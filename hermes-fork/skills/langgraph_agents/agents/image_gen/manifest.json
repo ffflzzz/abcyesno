@@ -1,0 +1,36 @@
+{
+  "id": "image_gen",
+  "name": "文生图",
+  "description": "根据提示词生成一张图片",
+  "category": "media",
+  "icon": "image",
+  "version": "1.0.0",
+  "entry": "agents/image_gen/agent.py",
+  "runtime": "inprocess",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "prompt": {
+        "type": "string",
+        "minLength": 1,
+        "x_ui": { "control": "textarea", "label": "提示词", "placeholder": "描述你要生成的画面…" }
+      },
+      "size": {
+        "type": "string",
+        "enum": ["1024x768", "1024x1024", "768x1024"],
+        "default": "1024x768",
+        "x_ui": { "control": "select", "label": "尺寸" }
+      }
+    },
+    "required": ["prompt"]
+  },
+  "output_schema": {
+    "summary": "markdown",
+    "artifacts": [
+      { "id": "image", "type": "image", "source": "path", "label": "生成结果" }
+    ]
+  },
+  "capabilities": ["image-generation"],
+  "approval_gates": [],
+  "progress_events": ["step_started", "step_progress", "artifact_produced"]
+}

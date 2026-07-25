@@ -1,0 +1,24 @@
+{
+  "id": "hello_agent",
+  "name": "问候助手",
+  "description": "最小 LangGraph 示例，验证契约最小接口",
+  "category": "general",
+  "icon": "chat",
+  "version": "1.0.0",
+  "entry": "agents/hello_agent/agent.py",
+  "runtime": "inprocess",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "input": {
+        "type": "string",
+        "x_ui": { "control": "textarea", "label": "输入", "placeholder": "说点什么…" }
+      }
+    },
+    "required": ["input"]
+  },
+  "output_schema": { "summary": "markdown", "artifacts": [] },
+  "capabilities": ["chat"],
+  "approval_gates": [],
+  "progress_events": []
+}

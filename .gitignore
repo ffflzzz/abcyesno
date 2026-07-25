@@ -1,0 +1,32 @@
+# --- dependencies / build output ---
+node_modules/
+dist/
+release/
+build/dist/
+
+# --- python ---
+hermes-fork/.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# --- runtime data / secrets (contains auth.json etc.) ---
+.hermes_dev/
+.wb-asar-extract/
+*.env
+.env*
+!.env.example
+auth.json
+
+# --- logs / temp ---
+*.log
+npm-install.log
+
+# --- editor / os ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# --- workbuddy local memory (keep private) ---
+.workbuddy/memory/

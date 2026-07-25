@@ -1,0 +1,100 @@
+const { contextBridge, ipcRenderer } = require('electron');
+
+const listenerMap = new Map();
+
+function on(channel, cb) {
+  const wrapped = (_e, ...args) => cb(...args);
+  listenerMap.set(cb, wrapped);
+  ipcRenderer.on(channel, wrapped);
+}
+
+function off(channel, cb) {
+  const wrapped = listenerMap.get(cb);
+  if (wrapped) {
+    ipcRenderer.off(channel, wrapped);
+    listenerMap.delete(cb);
+  }
+}
+
+contextBridge.exposeInMainWorld('hermes', {
+  // Lifecycle & runtime
+  getVersion: () => ipcRenderer.invoke('get-version'),
+  getStatus: () => ipcRenderer.invoke('get-status'),
+  getAguiPort: () => ipcRenderer.invoke('get-agui-port'),
+  getApiKeyStatus: () => ipcRenderer.invoke('get-api-key-status'),
+  validateApiKey: (key) => ipcRenderer.invoke('validate-api-key', key),
+  setApiKey: (key) => ipcRenderer.invoke('set-api-key', key),
+  logError: (msg) => ipcRenderer.invoke('log-error', msg),
+  openDataDir: () => ipcRenderer.invoke('open-data-dir'),
+
+  // Assistants
+  listAssistants: () => ipcRenderer.invoke('list-assistants'),
+  createAssistant: (data) => ipcRenderer.invoke('create-assistant', data),
+  updateAssistant: (id, data) => ipcRenderer.invoke('update-assistant', id, data),
+  deleteAssistant: (id) => ipcRenderer.invoke('delete-assistant', id),
+  listSkills: () => ipcRenderer.invoke('list-skills'),
+
+  // Sessions
+  listSessions: (assistantId) => ipcRenderer.invoke('list-sessions', assistantId),
+  createSession: (assistantId, title) => ipcRenderer.invoke('create-session', assistantId, title),
+  deleteSession: (id) => ipcRenderer.invoke('delete-session', id),
+  getSession: (id) => ipcRenderer.invoke('get-session', id),
+  updateSession: (id, data) => ipcRenderer.invoke('update-session', id, data),
+
+  // Approval & gateway passthrough
+  respondApproval: (id, choice) => ipcRenderer.invoke('respond-approval', id, choice),
+  // Workflow (LangGraph HITL) brake: POST the decision to the agui-server
+  // control-channel endpoint; the paused graph polls the resulting file.
+  sendWorkflowInterrupt: async (payload) => {
+    const port = await ipcRenderer.invoke('get-agui-port');
+    if (!port) throw new Error('agui port unknown');
+    const res = await fetch(`http://localhost:${port}/api/ag-ui/interrupt`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    return res.json();
+  },
+  gatewayRequest: (method, params, timeout) => ipcRenderer.invoke('gateway-request', method, params, timeout),
+
+  // Voice STT: forward recorded audio (base64) to the agui-server proxy,
+  // which calls Agnes /audio/transcriptions server-side (key stays in backend).
+  transcribeAudio: async (audioBase64, mime) => {
+    const port = await ipcRenderer.invoke('get-agui-port');
+    if (!port) throw new Error('agui port unknown');
+    const res = await fetch(`http://localhost:${port}/api/transcribe`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ audio: audioBase64, mime: mime || 'audio/webm' }),
+    });
+    return res.json();
+  },
+
+  // File upload
+  selectFile: (options) => ipcRenderer.invoke('select-file', options),
+  uploadFile: (sessionId, filePath) => ipcRenderer.invoke('upload-file', sessionId, filePath),
+
+  // Result panel: workspace file tree + read-file + open external (spec §5/§7.1)
+  listWorkspace: (opts) => ipcRenderer.invoke('list-workspace', opts),
+  readFile: (opts) => ipcRenderer.invoke('read-file', opts),
+  openExternal: (url) => ipcRenderer.invoke('open-external', url),
+
+  // Native Chrome DevTools
+  openDevTools: () => ipcRenderer.invoke('open-devtools'),
+
+  // Event subscriptions
+  on,
+  off,
+  removeAllListeners: (channel) => ipcRenderer.removeAllListeners(channel),
+
+  // Backend lifecycle
+  onAguiReady: (cb) => on('agui-ready', cb),
+  offAguiReady: (cb) => off('agui-ready', cb),
+
+  // Direct interrupt fallback (used when CopilotKit's stopGeneration cannot
+  // reach the AG-UI runtime in time).
+  interruptSession: (sessionId) => ipcRenderer.invoke('interrupt-session', sessionId),
+
+  // Permission mode: push default/yolo to the backend for the current session.
+  setPermissionMode: (mode, sessionId) => ipcRenderer.invoke('set-permission-mode', mode, sessionId),
+});

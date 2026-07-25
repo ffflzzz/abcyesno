@@ -1,0 +1,67 @@
+{
+  "name": "abcyesno",
+  "version": "1.4.0",
+  "description": "Abcyesno - Agent OS based on Hermes harness",
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
+    "build": "vite build",
+    "electron:build": "npm run build && electron-builder --win",
+    "electron:dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "build": {
+    "appId": "com.hermes.agent",
+    "productName": "Abcyesno",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "icon": "build/icon.png",
+    "win": {
+      "target": [
+        {
+          "target": "dir",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "verifyUpdateCodeSignature": false
+    },
+    "asarUnpack": [],
+    "asar": false,
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "hermes-fork/**/*",
+      "!hermes-fork/website/**",
+      "package.json"
+    ]
+  },
+  "dependencies": {
+    "@ag-ui/client": "^0.0.57",
+    "@ag-ui/core": "^0.0.57",
+    "@ag-ui/encoder": "^0.0.57",
+    "@copilotkit/react-core": "^1.61.2",
+    "@copilotkit/react-ui": "^1.61.2",
+    "@copilotkit/shared": "^1.61.2",
+    "axios": "^1.7.0",
+    "cors": "^2.8.5",
+    "express": "^4.21.0",
+    "react-markdown": "10.0.0",
+    "react-virtuoso": "^4.18.11",
+    "remark-gfm": "4.0.1",
+    "uuid": "^10.0.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.0",
+    "concurrently": "^9.1.0",
+    "electron": "^33.4.11",
+    "electron-builder": "^25.1.0",
+    "playwright-core": "^1.61.1",
+    "vite": "^6.0.0",
+    "wait-on": "^8.0.0"
+  }
+}

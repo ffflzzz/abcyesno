@@ -1,0 +1,27 @@
+delegation:
+  provider: custom
+  model: agnes-2.0-flash
+  base_url: https://apihub.agnes-ai.com/v1
+  api_key: ""
+providers:
+  custom:
+    name: Agnes Custom
+    api: https://apihub.agnes-ai.com/v1
+    api_key: ""
+    default_model: agnes-2.0-flash
+    models:
+      - agnes-2.0-flash
+model:
+  default: agnes-2.0-flash
+  provider: custom
+  base_url: https://apihub.agnes-ai.com/v1
+  api_key: ""
+# Keep context files tiny so agent startup stays fast and prompts don't
+# blow up with the bundled hermes-fork/AGENTS.md.
+context_file_max_chars: 1000
+agent:
+  # Lower than Hermes' default 90 so a confused/stuck model gives up quickly
+  # instead of burning credits and showing repeated interrupt messages.
+  max_turns: 10
+toolsets:
+  - hermes-cli
