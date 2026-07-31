@@ -30,3 +30,6 @@ Thumbs.db
 
 # --- workbuddy local memory (keep private) ---
 .workbuddy/memory/
+
+# junk: baiduyun upload leftover
+*.baiduyun.uploading.cfg
