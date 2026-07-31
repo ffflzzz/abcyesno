@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from "react";
+import Icon from "./Icon.jsx";
 
 export default function MarketPanel({ skills, enabledSkills = {}, manifests = [], onToggleSkill, onClose }) {
   const panelRef = useRef(null);
@@ -36,7 +37,7 @@ export default function MarketPanel({ skills, enabledSkills = {}, manifests = []
       <div className="market-panel" ref={panelRef}>
         <div className="market-panel-header">
           <h4>技能市场 / Skill Market</h4>
-          <button className="market-panel-close" onClick={onClose}>✕</button>
+          <button className="market-panel-close" onClick={onClose}><Icon name="close" size={14} /></button>
         </div>
         <div className="market-panel-body">
           {list.length === 0 ? (

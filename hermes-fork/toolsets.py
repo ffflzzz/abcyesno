@@ -77,6 +77,9 @@ _HERMES_CORE_TOOLS = [
     "kanban_unblock",
     # Computer use (macOS, gated on cua-driver being installed via check_fn)
     "computer_use",
+    # Agent 自渲染 UI 组件（spec: AGENT_UI_RENDER_SPEC.md）——让模型在对话中
+    # 主动声明要渲染的结构化组件（table/flowchart/card/progress/action）。
+    "render_ui",
 ]
 
 # Webhook events may originate from untrusted third-party content (for example,

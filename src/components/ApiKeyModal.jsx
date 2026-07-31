@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import Icon from "./Icon.jsx";
 
 export default function ApiKeyModal({ onSave, onClose }) {
   const [key, setKey] = useState("");
@@ -24,7 +25,7 @@ export default function ApiKeyModal({ onSave, onClose }) {
   return (
     <div className="modal-mask" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h3>🔑 设置 API Key</h3>
+        <h3><Icon name="key" size={16} /> 设置 API Key</h3>
         <p className="modal-desc">输入你的 API Key，程序会安全保存在本地。</p>
         <input
           type="password"

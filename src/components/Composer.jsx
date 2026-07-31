@@ -1,9 +1,9 @@
 import React, { useState, useRef, useEffect } from "react";
+import Icon from "./Icon.jsx";
 import bachPeek from "../assets/bach-peek.png";
 
 const AGNES_MODELS = [
-  { id: "agnes-2.0-flash", name: "agnes-2.0-flash", tag: "快" },
-  { id: "agnes-2.0-pro", name: "agnes-2.0-pro", tag: "强" },
+  { id: "agnes-2.5-flash", name: "agnes-2.5-flash", tag: "快" },
   { id: "__custom__", name: "自定义模型...", tag: "" },
 ];
 
@@ -125,6 +125,7 @@ export default function Composer({
   queuedMessages = [],
   onRemoveQueued,
   mentionables = [],
+  onOpenPreviewUrl,
 }) {
   const [empty, setEmpty] = useState(true);
   const [dragOver, setDragOver] = useState(false);
@@ -163,6 +164,16 @@ export default function Composer({
   useEffect(() => {
     if (!disabled) setSending(false);
   }, [disabled]);
+
+  // Auto-focus the contentEditable div on mount (e.g. after session switch remount)
+  useEffect(() => {
+    const el = editableRef.current;
+    if (el && !disabled) {
+      // Small delay to ensure DOM is fully painted after React commit
+      const timer = setTimeout(() => el.focus(), 50);
+      return () => clearTimeout(timer);
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Close all popovers on outside click
   useEffect(() => {
@@ -453,9 +464,9 @@ export default function Composer({
 
   const currentModelLabel = () => {
     if (AGNES_MODELS.some((m) => m.id === model)) {
-      return model || "agnes-2.0-flash";
+      return model || "agnes-2.5-flash";
     }
-    return model || "agnes-2.0-flash";
+    return model || "agnes-2.5-flash";
   };
 
   const currentPermission = PERMISSION_MODES.find((p) => p.id === permission) || PERMISSION_MODES[0];
@@ -469,23 +480,21 @@ export default function Composer({
       onDrop={handleDrop}
     >
       {/* ── Bach peeking over the composer ── */}
-      <a
+      <div
         className="composer-bach-peek"
-        href="https://abcyesno.cn"
-        target="_blank"
-        rel="noopener noreferrer"
+        onClick={() => onOpenPreviewUrl?.('https://abcyesno.cn')}
         title={busy ? "巴赫正在工作中… 点击访问官网" : "巴赫在等你~ 点击访问官网"}
       >
         <img src={bachPeek} alt="Bach" draggable={false} />
-      </a>
+      </div>
       {/* ── File attachment chip (non-image files still go through upload) ── */}
       {attachment && attachment.type !== "image" && (
         <div className="composer-attachment-row">
           <div className="composer-attachment">
-            <span className="attachment-file-icon">📎</span>
+            <span className="attachment-file-icon"><Icon name="note" size={14} /></span>
             <span className="attachment-name" title={attachment.fileName}>{attachment.fileName}</span>
             <button className="attachment-clear" onClick={onClearAttachment} title="移除附件">
-              ✕
+              <Icon name="close" size={14} />
             </button>
           </div>
         </div>
@@ -496,14 +505,14 @@ export default function Composer({
         <div className="composer-queue">
           {queuedMessages.map((m) => (
             <div key={m.id} className="composer-queue-item">
-              <span className="composer-queue-icon" title="排队中">⏳</span>
+              <span className="composer-queue-icon" title="排队中"><Icon name="loader" size={14} /></span>
               <span className="composer-queue-text">{m.text}</span>
               <button
                 className="composer-queue-remove"
                 onClick={() => onRemoveQueued && onRemoveQueued(m.id)}
                 title="移除"
               >
-                ✕
+                <Icon name="close" size={14} />
               </button>
             </div>
           ))}
@@ -537,7 +546,7 @@ export default function Composer({
                 onClick={() => applyMention(m)}
                 title={`调用 ${m.name}`}
               >
-                <span className={`mention-kind ${m.kind}`}>{m.kind === "workflow" ? "⚙" : "💬"}</span>
+                <span className={`mention-kind ${m.kind}`}>{m.kind === "workflow" ? <Icon name="settings" size={14} /> : <Icon name="chat" size={14} />}</span>
                 <span className="mention-name">{m.name}</span>
                 <span className="mention-id">{m.id}</span>
               </button>
@@ -549,7 +558,7 @@ export default function Composer({
       {/* ── Voice error / status line ── */}
       {voiceError && (
         <div className="composer-voice-error" onClick={() => setVoiceError("")} title="点击关闭">
-          ⚠ {voiceError}
+          <Icon name="warning" size={14} /> {voiceError}
         </div>
       )}
 
@@ -569,13 +578,13 @@ export default function Composer({
             {showPlusMenu && (
               <div className="composer-popover composer-popover-up">
                 <button className="composer-menu-item" onClick={() => { setShowPlusMenu(false); onNewSession && onNewSession(); }}>
-                  <span className="menu-icon">＋</span> 新会话
+                  <span className="menu-icon"><Icon name="plus" size={14} /></span> 新会话
                 </button>
                 <button className="composer-menu-item" onClick={() => { setShowPlusMenu(false); onUpload && onUpload(); }} disabled={disabled}>
-                  <span className="menu-icon">📎</span> 上传文件
+                  <span className="menu-icon"><Icon name="note" size={14} /></span> 上传文件
                 </button>
                 <button className="composer-menu-item" onClick={() => { setShowPlusMenu(false); onShowSkills && onShowSkills(); }} disabled={disabled}>
-                  <span className="menu-icon">⚡</span> 技能与工作流
+                  <span className="menu-icon"><Icon name="zap" size={14} /></span> 技能与工作流
                 </button>
               </div>
             )}
@@ -588,9 +597,9 @@ export default function Composer({
               title="权限模式"
               onClick={() => { setShowPermissionMenu(!showPermissionMenu); setShowPlusMenu(false); setShowModelMenu(false); }}
             >
-              <span className="pill-icon">🛡</span>
+              <span className="pill-icon"><Icon name="shield" size={14} /></span>
               <span className="pill-label">{currentPermission.name}</span>
-              <span className="pill-caret">▾</span>
+              <span className="pill-caret"><Icon name="chevron" size={12} /></span>
             </button>
             {showPermissionMenu && (
               <div className="composer-popover composer-popover-up">
@@ -601,7 +610,7 @@ export default function Composer({
                     onClick={() => { if (onPermissionChange) onPermissionChange(p.id); setShowPermissionMenu(false); }}
                     title={p.desc}
                   >
-                    <span className="menu-icon">{p.id === permission ? "●" : "○"}</span>
+                    <span className="menu-icon"><Icon name={p.id === permission ? "dot" : "circle"} size={12} /></span>
                     <span>
                       <div className="menu-item-title">{p.name}</div>
                       <div className="menu-item-desc">{p.desc}</div>
@@ -623,9 +632,9 @@ export default function Composer({
               onClick={() => { setShowModelMenu(!showModelMenu); setShowPlusMenu(false); setShowPermissionMenu(false); }}
               disabled={disabled}
             >
-              <span className="pill-icon">⊕</span>
+              <span className="pill-icon"><Icon name="plus" size={14} /></span>
               <span className="pill-label">{currentModelLabel()}</span>
-              <span className="pill-caret">▾</span>
+              <span className="pill-caret"><Icon name="chevron" size={12} /></span>
             </button>
             {showModelMenu && (
               <div className="composer-popover composer-popover-up composer-popover-right">
@@ -643,7 +652,7 @@ export default function Composer({
                       }
                     }}
                   >
-                    <span className="menu-icon">{m.id === model ? "●" : "○"}</span>
+                    <span className="menu-icon"><Icon name={m.id === model ? "dot" : "circle"} size={12} /></span>
                     <span className="menu-item-title">{m.name}{m.tag ? ` · ${m.tag}` : ""}</span>
                   </button>
                 ))}
@@ -680,7 +689,7 @@ export default function Composer({
             title={recording ? `停止录音（${recSeconds}s）` : "语音输入"}
             onClick={toggleRecording}
           >
-            {recording ? "⏹" : "🎤"}
+            {recording ? <Icon name="stop" size={16} /> : <Icon name="mic" size={16} />}
           </button>
 
           {/* Send / Queue / Stop */}

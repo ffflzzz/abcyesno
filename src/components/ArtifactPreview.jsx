@@ -74,7 +74,7 @@ function extractLabel(toolName, args) {
   return label;
 }
 
-export default function ArtifactPreview({ toolMessages = [], onImageClick }) {
+export default function ArtifactPreview({ toolMessages = [], onImageClick, compact = false, onViewInSidebar }) {
   const [lightbox, setLightbox] = useState(null);
 
   const artifacts = useMemo(() => {
@@ -116,6 +116,22 @@ export default function ArtifactPreview({ toolMessages = [], onImageClick }) {
   }, [toolMessages]);
 
   if (artifacts.length === 0) return null;
+
+  // Compact mode: show a small chip that opens the sidebar artifacts tab
+  if (compact) {
+    const first = artifacts[0];
+    return (
+      <div
+        className="artifact-chip"
+        onClick={() => onViewInSidebar ? onViewInSidebar("tab:artifacts") : (onImageClick ? onImageClick(first.url, first.label) : null)}
+        title={`共 ${artifacts.length} 个产物，点击在侧边栏查看`}
+      >
+        <span className="artifact-chip-icon">🖼</span>
+        <span className="artifact-chip-text">{artifacts.length} 个产物</span>
+        <span className="artifact-chip-arrow">→</span>
+      </div>
+    );
+  }
 
   return (
     <div className="artifact-preview">

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import Icon from "./Icon.jsx";
 
 function maskKey(key) {
   if (!key) return "";
@@ -34,7 +35,7 @@ export default function SettingsPanel({ apiKey = "", hasApiKey = false, model = 
       <div className="modal settings-panel" onClick={(e) => e.stopPropagation()}>
         <div className="settings-head">
           <h3>设置</h3>
-          <button className="settings-close" onClick={onClose} title="关闭">✕</button>
+          <button className="settings-close" onClick={onClose} title="关闭"><Icon name="close" size={14} /></button>
         </div>
 
         {/* 账号 */}

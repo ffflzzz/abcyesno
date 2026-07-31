@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
+import Icon from "./Icon.jsx";
 import { subscribeContractEvents, getContractEvents } from "../contract/eventBus.js";
-import { getManifest } from "../contract/registry.js";
+import { getManifest, listManifests } from "../contract/registry.js";
 import WorkflowTimeline from "./WorkflowTimeline.jsx";
 import ArtifactViewer from "./ArtifactViewer.jsx";
 
@@ -9,11 +10,11 @@ import ArtifactViewer from "./ArtifactViewer.jsx";
 // The main chat is never blocked — tasks run in the background.
 
 const STATUS_MAP = {
-  pending: { label: "等待中", icon: "⏳", cls: "task-pending" },
-  running: { label: "运行中", icon: "🔄", cls: "task-running" },
-  completed: { label: "已完成", icon: "✅", cls: "task-completed" },
-  failed: { label: "失败", icon: "❌", cls: "task-failed" },
-  stopped: { label: "已停止", icon: "⏹", cls: "task-stopped" },
+  pending: { label: "等待中", icon: "loader", cls: "task-pending" },
+  running: { label: "运行中", icon: "refresh", cls: "task-running" },
+  completed: { label: "已完成", icon: "check-circle", cls: "task-completed" },
+  failed: { label: "失败", icon: "close", cls: "task-failed" },
+  stopped: { label: "已停止", icon: "stop", cls: "task-stopped" },
 };
 
 function formatTaskTime(ts) {
@@ -75,7 +76,7 @@ function TaskCard({ task, active, onClick }) {
       onClick={() => onClick && onClick(task.id)}
     >
       <div className="task-card-header">
-        <span className="task-status-icon">{si.icon}</span>
+        <span className="task-status-icon"><Icon name={si.icon} size={14} /></span>
         <div className="task-card-title-row">
           <span className="task-card-name">{task.workflowName || task.workflowId || "任务"}</span>
           <span className="task-card-time">{formatTaskTime(task.startedAt)}</span>
@@ -87,7 +88,7 @@ function TaskCard({ task, active, onClick }) {
       </div>
       {(task.status === "completed" || task.status === "failed") && task.artifacts && task.artifacts.length > 0 && (
         <div className="task-artifacts-hint">
-          📦 {task.artifacts.length} 个产物
+          <Icon name="folder" size={14} /> {task.artifacts.length} 个产物
         </div>
       )}
     </div>
@@ -117,7 +118,7 @@ function TaskDetail({ task, onStop, onSend }) {
       <div className="task-detail-header">
         <span className="task-detail-name">{task.workflowName || task.workflowId}</span>
         <span className={`task-status-badge ${statusInfo(task.status).cls}`}>
-          {statusInfo(task.status).icon} {statusInfo(task.status).label}
+          <Icon name={statusInfo(task.status).icon} size={12} /> {statusInfo(task.status).label}
         </span>
       </div>
 
@@ -157,7 +158,7 @@ function TaskDetail({ task, onStop, onSend }) {
                 className="task-stop-btn"
                 onClick={() => onStop && onStop(task.id)}
               >
-                ⏹ 停止任务
+                <Icon name="stop" size={14} /> 停止任务
               </button>
             )}
           </div>
@@ -205,6 +206,7 @@ export default function TaskPanel({
   onSelectTask,
   onStopTask,
   onClearCompleted,
+  onClearAll,
 }) {
   // Auto-select first running task
   const runningTasks = tasks.filter((t) => t.status === "running");
@@ -217,6 +219,16 @@ export default function TaskPanel({
     <div className="task-panel">
       {/* Task list */}
       <div className="task-list-area">
+        {tasks.length > 0 && (
+          <div className="task-list-header">
+            <span className="task-count">共 {tasks.length} 个任务</span>
+            {onClearAll && (
+              <button className="task-clear-all-btn" onClick={onClearAll} title="清除所有任务（含运行中）">
+                <Icon name="trash" size={12} /> 清除全部
+              </button>
+            )}
+          </div>
+        )}
         {(runningTasks.length > 0 || pendingTasks.length > 0) && (
           <>
             <div className="task-group-label">进行中 ({runningTasks.length + pendingTasks.length})</div>
@@ -250,7 +262,7 @@ export default function TaskPanel({
 
         {tasks.length === 0 && (
           <div className="task-empty-state">
-            <div className="task-empty-icon">⚡</div>
+            <div className="task-empty-icon"><Icon name="zap" size={28} /></div>
             <div className="task-empty-text">暂无后台任务</div>
             <div className="task-empty-hint">从「工作流」Tab 触发工作流后，任务会在这里独立运行</div>
           </div>
@@ -275,7 +287,10 @@ export default function TaskPanel({
 export function useTaskManager(onSend, onStop) {
   const [tasks, setTasks] = useState(() => {
     try {
-      return JSON.parse(localStorage.getItem("abcyesno:tasks") || "[]");
+      const raw = JSON.parse(localStorage.getItem("abcyesno:tasks") || "[]");
+      // Filter out tasks whose workflowId no longer exists in the manifest registry
+      const validIds = new Set((listManifests() || []).map((m) => m.id));
+      return raw.filter((t) => !t.workflowId || validIds.has(t.workflowId));
     } catch (_) {
       return [];
     }
@@ -401,6 +416,12 @@ export function useTaskManager(onSend, onStop) {
     }
   }, [selectedTaskId]);
 
+  // Clear ALL tasks (for cleaning up stale / test data)
+  const clearAll = useCallback(() => {
+    setTasks([]);
+    setSelectedTaskId("");
+  }, []);
+
   return {
     tasks,
     selectedTaskId,
@@ -408,5 +429,6 @@ export function useTaskManager(onSend, onStop) {
     createTask,
     stopTask,
     clearCompleted,
+    clearAll,
   };
 }

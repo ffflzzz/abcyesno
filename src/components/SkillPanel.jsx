@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from "react";
+import Icon from "./Icon.jsx";
 
 // Skill picker. Lists contract workflows (from the manifest registry) and the
 // assistant skills. Selecting a contract workflow enters workflow mode in the
@@ -36,7 +37,7 @@ export default function SkillPanel({
         <div className="skill-panel" ref={panelRef}>
           <div className="skill-panel-header">
             <h4>技能 / Skill</h4>
-            <button className="skill-panel-close" onClick={onClose}>✕</button>
+            <button className="skill-panel-close" onClick={onClose}><Icon name="close" size={14} /></button>
           </div>
           <div className="skill-panel-body">
             <div className="skill-empty">暂无可用技能</div>
@@ -51,7 +52,7 @@ export default function SkillPanel({
       <div className="skill-panel" ref={panelRef}>
         <div className="skill-panel-header">
           <h4>技能 / Skill</h4>
-          <button className="skill-panel-close" onClick={onClose}>✕</button>
+          <button className="skill-panel-close" onClick={onClose}><Icon name="close" size={14} /></button>
         </div>
         <div className="skill-panel-body">
           {workflowList.length > 0 && (

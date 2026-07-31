@@ -1,14 +1,16 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from "react";
+import Icon from "./Icon.jsx";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import AgentVerboseTimeline from "./AgentVerboseTimeline.jsx";
 import ThinkingIndicator from "./ThinkingIndicator.jsx";
-import StructuredThinking from "./StructuredThinking.jsx";
-import TaskProgressPanel from "./TaskProgressPanel.jsx";
 import ArtifactPreview from "./ArtifactPreview.jsx";
 import ToolCard from "./ToolCard.jsx";
 import TypewriterText from "./TypewriterText.jsx";
-import useVirtualRows from "../hooks/useVirtualRows.js";
+import ApprovalBubble from "./ApprovalBubble.jsx";
+import GeneratedComponent from "./GeneratedComponent.jsx";
+import MessageActions from "./MessageActions.jsx";
+import { useContractEvents } from "../hooks/useContractEvents.js";
 import bachAvatar from "../assets/bach-avatar.png";
 
 function Lightbox({ src, alt, onClose }) {
@@ -73,6 +75,44 @@ export function sanitizeMessageContent(raw) {
     return "";
   }
 
+  // Strip outer code fences that models sometimes wrap entire responses in.
+  // E.g. "```markdown\n1. **step** ...\n```" → "1. **step** ..."
+  // Only strip if the fenced content looks like prose/markdown, not real code.
+  const fenceMatch = t.match(/^(`{3,})(\w*)\n([\s\S]+?)\n\s*\1\s*$/);
+  if (fenceMatch) {
+    const lang = (fenceMatch[2] || "").toLowerCase();
+    const inner = fenceMatch[3].trim();
+    // If language tag is markdown/text/empty AND inner looks like prose (not pure JSON/code)
+    if ((!lang || ["markdown", "md", "text", "txt"].includes(lang)) &&
+        !/^[\{\[<]/.test(inner) &&
+        inner.length > 20) {
+      t = inner;
+    }
+  }
+
+  // ════════════════════════════════════════
+  // Phase 1: Strip ENTIRE thinking/reasoning BLOCKS
+  // Models output thinking as kaomoji-prefixed lines like:
+  //   (○_○) reflecting...用户询问...
+  //   (◎_◎) mulling...我看了配置...
+  //   (╯‵□′)╯ reflecting...
+  //   (¬_¬) cogitating...
+  // These must be fully removed from displayed content so they ONLY
+  // appear in ThinkingTranscript (which gets its own thinkingText prop).
+  // ════════════════════════════════════════
+
+  // Single-line: (kaomoji) verb... → remove whole line
+  const thinkLineRe = /^\s*\([^)]{1,20}\)\s*(reflecting|cogitating|mulling|reasoning|thinking|deliberating|pondering|considering|analyzing|processing|contemplating|evaluating|assessing|planning|searching|investigating|exploring|examining)\b[\s\S]*$/gim;
+  t = t.replace(thinkLineRe, "");
+
+  // Multi-line block: (kaomoji) verb... \n continued thinking text
+  // Stop at code fence, header, numbered list, or blank line boundary
+  const thinkBlockRe = /^\s*\([^)]{1,20}\)\s*(reflecting|cogitating|mulling|reasoning|thinking|deliberating|pondering|considering|analyzing|processing|contemplating|evaluating|assessing|planning|searching|investigating|exploring|examining)\b[\s\S]*?(?=\n\s*(?:```|\n#{1,3}\s|\d+\.|\*|- |\n\n|$))/gim;
+  t = t.replace(thinkBlockRe, "");
+
+  // ════════════════════════════════════════
+  // Phase 2: Legacy / fragment patterns (older model outputs)
+  // ════════════════════════════════════════
   t = t.replace(/\(¬[ _-]¬\)[♡\s]*cogitating\s*\.\.\./gi, "");
   t = t.replace(/\(¬[ _-]¬\)[♡\s]*reflecting\s*\.\.\./gi, "");
   t = t.replace(/◎[_ ]?◎\s*(mulling|reasoning|thinking|deliberating|pondering)\s*[-.]*/gi, "");
@@ -81,9 +121,13 @@ export function sanitizeMessageContent(raw) {
   t = t.replace(/->\s*-+■{2,}\s*(analyzing|synthesizing|mulling|planning|executing|running|searching|calling)\b[\s\S]*?(?=\n|$)/gi, "");
   t = t.replace(/^(\([☺¬_◕▿-]+\)\s*[a-zA-Z]+\.{2,}\s*)+/gm, "");
   t = t.replace(/[\s.]{0,3}(me try using browser to this)\s*$/gi, "");
-  t = t.replace(/\s*\.{2,3}\s*$/gm, "");
   t = t.replace(/[◎◯][_ ]?[◎◯]\s*[a-z]+\ing\b[-. ]*[^\n]*/gi, "");
-  t = t.replace(/\n{3,}/g, "\n\n");
+
+  // ════════════════════════════════════════
+  // Phase 3: Clean up residuals
+  // ════════════════════════════════════════
+  t = t.replace(/\s*\.{2,3}\s*$/gm, "");          // trailing dots on lines
+  t = t.replace(/\n{3,}/g, "\n\n");               // collapse 3+ blank lines
   t = t.split("\n").map((l) => l.trimEnd()).join("\n").trim();
 
   return t;
@@ -139,6 +183,11 @@ function MarkdownView({ cleaned, onImageClick }) {
               alt={props.alt || ""}
             />
           ),
+          table: ({ node, ...props }) => (
+            <div className="md-table-wrapper">
+              <table {...props} />
+            </div>
+          ),
         }}
       >
         {cleaned}
@@ -169,7 +218,7 @@ function CollapsibleMarkdown({ cleaned, onImageClick }) {
       </div>
       {!expanded && <div className="collapsible-md-fade" />}
       <button className="collapsible-md-toggle" onClick={() => setExpanded(!expanded)}>
-        {expanded ? "▴ 收起" : `▾ 展开全部（${lines.length} 行）`}
+        {expanded ? (<><Icon name="chevron" size={12} style={{ transform: "rotate(-90deg)" }} /> 收起</>) : (<><Icon name="chevron" size={12} style={{ transform: "rotate(90deg)" }} /> 展开全部（{lines.length} 行）</>)}
       </button>
     </div>
   );
@@ -189,6 +238,101 @@ function mapStatus(s) {
   if (s === "error" || s === "failed") return "error";
   if (s === "pending") return "pending";
   return "complete";
+}
+
+/**
+ * ThinkingTranscript — shows the model's real reasoning tokens (thinkingText)
+ * streamed from the backend. If the model sends no reasoning content,
+ * renders nothing (the caller's spinner is enough).
+ */
+function ThinkingTranscript({ text }) {
+  const ref = useRef(null);
+  const pinnedRef = useRef(true);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (el && pinnedRef.current) el.scrollTop = el.scrollHeight;
+  }, [text]);
+  if (!text || !text.trim()) return null;
+  return (
+    <div
+      className="thinking-transcript"
+      ref={ref}
+      onScroll={(e) => {
+        const el = e.currentTarget;
+        pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+      }}
+    >
+      <div className="thinking-transcript-head">💭 思考过程</div>
+      <div className="thinking-transcript-text">{text}</div>
+    </div>
+  );
+}
+
+/**
+ * EditBox — inline editor shown in place of a user message bubble when the
+ * user clicks "编辑消息" in MessageActions. Mirrors ChatGPT behaviour:
+ * editing a user message discards the old reply and re-sends with new text.
+ *   - Enter      → save & send
+ *   - Shift+Enter → newline
+ *   - Esc        → cancel
+ */
+function EditBox({ initialText, onSave, onCancel }) {
+  const [text, setText] = useState(initialText || "");
+  const ref = useRef(null);
+  const autoGrow = useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = Math.min(el.scrollHeight, 400) + "px";
+  }, []);
+  useEffect(() => {
+    if (ref.current) {
+      ref.current.focus();
+      // Place cursor at end
+      const len = ref.current.value.length;
+      ref.current.setSelectionRange(len, len);
+      autoGrow();
+    }
+  }, [autoGrow]);
+  const handleChange = (e) => {
+    setText(e.target.value);
+    autoGrow();
+  };
+  const handleKeyDown = (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      if (text.trim()) onSave(text);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      onCancel();
+    }
+  };
+  return (
+    <div className="msg-edit-box">
+      <textarea
+        ref={ref}
+        className="msg-edit-textarea"
+        value={text}
+        onChange={handleChange}
+        onKeyDown={handleKeyDown}
+        rows={1}
+      />
+      <div className="msg-edit-actions">
+        <button className="msg-edit-cancel" onClick={onCancel} title="取消 (Esc)">
+          取消
+        </button>
+        <button
+          className="msg-edit-save"
+          onClick={() => text.trim() && onSave(text)}
+          title="保存并发送 (Enter)"
+        >
+          <Icon name="send" size={12} />
+          保存并发送
+        </button>
+      </div>
+      <div className="msg-edit-hint">Enter 发送 · Shift+Enter 换行 · Esc 取消</div>
+    </div>
+  );
 }
 
 function summarizeResult(res) {
@@ -261,7 +405,7 @@ function estimatedHeight(row) {
   return 80; // message
 }
 
-function ToolsRow({ items, assistantAvatar, loading, isLastRow, onImageClick }) {
+function ToolsRow({ items, assistantAvatar, loading, isLastRow, onImageClick, onViewInSidebar }) {
   const toolsRunning = loading && isLastRow;
   const hasRunning = items.some(m => mapStatus(m.status) === "running");
   const allComplete = items.every(m => {
@@ -270,16 +414,10 @@ function ToolsRow({ items, assistantAvatar, loading, isLastRow, onImageClick }) 
   });
   const totalTools = items.length;
 
-  // Default expanded if running, or if there's only a single tool.
-  const defaultExpanded = hasRunning || totalTools <= 1;
-  const [expanded, setExpanded] = useState(defaultExpanded);
+  // Always collapsed by default — user clicks to expand.
+  const [expanded, setExpanded] = useState(false);
 
-  // Keep expanded while any tool is running; collapse once all complete.
-  useEffect(() => {
-    if (hasRunning) setExpanded(true);
-    else if (!userToggledRef.current && allComplete) setExpanded(false);
-  }, [hasRunning, allComplete]);
-
+  // Never auto-expand; respect user toggle only.
   const userToggledRef = useRef(false);
   const toggle = () => {
     userToggledRef.current = true;
@@ -299,7 +437,7 @@ function ToolsRow({ items, assistantAvatar, loading, isLastRow, onImageClick }) 
       <div className={`message-avatar agent-avatar ${toolsRunning ? "tool" : ""}`}>{assistantAvatar}</div>
       <div className="message-col">
         <div className="tool-summary-bar" onClick={toggle}>
-          <span className="tool-summary-icon">{allComplete ? "✅" : "⚙️"}</span>
+          <span className="tool-summary-icon"><Icon name={allComplete ? "check-circle" : "settings"} size={14} /></span>
           <span className="tool-summary-text">
             {totalTools > 1 ? `${totalTools} 个工具调用` : (toolNames[0] || "工具")}
           </span>
@@ -308,10 +446,16 @@ function ToolsRow({ items, assistantAvatar, loading, isLastRow, onImageClick }) 
               {toolNames.map(n => `${n}×${groups[n].length}`).join(" · ")}
             </span>
           )}
-          <span className={`tool-summary-status ${allComplete ? "complete" : "running"}`}>
+          <span
+            className={`tool-summary-status ${allComplete ? "complete" : "running"}`}
+            style={!allComplete ? {
+              color: "#d29922",
+              animation: "status-running-pulse 1.5s ease-in-out infinite",
+            } : undefined}
+          >
             {allComplete ? "全部完成" : "执行中…"}
           </span>
-          <span className={`tool-summary-chevron ${expanded ? "expanded" : ""}`}>▸</span>
+          <span className={`tool-summary-chevron ${expanded ? "expanded" : ""}`}><Icon name="chevron" size={12} style={{ transform: expanded ? "rotate(90deg)" : "rotate(0deg)" }} /></span>
         </div>
         {expanded && (
           <div className="tool-group expanded">
@@ -328,14 +472,49 @@ function ToolsRow({ items, assistantAvatar, loading, isLastRow, onImageClick }) 
             ))}
           </div>
         )}
-        <ArtifactPreview toolMessages={items} onImageClick={onImageClick} />
+        <ArtifactPreview toolMessages={items} compact onViewInSidebar={onViewInSidebar} />
       </div>
     </div>
   );
 }
 
-export default function MessageThread({ messages = [], loading, streamPhase, thinkingText, onRetry, onRegenerate, assistant, manifests = [], onUpgradeToWorkbench }) {
+export default function MessageThread({ messages = [], loading, streamPhase, thinkingText, uiBlocks = [], onRetry, onRegenerate, assistant, manifests = [], onUpgradeToWorkbench, onOpenPreviewUrl, approval, onRespondApproval, sessionId, onEditMessage, onDeleteMessage, editingMessageId, onSaveEdit, onCancelEdit }) {
   const [lightbox, setLightbox] = useState(null);
+
+  // Only show tool messages from the current turn (after the last user message),
+  // not the entire session history. Prevents stale tool calls from flooding
+  // the TaskProgressPanel on every new response.
+  const currentTurnToolMessages = useMemo(() => {
+    let lastUserIdx = -1;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === "user") { lastUserIdx = i; break; }
+    }
+    if (lastUserIdx < 0) return messages.filter((m) => m.role === "tool");
+    return messages.slice(lastUserIdx + 1).filter((m) => m.role === "tool");
+  }, [messages]);
+
+  // ── Workflow progress: extract latest running step from contract events ──
+  const contractEvents = useContractEvents(sessionId);
+  const latestProgress = useMemo(() => {
+    if (!contractEvents || !contractEvents.length) return null;
+    // Find the most recent workflow.progress event with status="running"
+    let latest = null;
+    for (let i = contractEvents.length - 1; i >= 0; i--) {
+      const ev = contractEvents[i];
+      if (ev.type === "workflow.progress" && ev.payload?.status === "running") {
+        latest = ev.payload;
+        break;
+      }
+    }
+    // Fallback: if no running, show the last completed step
+    if (!latest) {
+      for (let i = contractEvents.length - 1; i >= 0; i--) {
+        const ev = contractEvents[i];
+        if (ev.type === "workflow.progress") { latest = ev.payload; break; }
+      }
+    }
+    return latest;
+  }, [contractEvents]);
 
   // @ mention protocol (spec §2): a user message beginning with `@<name>`
   // is a sub-call into a workflow. We render it as an inner block and, for the
@@ -397,43 +576,83 @@ export default function MessageThread({ messages = [], loading, streamPhase, thi
         rows.push({ type: "thinking", phase: streamPhase });
       }
       // If last is "thinking" legacy row already, leave it as-is.
+    } else if (lastHasContent) {
+      // Last row has content (tools or assistant text), but agent is still working.
+      // Append a compact progress row so the user can see real-time step info.
+      rows.push({ type: "thinking", phase: streamPhase || "tool_executing" });
     }
   }
 
-  // Virtual scroll
-  const {
-    containerRef,
-    virtualItems,
-    topSpacer,
-    bottomSpacer,
-    atBottom,
-    scrollToBottom,
-    measureRow,
-    onScroll,
-  } = useVirtualRows({ rows, estimatedHeight });
+  // ── Native scroll (no virtual scrolling — simpler, no scroll-thrash) ──
+  // The chat list is rendered directly in an `overflow-y:auto` container.
+  // Auto-follow pins to bottom while streaming, but yields the moment the
+  // user scrolls up to read history (restored only when they return to the
+  // bottom or click "回到底部").
+  const containerRef = useRef(null);
+  const atBottomRef = useRef(true);
+  const [atBottom, setAtBottom] = useState(true);
+
+  const handleScroll = useCallback(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const bottom = el.scrollHeight - el.scrollTop - el.clientHeight < 200;
+    atBottomRef.current = bottom;
+    setAtBottom((prev) => (prev === bottom ? prev : bottom));
+  }, []);
+
+  const scrollToBottom = useCallback((smooth) => {
+    const el = containerRef.current;
+    if (!el) return;
+    atBottomRef.current = true;
+    setAtBottom(true);
+    el.scrollTo({ top: el.scrollHeight, behavior: smooth ? "smooth" : "auto" });
+  }, []);
+
+  // Auto-follow after every render: pin to bottom only while the user is at
+  // the bottom (or hasn't scrolled up). Runs in layout phase so the browser
+  // never paints a stale (un-scrolled) frame during streaming.
+  useLayoutEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    if (atBottomRef.current) {
+      el.scrollTop = el.scrollHeight;
+    }
+  });
 
   const renderRow = (index) => {
     const row = rows[index];
     const isLastRow = index === rows.length - 1;
 
     if (row.type === "thinking") {
-      // Dedicated assistant thinking row: shown when the last row is a user
-      // message (user rows cannot host assistant thinking UI) or no host row.
+      // Dedicated thinking row: compact indicator only. Detailed progress lives
+      // in the header status bar and right-panel workflow timeline — NOT in chat bubbles.
       const phaseLabel =
         !thinkingText
           ? row.phase === "text_generating" ? "正在生成回复"
           : row.phase === "tool_executing" ? "正在调用工具"
           : "正在思考…"
           : "";
-      const toolMessages = messages.filter((m) => m.role === "tool");
       return (
         <div className="message-row assistant">
           <div className="message-avatar agent-avatar thinking">{assistantAvatar}</div>
           <div className="message-col">
-            <div className="message-bubble assistant">
-              <TaskProgressPanel messages={toolMessages} thinkingText={thinkingText} isLoading={loading} />
-              <StructuredThinking text={thinkingText} phaseLabel={phaseLabel} />
-              <ArtifactPreview toolMessages={toolMessages} onImageClick={(src, alt) => setLightbox({ src, alt })} />
+            <div className="assistant-body">
+              <div className="bubble-thinking-compact">
+                <div className="btc-line">
+                  <span className="btc-spinner" />
+                  <span className="btc-text">{phaseLabel || "处理中…"}</span>
+                </div>
+                {latestProgress && (
+                  <div className="btc-progress">
+                    <span className="btc-stage">{latestProgress.stage || latestProgress.step_id}</span>
+                    {latestProgress.total > 0 && (
+                      <span className="btc-pos">{latestProgress.completed}/{latestProgress.total}</span>
+                    )}
+                  </div>
+                )}
+                <ThinkingTranscript text={thinkingText} />
+              </div>
+              <ArtifactPreview toolMessages={currentTurnToolMessages} compact onViewInSidebar={() => onOpenPreviewUrl && onOpenPreviewUrl("tab:artifacts")} />
             </div>
           </div>
         </div>
@@ -448,6 +667,7 @@ export default function MessageThread({ messages = [], loading, streamPhase, thi
           loading={loading}
           isLastRow={isLastRow}
           onImageClick={(src, alt) => setLightbox({ src, alt })}
+          onViewInSidebar={() => onOpenPreviewUrl && onOpenPreviewUrl("tab:artifacts")}
         />
       );
     }
@@ -459,18 +679,19 @@ export default function MessageThread({ messages = [], loading, streamPhase, thi
     const isLast = isLastRow;
     const isStreamingText = isLast && !isUser && loading && streamPhase === "text_generating";
     const isThinkingInline = !isUser && row._thinking; // inline thinking inside this bubble
+    const isEditing = editingMessageId && m.id === editingMessageId;
     const mctx = mentionCtx[m.id];
     const isMentionUser = isUser && !!mctx?.self;
     const isInner = !isUser && !!mctx?.inner;
     const displayContent = isMentionUser
       ? String(m.content || "").replace(/^\s*@([^\s@]+)/, "").trim()
       : m.content;
-    const toolMessages = messages.filter((msg) => msg.role === "tool");
+    const toolMessages = currentTurnToolMessages;
     return (
       <div className={`message-row ${isUser ? "user" : "assistant"} ${isMentionUser ? "msg-mention" : ""} ${isInner ? "msg-inner" : ""}`}>
         {!isUser && <div className={`message-avatar agent-avatar ${isStreamingText ? "typing" : ""} ${isThinkingInline ? "thinking" : ""}`}>{assistantAvatar}</div>}
         <div className="message-col">
-          <div className={`message-bubble ${isUser ? "user" : "assistant"} ${isError ? "error" : ""} ${isThinkingInline ? "bubble-thinking" : ""}`}>
+          <div className={`${isUser ? "message-bubble user" : "assistant-body"} ${isError ? "error" : ""} ${isThinkingInline ? "bubble-thinking" : ""}`}>
             {!isUser && (
               <div className="message-meta">
                 <span className="message-name">{assistant?.name || "ABC"}</span>
@@ -483,18 +704,35 @@ export default function MessageThread({ messages = [], loading, streamPhase, thi
                 <span className="mention-call-label">子调用</span>
               </div>
             )}
-            {isThinkingInline ? (
-              // Inline thinking: show progress panels inside this bubble instead of a separate row
+            {isEditing ? (
+              <EditBox
+                initialText={typeof m.content === "string" ? m.content : normalizeContent(displayContent)}
+                onSave={(text) => onSaveEdit(m.id, text)}
+                onCancel={onCancelEdit}
+              />
+            ) : isThinkingInline ? (
+              // Inline thinking: compact indicator only. No TPP/ST — those
+              // belong in the header bar and workflow sidebar, not chat bubbles.
               <>
-                <TaskProgressPanel messages={toolMessages} thinkingText={thinkingText} isLoading={loading} />
-                <StructuredThinking text={thinkingText} phaseLabel={
-                  !thinkingText
-                    ? (row._phase === "text_generating" ? "正在生成回复"
+                <div className="bubble-thinking-compact">
+                  <div className="btc-line">
+                    <span className="btc-spinner" />
+                    <span className="btc-text">{
+                      row._phase === "text_generating" ? "正在生成回复"
                       : row._phase === "tool_executing" ? "正在调用工具"
-                      : "正在思考…")
-                    : ""
-                } />
-                <ArtifactPreview toolMessages={toolMessages} onImageClick={(src, alt) => setLightbox({ src, alt })} />
+                      : "正在思考…"
+                    }</span>
+                  </div>
+                  {latestProgress && (
+                    <div className="btc-progress">
+                      <span className="btc-stage">{latestProgress.stage || latestProgress.step_id}</span>
+                      {latestProgress.total > 0 && (
+                        <span className="btc-pos">{latestProgress.completed}/{latestProgress.total}</span>
+                      )}
+                    </div>
+                  )}
+                </div>
+                <ArtifactPreview toolMessages={toolMessages} compact onViewInSidebar={() => onOpenPreviewUrl && onOpenPreviewUrl("tab:artifacts")} />
               </>
             ) : isStreamingText ? (
               <TypewriterText
@@ -506,28 +744,30 @@ export default function MessageThread({ messages = [], loading, streamPhase, thi
               formatContent(displayContent, (src, alt) => setLightbox({ src, alt }))
             )}
           </div>
-          {isLast && !loading && (
-            <div className="message-actions">
-              {isUser && onRetry && (
-                <button className="message-action-btn" onClick={() => onRetry(m)} title="重新发送这条消息">
-                  重试
-                </button>
-              )}
-              {!isUser && onRegenerate && (
-                <button className="message-action-btn" onClick={onRegenerate} title="基于上一条问题重新生成">
-                  重新生成
-                </button>
-              )}
-              {isInner && onUpgradeToWorkbench && !isError && (
-                <button
-                  className="message-action-btn upgrade"
-                  onClick={() => onUpgradeToWorkbench(mctx.inner.id)}
-                  title="把这次子调用升级为独立工作台会话"
-                >
-                  在 {mctx.inner.name} 工作台打开 →
-                </button>
-              )}
-            </div>
+          {!isEditing && !isThinkingInline && !isStreamingText && (
+            <MessageActions
+              message={m}
+              isUser={isUser}
+              cleanedText={typeof displayContent === "string" ? sanitizeMessageContent(displayContent) : ""}
+              rawText={typeof displayContent === "string" ? displayContent : ""}
+              assistant={assistant}
+              alwaysShow={isLast && !loading}
+              onRegenerate={!isUser ? onRegenerate : undefined}
+              onRetry={isUser ? onRetry : undefined}
+              onEdit={onEditMessage}
+              onDelete={onDeleteMessage}
+            />
+          )}
+          {isInner && onUpgradeToWorkbench && !isError && !isStreamingText && !isThinkingInline && !isEditing && (
+            <button
+              className="message-action-btn upgrade-standalone"
+              onClick={() => onUpgradeToWorkbench(mctx.inner.id)}
+              title="把这次子调用升级为独立工作台会话"
+            >
+              <Icon name="workflow" size={12} />
+              <span>在 {mctx.inner.name} 工作台打开</span>
+              <Icon name="external" size={11} />
+            </button>
           )}
         </div>
       </div>
@@ -535,23 +775,26 @@ export default function MessageThread({ messages = [], loading, streamPhase, thi
   };
 
   return (
-    <div className="vs-container" ref={containerRef} onScroll={onScroll}>
+    <div className="vs-container" ref={containerRef} onScroll={handleScroll}>
       <div className="vs-content">
-        {/* Top spacer: pushes visible rows down to correct scroll position */}
-        <div style={{ height: topSpacer }} />
-
-        {virtualItems.map(({ index, row }) => (
-          <div
-            key={rowKey(row, index)}
-            ref={(el) => measureRow(index, el)}
-            data-row-index={index}
-          >
+        {rows.map((row, index) => (
+          <div key={rowKey(row, index)} data-row-index={index}>
             {renderRow(index)}
           </div>
         ))}
-
-        {/* Bottom spacer: fills remaining scroll height */}
-        <div style={{ height: bottomSpacer }} />
+        {uiBlocks.length > 0 && (
+          <div className="ui-blocks-region" key="ui-blocks-region">
+            {uiBlocks.map((b) => (
+              <GeneratedComponent key={b.blockId} block={b} />
+            ))}
+          </div>
+        )}
+        {approval && (
+          <ApprovalBubble
+            approval={approval}
+            onRespond={onRespondApproval}
+          />
+        )}
       </div>
 
       {!atBottom && (

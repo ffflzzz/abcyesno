@@ -262,6 +262,45 @@ class HermesRunner {
       PYTHONPATH: HERMES_FORK + (process.env.PYTHONPATH ? path.delimiter + process.env.PYTHONPATH : ''),
     };
 
+    // Network proxy — configurable, defaults to DIRECT (no proxy).
+    //
+    // On some networks apihub.agnes-ai.com is DNS-poisoned (a direct lookup returns
+    // a fake IP, e.g. 2001::/31.13.x), so the connection times out. A proxy that
+    // resolves DNS through its own tunnel reaches the real server. This is a network
+    // property, NOT an Agnes requirement — on a clean network the call works direct.
+    //
+    // Proxy is resolved in order of precedence:
+    //   1. HTTPS_PROXY / HTTP_PROXY in the launching environment (highest priority)
+    //   2. `network.proxy_url` in HERMES_HOME/config.yaml
+    // If neither is set, we go DIRECT: any inherited proxy env is stripped so Hermes
+    // connects straight out. To force direct on a clean network, leave both unset or
+    // remove `network.proxy_url` from config.yaml.
+    const proxyEnv =
+      process.env.HTTPS_PROXY ||
+      process.env.HTTP_PROXY ||
+      process.env.https_proxy ||
+      process.env.http_proxy;
+    let proxyFromConfig = '';
+    try {
+      const cfgText = fs.readFileSync(path.join(this.hermesHome, 'config.yaml'), 'utf-8');
+      const m = cfgText.match(/^\s*proxy_url:\s*(\S+)\s*$/m);
+      if (m) proxyFromConfig = m[1];
+    } catch (_) {}
+    const proxyUrl = proxyEnv || proxyFromConfig;
+    if (proxyUrl) {
+      env.HTTPS_PROXY = proxyUrl;
+      env.HTTP_PROXY = proxyUrl;
+      if (!env.NO_PROXY && !env.no_proxy) {
+        env.NO_PROXY = 'localhost,127.0.0.1,::1';
+      }
+    } else {
+      // Explicit direct: drop any inherited proxy so Hermes connects directly.
+      delete env.HTTPS_PROXY;
+      delete env.HTTP_PROXY;
+      delete env.https_proxy;
+      delete env.http_proxy;
+    }
+
     const hermesLogFile = path.join(logDir, 'hermes.log');
     let hermesLogStream;
     try {

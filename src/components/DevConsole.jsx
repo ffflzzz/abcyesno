@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useRef } from "react";
+import Icon from "./Icon.jsx";
 
 // ── DevConsole: captures window.console output and displays in a panel ──
 // Intercepts console.log/warn/error/info and shows timestamps.
 
 const LEVEL_STYLES = {
-  log: { color: "var(--text)", prefix: "📋" },
-  info: { color: "var(--accent)", prefix: "ℹ️" },
-  warn: { color: "var(--warning)", prefix: "⚠️" },
-  error: { color: "var(--error-text)", prefix: "❌" },
+  log: { color: "var(--text)", prefix: "clipboard" },
+  info: { color: "var(--accent)", prefix: "info" },
+  warn: { color: "var(--warning)", prefix: "warning" },
+  error: { color: "var(--error-text)", prefix: "close" },
 };
 
 export default function DevConsole({ open, onClose }) {
@@ -75,7 +76,7 @@ export default function DevConsole({ open, onClose }) {
     <div className="dev-console-overlay">
       <div className="dev-console">
         <div className="dev-console-header">
-          <span className="dev-console-title">🖥 开发控制台</span>
+          <span className="dev-console-title"><Icon name="monitor" size={16} /> 开发控制台</span>
           <div className="dev-console-actions">
             <div className="dev-console-filters">
               {["all", "log", "info", "warn", "error"].map((l) => (
@@ -89,10 +90,10 @@ export default function DevConsole({ open, onClose }) {
               ))}
             </div>
             <button className="dev-console-btn" onClick={clearEntries} title="清空">
-              🗑
+              <Icon name="trash" size={14} />
             </button>
             <button className="dev-console-btn" onClick={onClose} title="关闭">
-              ✕
+              <Icon name="close" size={14} />
             </button>
           </div>
         </div>
@@ -105,7 +106,7 @@ export default function DevConsole({ open, onClose }) {
               return (
                 <div key={e.id} className={`dev-log-row level-${e.level}`}>
                   <span className="dev-log-ts">{e.ts}</span>
-                  <span className="dev-log-prefix">{style.prefix}</span>
+                  <span className="dev-log-prefix"><Icon name={style.prefix} size={12} /></span>
                   <span className="dev-log-msg" style={{ color: style.color }}>{e.msg}</span>
                 </div>
               );

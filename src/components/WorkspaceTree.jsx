@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from "react";
+import Icon from "./Icon.jsx";
 
 // WorkspaceTree — §5.1 file tree renderer.
 // `tree` is the JSON returned by window.hermes.listWorkspace({root,path}):
@@ -31,7 +32,7 @@ function TreeNode({ node, depth, onOpenFile, defaultOpen }) {
         onClick={() => (isDir ? setOpen((o) => !o) : onOpenFile(node))}
         title={node.path}
       >
-        <span className="ws-icon">{isDir ? (open ? "📂" : "📁") : "📄"}</span>
+        <span className="ws-icon"><Icon name={isDir ? (open ? "folder-open" : "folder") : "file"} size={14} /></span>
         <span className="ws-name">{node.name}</span>
         {!isDir && node.size != null && (
           <span className="ws-size">{node.size > 1024 ? `${(node.size / 1024).toFixed(1)}K` : `${node.size}B`}</span>

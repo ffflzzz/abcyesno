@@ -51,6 +51,35 @@ function createAgUIServer(getGatewayClient, storage, options) {
   // /api/ag-ui/workflow-event and we relay them to the correct SSE stream.
   const workflowSubscribers = new Map();
 
+  // Agent 自渲染 UI 组件层：普通对话轮次（非 workflow）的活跃 SSE sender。
+  // render_ui tool 在 Hermes 进程内通过 HTTP 桥把 ui.render 事件回传，这里按
+  // runId 路由到当前对话轮的 SSE 流。与 workflowSubscribers 平行，但覆盖所有轮次。
+  const activeTurnSenders = new Map();
+
+  // 协调文件：每条对话轮开始时写入当前 runId，供 Python 侧 render_ui tool 发现
+  // 自己属于哪个 SSE 流（与 workflow_hitl/.wf_active.json 同构）。
+  function uiActiveCoordPath() {
+    const base = process.env.HERMES_HOME || path.join(os.homedir(), '.hermes_portable_data');
+    return path.join(base, 'workflow_hitl', '.ui_active.json');
+  }
+  function writeUiActiveCoord(runId, threadId) {
+    try {
+      const p = uiActiveCoordPath();
+      fs.mkdirSync(path.dirname(p), { recursive: true });
+      fs.writeFileSync(p, JSON.stringify({ runId, threadId }), 'utf-8');
+    } catch (e) {
+      log('agui-server', `ui coord write failed: ${e.message}`);
+    }
+  }
+  function clearUiActiveCoord() {
+    try {
+      const p = uiActiveCoordPath();
+      if (fs.existsSync(p)) fs.unlinkSync(p);
+    } catch (e) {
+      log('agui-server', `ui coord clear failed: ${e.message}`);
+    }
+  }
+
   function gatewayClient() {
     return typeof getGatewayClient === 'function' ? getGatewayClient() : getGatewayClient;
   }
@@ -59,7 +88,7 @@ function createAgUIServer(getGatewayClient, storage, options) {
     const list = await storage.listAssistants();
     let agents = Array.isArray(list) ? list : [];
     if (agents.length === 0) {
-      agents = [{ id: 'default', name: 'ABC', description: '默认 Hermes 助手', skillId: 'default' }];
+      agents = [{ id: 'default', name: 'ABC', description: '默认助手', skillId: 'default' }];
     }
     const agentsRecord = {};
     // Always ensure a "default" entry exists so CopilotKit can resolve the
@@ -68,7 +97,7 @@ function createAgUIServer(getGatewayClient, storage, options) {
     if (!hasDefault) {
       agentsRecord['default'] = {
         name: 'ABC',
-        description: '默认 Hermes 助手',
+        description: '默认助手',
         capabilities: [],
       };
     }
@@ -537,6 +566,17 @@ function createAgUIServer(getGatewayClient, storage, options) {
           send({ type: 'CUSTOM', name: 'workflow.done', value: payload });
           break;
 
+        // --- Agent 自渲染 UI 组件层 ----
+        // Hermes 的 render_ui tool 通过 emit 该事件，把结构化 UI 描述透传给前端
+        // useAgentStream.handleCustom("ui.render")，由 GeneratedComponent 路由渲染。
+        // payload 形状：{ blockId, type, props, replace?, appendPreview? }
+        case 'ui.render': {
+          if (payload && payload.type && payload.blockId) {
+            send({ type: 'CUSTOM', name: 'ui.render', value: payload });
+          }
+          break;
+        }
+
         default:
           // Forward anything else as a raw source event for debugging.
           send({ type: 'RAW', runId: ctx.runId, event: { type, params }, source: 'hermes' });
@@ -748,6 +788,12 @@ function createAgUIServer(getGatewayClient, storage, options) {
 
     sendSSE(res, encoder, { type: 'RUN_STARTED', threadId: ctx.threadId, runId: ctx.runId });
 
+    // Register this turn's SSE sender so render_ui (and any future agent-driven
+    // UI) can push ui.render events back from the Hermes process over HTTP.
+    const turnSend = (obj) => sendSSE(res, encoder, obj);
+    activeTurnSenders.set(ctx.runId, turnSend);
+    writeUiActiveCoord(ctx.runId, ctx.threadId);
+
     async function getReadyHermesSession() {
       const { id: hermesSessionId, created: sessionCreated } = await ensureHermesSession(client, ctx);
       // Hermes creates sessions lazily: wait for the agent build to finish
@@ -797,6 +843,8 @@ function createAgUIServer(getGatewayClient, storage, options) {
       sendSSE(res, encoder, { type: 'RUN_ERROR', message: err.message });
     }
     if (wfDelegated && wfRunId) workflowSubscribers.delete(wfRunId);
+    activeTurnSenders.delete(ctx.runId);
+    clearUiActiveCoord();
     res.end();
   }
 
@@ -857,6 +905,34 @@ function createAgUIServer(getGatewayClient, storage, options) {
   // The Python langgraph runtime cannot reach the Node SSE closure, so its
   // on_event callback POSTs workflow.* events here. We relay each one to the
   // SSE subscriber registered for the run that spawned the workflow.
+  app.post('/api/ag-ui/ui-event', (req, res) => {
+    // Agent 自渲染 UI 组件桥：Hermes 的 render_ui tool 在模型调用点把结构化 UI
+    // 描述 POST 过来，我们中继成 AG-UI CUSTOM{name:"ui.render"} 注入当前对话轮的 SSE 流。
+    try {
+      const body = req.body || {};
+      const runId = body.runId;
+      const payload = body.payload || {};
+      if (!runId) {
+        return res.json({ status: 'error', message: 'runId is required' });
+      }
+      const send = activeTurnSenders.get(runId);
+      if (!send) {
+        log('agui-server', `ui-event dropped (no active turn) for ${runId}`);
+        return res.json({ status: 'dropped', runId });
+      }
+      // 透传白名单已在 useAgentStream 侧校验；这里只保证必要字段存在。
+      if (!payload || !payload.type || !payload.blockId) {
+        return res.json({ status: 'error', message: 'payload{type, blockId} required' });
+      }
+      send({ type: 'CUSTOM', name: 'ui.render', value: payload });
+      log('agui-server', `relayed ui.render(${payload.type}) -> ${runId}`);
+      res.json({ status: 'ok' });
+    } catch (err) {
+      log('agui-server', `ui-event relay failed: ${err.message}`);
+      res.json({ status: 'error', message: err.message });
+    }
+  });
+
   app.post('/api/ag-ui/workflow-event', (req, res) => {
     try {
       const body = req.body || {};
@@ -941,7 +1017,7 @@ function createAgUIServer(getGatewayClient, storage, options) {
         : (mime.includes('mp4') || mime.includes('m4a')) ? 'm4a'
         : 'webm';
       fd.append('file', blob, `audio.${ext}`);
-      fd.append('model', 'agnes-2.0-flash');
+      fd.append('model', 'agnes-2.5-flash');
       const upstream = await fetch('https://apihub.agnes-ai.com/v1/audio/transcriptions', {
         method: 'POST',
         headers: { Authorization: `Bearer ${key}` },

@@ -2,11 +2,11 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import Sidebar from "./components/Sidebar.jsx";
 import ChatLayout from "./components/ChatLayout.jsx";
 import ApiKeyModal from "./components/ApiKeyModal.jsx";
-import ApprovalDialog from "./components/ApprovalDialog.jsx";
 import MarketPanel from "./components/MarketPanel.jsx";
 import CreateAssistantModal from "./components/CreateAssistantModal.jsx";
 import SettingsPanel from "./components/SettingsPanel.jsx";
 import ResultPanel from "./components/ResultPanel.jsx";
+import ConfirmModal from "./components/ConfirmModal.jsx";
 import { initContract, listManifests } from "./contract/registry.js";
 import { subscribeContractEvents } from "./contract/eventBus.js";
 import { sanitizeMessageContent } from "./components/MessageThread.jsx";
@@ -148,6 +148,13 @@ function ChatShell({
   aguiPort,
   resultPanelOpen = false,
   onToggleResultPanel = () => {},
+  onOpenPreviewUrl,
+  externalPreviewUrl = null,
+  setExternalPreviewUrl,
+  resultPanelCollapsed = false,
+  onToggleResultPanelCollapse,
+  resultPanelWidth = 380,
+  setResultPanelWidth,
 }) {
   const {
     messages: visibleMessages,
@@ -155,6 +162,7 @@ function ChatShell({
     thinkingText,
     error: streamError,
     isStreaming,
+    uiBlocks,
     sendMessage,
     stop,
     setHistory,
@@ -165,6 +173,8 @@ function ChatShell({
   // Permission mode: default (backend "ask") or yolo (session approval bypass).
   // Pushed to the backend via the gateway; fails silently if not connected.
   const [permissionMode, setPermissionMode] = useState("default");
+  const [editingMessageId, setEditingMessageId] = useState(null);
+  const [deleteConfirm, setDeleteConfirm] = useState(null); // { message } | null
   // Queue of user messages typed while the agent is busy. Flushed FIFO when
   // the current run finishes (see effect below).
   const [queuedMessages, setQueuedMessages] = useState([]);
@@ -206,13 +216,14 @@ function ChatShell({
     historyInitializedRef.current = true;
   }, [selectedSessionId, session, setHistory]);
 
-  async function doSend(text, mentions) {
+  async function doSend(text, mentions, explicitThreadId) {
     if (!text.trim()) return;
+    const threadId = explicitThreadId || selectedSessionId;
     const history = visibleMessages
       .filter((m) => m.role === "user" || m.role === "assistant")
       .map((m) => ({ id: m.id, role: m.role, content: m.content }));
     await sendMessage(text, {
-      threadId: selectedSessionId,
+      threadId,
       assistantId: selectedAssistantId,
       skillId: assistant?.skillId,
       model,
@@ -276,10 +287,22 @@ function ChatShell({
 
   async function handleSend(text, mentions) {
     if (!text.trim()) return;
+    // No active session → create one inline, then immediately send.
+    // (Avoids the fragile pendingSendRef → useEffect flush async chain.)
     if (!selectedSessionId) {
-      pendingSendRef.current = { text, mentions };
-      await onNewSession();
-      return;
+      try {
+        const assistantId = selectedAssistantId || "default";
+        const session = await hermes.createSession(assistantId, "新会话");
+        onSelectSession(session.id);
+        await loadSessions(assistantId);
+        // Session is now active; send using the freshly-created id (not the
+        // stale closure value, which would mismatch the eventBus key).
+        await doSend(text, mentions, session.id);
+        return;
+      } catch (err) {
+        console.error("auto-create session failed", err);
+        return;
+      }
     }
     // Busy → queue instead of dropping; the composer stays editable.
     if (isStreaming) {
@@ -343,6 +366,53 @@ function ChatShell({
     doSend(normalizeContent(userMsg.content));
   }
 
+  // ── Message edit / delete (MessageActions toolbar) ──────────────────────
+  function handleEditMessage(message) {
+    if (isStreaming) return;
+    setEditingMessageId(message.id);
+  }
+
+  function handleCancelEdit() {
+    setEditingMessageId(null);
+  }
+
+  async function handleSaveEdit(messageId, newContent) {
+    if (isStreaming || !newContent.trim()) return;
+    const idx = visibleMessages.findIndex((m) => m.id === messageId);
+    if (idx === -1) return;
+    // Truncate everything after the edited message, then re-send with new text.
+    // This mirrors ChatGPT: editing a user message discards the old reply and
+    // regenerates a fresh one.
+    const truncated = visibleMessages.slice(0, idx);
+    setHistory(truncated);
+    setEditingMessageId(null);
+    await doSend(newContent);
+  }
+
+  function handleDeleteMessage(message) {
+    if (isStreaming) return;
+    setDeleteConfirm({ message });
+  }
+
+  async function confirmDeleteMessage() {
+    const message = deleteConfirm?.message;
+    if (!message) return;
+    setDeleteConfirm(null);
+    const newMsgs = visibleMessages.filter((m) => m.id !== message.id);
+    setHistory(newMsgs);
+    // Persist immediately — deletion doesn't trigger a streaming cycle so the
+    // auto-save effect (which fires on isStreaming false→true→false) won't run.
+    if (selectedSessionId && hermes) {
+      const ui = newMsgs.map(toStorageMessage);
+      try {
+        await hermes.updateSession(selectedSessionId, { messages: ui });
+        if (onSessionUpdated) onSessionUpdated();
+      } catch (err) {
+        console.error("delete message persist failed", err);
+      }
+    }
+  }
+
   // Combine prop runError with stream error for the banner.
   const displayError = runError || streamError;
 
@@ -380,6 +450,7 @@ function ChatShell({
         status={isStreaming ? "thinking" : "ready"}
         streamPhase={phase}
         thinkingText={thinkingText}
+        uiBlocks={uiBlocks}
         version={version}
         sidebarOpen={sidebarOpen}
         model={model}
@@ -401,16 +472,58 @@ function ChatShell({
         selectedWorkflowId={selectedWorkflowId}
         onSelectWorkflow={onSelectWorkflow}
         approval={approval}
+        onRespondApproval={onRespondApproval}
         showSkills={showSkills}
         onToggleSkills={onToggleSkills}
         onRetry={handleRetry}
         onRegenerate={handleRegenerate}
         resultPanelOpen={resultPanelOpen}
         onToggleResultPanel={onToggleResultPanel}
+        onOpenPreviewUrl={onOpenPreviewUrl}
+        resultPanelCollapsed={resultPanelCollapsed}
+        onToggleResultPanelCollapse={onToggleResultPanelCollapse}
+        selectedSessionId={selectedSessionId}
+        onEditMessage={handleEditMessage}
+        onDeleteMessage={handleDeleteMessage}
+        editingMessageId={editingMessageId}
+        onSaveEdit={handleSaveEdit}
+        onCancelEdit={handleCancelEdit}
       />
       {/* ResultPanel wrapped in own ErrorBoundary so a sidebar crash never kills the main chat */}
       <ResultPanelErrorBoundary>
       {resultPanelOpen && (
+        <div className="result-panel-wrapper">
+        <div
+          className="result-panel-resize-handle"
+          onMouseDown={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const startX = e.clientX;
+            const startW = resultPanelWidth;
+            // Use a ref-captured updater so we always read the latest width for localStorage
+            let currentW = startW;
+            const onMove = (ev) => {
+              ev.preventDefault();
+              ev.stopPropagation();
+              const delta = startX - ev.clientX;
+              currentW = Math.min(Math.max(startW + delta, 220), window.innerWidth * 0.78);
+              setResultPanelWidth(currentW);
+            };
+            const onUp = () => {
+              try { localStorage.setItem('abc:resultPanelWidth', String(currentW)); } catch {}
+              document.removeEventListener('mousemove', onMove);
+              document.removeEventListener('mouseup', onUp);
+              document.body.style.cursor = '';
+              document.body.style.userSelect = '';
+              document.body.style.removeProperty('--resizing');
+            };
+            document.addEventListener('mousemove', onMove, { passive: false });
+            document.addEventListener('mouseup', onUp, { passive: true });
+            document.body.style.cursor = 'col-resize';
+            document.body.style.userSelect = 'none';
+            document.body.style.setProperty('--resizing', '1');
+          }}
+        />
       <ResultPanel
         sessionId={selectedSessionId}
         aguiPort={aguiPort}
@@ -422,14 +535,17 @@ function ChatShell({
         model={model}
         backendStatus={backendStatus}
         onSelectWorkflow={onSelectWorkflow}
+        externalPreviewUrl={externalPreviewUrl}
+        onClearExternalPreview={() => setExternalPreviewUrl(null)}
+        collapsed={resultPanelCollapsed}
+        onToggleCollapse={onToggleResultPanelCollapse}
+        style={!resultPanelCollapsed ? { width: resultPanelWidth, minWidth: resultPanelWidth, flexShrink: 0 } : undefined}
       />
+        </div>
       )}
       </ResultPanelErrorBoundary>
       {showKeyModal && (
         <ApiKeyModal onSave={async (key) => { await hermes.setApiKey(key); if (onApiKeySaved) onApiKeySaved(key); setShowKeyModal(false); }} onClose={() => setShowKeyModal(false)} />
-      )}
-      {approval && (
-        <ApprovalDialog approval={approval} onRespond={onRespondApproval} />
       )}
       {showMarket && (
         <MarketPanel
@@ -440,6 +556,14 @@ function ChatShell({
           onClose={() => setShowMarket(false)}
         />
       )}
+      <ConfirmModal
+        open={!!deleteConfirm}
+        title="删除消息"
+        message="确定删除这条消息？删除后无法恢复。"
+        danger={true}
+        onConfirm={confirmDeleteMessage}
+        onClose={() => setDeleteConfirm(null)}
+      />
     </>
   );
 }
@@ -449,7 +573,7 @@ export default function App({ aguiPort }) {
   const [sessions, setSessions] = useState([]);
   const [selectedAssistantId, setSelectedAssistantId] = useState("");
   const [selectedSessionId, setSelectedSessionId] = useState("");
-  const [model, setModel] = useState("agnes-2.0-flash");
+  const [model, setModel] = useState("agnes-2.5-flash");
   const [apiKey, setApiKey] = useState("");
   const [apiKeySet, setApiKeySet] = useState(false);
   const [showKeyModal, setShowKeyModal] = useState(false);
@@ -461,6 +585,12 @@ export default function App({ aguiPort }) {
   const [approval, setApproval] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [resultPanelOpen, setResultPanelOpen] = useState(false);
+  const [resultPanelCollapsed, setResultPanelCollapsed] = useState(false);
+  const [resultPanelWidth, setResultPanelWidth] = useState(() => {
+    try { return Number(localStorage.getItem('abc:resultPanelWidth')) || 380; } catch { return 380; }
+  });
+  const [externalPreviewUrl, setExternalPreviewUrl] = useState(null); // URL or "tab:xxx" to switch sidebar tab (e.g. abcyesno.cn / tab:artifacts)
+  const [confirmDialog, setConfirmDialog] = useState(null); // { title, message, danger, onConfirm } | null
   const [skills, setSkills] = useState([{ id: "default", name: "通用助手", category: "general" }]);
   const [backendStatus, setBackendStatus] = useState({ hermesReady: false, gatewayConnected: false });
   const [runError, setRunError] = useState(null);
@@ -631,11 +761,17 @@ export default function App({ aguiPort }) {
     // sinking below the fold as new ones are appended at the tail.
     list = (list || []).slice().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
     setSessions(list);
-    if (list && list.length > 0 && !selectedSessionId) {
-      setSelectedSessionId(list[0].id);
-    } else if (!list || list.length === 0) {
+    // Don't auto-select last session on startup — user gets a clean slate
+    // and can pick history from sidebar manually.
+    if (!selectedSessionId) {
       setSelectedSessionId("");
     }
+  }
+
+  /** Session switch handler (streaming guard lives in ChatShell where isStreaming is in scope). */
+  function handleSelectSession(id) {
+    if (id === selectedSessionId) return;
+    setSelectedSessionId(id);
   }
 
   async function handleCreateAssistant(data) {
@@ -645,20 +781,26 @@ export default function App({ aguiPort }) {
       avatar: data.avatar || "",
       description: data.skillId && data.skillId !== "default"
         ? `基于 ${data.skillId} skill`
-        : "默认 Hermes 助手",
+        : "默认助手",
     });
     setShowCreateModal(false);
     await loadAssistants();
   }
 
   async function handleDeleteAssistant(id) {
-    if (!window.confirm("确定删除这个助手？")) return;
-    await hermes.deleteAssistant(id);
-    if (selectedAssistantId === id) {
-      setSelectedAssistantId("");
-      setSelectedSessionId("");
-    }
-    await loadAssistants();
+    setConfirmDialog({
+      title: "删除助手",
+      message: "确定删除这个助手？删除后无法恢复。",
+      danger: true,
+      onConfirm: async () => {
+        await hermes.deleteAssistant(id);
+        if (selectedAssistantId === id) {
+          setSelectedAssistantId("");
+          setSelectedSessionId("");
+        }
+        await loadAssistants();
+      },
+    });
   }
 
   async function handleRenameAssistant(id, name) {
@@ -685,12 +827,19 @@ export default function App({ aguiPort }) {
   }
 
   async function handleDeleteSession(id) {
-    if (!window.confirm("确定删除这个会话？")) return;
-    await hermes.deleteSession(id);
-    if (selectedSessionId === id) {
-      setSelectedSessionId("");
-    }
-    await loadSessions(selectedAssistantId);
+    setConfirmDialog({
+      title: "删除会话",
+      message: "确定删除这个会话？对话记录将被永久删除。",
+      danger: true,
+      onConfirm: async () => {
+        await hermes.deleteSession(id);
+        if (selectedSessionId === id) {
+          // Deleting current session while streaming → switch to empty (aborts stream)
+          setSelectedSessionId("");
+        }
+        await loadSessions(selectedAssistantId);
+      },
+    });
   }
 
   async function handleRenameSession(id, title) {
@@ -798,7 +947,7 @@ export default function App({ aguiPort }) {
           onCreateAssistant={() => setShowCreateModal(true)}
           onDeleteAssistant={handleDeleteAssistant}
           onSelectAssistant={(id) => { setSelectedAssistantId(id); setSelectedWorkflowId(""); }}
-          onSelectSession={setSelectedSessionId}
+          onSelectSession={handleSelectSession}
           onSessionUpdated={() => loadSessions(selectedAssistantId)}
           model={model}
           onModelChange={handleModelChange}
@@ -813,12 +962,21 @@ export default function App({ aguiPort }) {
           onClearRunError={() => setRunError(null)}
           manifests={manifests}
           selectedWorkflowId={selectedWorkflowId}
-          onSelectWorkflow={setSelectedWorkflowId}
+          onSelectWorkflow={(id) => { setSelectedWorkflowId(id); setResultPanelCollapsed(false); }}
           onApiKeySaved={(key) => { setApiKey(key); setApiKeySet(true); }}
           aguiPort={aguiPort}
           resultPanelOpen={resultPanelOpen}
           onToggleResultPanel={() => setResultPanelOpen((o) => !o)}
-          onOpenDevConsole={() => setShowDevConsole(true)}
+          onOpenPreviewUrl={(url) => {
+            setExternalPreviewUrl(url);
+            setResultPanelOpen(true);
+          }}
+          externalPreviewUrl={externalPreviewUrl}
+          setExternalPreviewUrl={setExternalPreviewUrl}
+          resultPanelCollapsed={resultPanelCollapsed}
+          onToggleResultPanelCollapse={() => setResultPanelCollapsed((c) => !c)}
+          resultPanelWidth={resultPanelWidth}
+          setResultPanelWidth={setResultPanelWidth}
         />
       </div>
       {showCreateModal && (
@@ -842,6 +1000,14 @@ export default function App({ aguiPort }) {
           onClose={() => setShowSettings(false)}
         />
       )}
+      <ConfirmModal
+        open={!!confirmDialog}
+        title={confirmDialog?.title || ""}
+        message={confirmDialog?.message || ""}
+        danger={confirmDialog?.danger || false}
+        onConfirm={confirmDialog?.onConfirm}
+        onClose={() => setConfirmDialog(null)}
+      />
     </ErrorBoundary>
   );
 }

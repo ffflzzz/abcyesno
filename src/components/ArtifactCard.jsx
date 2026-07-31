@@ -1,4 +1,5 @@
 import React from "react";
+import Icon from "./Icon.jsx";
 
 // Generic artifact renderer (L3). Switches on artifact.type only - no
 // per-workflow branch. Local paths are served via file:// so the Electron
@@ -14,6 +15,7 @@ export default function ArtifactCard({ artifact }) {
   const a = artifact || {};
   const type = a.type || "file";
   const src = srcFor(a);
+  const isSafeUrl = (u) => /^(https?:|file:|data:image\/)/i.test(u || "");
 
   if (type === "video") {
     return (
@@ -42,12 +44,12 @@ export default function ArtifactCard({ artifact }) {
   if (type === "file") {
     return (
       <div className="artifact-card artifact-file">
-        <span className="artifact-icon">{"📄"}</span>
+        <span className="artifact-icon"><Icon name="file" size={16} /></span>
         <div className="artifact-meta">
           <div className="artifact-label">{a.label || "文件"}</div>
           {a.mime ? <div className="artifact-sub">{a.mime}</div> : null}
         </div>
-        {a.path ? (
+        {a.path && isSafeUrl(src) ? (
           <a className="artifact-download" href={src} download>
             下载
           </a>
@@ -58,7 +60,7 @@ export default function ArtifactCard({ artifact }) {
   return (
     <div className="artifact-card">
       <div className="artifact-label">{a.label || type}</div>
-      {src ? (
+      {src && isSafeUrl(src) ? (
         <a href={src} target="_blank" rel="noreferrer">
           打开
         </a>

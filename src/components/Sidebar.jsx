@@ -3,6 +3,7 @@ import DetailModal from "./DetailModal.jsx";
 import TaskPanel from "./TaskPanel.jsx";
 import bachAvatar from "../assets/bach-avatar.png";
 import bachIcon from "../assets/bach-icon.png";
+import Icon from "./Icon.jsx";
 
 function getStatusDotClass(backendStatus) {
   if (!backendStatus) return "offline";
@@ -29,9 +30,9 @@ function formatTime(ts) {
 
 // ── Tab constants ──
 const TABS = [
-  { id: "chat", label: "对话", icon: "\u{1F4AC}" },   // 💬
-  { id: "workflow", label: "工作流", icon: "\u{1F527}" }, // 🔧
-  { id: "tasks", label: "任务", icon: "\u26A1" },       // ⚡
+  { id: "chat", label: "对话", name: "chat" },
+  { id: "workflow", label: "工作流", name: "workflow" },
+  { id: "tasks", label: "任务", name: "tasks" },
 ];
 
 export default function Sidebar({
@@ -57,7 +58,7 @@ export default function Sidebar({
   selectedWorkflowId,
   onSelectWorkflow,
   // ── Task panel props ──
-  taskManager,           // { tasks, selectedTaskId, onSelectTask, createTask, stopTask, clearCompleted }
+  taskManager,           // { tasks, selectedTaskId, onSelectTask, createTask, stopTask, clearCompleted, clearAll }
 }) {
   // Tab state (persisted per session)
   const [activeTab, setActiveTab] = useState(() => {
@@ -76,13 +77,13 @@ export default function Sidebar({
     try { localStorage.setItem("abcyesno:sidebarTab", activeTab); } catch (_) {}
   }, [activeTab]);
 
-  // Map manifest icon to emoji
-  const workflowEmoji = (icon) => {
+  // Map manifest icon to a unified Icon name
+  const workflowIconName = (icon) => {
     switch (icon) {
-      case "chat": return "\u{1F4AC}"; // 💬
-      case "film": return "\u{1F3AC}"; // 🎬
-      case "image": return "\u{1F5BC}"; // 🖼
-      default: return "\u{1F527}";      // 🔧
+      case "chat": return "chat";
+      case "film": return "film";
+      case "image": return "image";
+      default: return "workflow";
     }
   };
 
@@ -149,39 +150,18 @@ export default function Sidebar({
     setContextMenu(null);
   }
 
-  // ── Handle workflow run from sidebar → creates a background task ──
+  // ── Handle workflow run from sidebar → select & open dashboard ──
   function handleWorkflowRun(manifest) {
-    if (!taskManager?.createTask) return;
-    taskManager.createTask(manifest.id, {});
+    // Select this workflow so ResultPanel shows its dashboard
+    if (onSelectWorkflow) onSelectWorkflow(manifest.id);
   }
 
   // ── Render helpers for each tab ──
 
-  /** Chat tab: compact assistant switcher + session list */
+  /** Chat tab: session list only (no assistant switcher — single agent) */
   function renderChatTab() {
     return (
       <div className="sidebar-tab-content">
-        {/* Compact assistant switcher */}
-        <div className="sidebar-assistant-switcher">
-          <div className="switcher-label">当前助手</div>
-          <div className="switcher-list">
-            {assistants.map((a) => (
-              <button
-                key={a.id}
-                className={`switcher-item ${a.id === selectedAssistantId ? "active" : ""}`}
-                onClick={() => onSelectAssistant(a.id)}
-                title={a.description || a.name}
-              >
-                <span className="status-dot mini ${dotClass}" />
-                <span className="switcher-name">{a.name}</span>
-              </button>
-            ))}
-            {assistants.length === 0 && (
-              <span className="switcher-empty">无助手</span>
-            )}
-          </div>
-        </div>
-
         {/* Session list (main content of chat tab) */}
         <div className="sidebar-sessions-area">
           <div className="sessions-header">
@@ -210,7 +190,7 @@ export default function Sidebar({
                     onClick={(e) => { e.stopPropagation(); onDeleteSession(s.id); }}
                     title="删除"
                   >
-                    \uD83D\uDDD1
+                    <Icon name="trash" size={12} />
                   </button>
                 </div>
               );
@@ -219,13 +199,6 @@ export default function Sidebar({
               <div className="empty-hint">暂无会话，点击上方创建</div>
             )}
           </div>
-        </div>
-
-        {/* Quick actions at bottom of chat tab */}
-        <div className="chat-tab-actions">
-          <button className="action-chip" onClick={onCreateAssistant} title="添加助手">
-            + 助手
-          </button>
         </div>
       </div>
     );
@@ -245,7 +218,7 @@ export default function Sidebar({
                 onClick={() => onSelectWorkflow && onSelectWorkflow(m.id)}
                 title={m.description || m.name}
               >
-                <div className="wf-card-icon">{workflowEmoji(m.icon)}</div>
+                <div className="wf-card-icon"><Icon name={workflowIconName(m.icon)} size={20} /></div>
                 <div className="wf-card-body">
                   <div className="wf-card-name">{m.name}</div>
                   <div className="wf-card-desc">{m.description || m.ui?.title || ""}</div>
@@ -260,7 +233,7 @@ export default function Sidebar({
                     }}
                     title="后台运行此工作流"
                   >
-                    ▶ 运行
+                    <Icon name="play" size={14} /> 运行
                   </button>
                 )}
               </div>
@@ -294,6 +267,7 @@ export default function Sidebar({
           onSelectTask={taskManager.onSelectTask}
           onStopTask={taskManager.stopTask}
           onClearCompleted={taskManager.clearCompleted}
+          onClearAll={taskManager.clearAll}
         />
       </div>
     );
@@ -304,7 +278,7 @@ export default function Sidebar({
     <>
       {!open && (
         <button className="sidebar-toggle" onClick={onToggle} title="展开侧边栏">
-          &#9776;
+          <Icon name="panel" size={16} />
         </button>
       )}
       <aside className={`sidebar ${open ? "open" : "closed"}`}>
@@ -314,7 +288,7 @@ export default function Sidebar({
             <img src={bachIcon} alt="Abcyesno" className="logo-small" />
             <span className="brand-name">Abcyesno</span>
           </div>
-          <button className="sidebar-close" onClick={onToggle}>&#10005;</button>
+          <button className="sidebar-close" onClick={onToggle}><Icon name="close" size={16} /></button>
         </div>
 
         {/* Tab bar (replaces old search bar) */}
@@ -325,7 +299,7 @@ export default function Sidebar({
               className={`sidebar-tab ${activeTab === t.id ? "active" : ""}`}
               onClick={() => setActiveTab(t.id)}
             >
-              <span className="tab-icon">{t.icon}</span>
+              <span className="tab-icon"><Icon name={t.name} size={14} /></span>
               <span className="tab-label">{t.label}</span>
               {t.id === "tasks" && taskManager && taskManager.tasks.filter((tk) => tk.status === "running").length > 0 && (
                 <span className="tab-badge">
@@ -345,9 +319,9 @@ export default function Sidebar({
 
         {/* Footer */}
         <div className="sidebar-footer">
-          <button className="footer-btn" title="市场" onClick={onOpenMarket}>\uD83D\uDED2 市场</button>
-          <button className="footer-btn" title="技能" onClick={onOpenSkills}>\u26A1 技能</button>
-          <button className="footer-btn" title="设置" onClick={onOpenSettings}>\u2699 设置</button>
+          <button className="footer-btn" title="市场" onClick={onOpenMarket}><Icon name="market" size={14} /> 市场</button>
+          <button className="footer-btn" title="技能" onClick={onOpenSkills}><Icon name="skills" size={14} /> 技能</button>
+          <button className="footer-btn" title="设置" onClick={onOpenSettings}><Icon name="settings" size={14} /> 设置</button>
         </div>
 
         {/* Context menu */}

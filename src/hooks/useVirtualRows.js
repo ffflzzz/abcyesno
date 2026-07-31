@@ -1,6 +1,15 @@
 import { useRef, useState, useCallback, useEffect, useMemo } from "react";
 
 /**
+ * Row gap in px. MUST stay in sync with `.vs-content { gap: 16px }` in
+ * src/styles/index.css. `.vs-content` is `display:flex; flex-direction:column`,
+ * so every flex child (virtual rows + the two spacer divs) is separated by
+ * this gap. getBoundingClientRect().height (used by measureRow) does NOT
+ * include it, which is exactly the mismatch this file compensates for.
+ */
+const ROW_GAP = 16;
+
+/**
  * Self-built virtual scroll hook for variable-height message lists.
  * See docs/VIRTUAL_SCROLL_SPEC.md for design rationale.
  *
@@ -30,6 +39,9 @@ export default function useVirtualRows({
   const prevRowCountRef = useRef(0);
   const rowObserverRef = useRef(null);          // shared ResizeObserver for rows
   const measuredElsRef = useRef(new Map());     // element -> row index
+  // FIX (followOutput): true once the user scrolls up to read history.
+  // Auto-follow is suspended until the user returns to the bottom.
+  const userScrolledUpRef = useRef(false);
 
   // ── Reactive state ────────────────────────────────────────────────
   const [scrollState, setScrollState] = useState({
@@ -56,7 +68,15 @@ export default function useVirtualRows({
     arr[0] = 0;
     for (let i = 0; i < rows.length; i++) {
       const h = heightMapRef.current.get(i) ?? getEstimatedHeight(rows[i], i);
-      arr[i + 1] = arr[i] + h;
+      // FIX (gap misalignment): each row is followed by a flex `gap` of
+      // ROW_GAP in `.vs-content`, but measureRow() returns the bare
+      // getBoundingClientRect().height which excludes that gap. Adding
+      // ROW_GAP to every stride makes the virtual-scroll range match the
+      // real rendered layout. Without this, `offsets` was short by
+      // (n-1)*ROW_GAP px, so scrolling up to history was mis-anchored /
+      // could not reach the top. The trailing gap is absorbed by the
+      // bottomSpacer subtraction below.
+      arr[i + 1] = arr[i] + h + ROW_GAP;
     }
     return arr;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -107,7 +127,11 @@ export default function useVirtualRows({
       startIndex: s,
       endIndex: e,
       topSpacer: offsets[s] || 0,
-      bottomSpacer: totalHeight - (offsets[e + 1] || 0),
+      // FIX (gap misalignment): offsets now include a trailing ROW_GAP after
+      // every row, but the real DOM only needs one gap between the last
+      // visible row and the bottom spacer. Subtract it so the total rendered
+      // height stays self-consistent (== totalHeight) under virtualization.
+      bottomSpacer: Math.max(0, (totalHeight - (offsets[e + 1] || 0)) - ROW_GAP),
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows.length, scrollState, offsets, totalHeight, overscanTop, overscanBottom]);
@@ -144,6 +168,12 @@ export default function useVirtualRows({
         scrollTop: el.scrollTop,
         viewportHeight: el.clientHeight,
       }));
+      // FIX (followOutput): whenever the user is not at the bottom, they are
+      // reading history — suspend auto-follow. The guard is cleared again by
+      // scrollToBottom() once they return to the bottom.
+      const bottom =
+        el.scrollHeight - el.scrollTop - el.clientHeight < atBottomThreshold;
+      userScrolledUpRef.current = !bottom;
       checkAtBottom();
     });
   }, [checkAtBottom]);
@@ -153,6 +183,10 @@ export default function useVirtualRows({
     (smooth) => {
       const el = containerRef.current;
       if (!el) return;
+      // FIX (followOutput): reaching the bottom clears the "user scrolled up"
+      // guard, so auto-follow resumes. Triggered both by auto-follow and by
+      // the user clicking the "回到底部" button.
+      userScrolledUpRef.current = false;
       el.scrollTo({
         top: el.scrollHeight,
         behavior: smooth ? "smooth" : "auto",
@@ -247,7 +281,11 @@ export default function useVirtualRows({
 
   // ── followOutput: auto-scroll to bottom when new rows arrive ──────
   useEffect(() => {
-    if (atBottom) {
+    // FIX (followOutput): only auto-follow when the user is at the bottom AND
+    // has not scrolled up to read history. This stops streaming output from
+    // yanking the viewport back down while the user is scrolling through old
+    // messages. atBottomThreshold itself is unchanged.
+    if (atBottom && !userScrolledUpRef.current) {
       scrollToBottom(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -260,6 +298,8 @@ export default function useVirtualRows({
       if (rows.length < prevRowCountRef.current) {
         // Session switch / clear — reset measurements
         heightMapRef.current.clear();
+        // FIX (followOutput): a fresh session must auto-follow from the top.
+        userScrolledUpRef.current = false;
         setScrollState((prev) => ({
           ...prev,
           heightVersion: prev.heightVersion + 1,

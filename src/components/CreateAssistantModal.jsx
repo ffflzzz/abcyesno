@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
+import Icon from "./Icon.jsx";
 
-const AVATAR_PRESETS = ["🤖", "🎨", "🛠", "🔍", "🧠", "🎬", "📊", "✍️"];
+const AVATAR_PRESETS = ["bot", "palette", "tools", "search", "brain", "film", "folder", "pen"];
 
 export default function CreateAssistantModal({ skills, onCreate, onClose }) {
   const [name, setName] = useState("");
@@ -53,11 +54,11 @@ export default function CreateAssistantModal({ skills, onCreate, onClose }) {
                 onClick={() => setAvatar(emoji)}
                 title={emoji}
               >
-                {emoji}
+                <Icon name={emoji} size={20} />
               </button>
             ))}
           </div>
-          <div className="modal-avatar-preview">已选：{avatar}</div>
+          <div className="modal-avatar-preview">已选：<Icon name={avatar} size={16} /></div>
         </div>
         <div className="modal-actions">
           <button className="ghost" onClick={onClose}>取消</button>

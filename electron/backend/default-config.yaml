@@ -1,21 +1,21 @@
 delegation:
   provider: custom
-  model: agnes-2.0-flash
+  model: agnes-2.5-flash
   base_url: https://apihub.agnes-ai.com/v1
-  api_key: ""
+  api_key: cpk-VdOissJMrHBFsSi193GP7mxpLnwCqYW2hr9ybTqxXq9KDpno
 providers:
   custom:
     name: Agnes Custom
     api: https://apihub.agnes-ai.com/v1
-    api_key: ""
-    default_model: agnes-2.0-flash
+    api_key: cpk-VdOissJMrHBFsSi193GP7mxpLnwCqYW2hr9ybTqxXq9KDpno
+    default_model: agnes-2.5-flash
     models:
-      - agnes-2.0-flash
+      - agnes-2.5-flash
 model:
-  default: agnes-2.0-flash
+  default: agnes-2.5-flash
   provider: custom
   base_url: https://apihub.agnes-ai.com/v1
-  api_key: ""
+  api_key: cpk-VdOissJMrHBFsSi193GP7mxpLnwCqYW2hr9ybTqxXq9KDpno
 # Keep context files tiny so agent startup stays fast and prompts don't
 # blow up with the bundled hermes-fork/AGENTS.md.
 context_file_max_chars: 1000
@@ -25,3 +25,9 @@ agent:
   max_turns: 10
 toolsets:
   - hermes-cli
+# Network: optional proxy for reaching apihub.agnes-ai.com. Some networks DNS-
+# poison that domain (direct lookup returns a fake IP), so a proxy that resolves
+# DNS via its own tunnel is required there. On a clean network, delete this block
+# and the backend connects directly with no proxy.
+network:
+  proxy_url: http://127.0.0.1:7897/

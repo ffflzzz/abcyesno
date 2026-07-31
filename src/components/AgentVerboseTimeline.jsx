@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import Icon from "./Icon.jsx";
 
 /**
  * AgentVerboseTimeline
@@ -35,30 +36,30 @@ const TYPE_LABEL = {
 
 function StepIcon({ type, status }) {
   const cls = ["av-step-icon"];
-  let glyph;
+  let name;
   if (type === "tool") {
     if (status === "running") {
-      glyph = "⚙️";
+      name = "settings";
       cls.push("av-spinning");
     } else if (status === "error") {
-      glyph = "❌";
+      name = "close";
     } else {
-      glyph = "✅";
+      name = "check-circle";
     }
     cls.push("av-type-tool");
   } else if (type === "thought") {
-    glyph = "🧠";
+    name = "brain";
     cls.push("av-type-thought");
     if (status === "running") cls.push("av-breathing");
   } else if (type === "result") {
-    glyph = "📝";
+    name = "note";
     cls.push("av-type-result");
   } else {
-    glyph = "ℹ️";
+    name = "info";
     cls.push("av-type-system");
   }
   if (status === "error" && type !== "tool") cls.push("av-status-error-icon");
-  return <div className={cls.join(" ")}>{glyph}</div>;
+  return <div className={cls.join(" ")}><Icon name={name} size={14} /></div>;
 }
 
 function renderDetails(details) {

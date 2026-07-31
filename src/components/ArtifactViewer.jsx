@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -26,9 +26,27 @@ export default function ArtifactViewer({ artifact, onOpenExternal }) {
   const a = artifact || {};
   const type = a.type || "file";
   const src = srcFor(a);
+  const [imgError, setImgError] = useState(false);
+
+  // Guard against internal/unsafe protocols leaking into href or shell.openExternal
+  const isSafeUrl = (u) => /^(https?:|file:|data:image\/)/i.test(u || "");
 
   if (type === "image" && src) {
-    return <img className="artifact-full-img" src={src} alt={a.label || "image"} />;
+    if (imgError) {
+      return (
+        <div className="artifact-file-view">
+          <div className="artifact-label">{a.label || "图片"}</div>
+          <div className="artifact-missing">图片无法加载</div>
+          {isSafeUrl(src) && (
+            <div className="artifact-file-actions">
+              <a className="artifact-download" href={src} download target="_blank">下载</a>
+              {onOpenExternal && <button className="artifact-open-ext" onClick={() => onOpenExternal(src)}>外开</button>}
+            </div>
+          )}
+        </div>
+      );
+    }
+    return <img className="artifact-full-img" src={src} alt={a.label || "image"} onError={() => setImgError(true)} />;
   }
   if (type === "video" && src) {
     return <video className="artifact-full-video" src={src} controls />;
@@ -66,12 +84,12 @@ export default function ArtifactViewer({ artifact, onOpenExternal }) {
         <div className="artifact-label">{a.label || a.path || "文件"}</div>
         {a.mime && <div className="artifact-sub">{a.mime}</div>}
         <div className="artifact-file-actions">
-          {src && (
+          {isSafeUrl(src) && (
             <a className="artifact-download" href={src} download>
               下载
             </a>
           )}
-          {src && onOpenExternal && (
+          {isSafeUrl(src) && onOpenExternal && (
             <button className="artifact-open-ext" onClick={() => onOpenExternal(src)}>
               外开
             </button>

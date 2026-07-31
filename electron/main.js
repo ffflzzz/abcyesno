@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, shell, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -15,6 +15,8 @@ const HERMES_FORK = path.join(__dirname, '..', 'hermes-fork');
 // Improve compatibility on some Windows GPUs / sandbox configs
 app.commandLine.appendSwitch('disable-gpu');
 app.commandLine.appendSwitch('no-sandbox');
+// Keep SSE / timers alive when window loses focus (agent must keep running in background)
+app.commandLine.appendSwitch('disable-background-timer-throttling');
 
 // Use a stable writable user-data dir under the user home to avoid temp/permission issues
 const userDataDir = path.join(os.homedir(), '.hermes_portable_data');
@@ -45,6 +47,7 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       webviewTag: true,
+      backgroundThrottling: false,
     },
   });
 
@@ -162,6 +165,54 @@ async function doStartBackend() {
 }
 
 app.whenReady().then(async () => {
+  // Native application menu (Help carries the DevTools entry).
+  const template = [
+    {
+      label: '文件',
+      submenu: [{ role: 'quit', label: '退出' }],
+    },
+    {
+      label: '编辑',
+      submenu: [
+        { role: 'undo', label: '撤销' },
+        { role: 'redo', label: '重做' },
+        { type: 'separator' },
+        { role: 'cut', label: '剪切' },
+        { role: 'copy', label: '复制' },
+        { role: 'paste', label: '粘贴' },
+        { role: 'selectall', label: '全选' },
+      ],
+    },
+    {
+      label: '帮助',
+      submenu: [
+        {
+          label: '开发控制台 (DevTools)',
+          accelerator: 'F12',
+          click: () => {
+            if (mainWindow) mainWindow.webContents.openDevTools({ mode: 'right' });
+          },
+        },
+        {
+          label: '打开数据目录',
+          click: async () => {
+            try { await shell.openPath(userDataDir); } catch (_) {}
+          },
+        },
+        {
+          label: '关于 Abcyesno',
+          click: () => {
+            dialog.showMessageBox(mainWindow || undefined, {
+              title: '关于 Abcyesno',
+              message: 'Abcyesno v1.3.0\n便携桌面 Agent 平台',
+            });
+          },
+        },
+      ],
+    },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+
   // Show the window immediately so the user sees a loading surface while
   // Hermes starts in the background. The frontend Bootstrap renders a
   // spinner until the backend is ready.
@@ -563,10 +614,41 @@ ipcMain.handle('open-external', async (_event, url) => {
   }
 });
 
-// Open native Chrome DevTools (Elements / Console / Sources / Network …)
-ipcMain.handle('open-devtools', (_event) => {
-  const win = BrowserWindow.fromWebContents(_event.sender);
-  if (win) win.webContents.openDevTools({ mode: 'detach' });
+// ── Read a local image file as a base64 data URL ──
+// The renderer is loaded via file:// and Chromium blocks cross-directory
+// file:// subresource loads (opaque origin). So the sandboxed renderer cannot
+// <img src="file:///C:/..."> a workspace artifact. We read it in the main
+// process (full FS access) and return a data: URL — bypassing the restriction.
+const IMG_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.ico']);
+ipcMain.handle('read-local-image', async (_event, p) => {
+  if (!p || typeof p !== 'string') return { dataUrl: null, error: 'missing path' };
+  let fp = p.trim();
+  // Accept file:// URLs (strip scheme; file:///C:/... -> C:/...)
+  if (/^file:\/\//i.test(fp)) {
+    fp = fp.replace(/^file:\/\//i, '');
+    if (/^\/[A-Za-z]:/.test(fp)) fp = fp.slice(1);
+  }
+  let stat;
+  try {
+    stat = fs.statSync(fp);
+  } catch (err) {
+    return { dataUrl: null, error: 'not found: ' + fp };
+  }
+  if (!stat.isFile()) return { dataUrl: null, error: 'not a file' };
+  if (stat.size > 16 * 1024 * 1024) return { dataUrl: null, error: 'too large' };
+  const ext = path.extname(fp).toLowerCase();
+  if (!IMG_EXTS.has(ext)) return { dataUrl: null, error: 'unsupported type: ' + ext };
+  const mime =
+    ext === '.jpg' ? 'image/jpeg' :
+    ext === '.svg' ? 'image/svg+xml' :
+    'image/' + ext.replace('.', '');
+  try {
+    const buf = fs.readFileSync(fp);
+    const b64 = buf.toString('base64');
+    return { dataUrl: `data:${mime};base64,${b64}` };
+  } catch (err) {
+    return { dataUrl: null, error: String(err && err.message ? err.message : err) };
+  }
 });
 
 process.on('uncaughtException', (err) => {

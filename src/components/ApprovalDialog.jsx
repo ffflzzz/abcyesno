@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import Icon from "./Icon.jsx";
 
 function formatValue(value) {
   if (value === undefined || value === null) return '';
@@ -39,7 +40,7 @@ export default function ApprovalDialog({ approval, onRespond }) {
   return (
     <div className="modal-mask">
       <div className="modal approval-modal">
-        <h3>⚠️ 需要你的确认</h3>
+        <h3><Icon name="warning" size={16} /> 需要你的确认</h3>
         <p className="modal-desc">以下操作需要批准后才能继续执行：</p>
         <div className="approval-detail">
           <div className="approval-row">

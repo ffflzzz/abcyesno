@@ -8,7 +8,11 @@ export default function ThinkingIndicator({ text = "Thinking" }) {
   return (
     <div className="thinking-indicator">
       <span className="thinking-spinner" aria-hidden="true" />
-      <span className="thinking-text">{text}</span>
+      <span className="thinking-text" style={{
+        color: "#4f8cff",
+        fontWeight: 500,
+        animation: "think-text-pulse 2s ease-in-out infinite",
+      }}>{text}</span>
       <span className="thinking-dots">
         <span className="thinking-dot" style={{ animationDelay: "0ms" }}>.</span>
         <span className="thinking-dot" style={{ animationDelay: "150ms" }}>.</span>

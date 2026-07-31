@@ -79,8 +79,10 @@ contextBridge.exposeInMainWorld('hermes', {
   readFile: (opts) => ipcRenderer.invoke('read-file', opts),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
 
-  // Native Chrome DevTools
-  openDevTools: () => ipcRenderer.invoke('open-devtools'),
+  // Read a local image file as a base64 data URL. Used by ApprovalBubble to
+  // render workspace artifacts: the file:// renderer cannot load cross-directory
+  // file:// images, so the main process reads + encodes them.
+  readLocalImage: (p) => ipcRenderer.invoke('read-local-image', p),
 
   // Event subscriptions
   on,

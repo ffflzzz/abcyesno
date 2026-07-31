@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import Icon from "./Icon.jsx";
 import TerminalPanel from "./TerminalPanel.jsx";
 
 /**
@@ -41,7 +42,7 @@ export default function ToolCard({
     }
   }, [status]);
 
-  const statusIcon = status === "running" ? "⚙️" : status === "error" ? "❌" : "✅";
+  const statusIcon = status === "running" ? "settings" : status === "error" ? "close" : "check-circle";
   const statusColor = status === "running" ? "var(--warning)" : status === "error" ? "var(--error)" : "var(--success)";
   const argsText = toText(args);
   // Clean args summary: hide internal fields like tool_id, call_*, __
@@ -63,7 +64,7 @@ export default function ToolCard({
         onClick={() => { userToggledRef.current = true; setExpanded(!expanded); }}
         aria-expanded={expanded}
       >
-        <span className="tool-card-icon">{statusIcon}</span>
+        <span className="tool-card-icon"><Icon name={statusIcon} size={14} /></span>
         <span className="tool-card-name">{toolName}</span>
         {argsSummary && <span className="tool-card-args">{argsSummary}</span>}
         {durationMs !== undefined && (
@@ -71,7 +72,7 @@ export default function ToolCard({
             {status === "error" ? "Failed" : "Completed"} in {(durationMs / 1000).toFixed(1)}s
           </span>
         )}
-        <span className="tool-card-chevron">{expanded ? "▾" : "▸"}</span>
+        <span className="tool-card-chevron"><Icon name="chevron" size={12} style={{ transform: expanded ? "rotate(90deg)" : "rotate(0deg)" }} /></span>
       </button>
       {expanded && (
         <div className="tool-card-body">

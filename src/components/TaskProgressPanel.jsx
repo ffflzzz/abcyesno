@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from "react";
+import Icon from "./Icon.jsx";
 
 /**
  * TaskProgressPanel — 实时任务进度面板
@@ -20,9 +21,9 @@ function StepIcon({ status }) {
     case "active":
       return <span className="step-icon step-icon-active" aria-hidden="true" />;
     case "done":
-      return <span className="step-icon step-icon-done" aria-hidden="true">✓</span>;
+      return <span className="step-icon step-icon-done" aria-hidden="true"><Icon name="check" size={12} /></span>;
     case "error":
-      return <span className="step-icon step-icon-error" aria-hidden="true">✗</span>;
+      return <span className="step-icon step-icon-error" aria-hidden="true"><Icon name="close" size={12} /></span>;
     default:
       return <span className="step-icon step-icon-pending" aria-hidden="true" />;
   }
@@ -139,7 +140,7 @@ export default function TaskProgressPanel({ messages = [], thinkingText = "", is
         <span className="task-progress-title">概览</span>
         <span className="task-progress-summary">{summary}</span>
         <span className={`task-progress-chevron ${expanded ? "open" : ""}`} aria-hidden="true">
-          ‹
+          <Icon name="chevron" size={12} style={{ transform: expanded ? "rotate(90deg)" : "rotate(180deg)" }} />
         </span>
       </button>
 
@@ -153,7 +154,7 @@ export default function TaskProgressPanel({ messages = [], thinkingText = "", is
                   <StepIcon status={step.status} />
                   <span className="task-step-label">{step.label}</span>
                   {step.hasArtifact && (
-                    <span className="task-step-badge" title="包含图片产物">🖼</span>
+                    <span className="task-step-badge" title="包含图片产物"><Icon name="image" size={12} /></span>
                   )}
                   {step.actionDetail && step.status === "active" && (
                     <span className="task-step-detail">{step.actionDetail}</span>

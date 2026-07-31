@@ -1,4 +1,5 @@
 import React, { useMemo } from "react";
+import Icon from "./Icon.jsx";
 
 /**
  * StructuredThinking — 结构化思考/推理展示
@@ -90,7 +91,10 @@ export default function StructuredThinking({ text = "", phaseLabel = "" }) {
     return (
       <div className="thinking-indicator">
         <span className="thinking-spinner" aria-hidden="true" />
-        <span className="thinking-text">正在思考…</span>
+        <span className="thinking-text" style={{
+          fontWeight: 500,
+          animation: "think-text-pulse 2s ease-in-out infinite",
+        }}>正在思考…</span>
         <span className="thinking-dots">
           <span className="thinking-dot" style={{ animationDelay: "0ms" }}>.</span>
           <span className="thinking-dot" style={{ animationDelay: "150ms" }}>.</span>
@@ -105,40 +109,44 @@ export default function StructuredThinking({ text = "", phaseLabel = "" }) {
       {(phaseLabel || !text.trim()) && (
         <div className="think-phase-header">
           <span className="thinking-spinner" aria-hidden="true" />
-          <span className="think-phase-label">{phaseLabel || "正在思考…"}</span>
+          <span className="think-phase-label" style={{
+            color: "#4f8cff",
+            fontWeight: 500,
+            animation: "think-text-pulse 2s ease-in-out infinite",
+          }}>{phaseLabel || "正在思考…"}</span>
         </div>
       )}
       {lines.map((line, i) => (
         <div key={i} className={`think-line think-${line.type}`}>
           {line.type === "search" && (
             <>
-              <span className="think-icon think-icon-search" aria-hidden="true">🔍</span>
+              <span className="think-icon think-icon-search" aria-hidden="true"><Icon name="search" size={14} /></span>
               <span className="think-label">已搜索</span>
               <code className="think-path">{line.path}</code>
             </>
           )}
           {line.type === "file" && (
             <>
-              <span className="think-icon think-icon-file" aria-hidden="true">©</span>
+              <span className="think-icon think-icon-file" aria-hidden="true"><Icon name="file" size={14} /></span>
               <span className="think-label">已读取</span>
               <code className="think-path">{line.path}</code>
             </>
           )}
           {line.type === "step" && (
             <>
-              <span className="think-icon think-icon-step" aria-hidden="true">▸</span>
+              <span className="think-icon think-icon-step" aria-hidden="true"><Icon name="chevron" size={14} /></span>
               <span className="think-text-content">{line.text}</span>
             </>
           )}
           {line.type === "inference" && (
             <>
-              <span className="think-icon think-icon-infer" aria-hidden="true">·</span>
+              <span className="think-icon think-icon-infer" aria-hidden="true"><Icon name="dot" size={6} /></span>
               <span className="think-text-content"><HighlightPaths text={line.text} paths={line.paths} /></span>
             </>
           )}
           {line.type === "text" && (
             <>
-              <span className="think-icon think-icon-text" aria-hidden="true">·</span>
+              <span className="think-icon think-icon-text" aria-hidden="true"><Icon name="dot" size={6} /></span>
               <span className="think-text-content">{line.text}</span>
             </>
           )}

@@ -1,6 +1,12 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { emitContractEvent } from "../contract/eventBus.js";
 
+// ── Agent 自渲染 UI 组件：白名单 + blockId 校验 ──
+const UI_BLOCK_TYPES = new Set(["table", "flowchart", "card", "progress", "action"]);
+const BLOCK_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
+// 渲染上限，防恶意大 payload 卡死渲染（spec §6.4）
+const UI_BLOCK_MAX = 64;
+
 /**
  * useAgentStream — 自建 SSE token 流状态机
  *
@@ -18,6 +24,9 @@ export function useAgentStream(aguiPort) {
   const [phase, setPhase] = useState("idle");
   const [thinkingText, setThinkingText] = useState("");
   const [error, setError] = useState(null);
+  // Agent 自渲染 UI 组件队列（spec: AGENT_UI_RENDER_SPEC.md）。每个 uiBlock:
+  // { blockId, type, props }，挂载在最近一条 assistant 消息下方。
+  const [uiBlocks, setUiBlocks] = useState([]);
 
   const abortRef = useRef(null);
   const runIdRef = useRef(null);
@@ -35,6 +44,7 @@ export function useAgentStream(aguiPort) {
     setPhase("idle");
     setThinkingText("");
     setError(null);
+    setUiBlocks([]);
     currentAssistantIdRef.current = null;
     toolIndexRef.current = new Map();
   }, []);
@@ -44,6 +54,7 @@ export function useAgentStream(aguiPort) {
     setPhase("idle");
     setThinkingText("");
     setError(null);
+    setUiBlocks([]);
     currentAssistantIdRef.current = null;
     toolIndexRef.current = new Map();
   }, []);
@@ -212,6 +223,33 @@ export function useAgentStream(aguiPort) {
       // (Blueprint / Timeline / ManjuCraft) subscribe via useContractEvents
       // (session.id) and render real backend streams instead of mock data.
       emitContractEvent(sessionIdRef.current, { type: name, payload: value });
+    } else if (name === "ui.render") {
+      // Agent 自渲染 UI 组件能力（spec: AGENT_UI_RENDER_SPEC.md §3.1）。
+      // 安全：未知 type 或非法 blockId 静默丢弃（§6）。
+      const { blockId, type, props, replace, appendPreview } = value || {};
+      if (!type || !UI_BLOCK_TYPES.has(type)) return;
+      if (!blockId || !BLOCK_ID_RE.test(blockId)) return;
+      const safeProps = props && typeof props === "object" ? props : {};
+      setUiBlocks((prev) => {
+        const block = { blockId, type, props: safeProps };
+        const idx = prev.findIndex((b) => b.blockId === blockId);
+        if (idx >= 0) {
+          // 幂等更新：相同 blockId 直接替换（action 流式进度由 agent 发送累积 props）。
+          // 若声明 appendPreview 且旧块已有 preview，则仅追加 preview 文本，其余字段整体替换。
+          const next = prev.slice();
+          if (appendPreview && typeof next[idx].props?.preview === "string" && typeof safeProps.preview === "string") {
+            next[idx] = {
+              ...block,
+              props: { ...safeProps, preview: next[idx].props.preview + safeProps.preview },
+            };
+          } else {
+            next[idx] = block;
+          }
+          return next;
+        }
+        if (prev.length >= UI_BLOCK_MAX) return prev; // 硬上限，防恶意大 payload
+        return [...prev, block];
+      });
     }
   }, []);
 
@@ -240,6 +278,7 @@ export function useAgentStream(aguiPort) {
       setPhase("thinking");
       setThinkingText("");
       setError(null);
+      setUiBlocks([]); // 新的一轮：清空上一轮的 agent 自渲染组件
 
       const controller = new AbortController();
       abortRef.current = controller;
@@ -274,9 +313,19 @@ export function useAgentStream(aguiPort) {
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
+        const READ_TIMEOUT_MS = 120_000; // 2 min idle = stall
 
         for (;;) {
-          const { done, value } = await reader.read();
+          let readPromise = reader.read();
+          // Safety timeout: if Chromium throttles the reader (background tab,
+          // GIL pressure), abort instead of hanging forever so the user can retry.
+          const timer = setTimeout(() => controller.abort(), READ_TIMEOUT_MS);
+          let done, value;
+          try {
+            ({ done, value } = await readPromise);
+          } finally {
+            clearTimeout(timer);
+          }
           if (done) break;
           buffer += decoder.decode(value, { stream: true });
 
@@ -328,6 +377,7 @@ export function useAgentStream(aguiPort) {
     phase,
     thinkingText,
     error,
+    uiBlocks,
     isStreaming: phase !== "idle",
     sendMessage,
     stop,

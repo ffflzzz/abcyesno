@@ -1,7 +1,9 @@
 import React, { useRef, useEffect, useState, useMemo } from "react";
+import Icon from "./Icon.jsx";
 import Composer from "./Composer.jsx";
 import MessageThread from "./MessageThread.jsx";
 import SkillPanel from "./SkillPanel.jsx";
+import ContextUsage from "./ContextUsage.jsx";
 import { inferStreamingPhase } from "../utils/streamingPhase.js";
 import bachAvatar from "../assets/bach-avatar.png";
 
@@ -21,6 +23,7 @@ export default function ChatLayout({
   status,
   streamPhase,
   thinkingText,
+  uiBlocks = [],
   version,
   sidebarOpen,
   model,
@@ -39,6 +42,7 @@ export default function ChatLayout({
   runError,
   onClearRunError,
   approval,
+  onRespondApproval,
   showSkills,
   onToggleSkills,
   onRetry,
@@ -49,9 +53,19 @@ export default function ChatLayout({
   assistants = [],
   resultPanelOpen = false,
   onToggleResultPanel = () => {},
+  onOpenPreviewUrl,
+  resultPanelCollapsed = false,
+  onToggleResultPanelCollapse = () => {},
+  selectedSessionId = "",
+  onEditMessage,
+  onDeleteMessage,
+  editingMessageId = null,
+  onSaveEdit,
+  onCancelEdit,
 }) {
   const bottomRef = useRef(null);
   const [attachment, setAttachment] = useState(null);
+  const [showContextUsage, setShowContextUsage] = useState(false);
 
   const approvalPending = !!approval;
 
@@ -125,34 +139,51 @@ export default function ChatLayout({
         <div className="header-left">
           {!sidebarOpen && (
             <button className="header-icon" onClick={onToggleSidebar} title="展开侧边栏">
-              ☰
+              <Icon name="panel" size={16} />
             </button>
           )}
           <div className="header-assistant">
             <div className="header-title-row">
               <span className={`header-status-dot ${getStatusLabel(backendStatus, phase).dot}`} />
-              <span className="header-title">{assistant?.name || "ABC"}</span>
+              <span className="header-title">{session?.preview || (assistant?.name || "Abcyesno")}</span>
             </div>
           </div>
         </div>
         <div className="header-center" />
         <div className="header-right">
-          <span className={`header-status ${getStatusLabel(backendStatus, phase).dot}`}>
+          <span
+            className={`header-status ${getStatusLabel(backendStatus, phase).dot}`}
+            style={getStatusLabel(backendStatus, phase).dot === "thinking" ? {
+              color: "#ffc107",
+              fontWeight: 500,
+              animation: "header-think-pulse 1.6s ease-in-out infinite",
+            } : undefined}
+          >
             {getStatusLabel(backendStatus, phase).text}
           </span>
           <button
-            className={`header-icon ${resultPanelOpen ? "active" : ""}`}
-            onClick={onToggleResultPanel}
-            title={resultPanelOpen ? "关闭结果区" : "打开结果区"}
+            className={`header-icon ${resultPanelOpen && !resultPanelCollapsed ? "active" : ""}`}
+            onClick={() => {
+              if (!resultPanelOpen) {
+                onToggleResultPanel(); // closed → open
+              } else {
+                onToggleResultPanelCollapse(); // open ↔ collapsed
+              }
+            }}
+            title={resultPanelCollapsed ? "展开结果区" : resultPanelOpen ? "收起结果区" : "打开结果区"}
           >
-            ▤
+            <Icon name="panel" size={16} />
+          </button>
+            <button
+            className="header-icon"
+            onClick={() => setShowContextUsage(true)}
+            title="上下文用量"
+          >
+            <Icon name="activity" size={16} />
           </button>
           <button className="header-icon" onClick={onOpenKey} title="设置 API Key">
-            ⚙
-          </button>
-          <button className="header-icon" onClick={() => window.hermes?.openDevTools?.()} title="开发控制台 (DevTools)">
-            ❓
-          </button>
+              <Icon name="settings" size={16} />
+            </button>
         </div>
       </header>
 
@@ -160,21 +191,21 @@ export default function ChatLayout({
         <div className="error-banner">
           <span className="error-banner-text">错误：{runError}</span>
           <button className="error-banner-close" onClick={onClearRunError} title="关闭">
-            ✕
+            <Icon name="close" size={14} />
           </button>
         </div>
       )}
 
       {approvalPending && (
         <div className="approval-banner">
-          ⏸ 等待用户确认：操作需要批准后才会继续
+          <Icon name="pause" size={14} /> 等待用户确认：操作需要批准后才会继续
         </div>
       )}
 
       <div className="chat-body">
         {(!messages || messages.length === 0) ? (
           <div className="welcome">
-            <img src={bachAvatar} alt="ABC" className="welcome-avatar" />
+            <img src={bachAvatar} alt="ABC" className="welcome-avatar" onClick={() => onOpenPreviewUrl && onOpenPreviewUrl("https://abcyesno.cn")} style={{ cursor: "pointer" }} title="打开 Abcyesno 文档站" />
             <h2>{assistant?.name || "Abcyesno"}</h2>
             <p>{assistant?.description || "输入问题，AI 会帮你执行命令、读取文件、浏览网页"}</p>
             <div className="welcome-hints">
@@ -189,11 +220,21 @@ export default function ChatLayout({
             loading={isLoading}
             streamPhase={phase}
             thinkingText={thinkingText}
+            uiBlocks={uiBlocks}
             onRetry={onRetry}
             onRegenerate={onRegenerate}
             assistant={assistant}
             manifests={manifests}
             onUpgradeToWorkbench={onSelectWorkflow}
+            onOpenPreviewUrl={onOpenPreviewUrl}
+            approval={approval}
+            onRespondApproval={onRespondApproval}
+            sessionId={selectedSessionId}
+            onEditMessage={onEditMessage}
+            onDeleteMessage={onDeleteMessage}
+            editingMessageId={editingMessageId}
+            onSaveEdit={onSaveEdit}
+            onCancelEdit={onCancelEdit}
           />
         )}
         <div ref={bottomRef} style={{ display: "none" }} />
@@ -214,13 +255,14 @@ export default function ChatLayout({
           mentionables={mentionables}
           queuedMessages={queuedMessages}
           onRemoveQueued={onRemoveQueued}
+          onOpenPreviewUrl={onOpenPreviewUrl}
           placeholder={
             approvalPending
               ? "请先在审批弹窗中选择批准或拒绝…"
               : !backendStatus.hermesReady
-              ? "Hermes 后端正在启动…"
+              ? "引擎正在启动…"
               : !backendStatus.gatewayConnected
-              ? "正在连接 Hermes Gateway…"
+              ? "正在连接服务…"
               : isLoading
               ? "工作中…可继续输入，Enter 排队"
               : "输入问题，Enter 发送，Shift+Enter 换行"
@@ -239,6 +281,13 @@ export default function ChatLayout({
         />
       )}
       <div className="version-tag">Abcyesno {version ? `v${version}` : ""}</div>
+
+      <ContextUsage
+        messages={messages}
+        model={model}
+        open={showContextUsage}
+        onClose={() => setShowContextUsage(false)}
+      />
     </main>
   );
 }
