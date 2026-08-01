@@ -24,6 +24,7 @@ export default function ChatLayout({
   streamPhase,
   thinkingText,
   uiBlocks = [],
+  stalled = false,
   version,
   sidebarOpen,
   model,
@@ -151,16 +152,6 @@ export default function ChatLayout({
         </div>
         <div className="header-center" />
         <div className="header-right">
-          <span
-            className={`header-status ${getStatusLabel(backendStatus, phase).dot}`}
-            style={getStatusLabel(backendStatus, phase).dot === "thinking" ? {
-              color: "#ffc107",
-              fontWeight: 500,
-              animation: "header-think-pulse 1.6s ease-in-out infinite",
-            } : undefined}
-          >
-            {getStatusLabel(backendStatus, phase).text}
-          </span>
           <button
             className={`header-icon ${resultPanelOpen && !resultPanelCollapsed ? "active" : ""}`}
             onClick={() => {
@@ -221,6 +212,7 @@ export default function ChatLayout({
             streamPhase={phase}
             thinkingText={thinkingText}
             uiBlocks={uiBlocks}
+            stalled={stalled}
             onRetry={onRetry}
             onRegenerate={onRegenerate}
             assistant={assistant}

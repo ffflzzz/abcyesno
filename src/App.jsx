@@ -16,7 +16,7 @@ import { useTaskManager } from "./components/TaskPanel.jsx";
 class ErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
-    this.state = { hasError: false, error: null };
+    this.state = { hasError: false, error: null, stack: null, showDetails: false };
   }
   static getDerivedStateFromError(error) {
     return { hasError: true, error };
@@ -26,18 +26,44 @@ class ErrorBoundary extends React.Component {
       window.hermes.logError(error && error.message ? error.message : String(error));
     }
     console.error(error, info);
+    this.setState({ stack: info && info.componentStack ? info.componentStack : null });
   }
   render() {
     if (this.state.hasError) {
+      const { showDetails } = this.state;
       return (
-        <div className="app flex-center">
-          <div className="welcome">
-            <div className="welcome-logo">!</div>
-            <h2>界面渲染出错</h2>
-            <pre style={{ maxWidth: 600, textAlign: 'left', fontSize: 12 }}>
-              {this.state.error && (this.state.error.message || String(this.state.error))}
-            </pre>
-            <button className="primary" onClick={() => window.location.reload()}>刷新</button>
+        <div className="error-fallback">
+          <div className="error-card">
+            <div className="error-emoji">⚡</div>
+            <h2 className="error-title">界面遇到点小问题</h2>
+            <p className="error-subtitle">这通常不影响已保存的对话数据</p>
+
+            <button className="error-reload-btn" onClick={() => window.location.reload()}>
+              <span className="error-reload-icon">↻</span> 重新加载
+            </button>
+
+            <button
+              className="error-details-toggle"
+              onClick={() => this.setState(s => ({ showDetails: !s.showDetails }))}
+            >
+              {showDetails ? '收起详情' : '查看技术详情'}
+              <span className={`error-toggle-arrow ${showDetails ? 'open' : ''}`}>▸</span>
+            </button>
+
+            {showDetails && (
+              <div className="error-details">
+                <div className="error-msg-block">
+                  <span className="error-label">错误信息</span>
+                  <pre className="error-pre">{this.state.error && (this.state.error.message || String(this.state.error))}</pre>
+                </div>
+                {this.state.stack && (
+                  <div className="error-stack-block">
+                    <span className="error-label">组件路径</span>
+                    <pre className="error-pre error-stack-pre">{this.state.stack}</pre>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       );
@@ -163,8 +189,10 @@ function ChatShell({
     error: streamError,
     isStreaming,
     uiBlocks,
+    stalled,
     sendMessage,
     stop,
+    reset,
     setHistory,
   } = useAgentStream(aguiPort);
 
@@ -190,6 +218,9 @@ function ChatShell({
 
   const pendingSendRef = useRef(null);
   const wasLoadingRef = useRef(false);
+  // Track whether a session was actively streaming so we don't kill a
+  // just-started first-send stream when selecting a newly-created session.
+  const hadActiveSessionRef = useRef(false);
 
   // Queued messages belong to a session; drop them when switching away.
   useEffect(() => {
@@ -204,8 +235,19 @@ function ChatShell({
   }, [selectedSessionId]);
 
   // Load persisted messages when the session changes.
+  // IMPORTANT: We must abort any ongoing stream from the PREVIOUS session
+  // before switching — otherwise stale SSE events leak into the new session.
+  // BUT: when switching from "no session" to a freshly-created one (first send),
+  // there is no previous stream to abort. Calling stop() here would kill the
+  // SSE that handleSend just started (race condition: setState → effect fires
+  // → stop() aborts the in-flight fetch). Guard with hadActiveSessionRef.
   useEffect(() => {
     if (historyInitializedRef.current) return;
+    // Only abort if we had an active session before (not "" → first send).
+    if (hadActiveSessionRef.current) {
+      stop();
+    }
+    reset();
     const stored = session?.messages || [];
     if (stored.length === 0) {
       historyInitializedRef.current = true;
@@ -214,7 +256,9 @@ function ChatShell({
     }
     setHistory(stored.map((m) => ({ ...m })));
     historyInitializedRef.current = true;
-  }, [selectedSessionId, session, setHistory]);
+    // Update tracking: now we have an active session.
+    hadActiveSessionRef.current = !!selectedSessionId;
+  }, [selectedSessionId, session, setHistory, stop, reset]);
 
   async function doSend(text, mentions, explicitThreadId) {
     if (!text.trim()) return;
@@ -288,15 +332,21 @@ function ChatShell({
   async function handleSend(text, mentions) {
     if (!text.trim()) return;
     // No active session → create one inline, then immediately send.
-    // (Avoids the fragile pendingSendRef → useEffect flush async chain.)
+    // IMPORTANT: We do NOT call loadSessions here because it triggers
+    // setSessions → re-render → ChatShell remount (via key=selectedSessionId)
+    // which destroys the active useAgentStream instance and causes TDZ/blank.
+    // The session list refreshes naturally via existing effects (post-send
+    // persistence callback + onSessionUpdated).
     if (!selectedSessionId) {
       try {
         const assistantId = selectedAssistantId || "default";
         const session = await hermes.createSession(assistantId, "新会话");
+        // Select the new session (triggers history-reset effect inside ChatShell,
+        // but does NOT remount it because we removed the key prop).
         onSelectSession(session.id);
-        await loadSessions(assistantId);
-        // Session is now active; send using the freshly-created id (not the
-        // stale closure value, which would mismatch the eventBus key).
+        // Send immediately using the explicit session id — don't wait for
+        // React to flush state. The stream hooks pick up the new threadId
+        // via the closure-free explicitThreadId parameter.
         await doSend(text, mentions, session.id);
         return;
       } catch (err) {
@@ -451,6 +501,7 @@ function ChatShell({
         streamPhase={phase}
         thinkingText={thinkingText}
         uiBlocks={uiBlocks}
+        stalled={stalled}
         version={version}
         sidebarOpen={sidebarOpen}
         model={model}
@@ -592,7 +643,9 @@ export default function App({ aguiPort }) {
   const [externalPreviewUrl, setExternalPreviewUrl] = useState(null); // URL or "tab:xxx" to switch sidebar tab (e.g. abcyesno.cn / tab:artifacts)
   const [confirmDialog, setConfirmDialog] = useState(null); // { title, message, danger, onConfirm } | null
   const [skills, setSkills] = useState([{ id: "default", name: "通用助手", category: "general" }]);
-  const [backendStatus, setBackendStatus] = useState({ hermesReady: false, gatewayConnected: false });
+  const [backendStatus, setBackendStatus] = useState(
+    aguiPort ? { hermesReady: true, gatewayConnected: true } : { hermesReady: false, gatewayConnected: false }
+  );
   const [runError, setRunError] = useState(null);
   const [enabledSkills, setEnabledSkills] = useState(() => {
     try {
@@ -677,10 +730,12 @@ export default function App({ aguiPort }) {
     hermes.on("gateway-status", onGatewayStatus);
 
     hermes.getStatus().then((status) => {
-      setBackendStatus({
-        hermesReady: !!status.hermesReady,
-        gatewayConnected: !!status.gatewayConnected,
-      });
+      // Only downgrade if we started as not-ready; never flip from ready→not-ready
+      // after Bootstrap has already confirmed the backend is up (aguiPort != null).
+      setBackendStatus(prev => ({
+        hermesReady: prev.hermesReady || !!status.hermesReady,
+        gatewayConnected: prev.gatewayConnected || !!status.gatewayConnected,
+      }));
     });
 
     // Pull contract manifests from the adapter (falls back to bundled set).
@@ -747,15 +802,14 @@ export default function App({ aguiPort }) {
 
   async function loadSessions(assistantId) {
     let list = await hermes.listSessions(assistantId);
-    // Auto-create a default session so the very first conversation is
-    // persisted (otherwise we'd chat in a non-persisted "no-session" thread).
-    if ((!list || list.length === 0) && assistantId) {
-      try {
-        const created = await hermes.createSession(assistantId, "新会话");
-        list = [created];
-      } catch (err) {
-        console.error("auto-create session failed", err);
+    // Filter out empty sessions (never had any message) and clean them from storage.
+    const emptyIds = (list || []).filter((s) => !s.messages || s.messages.length === 0).map((s) => s.id);
+    if (emptyIds.length > 0) {
+      // Clean empty sessions in background (fire-and-forget)
+      for (const id of emptyIds) {
+        hermes.deleteSession(id).catch(() => {});
       }
+      list = (list || []).filter((s) => s.messages && s.messages.length > 0);
     }
     // Most-recently-active first so old sessions stay visible instead of
     // sinking below the fold as new ones are appended at the tail.
@@ -814,16 +868,10 @@ export default function App({ aguiPort }) {
   }
 
   async function handleNewSession(title) {
-    if (typeof title !== "string") title = undefined;
-    const assistantId = selectedAssistantId || "default";
-    try {
-      const session = await hermes.createSession(assistantId, title || "新会话");
-      await loadSessions(assistantId);
-      setSelectedSessionId(session.id);
-      return session;
-    } catch (err) {
-      console.error("create new session failed", err);
-    }
+    // Lazy creation: don't persist until user sends first message.
+    // Just clear selection to give a blank slate. The real session gets
+    // created inline inside handleSend() when !selectedSessionId.
+    setSelectedSessionId("");
   }
 
   async function handleDeleteSession(id) {
@@ -926,7 +974,6 @@ export default function App({ aguiPort }) {
     <ErrorBoundary>
       <div className="app">
         <ChatShell
-          key={selectedSessionId || "none"}
           assistant={assistant}
           session={session}
           selectedAssistantId={selectedAssistantId}

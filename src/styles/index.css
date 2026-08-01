@@ -980,28 +980,45 @@ body {
 
 /* Live, auto-following transcript of the model's reasoning while it thinks.
    Keeps the user informed instead of staring at a spinner. */
-.thinking-transcript {
-  margin-top: 6px;
-  max-height: 200px;
+/* ═══ ThinkingTranscript — inline streaming text (no card/bubble) ═══ */
+.thinking-inline {
+  margin-top: 4px;
+  max-height: 120px;
   overflow-y: auto;
-  background: rgba(120, 140, 180, 0.06);
-  border: 1px solid var(--border, #2a3340);
-  border-radius: 8px;
-  padding: 8px 10px;
+  /* No background, no border, no border-radius — pure streaming text */
+  padding: 0;
 }
-.thinking-transcript-head {
-  font-size: 11px;
-  color: var(--muted, #8a94a6);
-  margin-bottom: 4px;
-  letter-spacing: 0.02em;
-}
-.thinking-transcript-text {
-  font-size: 12.5px;
-  line-height: 1.55;
-  color: #aeb8c8;
+.thinking-inline-text {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted, #6b7785);
   white-space: pre-wrap;
   word-break: break-word;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  opacity: 0.85;
+}
+/* Collapsed state: single subtle line */
+.thinking-inline-collapsed {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: background 0.15s;
+}
+.thinking-inline-collapsed:hover {
+  background: rgba(120, 140, 180, 0.08);
+}
+.thinking-dim-icon {
+  font-size: 11px;
+  opacity: 0.6;
+}
+.thinking-dim-text {
+  font-size: 11px;
+  color: var(--muted, #6b7785);
+  opacity: 0.5;
 }
 
 /* ═══════════════════════════════════════════
@@ -5947,4 +5964,179 @@ body[--resizing="1"] .result-panel-resize-handle::before {
 .modal-confirm.danger:hover {
   background: #d63031;
   border-color: #d63030;
+}
+
+/* ── Stall warning (thinking timeout) ── */
+.btc-stall-warning {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 6px 10px;
+  font-size: 11.5px;
+  color: var(--warning);
+  background: rgba(210, 153, 34, 0.1);
+  border: 1px solid rgba(210, 153, 34, 0.25);
+  border-radius: 6px;
+  animation: stallPulse 2s ease-in-out infinite;
+}
+.btc-stall-icon {
+  font-style: normal;
+  font-size: 14px;
+}
+@keyframes stallPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* ── ErrorBoundary Fallback (friendly, non-scary) ── */
+.error-fallback {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  z-index: 99999;
+  padding: 20px;
+}
+
+.error-card {
+  max-width: 520px;
+  width: 100%;
+  text-align: center;
+  padding: 48px 36px 36px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+}
+
+.error-emoji {
+  font-size: 48px;
+  line-height: 1;
+  margin-bottom: 16px;
+  filter: grayscale(0.2);
+}
+
+.error-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0 0 8px;
+  letter-spacing: -0.01em;
+}
+
+.error-subtitle {
+  font-size: 14px;
+  color: var(--muted);
+  margin: 0 0 28px;
+  line-height: 1.5;
+}
+
+.error-reload-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 28px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #fff;
+  background: var(--accent);
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s;
+}
+.error-reload-btn:hover { background: #3d7ccd; }
+.error-reload-btn:active { transform: scale(0.97); }
+
+.error-reload-icon {
+  font-size: 18px;
+  line-height: 1;
+  display: inline-block;
+  transition: transform 0.3s;
+}
+.error-reload-btn:hover .error-reload-icon {
+  transform: rotate(-180deg);
+}
+
+.error-details-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 18px;
+  padding: 6px 14px;
+  font-size: 12px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.error-details-toggle:hover {
+  color: var(--text);
+  border-color: var(--muted);
+}
+
+.error-toggle-arrow {
+  font-size: 10px;
+  transition: transform 0.2s;
+  display: inline-block;
+}
+.error-toggle-arrow.open {
+  transform: rotate(90deg);
+}
+
+.error-details {
+  margin-top: 20px;
+  text-align: left;
+  animation: errorSlideIn 0.2s ease-out;
+}
+
+@keyframes errorSlideIn {
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.error-msg-block,
+.error-stack-block {
+  margin-bottom: 12px;
+}
+.error-msg-block:last-child,
+.error-stack-block:last-child {
+  margin-bottom: 0;
+}
+
+.error-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.error-pre {
+  font-family: 'SF Mono', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 200px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.error-stack-pre {
+  max-height: 160px;
+  color: var(--muted);
 }

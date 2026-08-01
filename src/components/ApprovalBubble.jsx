@@ -13,7 +13,7 @@ function formatValue(value) {
  * without leaving the conversation flow. Replaces the modal ApprovalDialog
  * for workflow HITL gates.
  */
-export default function ApprovalBubble({ approval, onRespond }) {
+export default function ApprovalBubble({ approval, onRespond, toolMessages = [] }) {
   const [lightboxSrc, setLightboxSrc] = useState(null);
   const {
     operation,
@@ -126,9 +126,59 @@ export default function ApprovalBubble({ approval, onRespond }) {
   }
 
   // Image-type artifacts for inline preview
-  const imageArtifacts = shownArtifacts.filter((a) =>
+  let imageArtifacts = shownArtifacts.filter((a) =>
     a.type === "image" || a.source === "url" || /\.(png|jpe?g|gif|svg|webp|bmp)$/i.test(a.url || a.path || a.label || "")
   );
+
+  // Fallback: if no images in approval artifacts, extract from adjacent tool messages
+  // (some backends put generated images in tool results rather than approval payload)
+  if (imageArtifacts.length === 0 && toolMessages.length > 0) {
+    const fallbackImages = [];
+    const seenUrls = new Set();
+    for (const m of toolMessages) {
+      const content = m.result !== undefined ? m.result : m.content;
+      if (!content) continue;
+      // Scan for image URLs in tool result
+      const imgRe = /(data:image\/[a-zA-Z0-9+]+;base64,[A-Za-z0-9+/=]{20,}|https?:\/\/[^\s"')]+\.(?:png|jpe?g|gif|svg|webp|bmp)[^\s"')]*|[A-Za-z]:\\[^\s"')]+\.(?:png|jpe?g|gif|svg|webp|bmp))/gi;
+      let match;
+      while ((match = imgRe.exec(content)) !== null) {
+        const url = match[1];
+        if (!seenUrls.has(url)) {
+          seenUrls.add(url);
+          fallbackImages.push({
+            id: `tool-img-${fallbackImages.length}`,
+            type: "image",
+            url: url.startsWith("data:") || url.startsWith("http") ? url : null,
+            path: url.match(/^[A-Za-z]:\\/i) ? url : null,
+            src: url,
+            label: `${m.toolName || "工具"} 产物`,
+          });
+        }
+      }
+      // Also check for image in structured result object
+      if (typeof content === "object" && content !== null) {
+        ["image", "image_url", "url", "path", "src", "preview", "frames"].forEach(k => {
+          if (content[k]) {
+            const val = String(content[k]);
+            if (/^data:image\//i.test(val) || /^https?:\/\//i.test(val) || /\.(png|jpe?g|gif|svg|webp|bmp)$/i.test(val)) {
+              if (!seenUrls.has(val)) {
+                seenUrls.add(val);
+                fallbackImages.push({
+                  id: `tool-obj-${fallbackImages.length}`,
+                  type: "image",
+                  url: val,
+                  label: `${m.toolName || "工具"} 产物`,
+                });
+              }
+            }
+          }
+        });
+      }
+    }
+    if (fallbackImages.length > 0) {
+      imageArtifacts = fallbackImages;
+    }
+  }
 
   return (
     <div className="message-row assistant">

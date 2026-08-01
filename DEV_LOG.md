@@ -1277,3 +1277,276 @@ run_agent('manju_craft', '一只小猫在草地上玩耍')
 - **构建必须带代理**（或保证能直连 GitHub）：否则 `electron-builder` 下载 Electron 会失败。可用 Clash `127.0.0.1:7897`，或依赖已缓存的 `ELECTRON_CACHE`。
 - `win-unpacked`（解压版，双击 `Abcyesno.exe` 即用）是本机推荐产物；`portable` 单文件（`release/Abcyesno 1.3.0.exe`）需额外 325MB zip 步骤，且旧版 NSIS 曾崩溃，故优先用 win-unpacked。
 - 随后又跑了 `npx electron-builder --win`（portable 单文件）以补齐 `release/Abcyesno 1.3.0.exe`，Electron 已缓存无需再下载。
+
+---
+
+## 2026-07-15 Agent Verbose Timeline + v9 升级
+
+### 改动
+- 新增 `src/components/AgentVerboseTimeline.jsx`：thought/tool/result/system 时间线，pending/running/complete/error 状态，running 旋转/呼吸动画，步骤展开折叠，自动滚底。
+- `MessageThread.jsx`：移除旧 `ToolCallCard`，`role==="tool"` 经 `buildSteps()` 接入时间线；assistant 开始生成自动插 thought 占位步骤。
+- 版本 1.3.0→1.4.0；`win.target` portable→dir；`files` 排除 `hermes-fork/website` 瘦身。
+- 命名：`abcyesno-v8` 就地构建后复制为 `abcyesno-v9/abcyesno-v9`（v9 工作副本）。
+
+---
+
+## 2026-07-20 聊天气泡自适应 + Kaomoji 泄漏修复 + 脱离 CopilotKit 架构重做
+
+### 聊天气泡自适应宽度重构
+- `.message-bubble` 改 `width:fit-content; max-width:100%`；新增 `.message-col`（max-width:80%）；action 按钮移出气泡、hover 显示。
+
+### Kaomoji 流产物泄漏修复
+- **根因**：`agui-server.js` 把 Hermes 的 `thinking.delta`/`reasoning.available` 直接 emitTextDelta，未经滤。泄漏 `◎_◎ reasoning...`、`( ˘ ˘)♡ computing...` 等。
+- **后端**：thinking.delta/reasoning.available 改为空操作（break）。**前端**：`sanitizeMessageContent` 扩展覆盖 ◎_◎ 变体 + 裸 ◎/◯ + -ing 动词。
+
+### 打包 + 截图残留修复 + 启动页改造
+- 二次打包 15:10 / 21:03 / 21:26 / 21:36 多个 build；修复 `display is not defined`（MessageThread 裸 `{display}`→`{cleaned}`）。
+- 启动页 `src/main.jsx` Bootstrap 加 spinner + 分阶段文案 + 进度条（替代静态"正在启动本地 runtime"）。
+- 截图残留 3 处：侧栏 preview 走 sanitize、status.update case 加正则过滤、空消息 return null。
+
+### Agent Chat UI 5 Phase 规格重做
+- **Phase 1 协议层**：thinking.delta/reasoning 转发 CUSTOM；新增 tool.chunk/tool.output；tool 耗时；`stream.phase` 事件。
+- **Phase 2 状态机**：`src/utils/streamingPhase.js` 纯推断（isLoading+消息+阶段）。
+- **Phase 3 渲染组件**：ThinkingIndicator / TerminalPanel / ToolCard / TypewriterText。
+- **Phase 4 动画**：msg-slide-in / thinking-breathe / dot-bounce / tool-expand / cursor-blink。
+- **Phase 5 虚拟滚动**：`react-virtuoso` 引入；MessageThread 改 Virtuoso 驱动。
+
+### Composer 真实功能（去占位）
+- 语音 STT 全链路：MediaRecorder → `window.hermes.transcribeAudio` → agui-server `POST /api/transcribe` → Agnes STT。
+- 权限模式 default/yolo 两档真实切换（经 `session.set_yolo` 喂 Hermes gateway）。
+
+---
+
+## 2026-07-21 脱离 CopilotKit + Virtuoso 三连败 + 大量 UI 打磨
+
+### Virtuoso 高度塌缩 → 普通渲染 → 三次失败
+- 13:50 Virtuoso 高度链断裂（`.chat-body` overflow 模式与 Virtuoso 显式高度不兼容）→ 改 flex 链。
+- 14:45 **脱离 CopilotKit 架构重做**：新建 `src/hooks/useAgentStream.js` 直连 agui-server SSE，删除 CopilotKit Provider/useCopilotChatInternal。bundle 2270KB→470KB，构建 3min→3s。
+- 14:51 `streamPhase is not defined` 崩溃（重命名漏改函数体）。
+- 15:01 回退 Virtuoso 为普通渲染验证通过（确认 SSE 数据流正常，Virtuoso 是元凶）。
+- 15:33 Virtuoso 第三次尝试（ResizeObserver 实测高度）仍失败；查 WorkBuddy 安装目录发现其**根本没用 react-virtuoso**。
+- 17:46 产出 `docs/VIRTUAL_SCROLL_SPEC.md`（自研虚拟滚动方案，待 lex 确认）。
+
+### 其他修复
+- manju_craft `TypeError: Object of type Interrupt is not JSON serializable`：langgraph_runtime `_sanitize_for_json` 加 Interrupt/GraphInterrupt 处理 + `_invoke_graph` 异常捕获 + registry `tool_result` `default=str`。
+- 接通 manju_craft HITL 审批流（跨进程 HTTP 回传：`_make_http_emitter` + agui-server `workflow-event` 端点 + `.wf_active.json` 协调文件）。
+- 工具卡片占满全屏：defaultExpanded 改运行完收起；result/args 截断。
+- `permissionMode is not defined` 崩溃：state 误加在 App，移入 ChatShell。
+- UI 总体优化 5 项：消息区弹性宽度 / 长回复折叠 CollapsibleMarkdown / agent 头像状态动画 / 默认助手改名 ABC / 会话按 updatedAt 降序。
+- 四项冗余撤除：撤 header 新会话按钮、助手描述行、user meta、设置面板重做。
+- Thinking 状态加 spinner；消息排队 + 发送/停止 SVG 按钮 + 附件 chip 紧凑化；真·行内混排（contenteditable + `[[IMG:i]]` 占位符）；exe 图标换巴赫 + 全助手头像换巴赫；Sidebar 头像/Logo/窗口图标换巴赫；修复"+新会话"无反应（裸绑定传 MouseEvent→DataCloneError）；Agent 实时进度面板（StructuredThinking/TaskProgressPanel/ArtifactPreview）；巴赫探头动画；巴赫头像最终版。
+
+---
+
+## 2026-07-22 工作台架构 Spec + UI bug 修复
+
+### 工作台架构 Spec
+- 产出 `docs/WORKBENCH_ARCHITECTURE_SPEC.md`：三层（两层入口 / @提及协议 / 专用 Workbench UI 契约）。分 P1→P4。
+
+### UI bug 修复（4 项）
+- 产物预览失败：ArtifactPreview 递归扫描任意 result 结构。
+- 工具卡片未收纳：抽 `ToolsRow` 组件，useState 控制展开，始终显示摘要栏。
+- 巴赫头像背景/动画：透明 PNG + busy 选择器修正。
+- 工作过程 spinner 消失：user 消息后 loading 追加独立 thinking 行。
+
+---
+
+## 2026-07-23 发消息不回复根因 + 右侧结果区 + 后端真流打通
+
+### 发消息不回复（真 bug）
+- **根因**：`agui-server.js` 的 `resolveMentionDelegation` 定义在模块作用域，调用了定义在 `createAgUIServer` 内部的 `discoverManifests` → 每次 handleAgentRun 抛 ReferenceError。移入 createAgUIServer 内修复。已同步打包 app。
+
+### 右侧结果区 ResultPanel 完整开发
+- 产出 `docs/RESULT_PANEL_SPEC.md` v0.2（四 tab：概览/产物/文件/变更，剔除 Office 预览与云端分享）。
+- 新建 ResultPanel / ArtifactViewer / WorkspaceTree / ChangeDiff；main.js 加 list-workspace/read-file/open-external IPC + webviewTag；PDF/html 走 `<webview>` 只读。
+- Workflow UI 搬迁至右侧 ResultPanel（主区只留纯对话）。
+- 修复 ResultPanel 被整块注释导致右侧消失。
+
+### WORKBENCH P2/P4 收尾 + P0#1 后端真流
+- P2 `@` 提及协议：Composer picker → deriveMentions → 子调用消息 + "升级到工作台"。
+- P3 事件桥：ManjuCraftWorkbench 订阅 workflow.progress/artifact。
+- P4 通用蓝图/时间线渲染器；registry 注册三工作台。
+- P0#1 前端桥：useAgentStream.handleCustom 把 workflow.* 事件进 eventBus；后端 emit_progress 增 step_id；hello_agent/image_gen 补 WORKFLOW_STAGES；agui-server 结构化调用走流式。
+
+---
+
+## 2026-07-25 GitHub + Sidebar 三 Tab + 全 app 图标统一
+
+### GitHub repo
+- 首次 git init（main），推送 https://github.com/ffflzzz/abcyesno（private）。重写 .gitignore 排除 node_modules/release/.wb-asar-extract/hermes-fork/.venv/dist/*.log/.workbuddy/memory。
+
+### Sidebar 三 Tab 重写
+- 💬对话 / 🔧工作流 / ⚡任务；TaskPanel + useTaskManager（后台 task 独立运行，不阻塞主对话，localStorage 持久化）。
+- 新建 `src/components/Icon.jsx`（零依赖内联 SVG 13 图标）。
+
+### 大量修复
+- DevConsole 替换为原生 DevTools（F12 右侧停靠）。
+- ResultPanel 包 ErrorBoundary；巴赫位置多次微调。
+- ▤ 按钮控制 resultPanelOpen（多次崩溃修复：App state 未透传 ChatShell）。
+- 左侧 Sidebar 视觉打磨（subagent）：裸 unicode 改 Icon、统一选中态、去掉误导绿点。
+- 全 app 图标统一：引入 `lucide-react`，Icon.jsx 重写为 63 图标映射，23 文件 ~90 处 emoji 替换。
+- 21:00 批次：externalPreviewUrl/resultPanelCollapsed/DevTools 入口移原生菜单/巴赫最终位置。
+- 22:07 批次：Agent Loop 状态动画（shimmer→color+text-shadow pulse，因 Electron `background-clip:text` 不可靠）+ scrollbar 抢夺 bug（自研虚拟滚动 ROW_GAP 补偿）。
+
+---
+
+## 2026-07-26 动画全局冻结真凶 + 废虚拟滚动 + 审批气泡
+
+### 动画终极根因：`prefers-reduced-motion` 全局冻结
+- 用户"完全是静态的，连 spinner 都不转" → 真凶是 `index.css` 的 `@media (prefers-reduced-motion: reduce){ *{animation-duration:0.001ms!important} }` 用 `*`+`!important` 冻死全站动画（命中 RDP/VM/关闭动画环境）。删除该 media query。
+
+### 前述动画 4 轮修复（均打幽灵）
+- background-clip:text 在 Electron 静默失败 → 改 color+text-shadow pulse；header/气泡内 class 错位；inline style color 压死 keyframes → 去掉 inline color。直到 12:59 才发现全局 media query 才是元凶。
+
+### 废掉虚拟滚动
+- 14:30 自研虚拟滚动经 2+ 次修仍"scrollbar 被抢夺" → 废掉，改原生 `overflow-y:auto` + useLayoutEffect 贴底守卫。
+
+### Sidebar / 任务清理
+- 工作流去重（只留 manju_craft，加 ALLOWED_IDS 白名单）；对话 Tab 去助手概念；任务清理 clearAll；任务残留按白名单自动过滤；会话列表加 scrollbar。
+
+### 大量修复批次
+- 运行按钮改打开 dashboard（非直接发消息）；重复 analyzing 修复（TPP 独占进度）；切换会话输入框聚焦；巴赫头像点击开侧栏；webview 自适应；双开挤压（ResultPanel 允许收缩）；工具历史无限累积（currentTurnToolMessages 只取当前轮）；产物预览从气泡内嵌改侧边栏查看（compact 芯片 + tab:artifacts 协议）。
+- requestedTab is not defined 崩溃 → 彻底移除改用 tab: 协议；产物 tab 空白（collectToolArtifacts 合并数据源）；全 tab 空白（renderBody 优先级 bug）；产物预览失败（looksLikeImageUrl 校验 + img onError fallback）；artifact:// 泄漏（Windows 弹 Store，加 isSafeUrl 白名单）；气泡文本被截断（overflow:visible 链）；
+- 审批弹窗改聊天气泡内联（ApprovalBubble.jsx）；handleApprove is not defined 修复；气泡内状态文字重复（去 TPP/ST，改 bubble-thinking-compact）；移除 ApprovalDialog modal；webview 太小（flex 修复）；气泡内步骤进度（useContractEvents）；selectedSessionId 透传 + stale closure 修复；步骤行在工具列表后仍显示；审批气泡产物图 file:// 跨目录被拦截（read-local-image IPC 转 base64）；thinking 同步打印（ThinkingTranscript 滚动框）。
+
+### Agent 自渲染 UI 组件能力（render_ui）
+- useAgentStream 加 uiBlocks + ui.render CUSTOM 分支；agui-server 加 ui-event 端点 + .ui_active.json；前端 GeneratedComponent + 5 个 MVP 组件（Table/Flowchart/Card/Progress/Action）；后端 render_ui_tool.py 自注册工具。
+
+---
+
+## 2026-07-27 模型升级 + 短剧工作台研究
+
+### 内置模型 agnes-2.0-flash → agnes-2.5-flash
+- 全量替换：前端 App/Composer、后端 default-config.yaml、本机 config.yaml、storage.js、agui-server STT。agnes-2.0-pro 作为"强"选项保留。
+
+### 冒烟测试
+- 4 层冒烟（静态/启动受沙箱限制/配置/打包）全绿，需真机 GUI 最终验证。
+
+### AI 短剧制片工作台研究
+- 调研 6 个开源项目（InspoVanna/jellyfish/drama-workshop 等）+ 商业对位 LibTV；架构共性 5 模式；结论：manju_craft 是"一次性 workflow 出片"，工作台模式是"项目管理+资产库+多 run"，是 LangGraph Contract 5 层契约的自然扩展位，前端通用渲染器已够用。
+
+---
+
+## 2026-07-28 右侧面板拖拽 + 作用域崩溃连环 + render_ui 修复
+
+### 右侧面板可拖拽
+- resultPanelWidth state（默认 380px，localStorage）+ resize handle（pointer events）。
+
+### 大量崩溃连环（App.jsx 双组件作用域陷阱）
+- 白屏 `resultPanelWidth is not defined`：ChatShell 解构默认 ≠ App useState，App 补 useState。
+- 发送崩溃 `setSelectedSessionId is not defined`：ChatShell 直接调 App 变量 → 改 onSelectSession prop。
+- ConfirmModal 替换 window.confirm（暗色风格）；pxlkit 调研（图标可替换，组件需评估迁移）。
+- 切换会话误杀任务：ChatShell key={selectedSessionId} 重挂 → useAgentStream cleanup abort SSE。加 streaming 守卫 ConfirmModal。
+- render_ui 三功能全失效（模型不调/动画无/路径打不开）：`toolsets.py` 的 `_HERMES_CORE_TOOLS` 漏加 "render_ui"（TOOLSETS 无 "ui" toolset）→ 加 render_ui 进核心工具。前端全正确。
+- **模式总结**：App(500+行) 与 ChatShell(108-498行) 紧邻同文件但作用域隔离，跨作用域引用连续 4 次崩溃（resultPanelWidth/setSelectedSessionId/isStreaming/onSelectSession）。
+
+### 后端
+- 窗口失焦 agent 停止：backgroundThrottling=false + disable-background-timer-throttling。
+- 回车发送后文字消失：SSE reader 加 120s 读超时 + 防节流。
+
+---
+
+## 2026-07-29 顶部摘要 + 缓存清理 + DNS 污染闭环
+
+### 顶部标题栏显示会话摘要
+- ChatLayout 标题从助手名改 `session?.preview`（与侧栏同步）。
+
+### 思考可见性 + 拖拽（第一轮）
+- ThinkingTranscript 加计时器占位（后用户嫌废话又去除）；resize handle 加宽热区。
+
+### 部署漏 index.html（重要教训）
+- 只 cp js/css 漏 index.html → 一直加载旧 bundle。正确部署 = 整 dist 目录覆盖（含 index.html）。
+
+### 清理废话 + 重写拖拽 + 后端超时
+- ThinkingTranscript 回归极简（无内容 return null）；拖拽改 mouse 事件；Agnes 超时初判服务端问题。
+
+### DNS 污染根因闭环（重要）
+- **不是 Agnes 要求代理**，是本机对 `apihub.agnes-ai.com` DNS 污染（解析到 Meta 假 IP / 假 IPv6）→ 直连 TCP 443 超时。走代理 127.0.0.1:7897 正常（0.4s）。
+- 修复：hermes-runner.js 代理可配置（env → config.yaml network.proxy_url → 否则直连）；默认直连，用户不想要强制代理。
+
+---
+
+## 2026-07-30 ChatGPT 工具栏 + 编辑删除 + 去气泡 + 缓存脚本
+
+### ChatGPT 风格消息工具栏
+- 新建 `src/components/MessageActions.jsx`：hover 显示 7 按钮（复制/赞/踩/朗读/重生成/分享/更多）+ 模型名时间；复制用 stripMarkdownToText；评分存 localStorage；TTS 用 speechSynthesis。
+
+### 编辑/删除单条消息 handler
+- App.jsx(ChatShell) 加 editingMessageId/deleteConfirm + handleEditMessage/handleSaveEdit(截断+重发)/handleDeleteMessage；MessageThread 加 EditBox 内联组件（Enter 发送/Esc 取消）；ConfirmModal 删除确认。
+
+### 编辑框缩进修复
+- `.message-bubble:has(.msg-edit-box)` 强制 width:100%（:has 选择器）。
+
+### 四项修复
+- 面板拖拽（Fragment→wrapper div + mouse 事件 + 防 stale closure）；布局自适应（composer 去 max-width）；输入框边界；表格渲染（ReactMarkdown table 组件覆盖 + 暗色样式，模型缺 GFM 分隔行属后端 prompt 问题）。
+
+### 缓存清理 + thinking 重复修复 + assistant 去气泡
+- "一直旧版"根因 = exe 进程没重启；taskkill + 清 Cache/Code Cache/GPUCache；写 clean-restart.bat / start-clean.bat。
+- thinking 重复：sanitizeMessageContent 重写 3 阶段（Phase 1 宽匹配 kaomoji+18 动词整块移除）。
+- **assistant 回复去气泡**：`.message-bubble.assistant` → `.assistant-body`（无背景/无边框/流式块）；仅 user 消息用气泡。ApprovalBubble 审批卡保留气泡。
+
+---
+
+## 2026-07-31 thinking 去重 + 工具折叠 + 上下文用量面板 + 三项修复
+
+### thinking 文本重复（第二次）
+- **根因**：`btc-text`（spinner 旁）与 `ThinkingTranscript`（卡片）同渲染一份 thinkingText。spinner 旁改只显示 phase label，thinking 原文只在卡片显示一次。
+
+### 工具调用默认折叠
+- ToolsRow defaultExpanded 改 false，删除执行中自动展开 useEffect；默认折叠为摘要条（⚙ N 个工具调用 ... 执行中/全部完成 ›），用户点击才展开。
+
+### 上下文用量统计面板
+- 新建 `src/components/ContextUsage.jsx`：总用量百分比 + 渐变进度条 + 5 类占比（系统提示词/工具及子智能体/对话消息/连接器MCP/技能）。前端从 message history 估算（后端无分类拆分）。ChatLayout header 加 📊 按钮。
+
+### 三项修复
+- Manju-Craft 工作台崩溃（ResultPanel workflow 模式 session 空值守卫 + manifest null fallback）。
+- firstframe 产物图片：ApprovalBubble 从相邻 tool 消息提取图片（base64/http/本地路径）。
+- 思考过程去气泡：ThinkingTranscript 删卡片容器，改 `.thinking-inline` 无框内联 + 自动折叠（生成正文或非当前消息时折叠）。
+
+---
+
+## 2026-08-01 新会话懒创建 + 空会话自动清理
+
+### 用户现象
+左侧 Sidebar 大量"新会话 / 无消息"空会话占位，点"+ 新会话"即持久化空 session（messages:[]），不发消息也永留。
+
+### 修复
+- `handleNewSession` 改为懒创建：只 `setSelectedSessionId("")`，不调 createSession；首次发消息时由 handleSend 内联创建（已有逻辑）。
+- `loadSessions` 过滤 messages 为空的会话不显示，并后台异步删除存储中的空会话；去掉启动时自动创建默认空会话。
+
+### 效果
+Sidebar 不再出现空"新会话"条目；历史空会话重启时自动清理。
+
+### git commit & push
+- 提交 53 文件：`203ed12 feat: UI打磨 + 上下文用量统计 + 工具调用折叠 + 后端代理可配置`；`0f4e824 chore: gitignore baiduyun upload leftover cfg`。
+- 推送踩坑（已写入项目记忆）：直连 GitHub 被墙需 `git config http.proxy/https.proxy http://127.0.0.1:7897/`；非交互凭据用 `!gh auth git-credential`（gh 已登录 ffflzzz）；本地仓库设 ffflzzz 身份；排除 baiduyun 上传残留二进制。
+
+---
+
+## 2026-08-01 修复新建会话首发崩溃（TDZ：Cannot access 'be' before initialization）
+
+### 用户现象
+新开软件 → 新建会话 → 首次发送消息 → 界面白屏 + ErrorBoundary 报 `Cannot access 'be' before initialization`。老会话继续对话正常。
+
+### 排查路径（可复用）
+1. 先给 ErrorBoundary 增加 **组件堆栈（componentStack）** 输出，拿到 minified 帧：`mE / kE / aC / nC / iC / rC`。
+2. 用 `dist/assets/index-*.js.map` + `@jridgewell/trace-mapping` 把 minified 帧还原为源码位置：
+   - `mE` → `src/components/MessageThread.jsx:489`（崩溃组件）
+   - `kE` → ChatLayout / `aC` → App ChatShell / `iC` → App / `rC` → main.jsx
+3. 在 bundle 里搜 `be` 的全部出现位置，发现 **读取点偏移 457717 < 声明点偏移 458059**，再把这两个偏移反查 sourcemap，直接定位到 `MessageThread.jsx:661`（读）与 `687`（`const isLast`）。
+
+### 根因
+`renderRow(index)` 内 thinking 分支（661 行）引用了 `isLast`，而 `const isLast = isLastRow;` 声明在同一函数作用域的 687 行 → **TDZ**。
+thinking 行只在流式开始的那一帧出现，因此只有"新建会话首次发送"必现，日常滚动/历史会话不触发。
+
+### 修复
+- `MessageThread.jsx:661`：`!isLast` → `!isLastRow`（`isLastRow` 在 632 行已声明）。
+
+### 新增静态检查
+- `scripts/check-tdz.js`：用 `@babel/parser` + `@babel/traverse` 遍历 `src/**` 全部作用域，找出 `const`/`let` 绑定被"同步路径上提前读取"的情况（跨函数边界的闭包引用不算，避免误报）。
+- 运行：`node scripts/check-tdz.js`（有问题 exit 1）。当前全量扫描 clean。
+- 意义：minify 后变量被重命名（`isLast` → `be`），运行时报错不可读；此脚本在构建前把这类 bug 拦在源码层。
+
+### 同批附带改动（上一轮为排查此问题所做，保留）
+- `App.jsx`：去掉 `<ChatShell key={selectedSessionId}>`（key 变化会销毁重建整个组件与流式状态）；`handleSend` 内联建会话后不再 `await loadSessions()`；session 切换 effect 显式 `stop()` 旧流。
+- `App.jsx` ErrorBoundary：错误信息附带组件堆栈，便于下次直接定位崩溃组件。

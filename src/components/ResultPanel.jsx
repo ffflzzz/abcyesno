@@ -169,8 +169,10 @@ export default function ResultPanel({
   const contractEvents = useContractEvents(sessionId);
   const artifacts = useMemo(() => {
     // Merge artifacts from both sources: contract events (LangGraph workflows) + tool messages (agent tool calls)
+    const sessionMessages = session?.messages;
+    if (!Array.isArray(sessionMessages)) return [];
     const fromEvents = collectArtifacts(contractEvents);
-    const fromTools = collectToolArtifacts(session?.messages);
+    const fromTools = collectToolArtifacts(sessionMessages);
     // Deduplicate by URL
     const seen = new Set();
     const merged = [];
@@ -365,6 +367,24 @@ export default function ResultPanel({
 
     // Priority 2: workflow mode
     if (isWorkflowMode) {
+      // Guard: if manifest not found, show helpful fallback instead of crashing
+      if (!activeManifest) {
+        return (
+          <div className="result-workflow">
+            <div className="result-empty" style={{ padding: 32 }}>
+              <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 8 }}>
+                工作流 <strong>{selectedWorkflowId}</strong> 未找到对应的 manifest。
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+                可能原因：工作流未注册 / manifest 加载失败 / ID 不匹配
+              </div>
+              <button className="result-icon-btn" style={{ marginTop: 12 }} onClick={() => onSelectWorkflow?.("")}>
+                <Icon name="close" size={14} /> 关闭
+              </button>
+            </div>
+          </div>
+        );
+      }
       return (
         <div className="result-workflow">
           {Workbench ? (

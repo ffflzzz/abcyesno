@@ -38,6 +38,9 @@ export function useAgentStream(aguiPort) {
   const currentAssistantIdRef = useRef(null);
   // tool_call_id -> messages 数组索引
   const toolIndexRef = useRef(new Map());
+  // Track when thinking started to detect stalled streams
+  const thinkingSinceRef = useRef(null);
+  const [stalled, setStalled] = useState(false);
 
   const reset = useCallback(() => {
     setMessages([]);
@@ -45,6 +48,8 @@ export function useAgentStream(aguiPort) {
     setThinkingText("");
     setError(null);
     setUiBlocks([]);
+    setStalled(false);
+    thinkingSinceRef.current = null;
     currentAssistantIdRef.current = null;
     toolIndexRef.current = new Map();
   }, []);
@@ -82,6 +87,8 @@ export function useAgentStream(aguiPort) {
   const handleEvent = useCallback(
     (ev) => {
       if (!ev || !ev.type) return;
+      // Any incoming event means the stream is alive — clear stall flag
+      setStalled(false);
       const now = Date.now();
 
       switch (ev.type) {
@@ -278,6 +285,8 @@ export function useAgentStream(aguiPort) {
       setPhase("thinking");
       setThinkingText("");
       setError(null);
+      setStalled(false);
+      thinkingSinceRef.current = Date.now();
       setUiBlocks([]); // 新的一轮：清空上一轮的 agent 自渲染组件
 
       const controller = new AbortController();
@@ -364,6 +373,8 @@ export function useAgentStream(aguiPort) {
     }
     setPhase("idle");
     setThinkingText("");
+    setStalled(false);
+    thinkingSinceRef.current = null;
   }, []);
 
   useEffect(() => {
@@ -372,6 +383,22 @@ export function useAgentStream(aguiPort) {
     };
   }, []);
 
+  // Stall detection: if stuck in "thinking" phase for >60s with no events, flag it
+  useEffect(() => {
+    if (phase !== "thinking") {
+      setStalled(false);
+      return;
+    }
+    const CHECK_INTERVAL = 5000; // check every 5s
+    const STALL_THRESHOLD_MS = 60000; // 60s = stalled
+    const timer = setInterval(() => {
+      if (thinkingSinceRef.current && (Date.now() - thinkingSinceRef.current > STALL_THRESHOLD_MS)) {
+        setStalled(true);
+      }
+    }, CHECK_INTERVAL);
+    return () => clearInterval(timer);
+  }, [phase]);
+
   return {
     messages,
     phase,
@@ -379,6 +406,7 @@ export function useAgentStream(aguiPort) {
     error,
     uiBlocks,
     isStreaming: phase !== "idle",
+    stalled,
     sendMessage,
     stop,
     reset,

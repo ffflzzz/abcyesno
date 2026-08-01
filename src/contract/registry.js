@@ -18,15 +18,18 @@ export function setManifests(list) {
   if (Array.isArray(list) && list.length) {
     // Deduplicate by id + whitelist: keep only allowed production workflows.
     const seen = new Set();
-    manifests = list.filter((m) => {
+    const filtered = list.filter((m) => {
       if (!m.id || !ALLOWED_IDS.has(m.id)) return false;
       if (seen.has(m.id)) return false;
       seen.add(m.id);
       return true;
     });
-    // Fall back to bundled if filtering removed everything.
-    if (!manifests.length) manifests = bundledManifests.slice();
+    // Only replace if filtering produced results; otherwise keep current (bundled).
+    if (filtered.length) {
+      manifests = filtered;
+    }
   }
+  // IMPORTANT: manifests is NEVER cleared to []. Worst case = bundled fallback.
 }
 
 export function listManifests() {
@@ -43,7 +46,7 @@ export async function initContract(aguiPort) {
   initialized = true;
   if (aguiPort) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 1500);
+    const timer = setTimeout(() => controller.abort(), 3000); // increased from 1.5s
     try {
       const res = await fetch(
         `http://127.0.0.1:${aguiPort}/api/ag-ui/contract/manifests`,
@@ -57,9 +60,11 @@ export async function initContract(aguiPort) {
       }
     } catch (err) {
       // offline: keep bundled fallback
+      console.debug("[registry] backend manifest fetch failed, using bundled:", err.message || err);
     } finally {
       clearTimeout(timer);
     }
   }
+  console.debug("[registry] initContract complete, manifests:", manifests.map(m => m.id));
   return manifests;
 }

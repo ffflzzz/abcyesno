@@ -242,28 +242,36 @@ function mapStatus(s) {
 
 /**
  * ThinkingTranscript — shows the model's real reasoning tokens (thinkingText)
- * streamed from the backend. If the model sends no reasoning content,
- * renders nothing (the caller's spinner is enough).
+ * streamed from the backend. Renders as inline streaming text (no card/bubble).
+ * Auto-collapses when the agent moves past the thinking phase.
  */
-function ThinkingTranscript({ text }) {
+function ThinkingTranscript({ text, collapsed = false }) {
   const ref = useRef(null);
   const pinnedRef = useRef(true);
+
   useLayoutEffect(() => {
     const el = ref.current;
-    if (el && pinnedRef.current) el.scrollTop = el.scrollHeight;
-  }, [text]);
+    if (el && pinnedRef.current && !collapsed) el.scrollTop = el.scrollHeight;
+  }, [text, collapsed]);
+
   if (!text || !text.trim()) return null;
+
+  // When collapsed, show a small expandable hint line
+  if (collapsed) {
+    return (
+      <div className="thinking-inline-collapsed">
+        <span className="thinking-dim-icon">💭</span>
+        <span className="thinking-dim-text">思考过程已折叠</span>
+      </div>
+    );
+  }
+
   return (
-    <div
-      className="thinking-transcript"
-      ref={ref}
-      onScroll={(e) => {
-        const el = e.currentTarget;
-        pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
-      }}
-    >
-      <div className="thinking-transcript-head">💭 思考过程</div>
-      <div className="thinking-transcript-text">{text}</div>
+    <div className="thinking-inline" ref={ref} onScroll={(e) => {
+      const el = e.currentTarget;
+      pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+    }}>
+      <div className="thinking-inline-text">{text}</div>
     </div>
   );
 }
@@ -478,7 +486,7 @@ function ToolsRow({ items, assistantAvatar, loading, isLastRow, onImageClick, on
   );
 }
 
-export default function MessageThread({ messages = [], loading, streamPhase, thinkingText, uiBlocks = [], onRetry, onRegenerate, assistant, manifests = [], onUpgradeToWorkbench, onOpenPreviewUrl, approval, onRespondApproval, sessionId, onEditMessage, onDeleteMessage, editingMessageId, onSaveEdit, onCancelEdit }) {
+export default function MessageThread({ messages = [], loading, streamPhase, thinkingText, uiBlocks = [], stalled = false, onRetry, onRegenerate, assistant, manifests = [], onUpgradeToWorkbench, onOpenPreviewUrl, approval, onRespondApproval, sessionId, onEditMessage, onDeleteMessage, editingMessageId, onSaveEdit, onCancelEdit }) {
   const [lightbox, setLightbox] = useState(null);
 
   // Only show tool messages from the current turn (after the last user message),
@@ -650,7 +658,13 @@ export default function MessageThread({ messages = [], loading, streamPhase, thi
                     )}
                   </div>
                 )}
-                <ThinkingTranscript text={thinkingText} />
+                <ThinkingTranscript text={thinkingText} collapsed={!isLastRow || streamPhase === "text_generating"} />
+                {stalled && (
+                  <div className="btc-stall-warning">
+                    <span className="btc-stall-icon">⚠</span>
+                    <span>响应超时，后端可能未就绪。可点击停止后重试。</span>
+                  </div>
+                )}
               </div>
               <ArtifactPreview toolMessages={currentTurnToolMessages} compact onViewInSidebar={() => onOpenPreviewUrl && onOpenPreviewUrl("tab:artifacts")} />
             </div>
@@ -793,6 +807,7 @@ export default function MessageThread({ messages = [], loading, streamPhase, thi
           <ApprovalBubble
             approval={approval}
             onRespond={onRespondApproval}
+            toolMessages={currentTurnToolMessages}
           />
         )}
       </div>
