@@ -12,8 +12,13 @@ const { log } = require('./backend/logger');
 // Hermes Python backend location (relative to electron/main.js -> project root)
 const HERMES_FORK = path.join(__dirname, '..', 'hermes-fork');
 
-// Improve compatibility on some Windows GPUs / sandbox configs
-app.commandLine.appendSwitch('disable-gpu');
+// Improve compatibility on some Windows GPUs / sandbox configs.
+// GPU acceleration can be re-enabled via env ABC_GPU=1 (e.g. low-end machines
+// that stutter on CPU-composited scrolling/animations with the virtualized
+// message list). Defaults to disabled for maximum compatibility.
+if (process.env.ABC_GPU !== '1' && process.env.ABC_GPU !== 'true') {
+  app.commandLine.appendSwitch('disable-gpu');
+}
 app.commandLine.appendSwitch('no-sandbox');
 // Keep SSE / timers alive when window loses focus (agent must keep running in background)
 app.commandLine.appendSwitch('disable-background-timer-throttling');
@@ -32,6 +37,7 @@ let hermesRunner = null;
 let gatewayClient = null;
 let aguiServer = null;
 let aguiPort = 0;
+let gatewayReady = false; // true only after gatewayClient WS 'open' fires
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -147,10 +153,12 @@ async function doStartBackend() {
   });
 
   gatewayClient.on('close', () => {
+    gatewayReady = false;
     if (mainWindow) mainWindow.webContents.send('gateway-status', { connected: false });
   });
 
   gatewayClient.on('open', () => {
+    gatewayReady = true;
     if (mainWindow) {
       mainWindow.webContents.send('gateway-status', { connected: true });
       // Inform the frontend that it can re-read the AG-UI port and start
@@ -266,7 +274,12 @@ ipcMain.handle('get-version', () => {
 });
 
 ipcMain.handle('get-agui-port', () => {
-  return aguiPort;
+  // Only expose the port to the renderer after the gateway WebSocket is
+  // truly connected.  Without this guard Bootstrap reads aguiPort as soon
+  // as the Express bridge binds (step 1 of startup) and mounts App while
+  // Hermes is still starting — causing the first message to hit
+  // "Hermes gateway not connected".
+  return gatewayReady ? aguiPort : 0;
 });
 
 ipcMain.handle('get-api-key-status', () => {
@@ -319,9 +332,11 @@ ipcMain.handle('set-api-key', async (_event, key) => {
       }
     });
     gatewayClient.on('close', () => {
+      gatewayReady = false;
       if (mainWindow) mainWindow.webContents.send('gateway-status', { connected: false });
     });
     gatewayClient.on('open', () => {
+      gatewayReady = true;
       if (mainWindow) {
         mainWindow.webContents.send('gateway-status', { connected: true });
         mainWindow.webContents.send('agui-ready', { port: aguiPort });

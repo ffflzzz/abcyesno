@@ -33,3 +33,7 @@ Thumbs.db
 
 # junk: baiduyun upload leftover
 *.baiduyun.uploading.cfg
+
+# generated at runtime by scripts/test-multisession/run.mjs
+scripts/test-multisession/hook.mjs
+scripts/test-multisession/fake-eventbus.mjs

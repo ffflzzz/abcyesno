@@ -1550,3 +1550,68 @@ thinking 行只在流式开始的那一帧出现，因此只有"新建会话首�
 ### 同批附带改动（上一轮为排查此问题所做，保留）
 - `App.jsx`：去掉 `<ChatShell key={selectedSessionId}>`（key 变化会销毁重建整个组件与流式状态）；`handleSend` 内联建会话后不再 `await loadSessions()`；session 切换 effect 显式 `stop()` 旧流。
 - `App.jsx` ErrorBoundary：错误信息附带组件堆栈，便于下次直接定位崩溃组件。
+
+---
+
+## 2026-08-01 实现原生多会话并发（per-session 流重构）
+
+### 用户现象
+多个会话同时对话时，其中一个会弹出 `Operation interrupted: waiting for model response (1.5s elapsed).`；
+切走的会话回来后内容不完整。用户质疑："hermes 不是原生支持多会话独立工作的吗？"
+
+### 归因纠正
+用户是对的。**Hermes 后端本来就支持多会话并发**：`agui-server.js:242 ensureHermesSession` 通过
+`storage.getThreadMapping(threadId)` 为每个 threadId 映射独立的 Hermes `session_id`，
+`prompt.submit` 按 session_id 分发，后端无任何全局锁。
+
+问题全部在前端，且有两层：
+
+1. **表层**：session-switch effect 调 `stop()`（默认 `interruptBackend=true`）→
+   `agui-server.js:904` 发 `session.interrupt` → Hermes 杀掉正在跑的 turn 并回那句提示。
+   这句话是前端自己招来的，不是后端限制。（此前已改为 detach-only）
+
+2. **深层（本次修复）**：`useAgentStream` 在 `App.jsx` 只实例化一次，内部只有一个 `abortRef`，
+   `runAgent` 开头无条件 `abortRef.current.abort()` → **同一窗口同时只能存活一条 SSE 流**。
+   更严重的是 agui-server 不落库消息（只存 threadId→session_id 映射），持久化全在前端
+   `hermes.updateSession(sid, {messages})`，而它由 `isStreaming` effect 驱动、只对前台会话生效。
+   于是切走的会话：后端 turn 继续烧 token → 前端流已断 → 增量无人接收 → 也不写库 →
+   **输出永久丢失**。改成 detach-only 后现象从"报错"变成"静默丢内容"，更隐蔽。
+
+### 修复：per-session 流
+**`src/hooks/useAgentStream.js`** 重构为 `useAgentStream(aguiPort, activeSessionId, { onSettled })`：
+- `Map<sessionId, SessionState>` 取代所有单例 ref。每个会话独立持有
+  `controller / messages / phase / thinkingText / uiBlocks / toolIndex / thinkingSince / hydrated`。
+- 事件处理签名全部改为 `handleEvent(sess, ev)`，不再读组件级 state。
+- 渲染：`publish(id)` 打 dirty → rAF 合帧 → **只有前台会话才 `setSnapshot`**。
+  后台会话的 token 流完全不触发 React 渲染。
+- 会话切换用 render 期 state 调整（`projectedId`）而非 effect，消除切换时闪一帧旧内容。
+- `sendMessage` 只 abort 本会话的上一条流；`stop(sessionId)` 只停指定会话。
+- `hydrateSession(id, stored)`：**若该会话正在跑或已装载则拒绝覆盖**——切回一个仍在跑的会话
+  必须保留内存增量，不能被磁盘旧快照冲掉。
+- `settle(sess)` 在 RUN_FINISHED / RUN_ERROR / 流异常收尾时触发 `onSettled`。
+
+**`src/App.jsx`**：
+- 持久化改为 settle 回调驱动（`handleSessionSettled`），**后台会话完成同样落库**。
+- 删除 `wasLoadingRef` / `hadActiveSessionRef` / `historyInitializedRef` / `latestMessagesRef`
+  及其全部竞态守卫——per-session 状态天然解决首发竞态。
+- session-switch effect 从 `stop()+reset()+setHistory()` 简化为一行 `hydrateSession(...)`。
+- 删除会话时 `dropSession(id)` 一并清理内存流状态。
+
+**`src/components/Sidebar.jsx` + `index.css`**：会话列表对后台运行中的会话显示脉冲点
+和「正在生成…」，否则用户无法感知它还在跑。
+
+### 新增回归测试 `scripts/test-multisession/`
+`node scripts/test-multisession/run.mjs` —— 10/10 通过。
+
+项目没有 vitest/jsdom，因此用了一个低成本方案：`mini-react.mjs` 是 ~110 行的极简 hooks runtime
+（useState/useRef/useCallback/useMemo/useEffect + render 期 setState + 重渲染循环）；
+`run.mjs` 读取**真实的** `src/hooks/useAgentStream.js` 源码，只把 `from "react"` 和 eventBus 的
+import 重写指向 mock，然后 import 运行，配一个按 threadId 回放脚本化 SSE 帧的假 agui-server。
+测的是真代码，不是副本。
+
+覆盖的不变量：两流并发 / 前台快照不串台 / 后台完成触发 onSettled 且内容完整 /
+hydrate 拒绝覆盖运行中会话 / 切回会话拿到内存增量而非磁盘旧快照 / `stop(C)` 不影响 D。
+
+### 构建/部署
+`node scripts/check-tdz.js` clean → `index-CRNP3VHY.js` (599.56 kB) + `index-C6JhJWQ7.css` (100.79 kB)，
+已部署 `release/win-unpacked/resources/app/dist`，已清 Cache / Code Cache / GPUCache。

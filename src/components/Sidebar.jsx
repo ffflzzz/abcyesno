@@ -39,6 +39,7 @@ export default function Sidebar({
   open,
   assistants,
   sessions,
+  runningSessionIds = [],
   selectedAssistantId,
   selectedSessionId,
   onSelectAssistant,
@@ -173,18 +174,26 @@ export default function Sidebar({
           <div className="session-list">
             {sessions.map((s) => {
               const active = s.id === selectedSessionId;
+              // Sessions keep streaming in the background after you switch
+              // away — surface that so the list doesn't look frozen.
+              const running = runningSessionIds.includes(s.id);
               return (
                 <div
                   key={s.id}
-                  className={`session-item ${active ? "active" : ""}`}
+                  className={`session-item ${active ? "active" : ""} ${running ? "running" : ""}`}
                   onClick={() => onSelectSession(s.id)}
                   onContextMenu={(e) => openMenu(e, "session", s.id, s.title)}
                 >
                   <div className="session-row">
-                    <div className="session-title">{s.title}</div>
+                    <div className="session-title">
+                      {running && <span className="session-running-dot" title="正在生成" />}
+                      {s.title}
+                    </div>
                     <div className="session-time">{formatTime(s.updatedAt)}</div>
                   </div>
-                  <div className="session-preview">{s.preview || "无消息"}</div>
+                  <div className="session-preview">
+                    {running ? "正在生成…" : s.preview || "无消息"}
+                  </div>
                   <button
                     className="session-menu"
                     onClick={(e) => { e.stopPropagation(); onDeleteSession(s.id); }}

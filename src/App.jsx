@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Sidebar from "./components/Sidebar.jsx";
 import ChatLayout from "./components/ChatLayout.jsx";
 import ApiKeyModal from "./components/ApiKeyModal.jsx";
@@ -182,6 +182,42 @@ function ChatShell({
   resultPanelWidth = 380,
   setResultPanelWidth,
 }) {
+  // Keep a live ref to the session list so the settle callback (which is
+  // identity-stable by design) can look up titles without going stale.
+  const sessionsListRef = useRef(sessions);
+  sessionsListRef.current = sessions;
+  const hermesRef = useRef(hermes);
+  hermesRef.current = hermes;
+  const onSessionUpdatedRef = useRef(onSessionUpdated);
+  onSessionUpdatedRef.current = onSessionUpdated;
+
+  // Persist a session when ANY of its runs finishes — including sessions that
+  // are running in the background while the user looks at a different one.
+  // Before per-session streams existed this lived in an isStreaming effect,
+  // which only ever fired for the foreground session (background output was
+  // silently dropped).
+  const handleSessionSettled = useCallback((sid, msgs) => {
+    const h = hermesRef.current;
+    if (!sid || !h || !Array.isArray(msgs) || msgs.length === 0) return;
+    const uiMessages = msgs.map(toStorageMessage);
+    const userMsg = uiMessages.find((m) => m.role === "user");
+    const assistantMsg = [...uiMessages].reverse().find((m) => m.role === "assistant");
+    const patch = { messages: uiMessages };
+    const stored = (sessionsListRef.current || []).find((s) => s.id === sid);
+    if (userMsg && stored?.title === "新会话") {
+      patch.title = (userMsg.content || "").slice(0, 24).replace(/\n/g, " ") || "新会话";
+    }
+    if (assistantMsg) {
+      const clean = sanitizeMessageContent(assistantMsg.content || "");
+      patch.preview = clean.slice(0, 45).replace(/\n/g, " ") || "(新对话)";
+    }
+    h.updateSession(sid, patch)
+      .then(() => {
+        if (onSessionUpdatedRef.current) onSessionUpdatedRef.current();
+      })
+      .catch((err) => console.error("session save failed", err));
+  }, []);
+
   const {
     messages: visibleMessages,
     phase,
@@ -190,11 +226,14 @@ function ChatShell({
     isStreaming,
     uiBlocks,
     stalled,
+    runningSessionIds,
     sendMessage,
     stop,
-    reset,
     setHistory,
-  } = useAgentStream(aguiPort);
+    hydrateSession,
+    getSessionMessages,
+    dropSession,
+  } = useAgentStream(aguiPort, selectedSessionId, { onSettled: handleSessionSettled });
 
   // Permission mode: default (backend "ask") or yolo (session approval bypass).
 
@@ -217,105 +256,53 @@ function ChatShell({
   }
 
   const pendingSendRef = useRef(null);
-  const wasLoadingRef = useRef(false);
-  // Track whether a session was actively streaming so we don't kill a
-  // just-started first-send stream when selecting a newly-created session.
-  const hadActiveSessionRef = useRef(false);
 
   // Queued messages belong to a session; drop them when switching away.
   useEffect(() => {
     setQueuedMessages([]);
   }, [selectedSessionId]);
-  const historyInitializedRef = useRef(false);
-  const latestMessagesRef = useRef([]);
-
-  // Reset history loader whenever the active session changes.
-  useEffect(() => {
-    historyInitializedRef.current = false;
-  }, [selectedSessionId]);
 
   // Load persisted messages when the session changes.
-  // IMPORTANT: We must abort any ongoing stream from the PREVIOUS session
-  // before switching — otherwise stale SSE events leak into the new session.
-  // BUT: when switching from "no session" to a freshly-created one (first send),
-  // there is no previous stream to abort. Calling stop() here would kill the
-  // SSE that handleSend just started (race condition: setState → effect fires
-  // → stop() aborts the in-flight fetch). Guard with hadActiveSessionRef.
+  //
+  // Per-session streams (2026-08-01): switching sessions no longer stops or
+  // resets anything. Each session owns its own AbortController and message
+  // buffer inside useAgentStream, so a background run keeps streaming while
+  // the user reads another thread. hydrateSession() only fills in the stored
+  // history when that session has no live in-memory state — coming back to a
+  // still-running session must NOT overwrite its accumulated deltas with the
+  // stale on-disk snapshot.
   useEffect(() => {
-    if (historyInitializedRef.current) return;
-    // Only abort if we had an active session before (not "" → first send).
-    if (hadActiveSessionRef.current) {
-      stop();
-    }
-    reset();
-    const stored = session?.messages || [];
-    if (stored.length === 0) {
-      historyInitializedRef.current = true;
-      setHistory([]);
-      return;
-    }
-    setHistory(stored.map((m) => ({ ...m })));
-    historyInitializedRef.current = true;
-    // Update tracking: now we have an active session.
-    hadActiveSessionRef.current = !!selectedSessionId;
-  }, [selectedSessionId, session, setHistory, stop, reset]);
+    if (!selectedSessionId) return;
+    hydrateSession(selectedSessionId, session?.messages || []);
+  }, [selectedSessionId, session, hydrateSession]);
 
   async function doSend(text, mentions, explicitThreadId) {
     if (!text.trim()) return;
     const threadId = explicitThreadId || selectedSessionId;
-    const history = visibleMessages
-      .filter((m) => m.role === "user" || m.role === "assistant")
-      .map((m) => ({ id: m.id, role: m.role, content: m.content }));
     await sendMessage(text, {
       threadId,
       assistantId: selectedAssistantId,
       skillId: assistant?.skillId,
       model,
-      history,
       mentions,
     });
   }
 
-  // Persist messages and update session title/preview after a run finishes.
-  useEffect(() => {
-    if (wasLoadingRef.current && !isStreaming && selectedSessionId && hermes) {
-      const uiMessages = visibleMessages.map(toStorageMessage);
-      const userMsg = uiMessages.find((m) => m.role === "user");
-      const assistantMsg = [...uiMessages].reverse().find((m) => m.role === "assistant");
-      const patch = { messages: uiMessages };
-      if (userMsg && session?.title === "新会话") {
-        patch.title = (userMsg.content || "").slice(0, 24).replace(/\n/g, " ") || "新会话";
-      }
-      if (assistantMsg) {
-        const rawPreview = assistantMsg.content || "";
-        const clean = sanitizeMessageContent(rawPreview);
-        patch.preview = clean.slice(0, 45).replace(/\n/g, " ") || "(新对话)";
-      }
-      hermes.updateSession(selectedSessionId, patch).then(() => {
-        if (onSessionUpdated) onSessionUpdated();
-      }).catch((err) => {
-        console.error("session save failed", err);
-      });
-    }
-    wasLoadingRef.current = isStreaming;
-  }, [isStreaming, selectedSessionId, visibleMessages, hermes, session]);
-
-  // Track the latest messages every render so we can flush them on switch/unmount.
-  latestMessagesRef.current = visibleMessages;
-
   // Flush the current session's messages when switching away or unmounting.
+  // Runs still in flight are also persisted on completion via onSettled, so
+  // this only guards against losing partial output on an abrupt switch.
   useEffect(() => {
     const sid = selectedSessionId;
     return () => {
-      const msgs = latestMessagesRef.current;
-      if (sid && msgs && msgs.length > 0 && hermes) {
-        const ui = msgs.map(toStorageMessage);
-        hermes.updateSession(sid, { messages: ui }).catch((err) => {
-          console.error("session flush on switch failed", err);
-        });
-      }
+      if (!sid || !hermes) return;
+      const msgs = getSessionMessages(sid);
+      if (!msgs || msgs.length === 0) return;
+      const ui = msgs.map(toStorageMessage);
+      hermes.updateSession(sid, { messages: ui }).catch((err) => {
+        console.error("session flush on switch failed", err);
+      });
     };
-  }, [selectedSessionId, hermes]);
+  }, [selectedSessionId, hermes, getSessionMessages]);
 
   // Auto-send a message that was queued while creating a new session.
   useEffect(() => {
@@ -341,8 +328,8 @@ function ChatShell({
       try {
         const assistantId = selectedAssistantId || "default";
         const session = await hermes.createSession(assistantId, "新会话");
-        // Select the new session (triggers history-reset effect inside ChatShell,
-        // but does NOT remount it because we removed the key prop).
+        // Select the new session. hydrateSession() sees the bucket is already
+        // live (doSend below writes into it) and leaves it alone.
         onSelectSession(session.id);
         // Send immediately using the explicit session id — don't wait for
         // React to flush state. The stream hooks pick up the new threadId
@@ -383,7 +370,9 @@ function ChatShell({
   }, [isStreaming, queuedMessages, selectedSessionId]);
 
   async function handleStop() {
-    stop();
+    // Explicitly scope the stop to the foreground session — other sessions
+    // may be streaming in the background and must not be touched.
+    stop(selectedSessionId);
     // Stop also abandons anything the user queued behind the current run.
     setQueuedMessages([]);
     // Also interrupt the Hermes session directly so queued/running turns abort.
@@ -463,6 +452,17 @@ function ChatShell({
     }
   }
 
+  // Deleting a session must also tear down its in-memory stream state,
+  // otherwise an aborted-but-live run would keep writing into a bucket that
+  // no longer has a UI (and its messages would leak for the app's lifetime).
+  const handleDeleteSession = useCallback(
+    (id) => {
+      dropSession(id);
+      if (onDeleteSession) onDeleteSession(id);
+    },
+    [dropSession, onDeleteSession]
+  );
+
   // Combine prop runError with stream error for the banner.
   const displayError = runError || streamError;
 
@@ -472,6 +472,7 @@ function ChatShell({
         open={sidebarOpen}
         assistants={assistants}
         sessions={sessions}
+        runningSessionIds={runningSessionIds}
         selectedAssistantId={selectedAssistantId}
         selectedSessionId={selectedSessionId}
         onSelectAssistant={onSelectAssistant}
@@ -480,7 +481,7 @@ function ChatShell({
         onDeleteAssistant={onDeleteAssistant}
         onRenameAssistant={onRenameAssistant}
         onNewSession={onNewSession}
-        onDeleteSession={onDeleteSession}
+        onDeleteSession={handleDeleteSession}
         onRenameSession={onRenameSession}
         onToggle={() => setSidebarOpen((o) => !o)}
         onOpenSkills={onToggleSkills}

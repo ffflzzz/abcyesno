@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from "react";
 import Icon from "./Icon.jsx";
+import { Virtuoso } from "react-virtuoso";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import AgentVerboseTimeline from "./AgentVerboseTimeline.jsx";
@@ -9,6 +10,7 @@ import ToolCard from "./ToolCard.jsx";
 import TypewriterText from "./TypewriterText.jsx";
 import ApprovalBubble from "./ApprovalBubble.jsx";
 import GeneratedComponent from "./GeneratedComponent.jsx";
+import TableBlock from "./ui/TableBlock.jsx";
 import MessageActions from "./MessageActions.jsx";
 import { useContractEvents } from "../hooks/useContractEvents.js";
 import bachAvatar from "../assets/bach-avatar.png";
@@ -62,9 +64,30 @@ function CodeBlock({ children }) {
   );
 }
 
+// ── sanitizeMessageContent cache ──────────────────────────────
+// Historical/finalized messages have stable content, but the function runs
+// ~15 regexes per call and was re-invoked for every message on every stream
+// token (full-column re-render). Cache results keyed by raw string so repeated
+// renders of unchanged content hit O(1) instead of re-running all regexes.
+const sanitizeCache = new Map();
+const SANITIZE_CACHE_MAX = 1500;
+
 export function sanitizeMessageContent(raw) {
   if (typeof raw !== "string") return raw;
+  const cached = sanitizeCache.get(raw);
+  if (cached !== undefined) return cached;
+  const result = sanitizeImpl(raw);
+  if (sanitizeCache.size > SANITIZE_CACHE_MAX) sanitizeCache.clear();
+  sanitizeCache.set(raw, result);
+  return result;
+}
+
+function sanitizeImpl(raw) {
   let t = raw;
+
+  // Suppress Hermes interrupt metadata that leaked into stored messages.
+  // These are internal status strings, never user-visible content.
+  if (/^Operation interrupted:/.test(t.trim())) return "";
 
   // Hide raw JSON/structured data leaks (LangGraph internal state fragments)
   const trimmed = t.trim();
@@ -183,17 +206,78 @@ function MarkdownView({ cleaned, onImageClick }) {
               alt={props.alt || ""}
             />
           ),
-          table: ({ node, ...props }) => (
-            <div className="md-table-wrapper">
-              <table {...props} />
-            </div>
-          ),
+          table: ({ node, children, ...props }) => {
+            // Try to extract structured data for TableBlock (MVP component).
+            const extracted = extractTableData(node);
+            if (extracted) {
+              return <TableBlock columns={extracted.columns} rows={extracted.rows} />;
+            }
+            // Fallback: plain styled table.
+            return (
+              <div className="md-table-wrapper">
+                <table {...props}>{children}</table>
+              </div>
+            );
+          },
         }}
       >
         {cleaned}
       </ReactMarkdown>
     </MarkdownErrorBoundary>
   );
+}
+
+/** Extract columns + rows from a react-markdown table AST node. Returns null if not a data table. */
+function extractTableData(node) {
+  if (!node || !node.children) return null;
+  let thead = null;
+  let tbody = null;
+  for (const child of node.children) {
+    if (child.tagName === "thead") thead = child;
+    if (child.tagName === "tbody") tbody = child;
+  }
+  if (!thead || !tbody) return null;
+  // Extract header columns from <th> elements.
+  const columns = [];
+  const headerRow = thead.children?.find(c => c.tagName === "tr");
+  if (headerRow?.children) {
+    for (const cell of headerRow.children) {
+      if (cell.tagName === "th" || cell.tagName === "td") {
+        const text = extractTextFromAst(cell);
+        if (text != null) columns.push(text);
+      }
+    }
+  }
+  if (columns.length === 0) return null;
+  // Extract body rows from <tr> elements.
+  const rows = [];
+  for (const tr of tbody.children || []) {
+    if (tr.tagName !== "tr") continue;
+    // Skip separator rows (GFM tables have a row of dashes).
+    if (tr.children?.every(c => {
+      const t = extractTextFromAst(c);
+      return t != null && /^[-:|]+$/.test(t.replace(/\s/g, ""));
+    })) continue;
+    const row = [];
+    for (const cell of tr.children || []) {
+      if (cell.tagName === "td" || cell.tagName === "th") {
+        row.push(extractTextFromAst(cell) ?? "");
+      }
+    }
+    if (row.length > 0) rows.push(row);
+  }
+  if (rows.length === 0) return null;
+  return { columns, rows };
+}
+
+/** Recursively extract text content from a remark/rehype AST node. */
+function extractTextFromAst(node) {
+  if (!node) return null;
+  if (typeof node.value === "string") return node.value;
+  if (node.children?.length) {
+    return node.children.map(extractTextFromAst).filter(Boolean).join("");
+  }
+  return null;
 }
 
 // Collapse long assistant replies to a short preview with an expand toggle,
@@ -591,41 +675,25 @@ export default function MessageThread({ messages = [], loading, streamPhase, thi
     }
   }
 
-  // ── Native scroll (no virtual scrolling — simpler, no scroll-thrash) ──
-  // The chat list is rendered directly in an `overflow-y:auto` container.
-  // Auto-follow pins to bottom while streaming, but yields the moment the
-  // user scrolls up to read history (restored only when they return to the
-  // bottom or click "回到底部").
-  const containerRef = useRef(null);
-  const atBottomRef = useRef(true);
+  // ── Virtualized scroll via react-virtuoso ───────────────────
+  // Long conversations previously rendered the entire message column in a
+  // native overflow-y:auto container — every stream token re-rendered all
+  // rows (O(N) DOM work). Virtuoso keeps only the visible window mounted.
+  // Auto-follow pins to bottom while streaming but yields the moment the
+  // user scrolls up (restored via Virtuoso's atBottomStateChange / followOutput).
+  const virtuosoRef = useRef(null);
   const [atBottom, setAtBottom] = useState(true);
 
-  const handleScroll = useCallback(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const bottom = el.scrollHeight - el.scrollTop - el.clientHeight < 200;
-    atBottomRef.current = bottom;
-    setAtBottom((prev) => (prev === bottom ? prev : bottom));
-  }, []);
-
   const scrollToBottom = useCallback((smooth) => {
-    const el = containerRef.current;
-    if (!el) return;
-    atBottomRef.current = true;
-    setAtBottom(true);
-    el.scrollTo({ top: el.scrollHeight, behavior: smooth ? "smooth" : "auto" });
-  }, []);
-
-  // Auto-follow after every render: pin to bottom only while the user is at
-  // the bottom (or hasn't scrolled up). Runs in layout phase so the browser
-  // never paints a stale (un-scrolled) frame during streaming.
-  useLayoutEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    if (atBottomRef.current) {
-      el.scrollTop = el.scrollHeight;
+    if (virtuosoRef.current) {
+      virtuosoRef.current.scrollToIndex({
+        index: rows.length - 1,
+        behavior: smooth ? "smooth" : "auto",
+        align: "end",
+      });
     }
-  });
+    setAtBottom(true);
+  }, [rows.length]);
 
   const renderRow = (index) => {
     const row = rows[index];
@@ -789,28 +857,39 @@ export default function MessageThread({ messages = [], loading, streamPhase, thi
   };
 
   return (
-    <div className="vs-container" ref={containerRef} onScroll={handleScroll}>
-      <div className="vs-content">
-        {rows.map((row, index) => (
-          <div key={rowKey(row, index)} data-row-index={index}>
+    <div className="vs-container">
+      <Virtuoso
+        ref={virtuosoRef}
+        className="vs-content"
+        data={rows}
+        followOutput={(isAtBottom) => (isAtBottom ? "smooth" : false)}
+        atBottomStateChange={setAtBottom}
+        itemContent={(index) => (
+          <div key={rowKey(rows[index], index)} data-row-index={index}>
             {renderRow(index)}
           </div>
-        ))}
-        {uiBlocks.length > 0 && (
-          <div className="ui-blocks-region" key="ui-blocks-region">
-            {uiBlocks.map((b) => (
-              <GeneratedComponent key={b.blockId} block={b} />
-            ))}
-          </div>
         )}
-        {approval && (
-          <ApprovalBubble
-            approval={approval}
-            onRespond={onRespondApproval}
-            toolMessages={currentTurnToolMessages}
-          />
-        )}
-      </div>
+        components={{
+          Footer: () => (
+            <>
+              {uiBlocks.length > 0 && (
+                <div className="ui-blocks-region" key="ui-blocks-region">
+                  {uiBlocks.map((b) => (
+                    <GeneratedComponent key={b.blockId} block={b} />
+                  ))}
+                </div>
+              )}
+              {approval && (
+                <ApprovalBubble
+                  approval={approval}
+                  onRespond={onRespondApproval}
+                  toolMessages={currentTurnToolMessages}
+                />
+              )}
+            </>
+          ),
+        }}
+      />
 
       {!atBottom && (
         <button className="scroll-bottom-btn" onClick={() => scrollToBottom(true)} title="回到底部">

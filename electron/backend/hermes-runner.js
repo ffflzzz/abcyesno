@@ -77,8 +77,8 @@ class HermesRunner {
     }
     try {
       fs.mkdirSync(path.dirname(destDir), { recursive: true });
-      this._copyDirRecursive(srcDir, destDir);
-      log('hermes-runner', `synced builtin skill to ${destDir}`);
+      const copied = this._copyDirRecursive(srcDir, destDir);
+      log('hermes-runner', `synced builtin skill to ${destDir} (${copied} file(s) updated)`);
     } catch (err) {
       log('hermes-runner', `failed to sync builtin skills: ${err.message}`);
     }
@@ -86,15 +86,28 @@ class HermesRunner {
 
   _copyDirRecursive(src, dest) {
     fs.mkdirSync(dest, { recursive: true });
+    let updated = 0;
     for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
       const srcPath = path.join(src, entry.name);
       const destPath = path.join(dest, entry.name);
       if (entry.isDirectory()) {
-        this._copyDirRecursive(srcPath, destPath);
+        updated += this._copyDirRecursive(srcPath, destPath);
       } else {
+        // Incremental sync: skip files whose destination copy is already
+        // up-to-date (source mtime <= dest mtime). Avoids re-copying the
+        // entire skill tree on every cold start.
+        try {
+          const dstStat = fs.statSync(destPath);
+          const srcStat = fs.statSync(srcPath);
+          if (dstStat.mtimeMs >= srcStat.mtimeMs) continue;
+        } catch (_) {
+          // Destination missing → always copy.
+        }
         fs.copyFileSync(srcPath, destPath);
+        updated++;
       }
     }
+    return updated;
   }
 
   _updateConfigApiKey(key) {

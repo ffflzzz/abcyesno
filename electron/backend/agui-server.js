@@ -234,13 +234,24 @@ function createAgUIServer(getGatewayClient, storage, options) {
     return { method, agentId, threadId, runId, messages, forwardedProps, assistantId, skillId, requestedModel };
   }
 
+  // Cache recent session.status validations so we don't hit the gateway on
+  // every message of an active thread (P2: reduce per-message round-trips).
+  const sessionValidatedAt = new Map(); // threadId -> last validated timestamp
+  const SESSION_TTL_MS = 60000;
+
   async function ensureHermesSession(client, ctx) {
     const existing = await storage.getThreadMapping(ctx.threadId);
     if (existing) {
+      const lastValidated = sessionValidatedAt.get(ctx.threadId) || 0;
+      if (Date.now() - lastValidated < SESSION_TTL_MS) {
+        // Trust the cached mapping within TTL — skip the gateway round-trip.
+        return { id: existing, created: false };
+      }
       try {
         // Validate that the mapped Hermes session is still alive (it may have
         // been lost when Hermes restarted or was evicted from memory).
         await client.request('session.status', { session_id: existing }, 5000);
+        sessionValidatedAt.set(ctx.threadId, Date.now());
         return { id: existing, created: false };
       } catch (err) {
         log('agui-server', `existing session ${existing} not found (${err.message}), recreating`);
@@ -354,7 +365,11 @@ function createAgUIServer(getGatewayClient, storage, options) {
 
     function emitTextDelta(delta) {
       const actual = appendDelta(delta);
-      log('agui-server', `[translator] delta len=${delta.length} actualLen=${actual.length} emittedLen=${emittedText.length} text=${JSON.stringify(delta.slice(0, 120))}`);
+      // High-frequency: only log when ABC_AGUI_DEBUG is set (avoid per-delta
+      // synchronous file I/O storms during streaming).
+      if (process.env.ABC_AGUI_DEBUG) {
+        log('agui-server', `[translator] delta len=${delta.length} actualLen=${actual.length} emittedLen=${emittedText.length}`);
+      }
       if (!actual) return;
       ensureMessageStarted();
       hasTextDelta = true;
@@ -423,8 +438,11 @@ function createAgUIServer(getGatewayClient, storage, options) {
       const payload = params && params.payload ? params.payload : params;
       const sid = params && (params.session_id || params.sid);
       if (sid && sid !== ctx.hermesSessionId) return;
-      const textPreview = payload && typeof payload.text === 'string' ? payload.text.slice(0, 100) : '';
-      log('agui-server', `[translator] event=${type} sid=${sid || ''} textPreview=${JSON.stringify(textPreview)}`);
+      // High-frequency: only log when ABC_AGUI_DEBUG is set.
+      if (process.env.ABC_AGUI_DEBUG) {
+        const textPreview = payload && typeof payload.text === 'string' ? payload.text.slice(0, 100) : '';
+        log('agui-server', `[translator] event=${type} sid=${sid || ''} textPreview=${JSON.stringify(textPreview)}`);
+      }
 
       switch (type) {
         case 'message.start':
@@ -443,6 +461,15 @@ function createAgUIServer(getGatewayClient, storage, options) {
         case 'thinking.delta':
           // Forward thinking content to frontend for the ThinkingIndicator.
           // The frontend renders it as a transient indicator, not a bubble.
+          if (payload && typeof payload.text === 'string' && payload.text.trim()) {
+            setPhase('thinking');
+            send({ type: 'CUSTOM', name: 'thinking.delta', value: { text: payload.text } });
+          }
+          break;
+
+        case 'reasoning.delta':
+          // Real model reasoning tokens (from chat_completion_helpers / _fire_reasoning_delta).
+          // Without this case they fall through to default → RAW → frontend drops them.
           if (payload && typeof payload.text === 'string' && payload.text.trim()) {
             setPhase('thinking');
             send({ type: 'CUSTOM', name: 'thinking.delta', value: { text: payload.text } });
@@ -636,9 +663,27 @@ function createAgUIServer(getGatewayClient, storage, options) {
     return { promise, translator };
   }
 
+  // Safety net: if the gateway WebSocket hasn't connected yet (e.g. Hermes is
+  // still starting), wait up to 5 seconds for it to come up instead of
+  // immediately rejecting the request.  This covers edge cases where the
+  // renderer obtains aguiPort before gatewayReady is true (e.g. cached
+  // value, race between IPC events).
+  function waitForGateway(client) {
+    if (!client) return Promise.resolve(false);
+    if (client.ready) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      const onOpen = () => {
+        client.off('open', onOpen);
+        resolve(true);
+      };
+      client.once('open', onOpen);
+      setTimeout(() => { client.off('open', onOpen); resolve(false); }, 5000);
+    });
+  }
+
   async function handleAgentConnect(req, res, encoder, ctx) {
     const client = gatewayClient();
-    if (!client || !client.ready) {
+    if (!client || !(await waitForGateway(client))) {
       sendSSE(res, encoder, { type: 'RUN_ERROR', message: 'Hermes gateway not connected' });
       return res.end();
     }
@@ -693,7 +738,7 @@ function createAgUIServer(getGatewayClient, storage, options) {
 
   async function handleAgentRun(req, res, encoder, ctx) {
     const client = gatewayClient();
-    if (!client || !client.ready) {
+    if (!client || !(await waitForGateway(client))) {
       sendSSE(res, encoder, { type: 'RUN_ERROR', message: 'Hermes gateway not connected' });
       return res.end();
     }

@@ -279,6 +279,33 @@ body {
   text-overflow: ellipsis;
 }
 
+/* ── Background streaming indicator ──
+   Sessions keep running after the user switches away (per-session streams),
+   so the list needs to show which threads are still producing output. */
+.session-running-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+  background: var(--accent, #7f77dd);
+  animation: session-running-pulse 1.4s ease-in-out infinite;
+}
+
+.session-item.running .session-preview {
+  color: var(--accent, #7f77dd);
+}
+
+@keyframes session-running-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(0.75); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-running-dot { animation: none; }
+}
+
 /* ── Workflow group (entry type = WORKBENCH) ── */
 .workflow-list {
   display: flex;
