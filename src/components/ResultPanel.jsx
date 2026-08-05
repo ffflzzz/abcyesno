@@ -142,13 +142,22 @@ export default function ResultPanel({
   sessionId, aguiPort,
   // ── Workflow mode props (when set, panel shows workflow UI instead of tabs) ──
   selectedWorkflowId, manifests, session,
-  onSend, onStop, model, backendStatus, onSelectWorkflow,
+  onSend, onStop, onWorkflowRun, model, backendStatus, onSelectWorkflow,
   // ── External URL preview (e.g. abcyesno.cn opened from Bach click) ──
   externalPreviewUrl,
   onClearExternalPreview,
   // ── Collapse control (owned by parent so header button can toggle) ──
   collapsed = false,
   onToggleCollapse,
+  // ── Detach control: when true, hides the "detach to new window" button
+  //    (the standalone window already shows the panel; offering detach there
+  //    would spawn even more windows). ──
+  detachHidden = false,
+  // ── Layout override: lets the detached window set width:100% etc. ──
+  style,
+  // ── Detach handler — owned by App so it can clear the in-window state
+  //    (selectedWorkflowId, etc.) right after the new window opens. ──
+  onDetachResultPanel,
 }) {
   const [activeTab, setActiveTab] = useState("overview");
   const [maximized, setMaximized] = useState(false);
@@ -192,7 +201,15 @@ export default function ResultPanel({
   const isWorkflowMode = !!selectedWorkflowId;
 
   function handleContractRun(manifest, inputObj) {
-    if (!manifest || !onSend) return;
+    if (!manifest) return;
+    // Prefer the independent workflow session path (creates a dedicated
+    // session so chat and workflow runs don't abort each other).
+    if (onWorkflowRun) {
+      onWorkflowRun(manifest, inputObj);
+      return;
+    }
+    // Fallback: send through chat session (old behaviour).
+    if (!onSend) return;
     const envelope = {
       agent_name: manifest.id,
       input: inputObj,
@@ -342,6 +359,37 @@ export default function ResultPanel({
     if (!SAFE.test(url)) return;
     window.hermes.openExternal(url);
   }, []);
+
+  // ── Detach: pop the entire result panel into its own Electron window ──
+  // Mirrors Chrome's "move tab to a new window". The new window keeps the
+  // same workflow context (sessionId / workflowId / active tab / collapsed
+  // state), and they share the same backend (AG-UI / Hermes) over IPC/HTTP.
+  //
+  // The actual move-to-new-window orchestration (IPC + clearing in-window
+  // state) is owned by App.jsx via the `onDetachResultPanel` prop. We just
+  // forward — keeping ResultPanel pure of layout-level decisions.
+  const handleDetach = useCallback(() => {
+    if (typeof onDetachResultPanel === 'function') {
+      onDetachResultPanel();
+      return;
+    }
+    // Fallback when used standalone (e.g. inside the detached window
+    // itself, where this prop is intentionally absent): just hit the IPC
+    // directly. The standalone window has nothing to close — it's already
+    // the only copy.
+    if (!window.hermes?.detachResultPanel) {
+      console.warn('[ResultPanel] detachResultPanel IPC not available');
+      return;
+    }
+    window.hermes
+      .detachResultPanel({
+        workflowId: selectedWorkflowId || '',
+        sessionId: sessionId || '',
+        tab: activeTab || 'overview',
+        collapsed: collapsed ? 'true' : 'false',
+      })
+      .catch((err) => console.error('[ResultPanel] detach failed', err));
+  }, [onDetachResultPanel, selectedWorkflowId, sessionId, activeTab, collapsed]);
 
   // ── Render helpers ──
   const selectedFileObj = openFiles.find((o) => o.path === selectedFile);
@@ -531,8 +579,12 @@ export default function ResultPanel({
 
   // ── Main render ──
   return (
-    <aside className={`result-panel ${maximized ? "maximized" : ""} ${isWorkflowMode ? "workflow-mode" : ""}`}>
-      {/* Header */}
+    <aside className={`result-panel ${maximized ? "maximized" : ""} ${isWorkflowMode ? "workflow-mode" : ""} ${detachHidden ? "no-detach" : ""}`} style={style}>
+      {!detachHidden && (
+      /* Header — only when running inside the main window.
+         Detached windows keep Electron's native chrome (BrowserWindow title bar
+         + OS-level close/maximize/minimize) and don't need a duplicate header
+         inside the panel. */
       <div className="result-header">
         {isWorkflowMode ? (
           <div className="result-tabs">
@@ -554,9 +606,11 @@ export default function ResultPanel({
           {!isWorkflowMode && <button className="result-icon-btn" onClick={refresh} title="刷新"><Icon name="refresh" size={14} /></button>}
           {!isWorkflowMode && <button className="result-icon-btn" onClick={() => handleOpenExternal(popOutUrl)} disabled={!popOutUrl} title="外开新窗"><Icon name="external" size={14} /></button>}
           <button className="result-icon-btn" onClick={() => setMaximized((m) => !m)} title={maximized ? "还原" : "最大化"}><Icon name="square" size={14} /></button>
+          <button className="result-icon-btn" onClick={handleDetach} title="脱离为独立窗口"><Icon name="detach" size={14} /></button>
           <button className="result-icon-btn" onClick={() => onToggleCollapse?.()} title="折叠"><Icon name="chevron" size={14} style={{ transform: "rotate(180deg)" }} /></button>
         </div>
       </div>
+      )}
 
       {/* Body */}
       <div className="result-body">

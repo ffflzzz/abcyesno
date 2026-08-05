@@ -1,5 +1,73 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { emitContractEvent } from "../contract/eventBus.js";
+import { emitToastShow, emitToastClear } from "./uiBus.js";
+
+// ── Inline images → native vision ─────────────────────────────────────
+// The composer embeds a pasted/dropped screenshot straight into the message
+// text as `![图片1](data:image/png;base64,....)` so the user's own bubble can
+// render it. Shipping that data URL to the backend *as text* is what killed
+// vision: the model received tens of thousands of base64 characters instead
+// of an image (and blew the context budget — "input length too long").
+//
+// So we split the two concerns:
+//   • local message  → keeps the data URL, bubble still shows the picture
+//   • wire payload   → data URL replaced by a short `[附图N]` marker, and the
+//                      real bytes travel in a separate `images` array that
+//                      agui-server hands to Hermes via `image.attach_bytes`,
+//                      which is the same path the TUI uses for native vision.
+const INLINE_IMG_RE =
+  /!\[([^\]]*)\]\((data:image\/[a-zA-Z0-9.+-]+;base64,[^)\s]+|file:\/\/[^)\s]+)\)/g;
+
+function splitInlineImages(text) {
+  if (!text || typeof text !== "string") return { text: text || "", images: [] };
+  const images = [];
+  const stripped = text.replace(INLINE_IMG_RE, (_m, alt, url) => {
+    images.push({ alt: alt || "", url });
+    return `[附图${images.length}]`;
+  });
+  return { text: stripped, images };
+}
+
+// Cheap pre-check so we don't run the regex over every history entry.
+function hasInlineImage(s) {
+  return typeof s === "string" && (s.includes("](data:image/") || s.includes("](file://"));
+}
+
+function guessImageName(url, idx) {
+  if (url.startsWith("data:")) {
+    const m = /^data:image\/([a-zA-Z0-9.+-]+);/.exec(url);
+    const ext = (m && m[1] ? m[1] : "png").replace("jpeg", "jpg");
+    return `pasted_${idx + 1}.${ext}`;
+  }
+  try {
+    const tail = decodeURIComponent(url.split("?")[0]).split(/[\\/]/).pop();
+    return tail || `image_${idx + 1}.png`;
+  } catch {
+    return `image_${idx + 1}.png`;
+  }
+}
+
+// Resolve every inline reference to base64 bytes. `file://` needs a trip
+// through the main process (the renderer can't read cross-directory file://).
+async function resolveImagePayload(refs) {
+  const out = [];
+  for (let i = 0; i < refs.length; i++) {
+    const { alt, url } = refs[i];
+    const filename = guessImageName(url, i);
+    if (url.startsWith("data:")) {
+      out.push({ alt, dataUrl: url, filename });
+      continue;
+    }
+    if (typeof window === "undefined" || !window.hermes?.readLocalImage) continue;
+    try {
+      const r = await window.hermes.readLocalImage(url);
+      if (r && r.dataUrl) out.push({ alt, dataUrl: r.dataUrl, filename });
+    } catch {
+      /* unreadable file: drop it rather than fail the whole send */
+    }
+  }
+  return out;
+}
 
 // ── Agent 自渲染 UI 组件：白名单 + blockId 校验 ──
 const UI_BLOCK_TYPES = new Set(["table", "flowchart", "card", "progress", "action"]);
@@ -37,6 +105,17 @@ function createSessionState(id) {
     error: null,
     uiBlocks: [],
     stalled: false,
+    // ── P1 新增可见状态（深度推理 / 状态行 / 工具进度 / 子 agent / MOA / 用量 / 评审）──
+    reasoningText: "",
+    statusLine: "",
+    statusKind: "",
+    toolStatus: {},            // { [toolName]: { generating, preview } }
+    subagents: [],             // 子 agent 实时镜像
+    moaRefs: [],               // MOA 多模型参考
+    moaAggregating: null,      // 当前聚合器名（moa.aggregating）
+    usage: null,               // 后端真实 token/cost（message.complete.usage / session.usage）
+    reviewSummary: null,       // 评审摘要（review.summary）
+    browserProgress: [],       // 浏览器自动化进度（browser.progress）：[{message,level,ts}]
     // 运行时内部状态
     controller: null,
     runId: null,
@@ -55,12 +134,34 @@ function snapshotOf(s) {
     error: s.error,
     uiBlocks: s.uiBlocks,
     stalled: s.stalled,
+    reasoningText: s.reasoningText,
+    statusLine: s.statusLine,
+    statusKind: s.statusKind,
+    toolStatus: s.toolStatus,
+    subagents: s.subagents,
+    moaRefs: s.moaRefs,
+    moaAggregating: s.moaAggregating,
+    usage: s.usage,
+    reviewSummary: s.reviewSummary,
+    browserProgress: s.browserProgress,
   };
 }
 
 function sameIds(a, b) {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i += 1) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+/** Shallow equality for plain objects — used to deduplicate ui.render events. */
+function shallowEqual(a, b) {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  const keysA = Object.keys(a);
+  if (keysA.length !== Object.keys(b).length) return false;
+  for (const k of keysA) {
+    if (a[k] !== b[k]) return false;
+  }
   return true;
 }
 
@@ -212,6 +313,43 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
     }
   }, []);
 
+  /**
+   * 把本会话所有仍在运行的 tool message 强制标为 interrupted，
+   * 并清掉 toolStatus 里的 generating 映射。
+   *
+   * 背景：用户点“停止”或 SSE 被对端关时，TOOL_CALL_END 事件未必有机会发出，
+   * 会留下 status=='running' 的工具卡一直“执行中…”。这里兜底收尾。
+   *
+   * 注意：只清“会让 UI 误显示运行中”的状态：
+   * - toolStatus: {}（ToolCard 上的“生成中”徽标）
+   * - messages 里的 tool 状态 -> interrupted
+   * 不清 reasoningText / statusLine / subagents / moaRefs —— 这些是历史信息，
+   * 用户重新查看消息时仍应可见（且已被 `loading && reasoningText` 等条件
+   * 控制在流式期间才渲染，不会误显示运行中）。
+   */
+  const resetRunningTools = useCallback(
+    (sess) => {
+      let messagesChanged = false;
+      const next = sess.messages.map((m) => {
+        if (m && m.role === "tool" && (m.status === "running" || m.status === "in_progress")) {
+          messagesChanged = true;
+          // 没有 startedAt 也能算一个最小耗时，保证 ToolCard 能渲染
+          const durationMs = m.startedAt ? Date.now() - m.startedAt : undefined;
+          return { ...m, status: "interrupted", durationMs };
+        }
+        return m;
+      });
+      if (messagesChanged) sess.messages = next;
+
+      const toolStatusChanged =
+        sess.toolStatus && Object.keys(sess.toolStatus).length > 0;
+      if (toolStatusChanged) sess.toolStatus = {};
+
+      if (messagesChanged || toolStatusChanged) publish(sess.id);
+    },
+    [publish]
+  );
+
   // ── CUSTOM 事件 ─────────────────────────────────────────────
   const handleCustom = useCallback(
     (sess, ev) => {
@@ -229,6 +367,102 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
         if (/^[\s\p{P}\p{S}]{1,6}\s+\w+\.\.\.$/u.test(text.trim())) return;
         sess.phase = "thinking";
         sess.thinkingText += text;
+        publish(sess.id);
+      } else if (name === "reasoning.delta") {
+        // Deep model reasoning tokens — rendered in a dedicated ReasoningBlock,
+        // distinct from the shallow thinking indicator.
+        const text = value?.text || "";
+        if (!text) return;
+        // Dedup: skip if the new delta is already a suffix of what we have.
+        // Some upstream paths replay the last few tokens (reconnect / duplicate
+        // emit) and without this we'd render the same trailing text twice.
+        if (sess.reasoningText.endsWith(text)) return;
+        sess.phase = "thinking";
+        sess.reasoningText += text;
+        publish(sess.id);
+      } else if (name === "reasoning.snapshot") {
+        // Complete reasoning snapshot from the model_progress callback.
+        // Replaces the streamed text wholesale instead of appending — this is
+        // what guarantees the final ReasoningBlock doesn't double-render the
+        // same reasoning that streaming already pushed.
+        const text = value?.text || "";
+        if (!text) return;
+        sess.phase = "thinking";
+        sess.reasoningText = text;
+        publish(sess.id);
+      } else if (name === "status.update") {
+        sess.statusLine = value?.text || "";
+        sess.statusKind = value?.kind || "";
+        publish(sess.id);
+      } else if (name === "tool.generating") {
+        const tname = value?.name;
+        if (tname) {
+          sess.toolStatus = { ...sess.toolStatus, [tname]: { ...sess.toolStatus[tname], generating: true } };
+          sess.statusLine = `⏳ 正在生成工具调用：${tname}`;
+          publish(sess.id);
+        }
+      } else if (name === "tool.progress") {
+        const tname = value?.name;
+        const preview = value?.preview;
+        if (tname) {
+          sess.toolStatus = { ...sess.toolStatus, [tname]: { generating: true, preview: preview || (sess.toolStatus[tname] && sess.toolStatus[tname].preview) || null } };
+          if (preview && typeof preview === "string" && preview.length <= 160) {
+            sess.statusLine = `🔧 ${tname}：${preview}`;
+          }
+          publish(sess.id);
+        }
+      } else if (name === "tool.inline_diff") {
+        const { toolCallId, diff } = value || {};
+        const id = toolCallId && sess.toolIndex.get(toolCallId);
+        if (id) patchMessage(sess, id, { inlineDiff: diff });
+        // 仍触发一次 publish 让 UI 更新（patchMessage 内部已 publish，但保险）
+        publish(sess.id);
+      } else if (name === "notification.show") {
+        emitToastShow({
+          key: value?.key || value?.id,
+          level: value?.level || "info",
+          text: value?.text || "",
+          ttlMs: value?.ttl_ms,
+          kind: value?.kind,
+        });
+      } else if (name === "notification.clear") {
+        emitToastClear({ key: value?.key });
+      } else if (name && name.startsWith("subagent.")) {
+        const p = value || {};
+        const key = p.subagent_id || `task-${p.task_index}`;
+        const prev = sess.subagents.find((s) => s.key === key);
+        if (prev) {
+          Object.assign(prev, p);
+          prev.event = name;
+        } else {
+          sess.subagents = [...sess.subagents, { ...p, key, event: name }];
+        }
+        publish(sess.id);
+      } else if (name === "moa.reference") {
+        sess.moaRefs = [...sess.moaRefs, { label: value?.label, text: value?.text, index: value?.index }];
+        publish(sess.id);
+      } else if (name === "moa.aggregating") {
+        sess.moaAggregating = value?.aggregator || true;
+        sess.statusLine = value?.aggregator ? `🔀 MOA 聚合中（${value.aggregator}）` : "🔀 MOA 聚合中…";
+        publish(sess.id);
+      } else if (name === "background.complete") {
+        emitToastShow({ key: value?.task_id, level: "success", text: `后台任务完成：${value?.text || value?.task_id || ""}`, kind: "ttl", ttlMs: 6000 });
+      } else if (name === "review.summary") {
+        sess.reviewSummary = value?.text || "";
+        emitToastShow({ key: "review-summary", level: "info", text: "收到评审摘要", kind: "ttl", ttlMs: 4000 });
+        publish(sess.id);
+      } else if (name === "browser.progress") {
+        // Agent-driven browser activity (route B / pw_browser_* tools). The
+        // BrowserPanel mirrors these as a live progress log so the user watches
+        // the agent operate the in-app Chromium. payload = { message, level }.
+        const msg = value?.message;
+        if (!msg) return;
+        const entry = { message: msg, level: value?.level || "info", ts: Date.now() };
+        // Cap to the last 60 entries to bound memory across a long run.
+        sess.browserProgress = [...sess.browserProgress, entry].slice(-60);
+        publish(sess.id);
+      } else if (name === "usage.update") {
+        sess.usage = value || null;
         publish(sess.id);
       } else if (name === "tool.chunk") {
         const { toolCallId, chunk } = value || {};
@@ -252,9 +486,17 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
         if (!blockId || !BLOCK_ID_RE.test(blockId)) return;
         const safeProps = props && typeof props === "object" ? props : {};
         const prev = sess.uiBlocks;
-        const block = { blockId, type, props: safeProps };
         const idx = prev.findIndex((b) => b.blockId === blockId);
         if (idx >= 0) {
+          const old = prev[idx];
+          // ── 去重：props 浅比较一致则跳过，避免无意义重渲染导致频闪 ──
+          if (
+            old.type === type &&
+            shallowEqual(old.props, safeProps) &&
+            !appendPreview
+          ) {
+            return; // 内容没变，不 publish
+          }
           // 幂等更新：相同 blockId 直接替换（action 流式进度由 agent 发累积 props）。
           // 若声明 appendPreview 且旧块已有 preview，则仅追加 preview 文本。
           const next = prev.slice();
@@ -263,9 +505,12 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
             typeof next[idx].props?.preview === "string" &&
             typeof safeProps.preview === "string"
           ) {
+            const merged = next[idx].props.preview + safeProps.preview;
+            // 合并后如果 preview 也没变，同样跳过
+            if (next[idx].props.preview === merged) return;
             next[idx] = {
               ...block,
-              props: { ...safeProps, preview: next[idx].props.preview + safeProps.preview },
+              props: { ...safeProps, preview: merged },
             };
           } else {
             next[idx] = block;
@@ -278,7 +523,7 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
         publish(sess.id);
       }
     },
-    [publish]
+    [publish, patchMessage]
   );
 
   // ── SSE 事件处理 ────────────────────────────────────────────
@@ -295,6 +540,17 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
           sess.phase = "thinking";
           sess.thinkingText = "";
           sess.error = null;
+          // 复位上一轮残留的 P1 状态
+          sess.reasoningText = "";
+          sess.statusLine = "";
+          sess.statusKind = "";
+          sess.toolStatus = {};
+          sess.subagents = [];
+          sess.moaRefs = [];
+          sess.moaAggregating = null;
+          sess.reviewSummary = null;
+          sess.usage = null;
+          sess.browserProgress = [];
           publish(sess.id);
           break;
 
@@ -431,12 +687,16 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
         createdAt: Date.now(),
       };
 
-      // 历史优先取本会话自己的消息（调用方可显式覆盖）
-      const priorHistory =
+      // 历史优先取本会话自己的消息（调用方可显式覆盖）。
+      // 历史里的旧图同样要剥离 base64——否则每一轮都把整张图当文本重发一遍。
+      const priorHistory = (
         history ||
         sess.messages
           .filter((m) => m.role === "user" || m.role === "assistant")
-          .map((m) => ({ id: m.id, role: m.role, content: m.content }));
+          .map((m) => ({ id: m.id, role: m.role, content: m.content }))
+      ).map((m) =>
+        hasInlineImage(m.content) ? { ...m, content: splitInlineImages(m.content).text } : m
+      );
 
       sess.messages = [...sess.messages, userMsg];
       sess.phase = "thinking";
@@ -445,12 +705,27 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
       sess.stalled = false;
       sess.thinkingSince = Date.now();
       sess.uiBlocks = []; // 新的一轮：清空上一轮的 agent 自渲染组件
+      // 复位 P1 状态
+      sess.reasoningText = "";
+      sess.statusLine = "";
+      sess.statusKind = "";
+      sess.toolStatus = {};
+      sess.subagents = [];
+      sess.moaRefs = [];
+      sess.moaAggregating = null;
+      sess.reviewSummary = null;
+      sess.usage = null;
+      sess.browserProgress = [];
       publishNow(sess.id);
 
       const controller = new AbortController();
       sess.controller = controller;
 
-      const outgoing = [...priorHistory, { id: userMsg.id, role: "user", content: text }];
+      // ── Vision: pull the images out of the text, ship them as real images ──
+      const { text: wireText, images: imageRefs } = splitInlineImages(text);
+      const attachedImages = imageRefs.length > 0 ? await resolveImagePayload(imageRefs) : [];
+
+      const outgoing = [...priorHistory, { id: userMsg.id, role: "user", content: wireText }];
 
       try {
         const res = await fetch(`http://127.0.0.1:${aguiPort}/api/ag-ui/run`, {
@@ -465,6 +740,7 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
             runId,
             messages: outgoing,
             forwardedProps: { assistantId, skillId, model, mentions: mentions || [] },
+            images: attachedImages.length > 0 ? attachedImages : undefined,
           }),
           signal: controller.signal,
         });
@@ -523,13 +799,15 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
             sess.thinkingText = "";
             sess.thinkingSince = null;
             publish(sess.id);
-            settle(sess);
           }
+          // SSE 被关 / 网络断：把仍处于 running 的工具卡标 interrupted（idempotent）
+          resetRunningTools(sess);
+          settle(sess);
         }
         syncRunning();
       }
     },
-    [aguiPort, getSession, publish, publishNow, handleEvent, settle, syncRunning]
+    [aguiPort, getSession, publish, publishNow, handleEvent, settle, syncRunning, resetRunningTools]
   );
 
   /**
@@ -552,9 +830,11 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
       sess.thinkingText = "";
       sess.stalled = false;
       sess.thinkingSince = null;
+      // 用户主动中断：把仍在 running 的工具卡标 interrupted，避免“执行中…”永久残留
+      resetRunningTools(sess);
       publishNow(sess.id);
     },
-    [publishNow]
+    [publishNow, resetRunningTools]
   );
 
   const reset = useCallback(
@@ -586,6 +866,17 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
       sess.currentAssistantId = null;
       sess.toolIndex = new Map();
       sess.hydrated = true;
+      // 复位 P1 状态
+      sess.reasoningText = "";
+      sess.statusLine = "";
+      sess.statusKind = "";
+      sess.toolStatus = {};
+      sess.subagents = [];
+      sess.moaRefs = [];
+      sess.moaAggregating = null;
+      sess.reviewSummary = null;
+      sess.usage = null;
+      sess.browserProgress = [];
       publishNow(sess.id);
     },
     [getSession, publishNow]
@@ -687,6 +978,17 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
     uiBlocks: snapshot.uiBlocks,
     isStreaming: snapshot.phase !== "idle",
     stalled: snapshot.stalled,
+    // ── P1 新增 ──
+    reasoningText: snapshot.reasoningText,
+    statusLine: snapshot.statusLine,
+    statusKind: snapshot.statusKind,
+    toolStatus: snapshot.toolStatus,
+    subagents: snapshot.subagents,
+    moaRefs: snapshot.moaRefs,
+    moaAggregating: snapshot.moaAggregating,
+    usage: snapshot.usage,
+    reviewSummary: snapshot.reviewSummary,
+    browserProgress: snapshot.browserProgress,
     runningSessionIds,
     sendMessage,
     stop,

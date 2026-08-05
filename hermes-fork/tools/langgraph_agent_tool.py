@@ -88,17 +88,29 @@ def _make_http_emitter(run_id: str):
 def _read_active_workflow_run_id() -> str | None:
     """Read the workflowRunId the agui-server stashed for the current run.
 
-    The agui-server writes ``workflow_hitl/.wf_active.json`` before submitting
-    the prompt, so the tool can map its HITL events back to the correct SSE
-    subscriber on the Node side.
+    The agui-server writes ``workflow_hitl/.wf_active_<runId>.json`` (per-run
+    file) before submitting the prompt. We glob for the most recent one so
+    concurrent workflows don't overwrite each other's coordination data.
     """
     home = os.environ.get("HERMES_HOME")
     if not home:
         return None
-    coord = Path(home) / "workflow_hitl" / ".wf_active.json"
+    hitl_dir = Path(home) / "workflow_hitl"
     try:
-        if coord.exists():
-            data = json.loads(coord.read_text(encoding="utf-8"))
+        # Per-run coord files: .wf_active_<nodeRunId>.json
+        coords = sorted(
+            hitl_dir.glob(".wf_active_*.json"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        if coords:
+            data = json.loads(coords[0].read_text(encoding="utf-8"))
+            return data.get("runId")
+        # Fallback: legacy single-file name (upgraded deployments may still
+        # have a stale .wf_active.json on disk from an older build).
+        legacy = hitl_dir / ".wf_active.json"
+        if legacy.exists():
+            data = json.loads(legacy.read_text(encoding="utf-8"))
             return data.get("runId")
     except Exception:
         return None

@@ -3,6 +3,10 @@ node_modules/
 dist/
 release/
 build/dist/
+# Bundled Chromium for portable browser automation (regenerated at build time
+# via `playwright install chromium` → copied into build/playwright-browsers).
+# Never commit these ~700MB binaries.
+build/playwright-browsers/
 
 # --- python ---
 hermes-fork/.venv/

@@ -2,12 +2,12 @@ delegation:
   provider: custom
   model: agnes-2.5-flash
   base_url: https://apihub.agnes-ai.com/v1
-  api_key: cpk-VdOissJMrHBFsSi193GP7mxpLnwCqYW2hr9ybTqxXq9KDpno
+  api_key: cpk-REPLACE_WITH_YOUR_AGNES_API_KEY
 providers:
   custom:
     name: Agnes Custom
     api: https://apihub.agnes-ai.com/v1
-    api_key: cpk-VdOissJMrHBFsSi193GP7mxpLnwCqYW2hr9ybTqxXq9KDpno
+    api_key: cpk-REPLACE_WITH_YOUR_AGNES_API_KEY
     default_model: agnes-2.5-flash
     models:
       - agnes-2.5-flash
@@ -15,7 +15,7 @@ model:
   default: agnes-2.5-flash
   provider: custom
   base_url: https://apihub.agnes-ai.com/v1
-  api_key: cpk-VdOissJMrHBFsSi193GP7mxpLnwCqYW2hr9ybTqxXq9KDpno
+  api_key: cpk-REPLACE_WITH_YOUR_AGNES_API_KEY
 # Keep context files tiny so agent startup stays fast and prompts don't
 # blow up with the bundled hermes-fork/AGENTS.md.
 context_file_max_chars: 1000
@@ -23,6 +23,13 @@ agent:
   # Lower than Hermes' default 90 so a confused/stuck model gives up quickly
   # instead of burning credits and showing repeated interrupt messages.
   max_turns: 10
+  # Force provider-native vision (OpenAI-style `image_url` content parts).
+  # Agnes is an OpenAI-compatible endpoint and its models do read images, but
+  # it isn't in the models.dev capability registry, so `auto` can't prove
+  # vision support and silently downgrades to a text-only description of the
+  # attachment — the model then never sees the pixels. Declaring it here is
+  # what keeps screenshots working.
+  image_input_mode: native
 toolsets:
   - hermes-cli
 # Network: optional proxy for reaching apihub.agnes-ai.com. Some networks DNS-

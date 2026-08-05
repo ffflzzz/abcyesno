@@ -2430,6 +2430,24 @@ def _load_enabled_toolsets() -> list[str] | None:
     except Exception:
         validate_toolset = None
 
+    # The `browser-pw` toolset ships its tool definitions via side-effecting
+    # `registry.register(...)` calls at module import time. Nothing in the
+    # core startup chain imports `tools.pw_browser_tool`, so without this
+    # explicit import the registry stays empty and the toolset is silently
+    # unusable (validate_toolset() still returns True — the schema is in
+    # TOOLSETS — but get_definitions() then yields an empty list because no
+    # tool has been registered under that name). Trigger the import once
+    # per process, the first time the user enables the toolset.
+    if explicit and "browser-pw" in explicit:
+        try:
+            import tools.pw_browser_tool  # noqa: F401
+        except Exception as _pw_exc:  # pragma: no cover — best-effort lazy load
+            print(
+                f"[tui] failed to import tools.pw_browser_tool: {_pw_exc}",
+                file=sys.stderr,
+                flush=True,
+            )
+
     if explicit and validate_toolset is not None:
         built_in = [name for name in explicit if validate_toolset(name)]
         unresolved = [name for name in explicit if name not in built_in]

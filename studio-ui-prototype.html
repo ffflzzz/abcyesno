@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>短剧制片工作台 · Prototype</title>
+<style>
+  :root{
+    --bg:#0e1117; --panel:#161b22; --panel2:#1c2230; --line:#2a3240;
+    --txt:#e6edf3; --muted:#8b97a7; --acc:#6ea8fe; --acc2:#a371f7;
+    --ok:#3fb950; --warn:#d29922; --err:#f85149; --chip:#21262d;
+    --radius:10px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    background:var(--bg); color:var(--txt);
+    font:14px/1.5 -apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;
+    display:flex; flex-direction:column; height:100vh; overflow:hidden;
+  }
+  /* ── Top bar ── */
+  .topbar{display:flex; align-items:center; gap:14px; padding:12px 18px; border-bottom:1px solid var(--line); background:var(--panel)}
+  .brand{font-weight:700; letter-spacing:.5px}
+  .brand small{color:var(--muted); font-weight:400; margin-left:6px}
+  .stepper{display:flex; align-items:center; gap:10px; margin-left:auto}
+  .step{display:flex; align-items:center; gap:8px; padding:7px 14px; border:1px solid var(--line); border-radius:999px; background:var(--chip); color:var(--muted); cursor:pointer; user-select:none; transition:.15s}
+  .step .dot{width:18px;height:18px;border-radius:50%;display:grid;place-items:center;font-size:11px;background:#30363d;color:var(--muted)}
+  .step.active{color:var(--txt); border-color:var(--acc); background:#15233b}
+  .step.done{color:var(--txt); border-color:var(--ok)}
+  .step.done .dot{background:var(--ok); color:#06210d}
+  .step:not(:last-child)::after{content:""}
+  /* ── Main grid ── */
+  .grid{flex:1; display:grid; grid-template-columns:240px 1fr 280px; min-height:0}
+  .col{min-height:0; overflow:auto; border-right:1px solid var(--line)}
+  .col.right{border-right:none; border-left:1px solid var(--line)}
+  .col.left{background:var(--panel)}
+  .col.right{background:var(--panel)}
+  .center{background:var(--bg); padding:18px}
+  .sec-title{font-size:12px; text-transform:uppercase; letter-spacing:1px; color:var(--muted); margin:0 0 12px}
+
+  /* ── Asset library (left) ── */
+  .tabs{display:flex; gap:6px; padding:12px; position:sticky; top:0; background:var(--panel); border-bottom:1px solid var(--line); z-index:2}
+  .tab{padding:6px 12px; border:1px solid var(--line); border-radius:8px; background:var(--chip); color:var(--muted); cursor:pointer; font-size:13px}
+  .tab.active{color:var(--txt); border-color:var(--acc); background:#15233b}
+  .asset-list{padding:12px; display:flex; flex-direction:column; gap:12px}
+  .asset-card{background:var(--panel2); border:1px solid var(--line); border-radius:var(--radius); overflow:hidden}
+  .asset-card .name{padding:8px 10px; font-weight:600; display:flex; justify-content:space-between; align-items:center}
+  .asset-card .name .tag{font-size:11px; color:var(--muted); font-weight:400}
+  .views{display:grid; grid-template:repeat(2,1fr)/repeat(3,1fr); gap:3px; padding:3px}
+  .view{aspect-ratio:3/4; border-radius:6px; background:linear-gradient(135deg,#2b3550,#3a2b50); display:grid; place-items:center; color:#9fb0d0; font-size:11px; position:relative; overflow:hidden}
+  .view::after{content:""; position:absolute; inset:0; background:radial-gradient(120% 80% at 30% 20%, rgba(255,255,255,.12), transparent)}
+  .gen-btn{width:100%; padding:8px; border:none; border-top:1px solid var(--line); background:var(--panel2); color:var(--acc); cursor:pointer; font-size:13px}
+  .gen-btn:hover{background:#1f2940}
+  .empty{color:var(--muted); font-size:12px; padding:20px; text-align:center}
+
+  /* ── Center panels ── */
+  .panel{display:none}
+  .panel.active{display:block}
+  .card{background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); padding:16px; margin-bottom:14px}
+  label.fld{display:block; margin-bottom:12px}
+  label.fld span{display:block; color:var(--muted); margin-bottom:5px; font-size:12px}
+  input,select,textarea{width:100%; background:var(--bg); border:1px solid var(--line); color:var(--txt); border-radius:8px; padding:9px 11px; font:inherit}
+  textarea{resize:vertical; min-height:80px}
+  .row2{display:grid; grid-template-columns:1fr 1fr; gap:12px}
+  .primary{background:linear-gradient(90deg,var(--acc),var(--acc2)); color:#06101f; border:none; padding:11px 20px; border-radius:9px; font-weight:700; cursor:pointer; font-size:14px}
+  .primary:disabled{opacity:.5; cursor:not-allowed}
+  .primary:hover:not(:disabled){filter:brightness(1.08)}
+
+  /* ── Storyboard 3-col ── */
+  .sb-head{display:grid; grid-template-columns:1fr 1fr 1fr; gap:14px; padding:0 4px 10px; color:var(--muted); font-size:12px; position:sticky; top:0; background:var(--bg); z-index:2}
+  .shot{display:grid; grid-template-columns:1fr 1fr 1fr; gap:14px; padding:12px; margin-bottom:12px; background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); align-items:stretch}
+  .shot .col3{display:flex; flex-direction:column; gap:6px}
+  .shot textarea{min-height:64px}
+  .shot .ep-tag{font-size:11px; color:var(--acc); margin-bottom:2px}
+  .preview{position:relative; flex:1; border-radius:8px; background:linear-gradient(135deg,#11202f,#241433); min-height:120px; display:grid; place-items:center; overflow:hidden; border:1px solid var(--line)}
+  .preview .play{width:42px;height:42px;border-radius:50%;background:rgba(255,255,255,.14);display:grid;place-items:center;cursor:pointer}
+  .preview .play::before{content:"";border-left:14px solid #fff;border-top:9px solid transparent;border-bottom:9px solid transparent;margin-left:4px}
+  .preview .meta{position:absolute; bottom:6px; left:8px; font-size:11px; color:#cdd6e3; background:rgba(0,0,0,.45); padding:2px 7px; border-radius:6px}
+  .preview.busy{background:linear-gradient(90deg,#1a2333,#241433,#1a2333); background-size:200% 100%; animation:sh 1.1s linear infinite}
+  @keyframes sh{to{background-position:-200% 0}}
+  .mini-prog{height:5px; background:#222c3a; border-radius:4px; overflow:hidden; margin-top:4px}
+  .mini-prog>i{display:block; height:100%; width:0; background:linear-gradient(90deg,var(--acc),var(--acc2))}
+  .gen-shot{margin-top:6px; padding:7px; border:1px solid var(--line); background:var(--chip); color:var(--acc); border-radius:7px; cursor:pointer; font-size:12px}
+  .gen-shot:hover{background:#1f2940}
+
+  /* ── Episode gallery ── */
+  .eps{display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:14px}
+  .ep{background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); overflow:hidden}
+  .ep .pv{aspect-ratio:9/16; background:linear-gradient(135deg,#11202f,#241433); display:grid; place-items:center; position:relative}
+  .ep .pv .play{width:46px;height:46px;border-radius:50%;background:rgba(255,255,255,.14);display:grid;place-items:center}
+  .ep .pv .play::before{content:"";border-left:15px solid #fff;border-top:10px solid transparent;border-bottom:10px solid transparent;margin-left:4px}
+  .ep .cap{padding:10px; display:flex; justify-content:space-between; align-items:center}
+  .ep .cap b{font-size:13px}
+
+  /* ── 剪辑台 EditConsole（横轨时间轴） ── */
+  .tl-wrap{background:var(--panel); border:1px solid var(--line); border-radius:10px; overflow:hidden}
+  .tl-ruler{height:28px; background:#111620; border-bottom:1px solid var(--line); display:flex; align-items:flex-end; padding-left:100px; position:relative; user-select:none; font-size:10px; color:#5a687a; overflow:hidden}
+  .tl-ruler .tick{position:absolute; bottom:3px; transform:translateX(-50%)}
+  .tl-ruler .tick.maj{color:#7b8899; font-weight:600}
+  .tl-ruler .tick::before{content:''; position:absolute; top:-4px; left:50%; width:1px; height:6px; background:var(--line); transform:translateX(-50%)}
+  .tl-ruler .tick.maj::before{height:9px; background:#4a5568}
+  .track-labels{position:absolute; left:0; top:28px; width:98px; height:64px; background:#111620; border-right:1px solid var(--line); display:grid; place-items:center; font-size:11px; color:var(--muted); z-index:3}
+  .tl-track{height:64px; background:#0d1117; position:relative; margin-left:98px; display:flex; align-items:center; padding:4px 0; cursor:default; overflow-x:auto}
+  .clip{flex-shrink:0; height:52px; border-radius:6px; background:linear-gradient(135deg,#1e3a5f,#2d1b4e); border:1px solid #3a4a6a; display:flex; align-items:center; justify-content:center; gap:6px; padding:0 12px; cursor:grab; min-width:40px; position:relative; transition:border-color .15s,box-shadow .15s}
+  .clip:hover{border-color:var(--acc); box-shadow:0 0 0 1px rgba(110,168,254,.25)}
+  .clip.dragging{opacity:.35; cursor:grabbing; border-color:var(--err)}
+  .clip .clabel{font-size:11px; white-space:nowrap; color:#cdd6e3; pointer-events:none}
+  .clip .cdur{font-size:10px; color:#8fa0c0; background:rgba(0,0,0,.35); padding:1px 6px; border-radius:4px; pointer-events:none}
+  .clip-drop-zone{width:3px; height:56px; background:var(--acc); border-radius:3px; opacity:0; transition:opacity .15s; flex-shrink:0}
+  .clip-drop-zone.active{opacity:.7}
+  /* shot detail panel below timeline */
+  .shot-detail{background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px; margin-top:10px; display:none}
+  .shot-detail.active{display:block}
+  .shot-detail h4{margin:0 0 10px; font-size:13px; color:var(--txt)}
+  .sd-row{display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-top:6px}
+  .sd-row label{font-size:11px; color:var(--muted); display:block; margin-bottom:3px}
+  .sd-row input,.sd-row select{padding:7px 9px; font-size:12px}
+  .export-json{background:#0a0d13; border:1px solid var(--line); border-radius:10px; padding:14px; margin-top:10px; max-height:360px; overflow:auto}
+  .export-json pre{margin:0; font:12px/1.55 ui-monospace,Consolas,monospace; color:#cdd6e3; white-space:pre-wrap; word-break:break-all}
+  .export-note{color:var(--muted); font-size:12px; margin-top:8px}
+
+  /* ── Right tasks ── */
+  .task{background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:10px; margin-bottom:10px}
+  .task .t{display:flex; justify-content:space-between; font-size:13px}
+  .task .t .st{font-size:11px; color:var(--muted)}
+  .task .st.run{color:var(--acc)} .task .st.ok{color:var(--ok)}
+  .bar{height:6px; background:#222c3a; border-radius:4px; overflow:hidden; margin-top:8px}
+  .bar>i{display:block; height:100%; width:0; background:linear-gradient(90deg,var(--acc),var(--acc2)); transition:width .25s}
+  .hint{color:var(--muted); font-size:12px; padding:8px 0}
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="brand">短剧制片工作台<small>Prototype · 非项目代码</small></div>
+    <div class="stepper" id="stepper"></div>
+  </div>
+
+  <div class="grid">
+    <!-- LEFT: asset library -->
+    <div class="col left">
+      <div class="tabs" id="assetTabs">
+        <div class="tab active" data-t="character">角色</div>
+        <div class="tab" data-t="scene">场景</div>
+        <div class="tab" data-t="prop">道具</div>
+      </div>
+      <div class="asset-list" id="assetList"></div>
+    </div>
+
+    <!-- CENTER -->
+    <div class="col center">
+      <!-- 剧本 -->
+      <div class="panel active" id="p-script">
+        <h3 class="sec-title">① 剧本设定</h3>
+        <div class="card">
+          <label class="fld"><span>项目名</span><input id="f-name" value="倒数三秒说爱你" /></label>
+          <label class="fld"><span>剧本 / 大纲</span><textarea id="f-script">都市爱情短剧。霸总顾屿在雨夜车祸失忆，只记得女孩林夕的声音。林夕是他公司的实习生，为还债接近他，却在相处中动了真心。当记忆归来，他必须在家族利益与真爱间抉择。</textarea></label>
+          <div class="row2">
+            <label class="fld"><span>风格</span>
+              <select id="f-style"><option>二次元</option><option>写实</option><option>3D</option></select>
+            </label>
+            <label class="fld"><span>集数</span><input id="f-eps" type="number" value="2" min="1" max="6" /></label>
+          </div>
+          <div class="row2">
+            <label class="fld"><span>分辨率</span>
+              <select id="f-res"><option>1080×1920（竖屏）</option><option>1920×1080（横屏）</option></select>
+            </label>
+            <label class="fld"><span>每镜秒数</span><input id="f-sec" type="number" value="4" min="2" max="12" /></label>
+          </div>
+          <button class="primary" id="btn-gen">生成资产与分镜 →</button>
+          <div class="hint">点击后模拟：生成角色/场景/道具参考图 → 自动拆出分镜。</div>
+        </div>
+      </div>
+
+      <!-- 资产 -->
+      <div class="panel" id="p-assets">
+        <h3 class="sec-title">② 资产库（角色 / 场景 / 道具）</h3>
+        <div class="card">
+          <div class="hint">资产由独立 workflow（manju_assets）生成，分镜在生成时引用这里的参考图保证一致性。点击下方按钮模拟生成。</div>
+          <button class="primary" id="btn-gen-assets">一键生成全部资产 →</button>
+        </div>
+        <div class="asset-grid" id="assetGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px"></div>
+      </div>
+
+      <!-- 分镜 -->
+      <div class="panel" id="p-storyboard">
+        <h3 class="sec-title">③ 分镜编辑器（每镜三列：剧本 / 拍摄法 / 视频）</h3>
+        <div class="sb-head"><div>剧本文本（可编辑）</div><div>拍摄法 + 模型参数</div><div>视频预览 + 生成</div></div>
+        <div id="shotList"></div>
+      </div>
+
+      <!-- 成片 -->
+      <div class="panel" id="p-export">
+        <h3 class="sec-title">④ 剪辑台（拖拽编排 → 导出剪映工程）</h3>
+        <div class="card">
+          <div class="hint">横轨时间轴：shot 按时长占宽度，左右拖拽换顺序。点击片段打开详情编辑时长/转场。编排完点「导出剪映工程」生成 draft JSON。</div>
+          <div class="row2" style="margin-top:6px">
+            <label class="fld"><span>分辨率</span><select id="ex-res"><option>1080×1920</option><option>1920×1080</option></select></label>
+            <label class="fld"><span>帧率 fps</span><select id="ex-fps"><option>30</option><option>25</option><option>60</option></select></label>
+          </div>
+          <button class="primary" id="btn-export">导出剪映工程 ↓</button>
+        </div>
+        <div class="tl-wrap" id="tlWrap"></div>
+        <div class="shot-detail" id="shotDetail">
+          <h4 id="sdTitle">编辑镜头</h4>
+          <div class="sd-row">
+            <label>时长(秒)<input type="number" id="sdDur" min="1" max="20"></label>
+            <label>转场<select id="sdTrans"><option value="none">无</option><option value="fadein">淡入</option><option value="fadeout">淡出</option></select></label>
+            <label style="display:grid;place-items:end;padding-bottom:4px"><button class="primary" id="sdDel" style="padding:7px 14px;font-size:12px;background:#f85149;color:white;border:none;cursor:pointer;border-radius:6px">删除此镜</button></label>
+          </div>
+        </div>
+        <div class="export-json" id="exJson" style="display:none"><pre></pre></div>
+      </div>
+    </div>
+
+    <!-- RIGHT: tasks -->
+    <div class="col right">
+      <div style="padding:14px"><h3 class="sec-title">任务中心</h3><div id="taskList"></div></div>
+    </div>
+  </div>
+
+<script>
+const PHASES=[
+  {id:'script',label:'剧本'},
+  {id:'assets',label:'资产'},
+  {id:'storyboard',label:'分镜'},
+  {id:'export',label:'成片'},
+];
+const state={ phase:'script', done:new Set(), tasks:[] };
+
+/* ── stepper ── */
+function renderStepper(){
+  const el=document.getElementById('stepper'); el.innerHTML='';
+  PHASES.forEach((p,i)=>{
+    const s=document.createElement('div');
+    const isDone=state.done.has(p.id)&&state.phase!==p.id;
+    s.className='step'+(state.phase===p.id?' active':'')+(isDone?' done':'');
+    s.innerHTML=`<span class="dot">${isDone?'✓':i+1}</span>${p.label}`;
+    s.onclick=()=>goPhase(p.id);
+    el.appendChild(s);
+    if(i<PHASES.length-1){const a=document.createElement('span');a.style.color='var(--muted)';a.textContent='—';el.appendChild(a);}
+  });
+}
+function goPhase(id){
+  state.phase=id;
+  PHASES.forEach(p=>document.getElementById('p-'+p.id).classList.toggle('active',p.id===id));
+  renderStepper();
+  if(id==='assets') renderAssetGrid();
+  if(id==='storyboard') renderShots();
+  if(id==='export') renderTimeline();
+}
+
+/* ── tasks ── */
+function addTask(name){
+  const t={id:Date.now()+Math.random(),name,status:'run',prog:0};
+  state.tasks.unshift(t); renderTasks();
+  return t;
+}
+function tick(t,to,done){
+  const step=to>t.prog?Math.max(4,(to-t.prog)/8):4;
+  const iv=setInterval(()=>{
+    t.prog=Math.min(to,t.prog+step);
+    if(t.prog>=to){clearInterval(iv); t.status=done?'ok':'run'; if(done)t.prog=100; renderTasks();}
+    else renderTasks();
+  },120);
+}
+function renderTasks(){
+  const el=document.getElementById('taskList'); el.innerHTML='';
+  if(!state.tasks.length){el.innerHTML='<div class="empty">暂无任务</div>';return;}
+  state.tasks.forEach(t=>{
+    const d=document.createElement('div'); d.className='task';
+    d.innerHTML=`<div class="t"><span>${t.name}</span><span class="st ${t.status}">${t.status==='ok'?'完成':'运行中'}</span></div><div class="bar"><i style="width:${t.prog}%"></i></div>`;
+    el.appendChild(d);
+  });
+}
+
+/* ── assets ── */
+const ASSETS={
+  character:[
+    {name:'林夕',tag:'女主·实习生',views:['正面','侧面','全身']},
+    {name:'顾屿',tag:'男主·霸总',views:['正面','侧面','全身']},
+  ],
+  scene:[
+    {name:'雨夜天桥',tag:'第1集',views:['全景','近景','空镜']},
+    {name:'集团大堂',tag:'第2集',views:['全景','近景','空镜']},
+  ],
+  prop:[
+    {name:'旧怀表',tag:'关键道具',views:['正面','细节','佩戴']},
+  ],
+};
+let assetsReady={character:false,scene:false,prop:false};
+let curTab='character';
+
+document.getElementById('assetTabs').addEventListener('click',e=>{
+  const t=e.target.closest('.tab'); if(!t)return;
+  curTab=t.dataset.t;
+  document.querySelectorAll('#assetTabs .tab').forEach(x=>x.classList.toggle('active',x===t));
+  renderAssetList(); renderAssetGrid();
+});
+function assetCardHTML(a){
+  return `<div class="asset-card"><div class="name">${a.name}<span class="tag">${a.tag}</span></div>
+    <div class="views">${a.views.map(v=>`<div class="view">${v}</div>`).join('')}</div></div>`;
+}
+function renderAssetList(){
+  const el=document.getElementById('assetList');
+  if(!assetsReady[curTab]){el.innerHTML='<div class="empty">尚未生成<br>去「资产」页一键生成</div>';return;}
+  el.innerHTML=ASSETS[curTab].map(assetCardHTML).join('')+
+    `<button class="gen-btn" onclick="genOne('${curTab}')">↻ 重新生成该组</button>`;
+}
+function renderAssetGrid(){
+  const el=document.getElementById('assetGrid');
+  const all=[]; ['character','scene','prop'].forEach(t=>{ if(assetsReady[t]) ASSETS[t].forEach(a=>all.push({...a,_t:t})); });
+  if(!all.length){el.innerHTML='<div class="empty">点击上方按钮生成角色 / 场景 / 道具参考图</div>';return;}
+  el.innerHTML=all.map(a=>`<div class="asset-card"><div class="name">${a.name}<span class="tag">${a.tag}</span></div><div class="views">${a.views.map(v=>`<div class="view">${v}</div>`).join('')}</div></div>`).join('');
+}
+function genOne(t){
+  const task=addTask('生成 '+({character:'角色',scene:'场景',prop:'道具'}[t])+' 参考图');
+  tick(task,100,true);
+  setTimeout(()=>{assetsReady[t]=true; renderAssetList(); renderAssetGrid();},900);
+}
+document.getElementById('btn-gen-assets').onclick=()=>{
+  ['character','scene','prop'].forEach((t,i)=>setTimeout(()=>genOne(t),i*350));
+};
+
+/* ── shots ── */
+const SHOTS=[
+  {ep:1,n:1,script:'雨夜，林夕撑伞跑过天桥，怀表从包里滑落。',cam:'特写·手持',model:'agnes-2.5-flash',prompt:'雨夜天桥，女生撑伞奔跑，脚下积水倒映霓虹'},
+  {ep:1,n:2,script:'顾屿的车撞上护栏，他茫然抬头，记忆碎片闪回。',cam:'中景·慢镜',model:'agnes-2.5-flash',prompt:'豪华轿车追尾护栏，男主失神，雨刷摆动'},
+  {ep:1,n:3,script:'林夕拾起怀表，背面刻着熟悉的名字。',cam:'近景·推镜',model:'agnes-2.5-flash',prompt:'女生指尖特写，旧怀表背面刻字'},
+  {ep:2,n:1,script:'集团大堂，顾屿恢复记忆，却假装不识林夕。',cam:'全景·固定',model:'agnes-2.5-flash',prompt:'大理石大堂，男女主对峙，玻璃幕墙反光'},
+  {ep:2,n:2,script:'林夕递交辞呈，转身时眼泪落下。',cam:'中景·跟拍',model:'agnes-2.5-flash',prompt:'女生递信封，背影，电梯门缓缓关上'},
+  {ep:2,n:3,script:'顾屿追出，倒数三秒在雨中喊出她的名字。',cam:'全景·航拍',model:'agnes-2.5-flash',prompt:'雨中广场，男主奔跑呼喊，镜头拉升'},
+];
+let shotState={};
+function renderShots(){
+  const el=document.getElementById('shotList'); el.innerHTML='';
+  SHOTS.forEach(s=>{
+    const st=shotState[s.ep+'-'+s.n]||{status:'idle'};
+    const d=document.createElement('div'); d.className='shot';
+    d.innerHTML=`
+      <div class="col3">
+        <div class="ep-tag">第${s.ep}集 · 镜${s.n}</div>
+        <textarea>${s.script}</textarea>
+      </div>
+      <div class="col3">
+        <textarea placeholder="拍摄法 / 提示词">${s.prompt}</textarea>
+        <div class="row2" style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+          <select><option>${s.cam}</option><option>特写</option><option>全景</option><option>俯拍</option></select>
+          <select><option>${s.model}</option><option>agnes-2.5-pro</option></select>
+        </div>
+      </div>
+      <div class="col3">
+        <div class="preview ${st.status==='busy'?'busy':''}">
+          ${st.status==='done'?'<div class="meta">▶ 00:0'+s.n+'</div>':''}
+          <div class="play"></div>
+        </div>
+        ${st.status==='busy'?'<div class="mini-prog"><i></i></div>':''}
+        <button class="gen-shot" data-k="${s.ep+'-'+s.n}">${st.status==='done'?'↻ 重生成':'▶ 生成此镜'}</button>
+      </div>`;
+    el.appendChild(d);
+  });
+  el.querySelectorAll('.gen-shot').forEach(b=>b.onclick=()=>genShot(b.dataset.k));
+}
+function genShot(k){
+  const s=SHOTS.find(x=>x.ep+'-'+x.n===k);
+  shotState[k]={status:'busy'}; renderShots();
+  const bar=document.querySelector(`.shot [data-k="${k}"]`).previousElementSibling.querySelector('i');
+  const task=addTask(`生成 第${s.ep}集·镜${s.n}`);
+  tick(task,100,true);
+  let p=0; const iv=setInterval(()=>{p=Math.min(100,p+9); if(bar)bar.style.width=p+'%'; if(p>=100)clearInterval(iv);},90);
+  setTimeout(()=>{shotState[k]={status:'done'}; cfg(k).dur=parseInt(document.getElementById('f-sec').value)||4; renderShots();},1000);
+}
+
+/* ── 剪辑台 EditConsole（横轨时间轴） ── */
+let timeline=[];                 // 有序 shot key 列表
+const shotCfg={};               // { [k]: {dur, trans} }
+function cfg(k){ return shotCfg[k] || (shotCfg[k]={dur:4, trans:'none'}); }
+let selectedClip=null;           // 当前选中的 clip key
+const PX_PER_SEC=48;            // 每秒像素宽度
+
+function ensureTimeline(){
+  const done=SHOTS.filter(s=>shotState[s.ep+'-'+s.n]?.status==='done').map(s=>s.ep+'-'+s.n);
+  if(!timeline.length){ timeline=done.slice(); return; }
+  const set=new Set(done);
+  timeline=timeline.filter(k=>set.has(k));
+  done.forEach(k=>{ if(!timeline.includes(k)) timeline.push(k); });
+}
+function totalDur(){ return timeline.reduce((s,k)=>s+cfg(k).dur,0); }
+
+function renderTimeline(){
+  ensureTimeline();
+  const wrap=document.getElementById('tlWrap');
+  if(!timeline.length){ wrap.innerHTML='<div class="empty" style="padding:20px">先到「分镜」页生成镜头，这里会出现可拖拽编排的时间轴</div>'; document.getElementById('shotDetail').classList.remove('active'); return; }
+
+  const total=totalDur();
+  const tw=100+total*PX_PER_SEC+40; // label width + content + padding
+
+  wrap.innerHTML=`
+    <div class="tl-ruler" id="tlRuler"></div>
+    <div style="position:relative">
+      <div class="track-labels">视频轨道</div>
+      <div class="tl-track" id="tlTrack"></div>
+    </div>`;
+
+  // ruler
+  const ruler=document.getElementById('tlRuler');
+  for(let s=0;s<=total+(total%1===0?0:1);s++){
+    const t=document.createElement('span'); t.className='tick'+(s%5===0?' maj':'');
+    t.style.left=(100+s*PX_PER_SEC)+'px'; t.textContent=s+'s';
+    ruler.appendChild(t);
+  }
+
+  // clips on track
+  const track=document.getElementById('tlTrack');
+  let offset=0;
+  timeline.forEach((k,i)=>{
+    const s=SHOTS.find(x=>x.ep+'-'+x.n===k); const c=cfg(k);
+    const w=Math.max(30,c.dur*PX_PER_SEC);
+    const clip=document.createElement('div');
+    clip.className='clip'; clip.draggable=true; clip.dataset.k=k;
+    clip.style.width=w+'px';
+    clip.innerHTML=`<span class="clabel">第${s.ep}集·镜${s.n}</span><span class="cdur">${c.dur}s</span>`;
+    clip.addEventListener('click',e=>{ e.stopPropagation(); selectClip(k); });
+    if(selectedClip===k) clip.style.borderColor='var(--acc)';
+    track.appendChild(clip);
+    offset+=w;
+
+    // drop zone after each clip (except last)
+    if(i<timeline.length-1){
+      const dz=document.createElement('div'); dz.className='clip-drop-zone'; track.appendChild(dz);
+    }
+  });
+  track.style.minWidth=(offset+20)+'px';
+
+  bindTrackDnD(track);
+
+  // show detail panel if a clip is selected
+  if(selectedClip&&timeline.includes(selectedClip)){ showShotDetail(selectedClip); }
+  else document.getElementById('shotDetail').classList.remove('active');
+}
+
+function selectClip(k){
+  selectedClip=k; renderTimeline();
+}
+function showShotDetail(k){
+  const s=SHOTS.find(x=>x.ep+'-'+x.n===k); if(!s)return;
+  const c=cfg(k);
+  const d=document.getElementById('shotDetail'); d.classList.add('active');
+  document.getElementById('sdTitle').textContent=`第${s.ep}集 · 镜${s.n} — ${s.script.slice(0,24)}…`;
+  document.getElementById('sdDur').value=c.dur;
+  document.getElementById('sdTrans').value=c.trans;
+  // bind change handlers fresh each time
+  document.getElementById('sdDur').oninput=()=>{ c.dur=Math.max(1,parseInt(document.getElementById('sdDur').value)||4); renderTimeline(); };
+  document.getElementById('sdTrans').onchange=()=>{ c.trans=document.getElementById('sdTrans').value; };
+  document.getElementById('sdDel').onclick=()=>{ shotState[k]=null; selectedClip=null; renderTimeline(); };
+}
+
+// click outside clips to deselect
+document.getElementById('p-export').addEventListener('click',e=>{
+  if(!e.target.closest('.clip')){ selectedClip=null; renderTimeline(); }
+});
+
+function bindTrackDnD(track){
+  let dragEl=null, dragKey=null;
+  track.querySelectorAll('.clip').forEach(clip=>{
+    clip.addEventListener('dragstart',e=>{
+      dragEl=clip; dragKey=clip.dataset.k;
+      setTimeout(()=>clip.classList.add('dragging'),0);
+      e.dataTransfer.effectAllowed='move';
+    });
+    clip.addEventListener('dragend',()=>{
+      clip.classList.remove('dragging');
+      track.querySelectorAll('.clip-drop-zone').forEach(z=>z.classList.remove('active'));
+      dragEl=null; dragKey=null;
+    });
+  });
+
+  // allow drops on the track itself and on drop zones
+  track.addEventListener('dragover',e=>{ e.preventDefault(); e.dataTransfer.dropEffect='move'; });
+  track.querySelectorAll('.clip-drop-zone').forEach(z=>{
+    z.addEventListener('dragover',e=>{ e.preventDefault(); z.classList.add('active'); });
+    z.addEventListener('dragleave',()=>z.classList.remove('active'));
+  });
+
+  track.addEventListener('drop',e=>{
+    e.preventDefault();
+    if(!dragKey) return;
+    track.querySelectorAll('.clip-drop-zone').forEach(z=>z.classList.remove('active'));
+
+    // determine target index from drop position or zone
+    let toIdx=timeline.length-1;
+    const zones=[...track.querySelectorAll('.clip-drop-zone')];
+    const hitZone=zones.find(z=>z===e.target||z.contains(e.target));
+    if(hitZone){ toIdx=zones.indexOf(hitZone)+1; }
+    else{
+      // dropped on track background — find nearest clip by X offset
+      const rect=track.getBoundingClientRect();
+      const x=e.clientX-rect.left+track.scrollLeft-100; // minus label width
+      let acc=0;
+      for(let i=0;i<timeline.length;i++){ acc+=cfg(timeline[i]).dur*PX_PER_SEC; if(x<acc/2+acc/2){ toIdx=i; break; } }
+    }
+
+    const fromIdx=timeline.indexOf(dragKey);
+    if(fromIdx===toIdx||fromIdx===toIdx-1) return; // no-op
+    timeline.splice(toIdx,0,timeline.splice(fromIdx,1)[0]);
+    renderTimeline();
+  });
+}
+
+document.getElementById('btn-export').onclick=()=>{
+  ensureTimeline();
+  if(!timeline.length){ alert('没有可导出的镜头，请先到「分镜」页生成'); return; }
+  const [w,h]=document.getElementById('ex-res').value.split('×').map(Number);
+  const fps=parseInt(document.getElementById('ex-fps').value);
+  const US=1_000_000;            // 剪映 timerange 单位是微秒
+  let start=0; const videos=[], segments=[];
+  timeline.forEach((k,i)=>{
+    const s=SHOTS.find(x=>x.ep+'-'+x.n===k); const c=cfg(k);
+    const dur=Math.max(1,c.dur)*US; const id='v'+(i+1);
+    videos.push({ id, path:'materials/shot_'+k+'.mp4', duration:dur, shot:'第'+s.ep+'集·镜'+s.n });
+    const seg={ material_id:id, target_timerange:{ start, duration:dur } };
+    if(c.trans!=='none') seg.transition={ type:c.trans };
+    segments.push(seg); start+=dur;
+  });
+  const draft={
+    app_version:'5.0.0', fps, width:w, height:h, version:'1.0.0',
+    materials:{ videos, audios:[], texts:[], transitions:[] },
+    tracks:[{ type:'video', id:'t1', segments }]
+  };
+  const json=JSON.stringify(draft,null,2);
+  const box=document.getElementById('exJson');
+  box.style.display='block';
+  box.innerHTML='<pre></pre>';
+  box.querySelector('pre').textContent='draft_content.json\n\n'+json;
+  box.insertAdjacentHTML('beforeend',
+    `<div class="export-note">工程结构：<br>📁 项目名.draft/<br>&nbsp;&nbsp;├─ draft_content.json（上）<br>&nbsp;&nbsp;├─ draft_meta.json<br>&nbsp;&nbsp;└─ materials/（拷入 ${timeline.length} 个 shot_*.mp4，剪映按相对路径找素材）<br>用剪映「导入草稿」打开即可精修。总时长 ≈ ${(start/US).toFixed(0)}s。</div>`);
+};
+
+/* ── flow entry ── */
+document.getElementById('btn-gen').onclick=()=>{
+  const t=addTask('拆分剧本 → 资产 + 分镜'); tick(t,100,true);
+  setTimeout(()=>{ state.done.add('script'); goPhase('assets'); },700);
+};
+
+/* init */
+renderStepper(); renderTasks(); renderAssetList();
+</script>
+</body>
+</html>

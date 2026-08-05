@@ -1,0 +1,30 @@
+{
+  "id": "manju_studio",
+  "name": "短剧制片工作台",
+  "description": "剧本→资产→分镜→剪辑台，一键导出剪映草稿工程",
+  "category": "media",
+  "icon": "clapperboard",
+  "version": "1.0.0",
+  "entry": "agents/manju_studio/agent.py",
+  "runtime": "inprocess",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "project_name": {
+        "type": "string",
+        "x_ui": { "control": "text", "label": "项目名（可选）" }
+      }
+    },
+    "required": []
+  },
+  "output_schema": {
+    "summary": "markdown",
+    "artifacts": [
+      { "id": "jianying", "type": "file", "mime": "application/json", "label": "剪映草稿" }
+    ]
+  },
+  "capabilities": ["short-drama-studio", "script-to-video"],
+  "approval_gates": [],
+  "progress_events": [],
+  "ui": { "type": "workbench", "component": "StudioWorkbench", "title": "短剧制片工作台" }
+}

@@ -4,6 +4,7 @@ import Composer from "./Composer.jsx";
 import MessageThread from "./MessageThread.jsx";
 import SkillPanel from "./SkillPanel.jsx";
 import ContextUsage from "./ContextUsage.jsx";
+import Toasts from "./Toasts.jsx";
 import { inferStreamingPhase } from "../utils/streamingPhase.js";
 import bachAvatar from "../assets/bach-avatar.png";
 
@@ -25,6 +26,16 @@ export default function ChatLayout({
   thinkingText,
   uiBlocks = [],
   stalled = false,
+  // ── P1 新增 ──
+  reasoningText = "",
+  statusLine = "",
+  statusKind = "",
+  toolStatus = {},
+  subagents = [],
+  moaRefs = [],
+  moaAggregating = null,
+  usage = null,
+  reviewSummary = null,
   version,
   sidebarOpen,
   model,
@@ -57,6 +68,12 @@ export default function ChatLayout({
   onOpenPreviewUrl,
   resultPanelCollapsed = false,
   onToggleResultPanelCollapse = () => {},
+  // ── Detach: App-level handler that opens the standalone window AND
+  //    closes the in-window panel so the two don't render side by side. ──
+  onDetachResultPanel = () => {},
+  browserPanelOpen = false,
+  onToggleBrowserPanel = () => {},
+  onOpenBrowser = () => {},
   selectedSessionId = "",
   onEditMessage,
   onDeleteMessage,
@@ -165,6 +182,13 @@ export default function ChatLayout({
           >
             <Icon name="panel" size={16} />
           </button>
+          <button
+            className={`header-icon ${browserPanelOpen ? "active" : ""}`}
+            onClick={onToggleBrowserPanel}
+            title={browserPanelOpen ? "关闭浏览器" : "打开浏览器"}
+          >
+            <Icon name="globe" size={16} />
+          </button>
             <button
             className="header-icon"
             onClick={() => setShowContextUsage(true)}
@@ -211,8 +235,14 @@ export default function ChatLayout({
             loading={isLoading}
             streamPhase={phase}
             thinkingText={thinkingText}
+            reasoningText={reasoningText}
             uiBlocks={uiBlocks}
             stalled={stalled}
+            subagents={subagents}
+            moaRefs={moaRefs}
+            moaAggregating={moaAggregating}
+            toolStatus={toolStatus}
+            reviewSummary={reviewSummary}
             onRetry={onRetry}
             onRegenerate={onRegenerate}
             assistant={assistant}
@@ -227,6 +257,7 @@ export default function ChatLayout({
             editingMessageId={editingMessageId}
             onSaveEdit={onSaveEdit}
             onCancelEdit={onCancelEdit}
+            onSend={onSend}
           />
         )}
         <div ref={bottomRef} style={{ display: "none" }} />
@@ -248,6 +279,7 @@ export default function ChatLayout({
           queuedMessages={queuedMessages}
           onRemoveQueued={onRemoveQueued}
           onOpenPreviewUrl={onOpenPreviewUrl}
+          onOpenBrowser={onOpenBrowser}
           placeholder={
             approvalPending
               ? "请先在审批弹窗中选择批准或拒绝…"
@@ -277,9 +309,12 @@ export default function ChatLayout({
       <ContextUsage
         messages={messages}
         model={model}
+        usage={usage}
         open={showContextUsage}
         onClose={() => setShowContextUsage(false)}
       />
+
+      <Toasts />
     </main>
   );
 }

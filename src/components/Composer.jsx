@@ -115,6 +115,7 @@ export default function Composer({
   onNewSession,
   onUpload,
   onShowSkills,
+  onOpenBrowser,
   disabled,
   placeholder,
   attachment,
@@ -585,6 +586,9 @@ export default function Composer({
                 </button>
                 <button className="composer-menu-item" onClick={() => { setShowPlusMenu(false); onShowSkills && onShowSkills(); }} disabled={disabled}>
                   <span className="menu-icon"><Icon name="zap" size={14} /></span> 技能与工作流
+                </button>
+                <button className="composer-menu-item" onClick={() => { setShowPlusMenu(false); onOpenBrowser && onOpenBrowser(); }} disabled={disabled}>
+                  <span className="menu-icon"><Icon name="globe" size={14} /></span> 打开浏览器
                 </button>
               </div>
             )}

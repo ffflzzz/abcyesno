@@ -268,8 +268,16 @@ class HermesRunner {
       AGUI_PORT: process.env.AGUI_PORT || '9121',
       // Cap tool-calling iterations so a confused model doesn't spin forever.
       HERMES_TUI_MAX_TURNS: process.env.HERMES_TUI_MAX_TURNS || '15',
-      // Enable the Hermes toolset that carries langgraph_agent and shell/file tools.
-      HERMES_TUI_TOOLSETS: process.env.HERMES_TUI_TOOLSETS || 'hermes-cli',
+      // Enable the Hermes toolsets. `hermes-cli` carries langgraph_agent and
+      // shell/file tools; `browser-pw` adds the 7 pw_browser_* Playwright tools
+      // (Path B browser automation). Override via HERMES_TUI_TOOLSETS to roll back.
+      HERMES_TUI_TOOLSETS: process.env.HERMES_TUI_TOOLSETS || 'hermes-cli,browser-pw',
+      // Point Playwright at the Chromium build bundled with the portable app.
+      // In a packaged build process.resourcesPath -> release/win-unpacked/resources,
+      // so browsers live in resources/playwright-browsers (copied via extraResources).
+      // In dev (no such dir) this path is harmless: _chromium_installed() falls back
+      // to the default cache and ~/.hermes_portable_data/playwright-browsers.
+      PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH || path.join(process.resourcesPath || '', 'playwright-browsers'),
       // Preload the LangGraph agents skill so manju_craft / hello_agent are available.
       HERMES_TUI_SKILLS: process.env.HERMES_TUI_SKILLS || 'langgraph-agents',
       PYTHONPATH: HERMES_FORK + (process.env.PYTHONPATH ? path.delimiter + process.env.PYTHONPATH : ''),

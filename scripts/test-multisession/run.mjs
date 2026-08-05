@@ -212,7 +212,181 @@ check(
   dSettled ? `"${dSettled.text}"` : "未触发"
 );
 
+// 7b. stop() 后仍在 running 的 tool message 必须被标 interrupted（避免 UI 永久残留“执行中…”）
+function toolInterruptRun() {
+  return [
+    { delay: 10, event: { type: "RUN_STARTED", runId: "F-run" } },
+    { delay: 10, event: { type: "TOOL_CALL_START", toolCallId: "F-tool-1", toolCallName: "browser_navigate" } },
+    { delay: 10, event: { type: "TOOL_CALL_START", toolCallId: "F-tool-2", toolCallName: "terminal" } },
+    // 注意：故意不发 TOOL_CALL_END，模拟用户中途打断场景
+  ];
+}
+scripts.set("F", toolInterruptRun());
+setActive("F");
+api.sendMessage("hello F", { threadId: "F" });
+await sleep(80); // 等两条 TOOL_CALL_START 落入消息
+api.stop("F");
+await sleep(60);
+const fMessages = api.messages.filter((m) => m.role === "tool");
+const fInterruptedCount = fMessages.filter((m) => m.status === "interrupted").length;
+const fStillRunningCount = fMessages.filter((m) => m.status === "running").length;
+check(
+  "stop() 后 running 工具卡被强制标 interrupted（不残留“执行中…”）",
+  fMessages.length === 2 && fInterruptedCount === 2 && fStillRunningCount === 0,
+  `tools=${JSON.stringify(fMessages.map((m) => ({ name: m.toolName, status: m.status })))}`
+);
+
+// 8. P1 事件：reasoning / subagent / usage / notification / moa / inline_diff
+//    驱动真实 hook 消费新增 CUSTOM 事件，确认不崩溃且字段正确填充。
+function p1Run() {
+  const mid = "E-msg";
+  return [
+    { delay: 10, event: { type: "RUN_STARTED", runId: "E-run" } },
+    { delay: 5, event: { type: "CUSTOM", name: "reasoning.delta", value: { text: "deep thought" } } },
+    { delay: 5, event: { type: "CUSTOM", name: "status.update", value: { kind: "info", text: "compacting…" } } },
+    { delay: 5, event: { type: "CUSTOM", name: "subagent.start", value: { subagent_id: "s1", goal: "research", status: "start" } } },
+    { delay: 5, event: { type: "CUSTOM", name: "subagent.complete", value: { subagent_id: "s1", status: "complete", input_tokens: 100, output_tokens: 50, cost_usd: 0.001 } } },
+    { delay: 5, event: { type: "CUSTOM", name: "moa.reference", value: { label: "m1", text: "ref content" } } },
+    { delay: 5, event: { type: "CUSTOM", name: "tool.inline_diff", value: { toolCallId: "tool-1", diff: "+added\n-removed" } } },
+    { delay: 5, event: { type: "CUSTOM", name: "usage.update", value: { input: 100, output: 50, reasoning: 20, total: 170, cost_usd: 0.002, context_used: 170, context_max: 128000, context_percent: 0.1 } } },
+    { delay: 5, event: { type: "CUSTOM", name: "notification.show", value: { level: "info", text: "P1 toast" } } },
+    { delay: 5, event: { type: "CUSTOM", name: "browser.progress", value: { message: "正在打开 example.com", level: "info" } } },
+    { delay: 5, event: { type: "CUSTOM", name: "browser.progress", value: { message: "点击登录按钮", level: "info" } } },
+    { delay: 5, event: { type: "CUSTOM", name: "browser.progress", value: { message: "页面未找到", level: "warn" } } },
+    { delay: 5, event: { type: "TEXT_MESSAGE_START", role: "assistant", messageId: mid } },
+    { delay: 5, event: { type: "TEXT_MESSAGE_CONTENT", messageId: mid, delta: "done" } },
+    { delay: 5, event: { type: "TEXT_MESSAGE_END", messageId: mid } },
+    { delay: 5, event: { type: "RUN_FINISHED" } },
+  ];
+}
+scripts.set("E", p1Run());
+setActive("E");
+api.sendMessage("hello E", { threadId: "E" });
+await sleep(300);
+check(
+  "P1 reasoning.delta 累积到 reasoningText",
+  api.reasoningText.includes("deep thought"),
+  `reasoningText="${api.reasoningText}"`
+);
+check(
+  "P1 subagent.* 镜像到 subagents",
+  Array.isArray(api.subagents) && api.subagents.length === 1 && api.subagents[0].subagent_id === "s1",
+  `subagents=${JSON.stringify(api.subagents)}`
+);
+check(
+  "P1 usage.update 注入真实用量",
+  api.usage && api.usage.cost_usd === 0.002 && api.usage.total === 170,
+  `usage=${JSON.stringify(api.usage)}`
+);
+check(
+  "P1 moa.reference 累积到 moaRefs",
+  Array.isArray(api.moaRefs) && api.moaRefs.length === 1 && api.moaRefs[0].label === "m1",
+  `moaRefs=${JSON.stringify(api.moaRefs)}`
+);
+check(
+  "P1 status.update 写入 statusLine",
+  api.statusLine === "compacting…",
+  `statusLine="${api.statusLine}"`
+);
+check(
+  "P1 browser.progress 累积到 browserProgress",
+  Array.isArray(api.browserProgress) && api.browserProgress.length === 3 &&
+    api.browserProgress[2].level === "warn" && api.browserProgress[2].message === "页面未找到",
+  `browserProgress=${JSON.stringify(api.browserProgress)}`
+);
+await sleep(60);
+
+// ── Reasoning snapshot / delta dedup ───────────────────────────────────
+// 模拟 hermes 两条独立 emit 路径（streaming delta + model_progress snapshot）
+// 同时推同一段 reasoning。snapshot 必须覆盖而非累加，dedup 必须吃掉重复 suffix。
+function pReasoning() {
+  const mid = "F-msg";
+  return [
+    { delay: 10, event: { type: "RUN_STARTED", runId: "F-run" } },
+    // streaming delta：先推一段
+    { delay: 5, event: { type: "CUSTOM", name: "reasoning.delta", value: { text: "(•ㅅ•) formulating..." } } },
+    // snapshot 到达：覆盖整个 reasoningText（关键：不能追加）
+    { delay: 5, event: { type: "CUSTOM", name: "reasoning.snapshot", value: { text: "完整思考：决定搜索一下" } } },
+    // 又一段 delta 续在 snapshot 之后
+    { delay: 5, event: { type: "CUSTOM", name: "reasoning.delta", value: { text: "...继续推理" } } },
+    // 重复 suffix：必须被 dedup 吃掉
+    { delay: 5, event: { type: "CUSTOM", name: "reasoning.delta", value: { text: "...继续推理" } } },
+    { delay: 5, event: { type: "TEXT_MESSAGE_START", role: "assistant", messageId: mid } },
+    { delay: 5, event: { type: "TEXT_MESSAGE_CONTENT", messageId: mid, delta: "ok" } },
+    { delay: 5, event: { type: "TEXT_MESSAGE_END", messageId: mid } },
+    { delay: 5, event: { type: "RUN_FINISHED" } },
+  ];
+}
+scripts.set("F", pReasoning());
+setActive("F");
+api.sendMessage("test reasoning snapshot", { threadId: "F" });
+await sleep(200);
+check(
+  "F1 reasoning.snapshot 覆盖而非累加（不重复 formulating/重复 deliberating 之类）",
+  api.reasoningText === "完整思考：决定搜索一下...继续推理",
+  `reasoningText="${api.reasoningText}"`
+);
+await sleep(60);
+
 // ── Summary ─────────────────────────────────────────────────────────────
+// G1: detach-result-panel IPC contract — preload exposes it, ResultPanel
+// calls it. Pure-static smoke test (the regression is a UI gesture, not a
+// state machine), but it fails fast if anyone removes the wiring.
+const detachRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+const preloadSrc = fs.readFileSync(path.join(detachRoot, "electron", "preload.js"), "utf8");
+const resultPanelSrc = fs.readFileSync(path.join(detachRoot, "src", "components", "ResultPanel.jsx"), "utf8");
+const mainJsSrc = fs.readFileSync(path.join(detachRoot, "electron", "main.js"), "utf8");
+const detachedAppSrc = fs.readFileSync(path.join(detachRoot, "src", "DetachedApp.jsx"), "utf8");
+const mainJsxSrc = fs.readFileSync(path.join(detachRoot, "src", "main.jsx"), "utf8");
+check(
+  "G1 preload 暴露 detachResultPanel",
+  /detachResultPanel\s*:\s*\(opts\)\s*=>/.test(preloadSrc),
+  "preload.js 必须 export detachResultPanel"
+);
+check(
+  "G2 main 处理 detach-result-panel IPC",
+  /ipcMain\.handle\(['"]detach-result-panel['"]/.test(mainJsSrc),
+  "main.js 必须注册 detach-result-panel handler"
+);
+check(
+  "G3 main 支持 ?panel=result 加载",
+  /panel:\s*['"]result['"]/.test(mainJsSrc),
+  "main.js 必须把 panel=result 透传给 loadURL"
+);
+check(
+  "G4 ResultPanel 含脱离按钮 + handleDetach",
+  /handleDetach\s*=/.test(resultPanelSrc) && /脱离为独立窗口/.test(resultPanelSrc),
+  "ResultPanel.jsx 必须有 handleDetach + title=\"脱离为独立窗口\" 按钮"
+);
+check(
+  "G5 DetachedApp 存在并独立渲染",
+  /export default function DetachedApp/.test(detachedAppSrc) &&
+    /<ResultPanel/.test(detachedAppSrc) &&
+    /detachHidden/.test(detachedAppSrc),
+  "DetachedApp.jsx 必须导出组件、渲染 ResultPanel、传 detachHidden"
+);
+check(
+  "G6 main.jsx 据 ?panel=result 分发",
+  /isDetachedPanel\s*\(\)/.test(mainJsxSrc) && /DetachedApp/.test(mainJsxSrc),
+  "main.jsx 必须根据 panel=result 渲染 DetachedApp 替代 Bootstrap"
+);
+// G7: detach must close the in-window panel so we don't render the same
+// content in two windows (lex feedback after first deploy).
+const appSrc = fs.readFileSync(path.join(detachRoot, "src", "App.jsx"), "utf8");
+check(
+  "G7 App.jsx 脱离后清掉 selectedWorkflowId（避免双窗口渲染）",
+  /handleDetachResultPanel\s*=/.test(appSrc) &&
+    /setSelectedWorkflowId\(.{0,5}'?\"?'?\s*\)/.test(appSrc) &&
+    /onDetachResultPanel=\{handleDetachResultPanel\}/.test(appSrc),
+  "App.jsx 必须 handleDetachResultPanel 内 setSelectedWorkflowId('') + 把 handler 传给 ResultPanel"
+);
+check(
+  "G8 ResultPanel 用 onDetachResultPanel prop 而不是直接 IPC",
+  /onDetachResultPanel/.test(resultPanelSrc) &&
+    /typeof onDetachResultPanel === 'function'/.test(resultPanelSrc),
+  "ResultPanel.jsx 必须用 onDetachResultPanel prop（fallback 才直接 IPC）"
+);
+
 const failed = results.filter((r) => !r.pass);
 console.log(`\n${results.length - failed.length}/${results.length} passed`);
 mini.unmount();

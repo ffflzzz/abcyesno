@@ -64,6 +64,43 @@ function CodeBlock({ children }) {
   );
 }
 
+// ── Extract data-URL images from markdown content ───────────────
+// User messages embed screenshots as ![图片N](data:image/...;base64,...)
+// which can be 2MB+. Passing these through ReactMarkdown on every stream
+// token chokes the main thread (re-parse 2MB markdown → base64 decode →
+// <img> layout) and inside react-virtuoso the <img> node gets repeatedly
+// unmounted/remounted so it never finishes decoding.
+//
+// Solution: extract data-URL images BEFORE markdown rendering, render them
+// as standalone <img> elements, and strip the ![](data:...) from text.
+const DATA_URL_IMG_RE = /!\[([^\]]*)\]\((data:image\/[^)]+)\)/g;
+
+/** @returns {{ images: Array<{src,alt}>, text: string }} */
+function extractDataUrlImages(markdown) {
+  if (typeof markdown !== "string" || !markdown.includes("data:image")) {
+    return { images: [], text: markdown };
+  }
+  const images = [];
+  const text = markdown.replace(DATA_URL_IMG_RE, (_match, alt, src) => {
+    images.push({ src, alt: alt || "" });
+    return ""; // remove the image inline syntax
+  });
+  return { images, text };
+}
+
+/** Memoized wrapper so identical content doesn't re-extract. */
+const extractCache = new Map();
+const EXTRACT_CACHE_MAX = 200;
+function cachedExtract(markdown) {
+  if (typeof markdown !== "string") return { images: [], text: markdown };
+  const hit = extractCache.get(markdown);
+  if (hit) return hit;
+  const result = extractDataUrlImages(markdown);
+  if (extractCache.size > EXTRACT_CACHE_MAX) extractCache.clear();
+  extractCache.set(markdown, result);
+  return result;
+}
+
 // ── sanitizeMessageContent cache ──────────────────────────────
 // Historical/finalized messages have stable content, but the function runs
 // ~15 regexes per call and was re-invoked for every message on every stream
@@ -162,6 +199,120 @@ function formatTime(ts) {
   return `${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}`;
 }
 
+/**
+ * ClarifyQuestionRow — renders the clarify tool's interactive question UI.
+ *
+ * When the agent calls `clarify(question, choices)` the gateway blocks on a
+ * user response.  In CLI this is a rich select widget; in our Electron app
+ * we render an inline question card with choice buttons + free-text input.
+ *
+ * The user's answer is sent as a normal chat message — the gateway's
+ * _maybe_intercept_clarify_text (run.py:8705) intercepts it and routes it
+ * to the waiting clarify resolver, unblocking the agent.
+ */
+function ClarifyQuestionRow({ toolMsg, assistantAvatar, onSend }) {
+  const [reply, setReply] = useState("");
+  const [submitted, setSubmitted] = useState(false);
+
+  // Parse question + choices from tool args
+  let question = "";
+  let choices = null;
+  try {
+    const args = typeof toolMsg.args === "string" ? JSON.parse(toolMsg.args) : (toolMsg.args || {});
+    // Handle both raw clarify schema {question, choices} and wrapped
+    // LangGraph format {context: "Asking ...", ...}
+    question = args.question || args.context || "";
+    if (typeof question === "string" && question.startsWith("Asking ")) {
+      question = question.replace(/^Asking\s+/, "");
+    }
+    choices = Array.isArray(args.choices) ? args.choices : null;
+  } catch {
+    question = String(toolMsg.args || "");
+    choices = null;
+  }
+
+  const handleChoice = (text) => {
+    if (submitted || !onSend) return;
+    setSubmitted(true);
+    onSend(text);
+  };
+
+  const handleSubmit = () => {
+    const text = reply.trim();
+    if (!text || submitted || !onSend) return;
+    setSubmitted(true);
+    onSend(text);
+  };
+
+  const status = mapStatus(toolMsg.status);
+  const isDone = status === "complete" || status === "error";
+
+  return (
+    <div className="message-row assistant">
+      <div className="message-avatar agent-avatar">{assistantAvatar}</div>
+      <div className="message-col">
+        <div className="clarify-bubble">
+          <div className="clarify-header">
+            <span className="clarify-icon">❓</span>
+            <span className="clarify-label">需要确认</span>
+            {!isDone && (
+              <span className="clarify-status-hint">请选择或输入回答</span>
+            )}
+            {isDone && (
+              <span className="clarify-status-done">已结束</span>
+            )}
+          </div>
+          <div className="clarify-question">{question}</div>
+
+          {!isDone && choices && choices.length > 0 && (
+            <div className="clarify-choices">
+              {choices.map((c, i) => (
+                <button
+                  key={`cq-${i}`}
+                  className="clarify-choice-btn"
+                  onClick={() => handleChoice(c)}
+                >
+                  {c}
+                </button>
+              ))}
+              <button
+                className="clarify-choice-btn clarify-other"
+                onClick={() => {
+                  const el = document.querySelector(".clarify-freetext-input");
+                  if (el) el.focus();
+                }}
+              >
+                其他（自定义）
+              </button>
+            </div>
+          )}
+
+          {!isDone && (
+            <div className="clarify-freetext">
+              <input
+                className="clarify-freetext-input"
+                type="text"
+                placeholder={choices?.length ? "或直接输入你的答案…" : "输入你的回答…"}
+                value={reply}
+                onChange={(e) => setReply(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") handleSubmit(); }}
+                disabled={submitted}
+              />
+              <button
+                className="clarify-send-btn"
+                onClick={handleSubmit}
+                disabled={submitted || !reply.trim()}
+              >
+                发送
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 class MarkdownErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
@@ -190,7 +341,7 @@ function normalizeContentForTypewriter(content) {
   return String(content || "");
 }
 
-function MarkdownView({ cleaned, onImageClick }) {
+const MarkdownView = React.memo(function MarkdownView({ cleaned, onImageClick }) {
   return (
     <MarkdownErrorBoundary raw={cleaned}>
       <ReactMarkdown
@@ -201,7 +352,7 @@ function MarkdownView({ cleaned, onImageClick }) {
           img: ({ node, ...props }) => (
             <img
               {...props}
-              style={{ maxWidth: "100%", cursor: "pointer", borderRadius: "6px" }}
+              style={{ maxWidth: "100%", maxHeight: "60vh", cursor: "pointer", borderRadius: "6px" }}
               onClick={() => onImageClick && onImageClick(props.src, props.alt)}
               alt={props.alt || ""}
             />
@@ -225,7 +376,7 @@ function MarkdownView({ cleaned, onImageClick }) {
       </ReactMarkdown>
     </MarkdownErrorBoundary>
   );
-}
+});
 
 /** Extract columns + rows from a react-markdown table AST node. Returns null if not a data table. */
 function extractTableData(node) {
@@ -280,33 +431,139 @@ function extractTextFromAst(node) {
   return null;
 }
 
-// Collapse long assistant replies to a short preview with an expand toggle,
-// so a big multi-section result doesn't flood the thread (简洁 + 可展开).
-const COLLAPSE_CHAR_THRESHOLD = 600;
-const COLLAPSE_LINE_THRESHOLD = 12;
+// ── ASCII / box-drawing art detection ──────────────────────
+// Matches lines heavy in box-drawing Unicode chars (flowcharts, trees, diagrams).
+// A block is "ASCII art" when ≥3 consecutive lines each contain ≥2 box-drawing chars.
+const BOX_DRAWING_RE = /[┌┐└┘│─├┤┬┴┼╭╮╯╰═║╞╟╠╚╔╗╝▓░▀▄■□▲▼◆◇●○·━┿╼╾╶╷╺╻╱╲╳╴╵╶╷╸╹]/;
+const ASCII_ART_MIN_LINES = 3;
+const ASCII_ART_MIN_CHARS_PER_LINE = 2;
 
-function CollapsibleMarkdown({ cleaned, onImageClick }) {
-  const [expanded, setExpanded] = useState(false);
-  const lines = cleaned.split("\n");
-  const tooLong = cleaned.length > COLLAPSE_CHAR_THRESHOLD || lines.length > COLLAPSE_LINE_THRESHOLD;
+function detectAsciiArtBlocks(text) {
+  if (!text) return [];
+  const lines = text.split("\n");
+  const blocks = []; // [{start, end, content}]
+  let blockStart = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const hasBox = (lines[i].match(BOX_DRAWING_RE) || []).length >= ASCII_ART_MIN_CHARS_PER_LINE;
+    if (hasBox && blockStart < 0) {
+      blockStart = i;
+    } else if (!hasBox && blockStart >= 0) {
+      if (i - blockStart >= ASCII_ART_MIN_LINES) {
+        blocks.push({ start: blockStart, end: i, content: lines.slice(blockStart, i).join("\n") });
+      }
+      blockStart = -1;
+    }
+  }
+  // Handle block extending to end of text
+  if (blockStart >= 0 && lines.length - blockStart >= ASCII_ART_MIN_LINES) {
+    blocks.push({ start: blockStart, end: lines.length, content: lines.slice(blockStart).join("\n") });
+  }
+  return blocks;
+}
 
-  if (!tooLong) {
+// Render markdown with ASCII art blocks (box-drawing diagrams) collapsed into
+// individually toggleable sections. Normal text renders via MarkdownView;
+// detected ASCII art regions get wrapped in <pre> with max-height + scroll.
+function AsciiArtAwareMarkdown({ cleaned, onImageClick, asciiBlocks }) {
+  const [expandedBlocks, setExpandedBlocks] = useState({});
+
+  if (!asciiBlocks || asciiBlocks.length === 0) {
     return <MarkdownView cleaned={cleaned} onImageClick={onImageClick} />;
   }
 
-  const previewText = lines.slice(0, 6).join("\n");
+  // Split content into segments: normal text and ASCII art blocks
+  const segments = [];
+  let lastEnd = 0;
+  const lines = cleaned.split("\n");
+  for (const block of asciiBlocks) {
+    if (block.start > lastEnd) {
+      segments.push({ type: "text", content: lines.slice(lastEnd, block.start).join("\n") });
+    }
+    segments.push({ type: "ascii", content: block.content, lineCount: block.end - block.start });
+    lastEnd = block.end;
+  }
+  if (lastEnd < lines.length) {
+    segments.push({ type: "text", content: lines.slice(lastEnd).join("\n") });
+  }
+
+  const toggleBlock = (idx) => {
+    setExpandedBlocks(prev => ({ ...prev, [idx]: !prev[idx] }));
+  };
+
+  return (
+    <>
+      {segments.map((seg, idx) =>
+        seg.type === "ascii" ? (
+          <div key={`ascii-${idx}`} className="ascii-art-block">
+            <button
+              className="ascii-art-toggle"
+              onClick={() => toggleBlock(idx)}
+              title={expandedBlocks[idx] ? "收起图表" : "展开图表"}
+            >
+              <Icon name="chevron" size={10} style={{ transform: expandedBlocks[idx] ? "rotate(-90deg)" : "rotate(90deg)", transition: "transform 0.15s" }} />
+              <span className="ascii-art-label">流程图 / 图表（{seg.content.split("\n").length} 行）</span>
+            </button>
+            {expandedBlocks[idx] && (
+              <pre className="ascii-art-pre">{seg.content}</pre>
+            )}
+          </div>
+        ) : (
+          <MarkdownView key={`text-${idx}`} cleaned={seg.content} onImageClick={onImageClick} />
+        )
+      )}
+    </>
+  );
+}
+
+// Collapse long assistant replies to a short preview with an expand toggle,
+// so a big multi-section result doesn't flood the thread (简洁 + 可展开).
+// ASCII art blocks are always independently collapsed regardless of total length.
+const COLLAPSE_CHAR_THRESHOLD = 2000;
+const COLLAPSE_LINE_THRESHOLD = 30;
+
+const CollapsibleMarkdown = React.memo(function CollapsibleMarkdown({ cleaned, onImageClick }) {
+  const [expanded, setExpanded] = useState(false);
+  const asciiBlocks = useMemo(() => detectAsciiArtBlocks(cleaned), [cleaned]);
+  const hasAsciiArt = asciiBlocks.length > 0;
+  const lines = cleaned.split("\n");
+  const tooLong = cleaned.length > COLLAPSE_CHAR_THRESHOLD || lines.length > COLLAPSE_LINE_THRESHOLD;
+
+  if (!tooLong && !hasAsciiArt) {
+    return <MarkdownView cleaned={cleaned} onImageClick={onImageClick} />;
+  }
+
+  // ── Build preview: skip ASCII art lines so the user sees useful text ──
+  const nonAsciiLineIndices = [];
+  for (let i = 0; i < lines.length; i++) {
+    const inAscii = asciiBlocks.some(b => i >= b.start && i < b.end);
+    if (!inAscii) nonAsciiLineIndices.push(i);
+  }
+  const previewLines = nonAsciiLineIndices.slice(0, 15).map(i => lines[i]);
+  const previewText = previewLines.join("\n");
+  const needsCollapse = tooLong || hasAsciiArt;
+
+  if (!needsCollapse) {
+    return <MarkdownView cleaned={cleaned} onImageClick={onImageClick} />;
+  }
+
   return (
     <div className={`collapsible-md ${expanded ? "expanded" : "collapsed"}`}>
       <div className="collapsible-md-content">
-        <MarkdownView cleaned={expanded ? cleaned : previewText} onImageClick={onImageClick} />
+        {expanded ? (
+          <AsciiArtAwareMarkdown cleaned={cleaned} onImageClick={onImageClick} asciiBlocks={asciiBlocks} />
+        ) : (
+          <MarkdownView cleaned={previewText || cleaned.slice(0, 200)} onImageClick={onImageClick} />
+        )}
       </div>
       {!expanded && <div className="collapsible-md-fade" />}
       <button className="collapsible-md-toggle" onClick={() => setExpanded(!expanded)}>
-        {expanded ? (<><Icon name="chevron" size={12} style={{ transform: "rotate(-90deg)" }} /> 收起</>) : (<><Icon name="chevron" size={12} style={{ transform: "rotate(90deg)" }} /> 展开全部（{lines.length} 行）</>)}
+        {expanded ? (<><Icon name="chevron" size={12} style={{ transform: "rotate(-90deg)" }} /> 收起</>) : (
+          <><Icon name="chevron" size={12} style={{ transform: "rotate(90deg)" }} /> 展开全部（{lines.length} 行{hasAsciiArt ? `，含 ${asciiBlocks.length} 处图表` : ""}）</>
+        )}
       </button>
     </div>
   );
-}
+});
 
 function formatContent(content, onImageClick) {
   const cleaned = sanitizeMessageContent(content);
@@ -320,6 +577,7 @@ function formatContent(content, onImageClick) {
 function mapStatus(s) {
   if (s === "running" || s === "in_progress") return "running";
   if (s === "error" || s === "failed") return "error";
+  if (s === "interrupted" || s === "cancelled" || s === "canceled") return "interrupted";
   if (s === "pending") return "pending";
   return "complete";
 }
@@ -497,13 +755,15 @@ function estimatedHeight(row) {
   return 80; // message
 }
 
-function ToolsRow({ items, assistantAvatar, loading, isLastRow, onImageClick, onViewInSidebar }) {
+function ToolsRow({ items, assistantAvatar, loading, isLastRow, toolStatus = {}, onImageClick, onViewInSidebar }) {
   const toolsRunning = loading && isLastRow;
   const hasRunning = items.some(m => mapStatus(m.status) === "running");
   const allComplete = items.every(m => {
     const s = mapStatus(m.status);
+    // interrupted / complete / error 都视为“已收尾”，不再显示“执行中…”
     return s !== "running" && s !== "in_progress";
   });
+  const interruptedCount = items.filter(m => mapStatus(m.status) === "interrupted").length;
   const totalTools = items.length;
 
   // Always collapsed by default — user clicks to expand.
@@ -539,19 +799,23 @@ function ToolsRow({ items, assistantAvatar, loading, isLastRow, onImageClick, on
             </span>
           )}
           <span
-            className={`tool-summary-status ${allComplete ? "complete" : "running"}`}
+            className={`tool-summary-status ${allComplete ? (interruptedCount ? "interrupted" : "complete") : "running"}`}
             style={!allComplete ? {
               color: "#d29922",
               animation: "status-running-pulse 1.5s ease-in-out infinite",
             } : undefined}
           >
-            {allComplete ? "全部完成" : "执行中…"}
+            {!allComplete
+              ? "执行中…"
+              : interruptedCount
+                ? (interruptedCount === totalTools ? "已中断" : `已中断 (${interruptedCount}/${totalTools})`)
+                : "全部完成"}
           </span>
           <span className={`tool-summary-chevron ${expanded ? "expanded" : ""}`}><Icon name="chevron" size={12} style={{ transform: expanded ? "rotate(90deg)" : "rotate(0deg)" }} /></span>
         </div>
         {expanded && (
           <div className="tool-group expanded">
-            {items.map((m, i) => (
+              {items.map((m, i) => (
               <ToolCard
                 key={m.id || `tool-${i}`}
                 toolName={m.toolName || "tool"}
@@ -559,6 +823,8 @@ function ToolsRow({ items, assistantAvatar, loading, isLastRow, onImageClick, on
                 result={m.result !== undefined && m.result !== null ? m.result : m.content}
                 status={mapStatus(m.status)}
                 durationMs={m.durationMs}
+                inlineDiff={m.inlineDiff}
+                generating={toolStatus[m.toolName || "tool"]?.generating}
                 defaultExpanded={mapStatus(m.status) === "running" || mapStatus(m.status) === "in_progress"}
               />
             ))}
@@ -570,8 +836,11 @@ function ToolsRow({ items, assistantAvatar, loading, isLastRow, onImageClick, on
   );
 }
 
-export default function MessageThread({ messages = [], loading, streamPhase, thinkingText, uiBlocks = [], stalled = false, onRetry, onRegenerate, assistant, manifests = [], onUpgradeToWorkbench, onOpenPreviewUrl, approval, onRespondApproval, sessionId, onEditMessage, onDeleteMessage, editingMessageId, onSaveEdit, onCancelEdit }) {
+function MessageThread({ messages = [], loading, streamPhase, thinkingText, reasoningText = "", uiBlocks = [], stalled = false, subagents = [], moaRefs = [], moaAggregating = null, toolStatus = {}, reviewSummary = null, onRetry, onRegenerate, assistant, manifests = [], onUpgradeToWorkbench, onOpenPreviewUrl, approval, onRespondApproval, sessionId, onEditMessage, onDeleteMessage, editingMessageId, onSaveEdit, onCancelEdit, onSend }) {
   const [lightbox, setLightbox] = useState(null);
+  // Stable image-click handler so memoized markdown bubbles (React.memo on
+  // CollapsibleMarkdown/MarkdownView) don't re-render on every stream token.
+  const handleImageClick = useCallback((src, alt) => setLightbox({ src, alt }), []);
 
   // Only show tool messages from the current turn (after the last user message),
   // not the entire session history. Prevents stale tool calls from flooding
@@ -585,27 +854,25 @@ export default function MessageThread({ messages = [], loading, streamPhase, thi
     return messages.slice(lastUserIdx + 1).filter((m) => m.role === "tool");
   }, [messages]);
 
-  // ── Workflow progress: extract latest running step from contract events ──
+  // ── Workflow progress: extract stage list from contract events ──
   const contractEvents = useContractEvents(sessionId);
-  const latestProgress = useMemo(() => {
-    if (!contractEvents || !contractEvents.length) return null;
-    // Find the most recent workflow.progress event with status="running"
+  const { latestProgress, progressStages } = useMemo(() => {
+    if (!contractEvents || !contractEvents.length) return { latestProgress: null, progressStages: [] };
+    // Collect unique stages in order, keeping the last status per step_id
+    const stageMap = new Map(); // step_id -> payload
     let latest = null;
-    for (let i = contractEvents.length - 1; i >= 0; i--) {
-      const ev = contractEvents[i];
-      if (ev.type === "workflow.progress" && ev.payload?.status === "running") {
-        latest = ev.payload;
-        break;
+    for (const ev of contractEvents) {
+      if (ev.type === "workflow.progress" && ev.payload) {
+        stageMap.set(ev.payload.step_id, ev.payload);
+        if (!latest || ev.payload.status === "running") latest = ev.payload;
       }
     }
-    // Fallback: if no running, show the last completed step
-    if (!latest) {
-      for (let i = contractEvents.length - 1; i >= 0; i--) {
-        const ev = contractEvents[i];
-        if (ev.type === "workflow.progress") { latest = ev.payload; break; }
-      }
+    // Fallback: if no running, use last event
+    if (!latest && stageMap.size > 0) {
+      const vals = [...stageMap.values()];
+      latest = vals[vals.length - 1];
     }
-    return latest;
+    return { latestProgress: latest, progressStages: [...stageMap.values()] };
   }, [contractEvents]);
 
   // @ mention protocol (spec §2): a user message beginning with `@<name>`
@@ -615,12 +882,14 @@ export default function MessageThread({ messages = [], loading, streamPhase, thi
     const m = String(text || "").match(/^\s*@([^\s@]+)/);
     if (!m) return null;
     const token = m[1];
+    const norm = (s) => s.toLowerCase().replace(/[-_]+/g, "_");
+    const tokenNorm = norm(token);
     const hit = manifests.find(
       (x) =>
+        norm(x.name) === tokenNorm ||
+        norm(x.id) === tokenNorm ||
         x.name === token ||
-        x.id === token ||
-        x.id === token.replace(/\s+/g, "_") ||
-        x.name === token.replace(/_/g, " ")
+        x.id === token
     );
     return hit
       ? { id: hit.id, name: hit.name }
@@ -643,37 +912,37 @@ export default function MessageThread({ messages = [], loading, streamPhase, thi
   const assistantAvatar = <img src={bachAvatar} alt="ABC" className="agent-avatar-img" />;
   const hasToolMsgs = messages.some((m) => m.role === "tool");
 
-  // Build rows
-  const grouped = renderGrouped(messages);
-  const rows = [...grouped];
-  // Show a working indicator whenever the agent is busy, unless the last row is
-  // already an assistant message with visible streamed content or running tools.
-  // For an EMPTY assistant message we inline the indicator inside that bubble;
-  // for a user message we must still create an assistant thinking row (user rows
-  // cannot host assistant thinking UI) — but we use a compact avatar-only style.
-  if (loading) {
-    const last = rows[rows.length - 1];
-    const lastHasContent =
-      last &&
-      ((last.type === "message" && last.data.role === "assistant" &&
-        sanitizeMessageContent(last.data.content) &&
-        String(sanitizeMessageContent(last.data.content)).trim().length > 0) ||
-        last.type === "tools");
-    if (!lastHasContent && last) {
-      if (last.type === "message" && last.data.role === "assistant") {
-        last._thinking = true;
-        last._phase = streamPhase;
-      } else if (last.type === "message" && last.data.role === "user") {
-        // User message cannot show assistant thinking; append a dedicated row.
-        rows.push({ type: "thinking", phase: streamPhase });
+  // ── Memoized rows ──────────────────────────────────────────────
+  // Without useMemo, rows gets a new array reference on every parent
+  // re-render (i.e. every stream token).  Virtuoso then assumes the
+  // entire data set changed and re-renders all visible items, causing
+  // flicker even for unchanged message bubbles.
+  const rows = useMemo(() => {
+    const grouped = renderGrouped(messages);
+    const r = [...grouped];
+    // Append thinking / progress indicator when agent is busy.
+    if (loading) {
+      const last = r[r.length - 1];
+      const lastHasContent =
+        last &&
+        ((last.type === "message" && last.data.role === "assistant" &&
+          sanitizeMessageContent(last.data.content) &&
+          String(sanitizeMessageContent(last.data.content)).trim().length > 0) ||
+          last.type === "tools");
+      if (!lastHasContent && last) {
+        if (last.type === "message" && last.data.role === "assistant") {
+          last._thinking = true;
+          last._phase = streamPhase;
+        } else if (last.type === "message" && last.data.role === "user") {
+          r.push({ type: "thinking", phase: streamPhase });
+        }
+      } else if (lastHasContent) {
+        r.push({ type: "thinking", phase: streamPhase || "tool_executing" });
       }
-      // If last is "thinking" legacy row already, leave it as-is.
-    } else if (lastHasContent) {
-      // Last row has content (tools or assistant text), but agent is still working.
-      // Append a compact progress row so the user can see real-time step info.
-      rows.push({ type: "thinking", phase: streamPhase || "tool_executing" });
     }
-  }
+    return r;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages, loading, streamPhase]);
 
   // ── Virtualized scroll via react-virtuoso ───────────────────
   // Long conversations previously rendered the entire message column in a
@@ -695,6 +964,29 @@ export default function MessageThread({ messages = [], loading, streamPhase, thi
     setAtBottom(true);
   }, [rows.length]);
 
+  // Stable item-content callback for Virtuoso.  Without this, the inline
+  // arrow created a new reference on every parent re-render, defeating
+  // Virtuoso's internal item-level memoization and causing every visible
+  // row to re-render (and re-run ReactMarkdown) on each stream token.
+  const itemContent = useCallback(
+    (index) => (
+      <div key={rowKey(rows[index], index)} data-row-index={index}>
+        {renderRow(index)}
+      </div>
+    ),
+    // renderRow closes over the latest props/state; rows changes when
+    // messages change (useMemo above).  Omitting renderRow from deps is
+    // safe because it is a pure function of (index, rows, props) — when
+    // those change the component re-renders and creates a new closure.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [rows]
+  );
+
+  const computeItemKey = useCallback(
+    (index) => rowKey(rows[index], index),
+    [rows]
+  );
+
   const renderRow = (index) => {
     const row = rows[index];
     const isLastRow = index === rows.length - 1;
@@ -702,6 +994,13 @@ export default function MessageThread({ messages = [], loading, streamPhase, thi
     if (row.type === "thinking") {
       // Dedicated thinking row: compact indicator only. Detailed progress lives
       // in the header status bar and right-panel workflow timeline — NOT in chat bubbles.
+      //
+      // When this row immediately follows a tools row, suppress the duplicate
+      // avatar and indent to align with the content column above.  Otherwise
+      // three identical avatars stack vertically (user → tools → thinking)
+      // which looks cramped and redundant.
+      const prevRow = index > 0 ? rows[index - 1] : null;
+      const isContinuation = prevRow?.type === "tools";
       const phaseLabel =
         !thinkingText
           ? row.phase === "text_generating" ? "正在生成回复"
@@ -709,8 +1008,8 @@ export default function MessageThread({ messages = [], loading, streamPhase, thi
           : "正在思考…"
           : "";
       return (
-        <div className="message-row assistant">
-          <div className="message-avatar agent-avatar thinking">{assistantAvatar}</div>
+        <div className={`message-row assistant${isContinuation ? " continuation" : ""}`}>
+          {!isContinuation && <div className="message-avatar agent-avatar thinking">{assistantAvatar}</div>}
           <div className="message-col">
             <div className="assistant-body">
               <div className="bubble-thinking-compact">
@@ -718,11 +1017,29 @@ export default function MessageThread({ messages = [], loading, streamPhase, thi
                   <span className="btc-spinner" />
                   <span className="btc-text">{phaseLabel || "处理中…"}</span>
                 </div>
-                {latestProgress && (
-                  <div className="btc-progress">
-                    <span className="btc-stage">{latestProgress.stage || latestProgress.step_id}</span>
-                    {latestProgress.total > 0 && (
-                      <span className="btc-pos">{latestProgress.completed}/{latestProgress.total}</span>
+                {progressStages.length > 0 && (
+                  <div className="btc-workflow-progress">
+                    <div className="btc-stage-bar">
+                      {progressStages.map((s) => (
+                        <span
+                          key={s.step_id}
+                          className={`btc-stage-chip ${s.status === "running" ? "active" : s.status === "done" ? "done" : ""}`}
+                          title={s.message || s.step_id}
+                        >
+                          {s.stage || s.step_id}
+                        </span>
+                      ))}
+                    </div>
+                    {latestProgress?.total > 1 && (
+                      <div className="btc-progress-track">
+                        <div
+                          className="btc-progress-fill"
+                          style={{ width: `${(latestProgress.completed / latestProgress.total) * 100}%` }}
+                        />
+                      </div>
+                    )}
+                    {latestProgress?.message && (
+                      <div className="btc-step-msg">{latestProgress.message}</div>
                     )}
                   </div>
                 )}
@@ -742,13 +1059,26 @@ export default function MessageThread({ messages = [], loading, streamPhase, thi
     }
 
     if (row.type === "tools") {
+      // If the only (or last) tool is "clarify", render the interactive
+      // question UI instead of the generic tool card.
+      const clarifyItem = row.items.find((m) => m.toolName === "clarify");
+      if (clarifyItem && row.items.length === 1) {
+        return (
+          <ClarifyQuestionRow
+            toolMsg={clarifyItem}
+            assistantAvatar={assistantAvatar}
+            onSend={onSend}
+          />
+        );
+      }
       return (
         <ToolsRow
           items={row.items}
           assistantAvatar={assistantAvatar}
           loading={loading}
           isLastRow={isLastRow}
-          onImageClick={(src, alt) => setLightbox({ src, alt })}
+          toolStatus={toolStatus}
+          onImageClick={handleImageClick}
           onViewInSidebar={() => onOpenPreviewUrl && onOpenPreviewUrl("tab:artifacts")}
         />
       );
@@ -765,9 +1095,15 @@ export default function MessageThread({ messages = [], loading, streamPhase, thi
     const mctx = mentionCtx[m.id];
     const isMentionUser = isUser && !!mctx?.self;
     const isInner = !isUser && !!mctx?.inner;
-    const displayContent = isMentionUser
+    const rawContent = isMentionUser
       ? String(m.content || "").replace(/^\s*@([^\s@]+)/, "").trim()
       : m.content;
+    // For user messages, extract data-URL images BEFORE markdown rendering.
+    // This avoids passing 2MB+ base64 strings through ReactMarkdown on every
+    // stream token, which chokes Virtuoso (re-parse → <img> never decodes).
+    const extracted = isUser ? cachedExtract(rawContent) : null;
+    const displayContent = extracted ? extracted.text : rawContent;
+    const userImages = extracted?.images || null;
     const toolMessages = currentTurnToolMessages;
     return (
       <div className={`message-row ${isUser ? "user" : "assistant"} ${isMentionUser ? "msg-mention" : ""} ${isInner ? "msg-inner" : ""}`}>
@@ -820,10 +1156,27 @@ export default function MessageThread({ messages = [], loading, streamPhase, thi
               <TypewriterText
                 content={sanitizeMessageContent(normalizeContentForTypewriter(displayContent))}
                 isStreaming={true}
-                onImageClick={(src, alt) => setLightbox({ src, alt })}
+                onImageClick={handleImageClick}
               />
             ) : (
-              formatContent(displayContent, (src, alt) => setLightbox({ src, alt }))
+              <>
+                {/* Standalone data-URL images for user messages — rendered
+                    outside ReactMarkdown so Virtuoso can't unmount them */}
+                {userImages && userImages.length > 0 && (
+                  <div className="user-attached-images">
+                    {userImages.map((img, i) => (
+                      <img
+                        key={`uimg-${i}`}
+                        src={img.src}
+                        alt={img.alt || `截图${i + 1}`}
+                        className="user-attached-img"
+                        onClick={() => handleImageClick(img.src, img.alt)}
+                      />
+                    ))}
+                  </div>
+                )}
+                {formatContent(displayContent, handleImageClick)}
+              </>
             )}
           </div>
           {!isEditing && !isThinkingInline && !isStreamingText && (
@@ -840,7 +1193,7 @@ export default function MessageThread({ messages = [], loading, streamPhase, thi
               onDelete={onDeleteMessage}
             />
           )}
-          {isInner && onUpgradeToWorkbench && !isError && !isStreamingText && !isThinkingInline && !isEditing && (
+          {isInner && onUpgradeToWorkbench && !isError && !isStreamingText && !isThinkingInline && !isEditing && !mctx.inner.unknown && (
             <button
               className="message-action-btn upgrade-standalone"
               onClick={() => onUpgradeToWorkbench(mctx.inner.id)}
@@ -864,11 +1217,8 @@ export default function MessageThread({ messages = [], loading, streamPhase, thi
         data={rows}
         followOutput={(isAtBottom) => (isAtBottom ? "smooth" : false)}
         atBottomStateChange={setAtBottom}
-        itemContent={(index) => (
-          <div key={rowKey(rows[index], index)} data-row-index={index}>
-            {renderRow(index)}
-          </div>
-        )}
+        computeItemKey={computeItemKey}
+        itemContent={itemContent}
         components={{
           Footer: () => (
             <>
@@ -878,6 +1228,18 @@ export default function MessageThread({ messages = [], loading, streamPhase, thi
                     <GeneratedComponent key={b.blockId} block={b} />
                   ))}
                 </div>
+              )}
+              {loading && reasoningText && reasoningText.trim() && (
+                <ReasoningBlock key="reasoning-block" text={reasoningText} />
+              )}
+              {subagents.length > 0 && (
+                <SubagentPanel key="subagent-panel" subagents={subagents} />
+              )}
+              {moaRefs.length > 0 && (
+                <MoaBlock key="moa-block" refs={moaRefs} aggregating={moaAggregating} />
+              )}
+              {reviewSummary && (
+                <ReviewSummaryBlock key="review-summary" text={reviewSummary} />
               )}
               {approval && (
                 <ApprovalBubble
@@ -904,6 +1266,119 @@ export default function MessageThread({ messages = [], loading, streamPhase, thi
           onClose={() => setLightbox(null)}
         />
       )}
+    </div>
+  );
+}
+
+// React.memo prevents re-render cascade from parent (ChatLayout → App) on
+// every stream token.  Only when messages / loading / streamPhase actually
+// change will the rows be rebuilt and Virtuoso updated.
+export default React.memo(MessageThread);
+
+// ─────────────────────────────────────────────────────────────────────────
+// P1 增量 UI 组件（深度推理 / 子 agent / MOA / 评审摘要）
+// 这些组件只依赖 Footer 传入的瞬时 props，独立渲染，不进入 Virtuoso 行重算。
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * ReasoningBlock — 模型深度推理 token 的折叠展示（区别于浅层 thinking 指示）。
+ */
+function ReasoningBlock({ text }) {
+  const [open, setOpen] = useState(false);
+  const preview = text.length > 200 ? text.slice(0, 200) + "…" : text;
+  return (
+    <div className="reasoning-block">
+      <button className="reasoning-toggle" onClick={() => setOpen((o) => !o)}>
+        <Icon name="lightbulb" size={13} />
+        <span>深度推理</span>
+        <span className="reasoning-count">{text.length} 字符</span>
+        <Icon name="chevron" size={12} style={{ transform: open ? "rotate(90deg)" : "rotate(0deg)" }} />
+      </button>
+      {open ? (
+        <pre className="reasoning-text">{text}</pre>
+      ) : (
+        <pre className="reasoning-text collapsed">{preview}</pre>
+      )}
+    </div>
+  );
+}
+
+/**
+ * SubagentPanel — 子 agent 实时镜像列表（subagent.* 事件驱动）。
+ * 每个子 agent 一行：目标 / 状态 / 当前动作 / token 与 cost。
+ */
+function SubagentPanel({ subagents }) {
+  const [open, setOpen] = useState(true);
+  return (
+    <div className="subagent-panel">
+      <button className="subagent-toggle" onClick={() => setOpen((o) => !o)}>
+        <Icon name="users" size={13} />
+        <span>子智能体</span>
+        <span className="subagent-count">{subagents.length}</span>
+        <Icon name="chevron" size={12} style={{ transform: open ? "rotate(90deg)" : "rotate(0deg)" }} />
+      </button>
+      {open && (
+        <div className="subagent-list">
+          {subagents.map((s) => {
+            const status = s.status || (s.event || "").replace("subagent.", "");
+            const tokens = (s.input_tokens || 0) + (s.output_tokens || 0);
+            return (
+              <div className="subagent-row" key={s.key}>
+                <span className={`subagent-status subagent-status-${status}`}>{status}</span>
+                <span className="subagent-goal" title={s.goal}>{s.goal || s.key}</span>
+                {s.tool_name && <span className="subagent-tool">🔧 {s.tool_name}</span>}
+                {tokens > 0 && <span className="subagent-tokens">{tokens} tok</span>}
+                {s.cost_usd != null && <span className="subagent-cost">${Number(s.cost_usd).toFixed(4)}</span>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * MoaBlock — MOA 多模型聚合参考（moa.reference / moa.aggregating）。
+ */
+function MoaBlock({ refs, aggregating }) {
+  const [open, setOpen] = useState(true);
+  return (
+    <div className="moa-block">
+      <button className="moa-toggle" onClick={() => setOpen((o) => !o)}>
+        <Icon name="shuffle" size={13} />
+        <span>多模型参考 (MOA)</span>
+        {aggregating && <span className="moa-aggregating">聚合中…</span>}
+        <span className="moa-count">{refs.length}</span>
+        <Icon name="chevron" size={12} style={{ transform: open ? "rotate(90deg)" : "rotate(0deg)" }} />
+      </button>
+      {open && (
+        <div className="moa-list">
+          {refs.map((r, i) => (
+            <div className="moa-ref" key={i}>
+              <span className="moa-ref-label">{r.label || `参考 ${i + 1}`}</span>
+              <span className="moa-ref-text">{r.text}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * ReviewSummaryBlock — 评审 / 自检摘要（review.summary）。
+ */
+function ReviewSummaryBlock({ text }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="review-summary-block">
+      <button className="review-toggle" onClick={() => setOpen((o) => !o)}>
+        <Icon name="clipboard" size={13} />
+        <span>评审摘要</span>
+        <Icon name="chevron" size={12} style={{ transform: open ? "rotate(90deg)" : "rotate(0deg)" }} />
+      </button>
+      {open && <pre className="review-text">{text}</pre>}
     </div>
   );
 }

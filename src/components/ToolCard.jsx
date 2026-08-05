@@ -23,6 +23,23 @@ function truncate(text, max) {
   return { text: text.slice(0, max), truncated: true };
 }
 
+// 把后端 inline_diff 文本按行渲染为带着色的 diff（+ 绿 / - 红 / @@ 灰）。
+function renderDiffLines(diff) {
+  if (!diff) return null;
+  const lines = String(diff).split("\n");
+  return lines.map((line, i) => {
+    let cls = "diff-line-ctx";
+    if (line.startsWith("+")) cls = "diff-line-add";
+    else if (line.startsWith("-")) cls = "diff-line-del";
+    else if (line.startsWith("@@")) cls = "diff-line-hunk";
+    return (
+      <div key={i} className={`diff-line ${cls}`}>
+        {line || " "}
+      </div>
+    );
+  });
+}
+
 export default function ToolCard({
   toolName = "tool",
   args,
@@ -30,6 +47,8 @@ export default function ToolCard({
   status = "complete", // running | complete | error
   durationMs,
   chunks = [],
+  inlineDiff,
+  generating = false,
   defaultExpanded = false,
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
@@ -42,8 +61,20 @@ export default function ToolCard({
     }
   }, [status]);
 
-  const statusIcon = status === "running" ? "settings" : status === "error" ? "close" : "check-circle";
-  const statusColor = status === "running" ? "var(--warning)" : status === "error" ? "var(--error)" : "var(--success)";
+  const statusIcon = status === "running"
+    ? "settings"
+    : status === "error"
+      ? "close"
+      : status === "interrupted"
+        ? "stop"
+        : "check-circle";
+  const statusColor = status === "running"
+    ? "var(--warning)"
+    : status === "error"
+      ? "var(--error)"
+      : status === "interrupted"
+        ? "var(--muted, #888)"
+        : "var(--success)";
   const argsText = toText(args);
   // Clean args summary: hide internal fields like tool_id, call_*, __
   const cleanArgs = argsText
@@ -66,10 +97,15 @@ export default function ToolCard({
       >
         <span className="tool-card-icon"><Icon name={statusIcon} size={14} /></span>
         <span className="tool-card-name">{toolName}</span>
+        {generating && <span className="tool-card-generating"><Icon name="settings" size={11} /> 生成中</span>}
         {argsSummary && <span className="tool-card-args">{argsSummary}</span>}
         {durationMs !== undefined && (
           <span className="tool-card-duration" style={{ color: statusColor }}>
-            {status === "error" ? "Failed" : "Completed"} in {(durationMs / 1000).toFixed(1)}s
+            {status === "error"
+              ? "Failed"
+              : status === "interrupted"
+                ? "Interrupted"
+                : "Completed"} in {(durationMs / 1000).toFixed(1)}s
           </span>
         )}
         <span className="tool-card-chevron"><Icon name="chevron" size={12} style={{ transform: expanded ? "rotate(90deg)" : "rotate(0deg)" }} /></span>
@@ -95,6 +131,12 @@ export default function ToolCard({
               {resultCut.truncated && (
                 <div className="tool-card-truncated">结果过长，已截断（前 {MAX_RESULT_CHARS} 字符）</div>
               )}
+            </div>
+          )}
+          {inlineDiff && (
+            <div className="tool-card-section">
+              <div className="tool-card-section-title">变更 (diff)</div>
+              <pre className="tool-card-diff">{renderDiffLines(inlineDiff)}</pre>
             </div>
           )}
         </div>

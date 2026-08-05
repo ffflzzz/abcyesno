@@ -28,6 +28,44 @@ const CHARS_PER_TOKEN = 3.5;
 const IMAGE_TOKEN_COST = 1500;
 
 /**
+ * 把后端返回的真实 usage 整理成与估算一致的展示结构。
+ * Usage 字段（来自 hermes ui-tui/src/types.ts）：
+ *   input / output / total / reasoning / cost_usd /
+ *   context_used / context_max / context_percent / calls / active_subagents
+ */
+function realUsageBuckets(usage = {}) {
+  const contextMax = usage.context_max || 0;
+  const contextUsed = usage.context_used || 0;
+  const input = usage.input || 0;
+  const output = usage.output || 0;
+  const reasoning = usage.reasoning || 0;
+  const total = usage.total || input + output + reasoning || 0;
+
+  // 上下文占比优先用后端 context_percent，否则用 context_used/max 推算
+  let percentage = 0;
+  if (usage.context_percent != null) {
+    percentage = Number(usage.context_percent);
+  } else if (contextMax > 0) {
+    percentage = (contextUsed / contextMax) * 100;
+  }
+
+  const buckets = [
+    { key: "input", label: "输入 tokens", tokens: input, color: "#06b6d4" },
+    { key: "output", label: "输出 tokens", tokens: output, color: "#8b5cf6" },
+    { key: "reasoning", label: "推理 tokens", tokens: reasoning, color: "#f59e0b" },
+  ].filter((b) => b.tokens > 0);
+
+  return {
+    total: contextMax || total,
+    used: contextMax > 0 ? contextUsed : total,
+    percentage: Math.min(percentage, 100),
+    buckets,
+    cost: usage.cost_usd != null ? Number(usage.cost_usd) : null,
+    isReal: true,
+  };
+}
+
+/**
  * 从消息列表估算各分类 token 用量
  */
 function estimateUsageBuckets(messages = [], modelName = "default") {
@@ -102,8 +140,14 @@ function estimateUsageBuckets(messages = [], modelName = "default") {
   };
 }
 
-export default function ContextUsage({ messages = [], model = "agnes-2.5-flash", open, onClose }) {
-  const data = useMemo(() => estimateUsageBuckets(messages, model), [messages, model]);
+export default function ContextUsage({ messages = [], model = "agnes-2.5-flash", usage = null, open, onClose }) {
+  // 优先展示后端真实用量（message.complete.usage / session.usage）；缺失时回退前端估算。
+  const data = useMemo(() => {
+    if (usage && (usage.context_max || usage.total || usage.input != null || usage.output != null)) {
+      return realUsageBuckets(usage);
+    }
+    return estimateUsageBuckets(messages, model);
+  }, [usage, messages, model]);
 
   const formatTokens = (n) => {
     if (n >= 1000) return `${(n / 1000).toFixed(1)}K`;
@@ -116,7 +160,7 @@ export default function ContextUsage({ messages = [], model = "agnes-2.5-flash",
 
   if (!open) return null;
 
-  const { total, used, percentage, buckets } = data;
+  const { total, used, percentage, buckets, cost, isReal } = data;
 
   return (
     <div className="context-usage-backdrop" onClick={handleBackdropClick}>
@@ -153,7 +197,8 @@ export default function ContextUsage({ messages = [], model = "agnes-2.5-flash",
         {/* Category breakdown */}
         <div className="context-usage-buckets">
           {buckets.map((b) => {
-            const bpct = used > 0 ? ((b.tokens / used) * 100) : 0;
+            const denom = isReal ? buckets.reduce((a, x) => a + x.tokens, 0) : used;
+            const bpct = denom > 0 ? ((b.tokens / denom) * 100) : 0;
             return (
               <div className="context-usage-bucket-row" key={b.key}>
                 <span
@@ -161,15 +206,22 @@ export default function ContextUsage({ messages = [], model = "agnes-2.5-flash",
                   style={{ background: b.color }}
                 />
                 <span className="context-usage-bucket-label">{b.label}</span>
-                <span className="context-usage-bucket-pct">{bpct.toFixed(1)}%</span>
+                <span className="context-usage-bucket-pct">{b.tokens > 0 ? `${formatTokens(b.tokens)} (${bpct.toFixed(1)}%)` : "—"}</span>
               </div>
             );
           })}
         </div>
 
+        {cost != null && (
+          <div className="context-usage-cost">
+            <span className="context-usage-cost-label">本次花费</span>
+            <span className="context-usage-cost-value">${cost.toFixed(5)}</span>
+          </div>
+        )}
+
         {/* Footer hint */}
         <div className="context-usage-footer">
-          估算值 · 实际用量以模型返回为准
+          {isReal ? "真实用量（来自模型返回）" : "估算值 · 实际用量以模型返回为准"}
         </div>
       </div>
     </div>

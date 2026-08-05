@@ -183,7 +183,21 @@ TOOLSETS = {
         ],
         "includes": []
     },
-    
+
+    # Path B browser automation: drives Electron's built-in Chromium
+    # (`<webview>` in the desktop app) over CDP via Playwright's
+    # connect_over_cdp(). No separate Chromium build required — the agent
+    # drives the same page the user sees in the 浏览器 sidebar panel.
+    "browser-pw": {
+        "description": "Drive the app's built-in Chromium browser step by step (navigate, snapshot, click, type, scroll, screenshot, close). Use whenever the user wants to open / read / fill / screenshot a web page.",
+        "tools": [
+            "pw_browser_navigate", "pw_browser_snapshot", "pw_browser_click",
+            "pw_browser_type", "pw_browser_scroll", "pw_browser_screenshot",
+            "pw_browser_close"
+        ],
+        "includes": []
+    },
+
     "cronjob": {
         "description": "Cronjob management tool - create, list, update, pause, resume, remove, and trigger scheduled tasks",
         "tools": ["cronjob"],

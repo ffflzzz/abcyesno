@@ -17,6 +17,33 @@ function getInitials(name) {
   return name.slice(0, 2).toUpperCase();
 }
 
+/** Strip markdown syntax and truncate for sidebar display. */
+function stripMd(text, maxLen = 60) {
+  if (!text || typeof text !== "string") return "";
+  let s = text
+    // Images: ![alt](url) → ""
+    .replace(/!\[([^\]]*)\]\([^)]+\)/g, "$1")
+    // Links: [text](url) → text
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    // Bold/italic: **text** / *text* / __text__ / _text_ → text
+    .replace(/\*{1,3}([^*]+)\*{1,3}/g, "$1")
+    .replace(/_{1,2}([^_]+)_{1,2}/g, "$1")
+    // Inline code: `code` → code
+    .replace(/`([^`]+)`/g, "$1")
+    // Headings: # ## ### → ""
+    .replace(/^#{1,6}\s+/gm, "")
+    // Horizontal rules: --- / *** / ___ → ""
+    .replace(/^[-*_]{3,}\s*$/gm, "")
+    // Block quotes: > text → text
+    .replace(/^>\s*/gm, "")
+    // Clean up whitespace
+    .replace(/\n{2,}/g, " ")
+    .replace(/[ \t]+/g, " ")
+    .trim();
+  if (s.length > maxLen) s = s.slice(0, maxLen - 1) + "…";
+  return s;
+}
+
 function formatTime(ts) {
   if (!ts) return "";
   const d = new Date(ts);
@@ -58,6 +85,7 @@ export default function Sidebar({
   manifests = [],
   selectedWorkflowId,
   onSelectWorkflow,
+  onWorkflowRun,          // triggers independent workflow session run
   // ── Task panel props ──
   taskManager,           // { tasks, selectedTaskId, onSelectTask, createTask, stopTask, clearCompleted, clearAll }
 }) {
@@ -151,10 +179,12 @@ export default function Sidebar({
     setContextMenu(null);
   }
 
-  // ── Handle workflow run from sidebar → select & open dashboard ──
+  // ── Handle workflow run from sidebar → independent session + open dashboard ──
   function handleWorkflowRun(manifest) {
     // Select this workflow so ResultPanel shows its dashboard
     if (onSelectWorkflow) onSelectWorkflow(manifest.id);
+    // Actually trigger the run (creates dedicated session, sends envelope).
+    if (onWorkflowRun) onWorkflowRun(manifest, {});
   }
 
   // ── Render helpers for each tab ──
@@ -187,12 +217,12 @@ export default function Sidebar({
                   <div className="session-row">
                     <div className="session-title">
                       {running && <span className="session-running-dot" title="正在生成" />}
-                      {s.title}
+                      {stripMd(s.title, 24)}
                     </div>
                     <div className="session-time">{formatTime(s.updatedAt)}</div>
                   </div>
-                  <div className="session-preview">
-                    {running ? "正在生成…" : s.preview || "无消息"}
+                  <div className="session-preview" title={stripMd(s.preview || "")}>
+                    {running ? "正在生成…" : stripMd(s.preview, 50) || "无消息"}
                   </div>
                   <button
                     className="session-menu"

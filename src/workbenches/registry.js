@@ -14,6 +14,10 @@ import ManjuCraftWorkbench from "./ManjuCraftWorkbench.jsx";
 // `graph` in its manifest + ui.type "blueprint"/"timeline" — no new component.
 import BlueprintWorkbench from "./BlueprintWorkbench.jsx";
 import TimelineWorkbench from "./TimelineWorkbench.jsx";
+// Custom short-drama production studio (script → assets → storyboard →
+// edit/export a Jianying draft). Frontend authoring workbench; opened in the
+// sidebar when its manifest is selected from the SkillPanel.
+import StudioWorkbench from "./StudioWorkbench.jsx";
 
 const WORKBENCHES = {
   // Hand-written first-version workbench (spec decision ③) for the manju_craft
@@ -24,6 +28,8 @@ const WORKBENCHES = {
   // Generic renderers driven entirely by manifest.graph.
   BlueprintWorkbench,
   TimelineWorkbench,
+  // Custom short-drama production studio.
+  StudioWorkbench,
 };
 
 // Returns the registered component, or null if unregistered/unknown.

@@ -69,6 +69,8 @@ import {
   StopCircle,      // stop-circle
   CheckCheck,      // check-check / done
   BarChart3,       // bar-chart / usage stats
+  AppWindow,       // app-window / "move tab to new window"
+  Maximize2,       // maximize-2 (detach)
 } from "lucide-react";
 
 // Single source of truth: name -> Lucide component.
@@ -160,6 +162,10 @@ const MAP = {
   "stop-circle": StopCircle,
   "check-check": CheckCheck,
   activity: BarChart3,
+  window: AppWindow,
+  "app-window": AppWindow,
+  detach: AppWindow,
+  "maximize-2": Maximize2,
   // neutral fallback for unknown names
   default: CircleDot,
 };

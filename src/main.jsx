@@ -1,7 +1,23 @@
 import React, { useEffect, useState } from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App.jsx';
+import DetachedApp from './DetachedApp.jsx';
 import './styles/index.css';
+
+// URLSearchParams drives the dispatch — main.jsx is the entry point for
+// both the primary window (`index.html`) and the standalone "detached panel"
+// window (`index.html?panel=result`). Keeping this here (instead of inside
+// App.jsx) lets the detached window AVOID loading the heavy App bundle at
+// all — it just renders the result panel and waits for the main window's
+// backend to come up.
+function isDetachedPanel() {
+  try {
+    const p = new URLSearchParams(window.location.search);
+    return p.get('panel') === 'result';
+  } catch (_) {
+    return false;
+  }
+}
 
 function Bootstrap() {
   const [aguiPort, setAguiPort] = useState(null);
@@ -86,8 +102,12 @@ function Bootstrap() {
   return <App aguiPort={aguiPort} />;
 }
 
+// Standalone "detached panel" window — its own Bootstrap is in DetachedApp.jsx
+// because it has entirely different loading-state messaging (the main window
+// already owns the backend, so we just wait for it to come up).
+const Root = isDetachedPanel() ? <DetachedApp /> : <Bootstrap />;
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
-    <Bootstrap />
+    {Root}
   </React.StrictMode>
 );

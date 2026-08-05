@@ -6,73 +6,16 @@ import MarketPanel from "./components/MarketPanel.jsx";
 import CreateAssistantModal from "./components/CreateAssistantModal.jsx";
 import SettingsPanel from "./components/SettingsPanel.jsx";
 import ResultPanel from "./components/ResultPanel.jsx";
+import BrowserPanel from "./components/BrowserPanel.jsx";
 import ConfirmModal from "./components/ConfirmModal.jsx";
+import BlockRequestDialog from "./components/BlockRequestDialog.jsx";
 import { initContract, listManifests } from "./contract/registry.js";
 import { subscribeContractEvents } from "./contract/eventBus.js";
 import { sanitizeMessageContent } from "./components/MessageThread.jsx";
 import { useAgentStream } from "./hooks/useAgentStream.js";
 import { useTaskManager } from "./components/TaskPanel.jsx";
+import { ErrorBoundary } from "./ErrorBoundary.jsx";
 
-class ErrorBoundary extends React.Component {
-  constructor(props) {
-    super(props);
-    this.state = { hasError: false, error: null, stack: null, showDetails: false };
-  }
-  static getDerivedStateFromError(error) {
-    return { hasError: true, error };
-  }
-  componentDidCatch(error, info) {
-    if (window.hermes && window.hermes.logError) {
-      window.hermes.logError(error && error.message ? error.message : String(error));
-    }
-    console.error(error, info);
-    this.setState({ stack: info && info.componentStack ? info.componentStack : null });
-  }
-  render() {
-    if (this.state.hasError) {
-      const { showDetails } = this.state;
-      return (
-        <div className="error-fallback">
-          <div className="error-card">
-            <div className="error-emoji">⚡</div>
-            <h2 className="error-title">界面遇到点小问题</h2>
-            <p className="error-subtitle">这通常不影响已保存的对话数据</p>
-
-            <button className="error-reload-btn" onClick={() => window.location.reload()}>
-              <span className="error-reload-icon">↻</span> 重新加载
-            </button>
-
-            <button
-              className="error-details-toggle"
-              onClick={() => this.setState(s => ({ showDetails: !s.showDetails }))}
-            >
-              {showDetails ? '收起详情' : '查看技术详情'}
-              <span className={`error-toggle-arrow ${showDetails ? 'open' : ''}`}>▸</span>
-            </button>
-
-            {showDetails && (
-              <div className="error-details">
-                <div className="error-msg-block">
-                  <span className="error-label">错误信息</span>
-                  <pre className="error-pre">{this.state.error && (this.state.error.message || String(this.state.error))}</pre>
-                </div>
-                {this.state.stack && (
-                  <div className="error-stack-block">
-                    <span className="error-label">组件路径</span>
-                    <pre className="error-pre error-stack-pre">{this.state.stack}</pre>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-      );
-    }
-    return this.props.children;
-  }
-}
-
-// ── Isolated ErrorBoundary for ResultPanel (sidebar crashes must never blank the main chat) ──
 class ResultPanelErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
@@ -181,6 +124,10 @@ function ChatShell({
   onToggleResultPanelCollapse,
   resultPanelWidth = 380,
   setResultPanelWidth,
+  browserPanelOpen = false,
+  onToggleBrowserPanel = () => {},
+  onOpenBrowserPanel = () => {},
+  onDetachResultPanel,
 }) {
   // Keep a live ref to the session list so the settle callback (which is
   // identity-stable by design) can look up titles without going stale.
@@ -233,7 +180,42 @@ function ChatShell({
     hydrateSession,
     getSessionMessages,
     dropSession,
+    // ── P1 新增 ──
+    reasoningText,
+    statusLine,
+    statusKind,
+    toolStatus,
+    subagents,
+    moaRefs,
+    moaAggregating,
+    usage,
+    reviewSummary,
+    browserProgress,
   } = useAgentStream(aguiPort, selectedSessionId, { onSettled: handleSessionSettled });
+
+  // Auto-open the embedded browser panel when the agent uses a browser_* tool,
+  // so the user sees the agent operate the in-app Chromium live (spec §5.5).
+  // Hermes exposes tool names as "browser_navigate" (without pw_ prefix) in events.
+  //
+  // Only fires ONCE per session (tracked via browserNotifiedRef) and only while
+  // streaming — so switching sessions or re-rendering history does NOT re-open
+  // a panel the user explicitly closed.
+  const browserNotifiedRef = useRef(new Set());
+  useEffect(() => {
+    if (browserPanelOpen || !isStreaming) return;
+    const msgs = visibleMessages || [];
+    if (msgs.length === 0) return;
+    // Only look at the LAST message — if it's a fresh browser_* tool call
+    // that we haven't notified for this session yet, open once.
+    const last = msgs[msgs.length - 1];
+    if (!last || typeof last.toolName !== "string") return;
+    const isBrowser = last.toolName.startsWith("browser_") || last.toolName.startsWith("pw_browser_");
+    if (!isBrowser) return;
+    const sid = selectedSessionId || "";
+    if (browserNotifiedRef.current.has(sid)) return;
+    browserNotifiedRef.current.add(sid);
+    onOpenBrowserPanel();
+  }, [visibleMessages, browserPanelOpen, isStreaming, selectedSessionId, onOpenBrowserPanel]);
 
   // Permission mode: default (backend "ask") or yolo (session approval bypass).
 
@@ -352,6 +334,50 @@ function ChatShell({
   function handleRemoveQueued(id) {
     setQueuedMessages((q) => q.filter((m) => m.id !== id));
   }
+
+  // ── Workflow run: independent session (does NOT reuse chat session) ──
+  // Each workflow invocation gets its own Hermes session so chat and workflows
+  // can run concurrently without aborting each other. The per-session multi-
+  // stream architecture (useAgentStream Map<sessionId>) handles this natively.
+  const handleWorkflowRunRef = useRef(null);
+  handleWorkflowRunRef.current = async (manifest, inputObj = {}) => {
+    if (!hermes || !manifest) return null;
+    try {
+      const assistantId = selectedAssistantId || "default";
+      const wfSession = await hermes.createSession(
+        assistantId,
+        `工作流: ${manifest.name || manifest.id}`
+      );
+      const envelope = {
+        agent_name: manifest.id,
+        input: inputObj,
+        thread_id: wfSession.id,
+      };
+      const text = `请调用 langgraph_agent 工具完成任务：\n${JSON.stringify(envelope)}`;
+      // Send to the dedicated workflow session — not selectedSessionId.
+      await doSend(text, undefined, wfSession.id);
+      return wfSession.id;
+    } catch (err) {
+      console.error("workflow run failed", err);
+      return null;
+    }
+  };
+
+  // Stable callback for ResultPanel / Sidebar.
+  const handleWorkflowRun = useCallback((manifest, inputObj) => {
+    return handleWorkflowRunRef.current?.(manifest, inputObj);
+  }, []);
+
+  // ── Detach: open the standalone window AND clear the in-window state so
+  //    the panel doesn't render in two places at once. We clear the active
+  //    workflow (which removes its tab + exits workflow mode in the right
+  //    panel) but keep `resultPanelOpen` true so the default tabs (概览 /
+  //    产物 / 文件 / 变更) stay visible. The new window carries the workflow
+  // NOTE: handleDetachResultPanel was relocated to the App function below.
+  // Defining it here ReferenceErrors because ChatShell is a module-level
+  // function with no access to App-local setters (setSelectedWorkflowId,
+  // setResultPanelCollapsed). The detached click is forwarded via the
+  // onDetachResultPanel prop.
 
   // ── Task manager: long-chain workflow tasks run independently in sidebar ──
   const taskManager = useTaskManager(
@@ -491,6 +517,7 @@ function ChatShell({
         manifests={manifests}
         selectedWorkflowId={selectedWorkflowId}
         onSelectWorkflow={onSelectWorkflow}
+        onWorkflowRun={handleWorkflowRun}
         taskManager={taskManager}
       />
       <ChatLayout
@@ -503,6 +530,15 @@ function ChatShell({
         thinkingText={thinkingText}
         uiBlocks={uiBlocks}
         stalled={stalled}
+        reasoningText={reasoningText}
+        statusLine={statusLine}
+        statusKind={statusKind}
+        toolStatus={toolStatus}
+        subagents={subagents}
+        moaRefs={moaRefs}
+        moaAggregating={moaAggregating}
+        usage={usage}
+        reviewSummary={reviewSummary}
         version={version}
         sidebarOpen={sidebarOpen}
         model={model}
@@ -534,6 +570,9 @@ function ChatShell({
         onOpenPreviewUrl={onOpenPreviewUrl}
         resultPanelCollapsed={resultPanelCollapsed}
         onToggleResultPanelCollapse={onToggleResultPanelCollapse}
+        browserPanelOpen={browserPanelOpen}
+        onToggleBrowserPanel={onToggleBrowserPanel}
+        onOpenBrowser={onOpenBrowserPanel}
         selectedSessionId={selectedSessionId}
         onEditMessage={handleEditMessage}
         onDeleteMessage={handleDeleteMessage}
@@ -584,6 +623,7 @@ function ChatShell({
         session={session}
         onSend={handleSend}
         onStop={handleStop}
+        onWorkflowRun={handleWorkflowRun}
         model={model}
         backendStatus={backendStatus}
         onSelectWorkflow={onSelectWorkflow}
@@ -592,8 +632,15 @@ function ChatShell({
         collapsed={resultPanelCollapsed}
         onToggleCollapse={onToggleResultPanelCollapse}
         style={!resultPanelCollapsed ? { width: resultPanelWidth, minWidth: resultPanelWidth, flexShrink: 0 } : undefined}
+        onDetachResultPanel={onDetachResultPanel}
       />
         </div>
+      )}
+      </ResultPanelErrorBoundary>
+      {/* BrowserPanel wrapped in the same ErrorBoundary so a crash never blanks the chat */}
+      <ResultPanelErrorBoundary>
+      {browserPanelOpen && (
+        <BrowserPanel progress={browserProgress} />
       )}
       </ResultPanelErrorBoundary>
       {showKeyModal && (
@@ -635,12 +682,18 @@ export default function App({ aguiPort }) {
   const [showMarket, setShowMarket] = useState(false);
   const [version, setVersion] = useState("");
   const [approval, setApproval] = useState(null);
+  // P0 阻塞请求队列：sudo / secret / terminal.read 三类 _block() 请求。
+  // 后端每条请求带 request_id，前端必须回执才能解除挂起。用队列支持连续多个。
+  const [blockQueue, setBlockQueue] = useState([]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [resultPanelOpen, setResultPanelOpen] = useState(false);
   const [resultPanelCollapsed, setResultPanelCollapsed] = useState(false);
   const [resultPanelWidth, setResultPanelWidth] = useState(() => {
     try { return Number(localStorage.getItem('abc:resultPanelWidth')) || 380; } catch { return 380; }
   });
+  const [browserPanelOpen, setBrowserPanelOpen] = useState(false);
+  const toggleBrowserPanel = useCallback(() => setBrowserPanelOpen((o) => !o), []);
+  const openBrowserPanel = useCallback(() => setBrowserPanelOpen(true), []);
   const [externalPreviewUrl, setExternalPreviewUrl] = useState(null); // URL or "tab:xxx" to switch sidebar tab (e.g. abcyesno.cn / tab:artifacts)
   const [confirmDialog, setConfirmDialog] = useState(null); // { title, message, danger, onConfirm } | null
   const [skills, setSkills] = useState([{ id: "default", name: "通用助手", category: "general" }]);
@@ -669,6 +722,31 @@ export default function App({ aguiPort }) {
   // the composer. Adding a workflow never touches this file beyond the data.
   const [manifests, setManifests] = useState(() => listManifests());
   const [selectedWorkflowId, setSelectedWorkflowId] = useState("");
+
+  // ── Detach: owns the IPC + clears in-window workflow state ──
+  // Lives in App (not ChatShell) because setSelectedWorkflowId /
+  // setResultPanelCollapsed are App-local setters and ChatShell is a
+  // module-level function with no lexical access to them. ResultPanel
+  // receives this via `onDetachResultPanel` — it must never ReferenceError.
+  const handleDetachResultPanel = useCallback(async () => {
+    if (!window.hermes?.detachResultPanel) return;
+    try {
+      const result = await window.hermes.detachResultPanel({
+        workflowId: selectedWorkflowId || '',
+        sessionId: selectedSessionId || '',
+        tab: 'overview',
+        collapsed: 'false',
+      });
+      if (result && result.success !== false) {
+        // Drop the workflow context from this window so the tab strip +
+        // tabbed workbench stop showing it. The detached window owns it now.
+        setSelectedWorkflowId('');
+        setResultPanelCollapsed(false);
+      }
+    } catch (err) {
+      console.error('[App] detach failed', err);
+    }
+  }, [selectedWorkflowId, selectedSessionId]);
 
   // Apply the active theme to the document root. theme can be "dark", "light",
   // or "system" (follow prefers-color-scheme). For "system" we also listen for
@@ -725,6 +803,21 @@ export default function App({ aguiPort }) {
     };
     hermes.on("approval-request", onApproval);
 
+    // ── P0 阻塞请求：sudo / secret / terminal.read ──
+    // 后端 _block() 触发，必须弹窗回执才能解除线程挂起，否则 agent 死等。
+    const onSudoRequest = (payload) => {
+      setBlockQueue((q) => [...q, { type: "sudo.request", ...(payload || {}) }]);
+    };
+    const onSecretRequest = (payload) => {
+      setBlockQueue((q) => [...q, { type: "secret.request", ...(payload || {}) }]);
+    };
+    const onTerminalReadRequest = (payload) => {
+      setBlockQueue((q) => [...q, { type: "terminal.read.request", ...(payload || {}) }]);
+    };
+    hermes.on("sudo-request", onSudoRequest);
+    hermes.on("secret-request", onSecretRequest);
+    hermes.on("terminal-read-request", onTerminalReadRequest);
+
     const onGatewayStatus = (status) => {
       setBackendStatus((prev) => ({ ...prev, gatewayConnected: !!status.connected }));
     };
@@ -776,6 +869,9 @@ export default function App({ aguiPort }) {
 
     return () => {
       hermes.off("approval-request", onApproval);
+      hermes.off("sudo-request", onSudoRequest);
+      hermes.off("secret-request", onSecretRequest);
+      hermes.off("terminal-read-request", onTerminalReadRequest);
       hermes.off("gateway-status", onGatewayStatus);
       unsubContract && unsubContract();
     };
@@ -962,6 +1058,29 @@ export default function App({ aguiPort }) {
     setApproval(null);
   }
 
+  // P0 阻塞请求应答：组装 request_id + 用户输入，经既有 gatewayRequest 通道回执后端，
+  // 解除 _block() 的线程挂起。取消也回传空值以主动解除（避免死等超时兜底）。
+  const handleBlockRespond = useCallback(
+    async (value) => {
+      const current = blockQueue[0];
+      if (!current) return;
+      const { type, request_id } = current;
+      try {
+        if (type === "sudo.request") {
+          await hermes.gatewayRequest("sudo.respond", { request_id, password: value || "" }, 30000);
+        } else if (type === "secret.request") {
+          await hermes.gatewayRequest("secret.respond", { request_id, value: value || "" }, 30000);
+        } else if (type === "terminal.read.request") {
+          await hermes.gatewayRequest("terminal.read.respond", { request_id, text: value || "" }, 30000);
+        }
+      } catch (err) {
+        console.error("block request respond failed", err);
+      }
+      setBlockQueue((q) => q.slice(1));
+    },
+    [blockQueue]
+  );
+
   const assistant = useMemo(
     () => assistants.find((a) => a.id === selectedAssistantId),
     [assistants, selectedAssistantId]
@@ -1025,6 +1144,10 @@ export default function App({ aguiPort }) {
           onToggleResultPanelCollapse={() => setResultPanelCollapsed((c) => !c)}
           resultPanelWidth={resultPanelWidth}
           setResultPanelWidth={setResultPanelWidth}
+          browserPanelOpen={browserPanelOpen}
+          onToggleBrowserPanel={toggleBrowserPanel}
+          onOpenBrowserPanel={openBrowserPanel}
+          onDetachResultPanel={handleDetachResultPanel}
         />
       </div>
       {showCreateModal && (
@@ -1056,6 +1179,9 @@ export default function App({ aguiPort }) {
         onConfirm={confirmDialog?.onConfirm}
         onClose={() => setConfirmDialog(null)}
       />
+      {blockQueue[0] && (
+        <BlockRequestDialog blockRequest={blockQueue[0]} onRespond={handleBlockRespond} />
+      )}
     </ErrorBoundary>
   );
 }

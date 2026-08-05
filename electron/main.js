@@ -23,12 +23,46 @@ app.commandLine.appendSwitch('no-sandbox');
 // Keep SSE / timers alive when window loses focus (agent must keep running in background)
 app.commandLine.appendSwitch('disable-background-timer-throttling');
 
+// ── Browser automation (spec §5.5, route B): embedded Electron Chromium ──
+// Expose Electron's own Chromium to Playwright via the DevTools Protocol so the
+// agent can drive the built-in <webview> "浏览器" panel. Python's pw_browser_*
+// tools connect_over_cdp(PW_CDP_URL) and select the webview by its marker URL.
+// Port is localhost-only; override via PW_CDP_PORT. Must be set before app ready.
+// Browser marker: tiny self-contained page Playwright can target by URL.
+// Includes visible body so users see a real (idle) page in the panel, not
+// a blank white canvas. Also exposes a `__marker` flag for any consumer that
+// wants to detect the idle state.
+const BROWSER_PW_MARKER =
+  'data:text/html;charset=utf-8,' + encodeURIComponent(
+    `<!doctype html><html><head><meta charset="utf-8"><title>browser-pw-marker</title>` +
+    `<style>html,body{margin:0;height:100%;background:#0d1117;color:#c9d1d9;` +
+    `font-family:-apple-system,Segoe UI,sans-serif;display:flex;align-items:center;` +
+    `justify-content:center;flex-direction:column;gap:14px;user-select:none;}` +
+    `.dot{width:14px;height:14px;border-radius:50%;background:#3fb950;` +
+    `box-shadow:0 0 18px #3fb95080;animation:pulse 1.6s ease-in-out infinite;}` +
+    `h1{margin:0;font-size:18px;font-weight:600;letter-spacing:0.5px;}` +
+    `p{margin:0;font-size:13px;color:#8b949e;text-align:center;line-height:1.6;` +
+    `max-width:340px;}` +
+    `@keyframes pulse{0%,100%{opacity:0.55}50%{opacity:1}}</style>` +
+    `</head><body><div class="dot"></div>` +
+    `<h1>内置浏览器已就绪</h1>` +
+    `<p>可在上方地址栏手动浏览，或等 Agent 调用浏览器工具。<br>` +
+    `（空闲页面 — Agent 一旦驱动将自动切换）</p>` +
+    `<script>window.__browserPwMarker=true;</script></body></html>`
+  );
+const PW_CDP_PORT = parseInt(process.env.PW_CDP_PORT || '18922', 10) || 18922;
+app.commandLine.appendSwitch('remote-debugging-port', String(PW_CDP_PORT));
+process.env.PW_CDP_URL = `http://127.0.0.1:${PW_CDP_PORT}`;
+process.env.PW_WEBVIEW_MARKER = BROWSER_PW_MARKER;
+
 // Use a stable writable user-data dir under the user home to avoid temp/permission issues
 const userDataDir = path.join(os.homedir(), '.hermes_portable_data');
 try {
   fs.mkdirSync(userDataDir, { recursive: true });
 } catch (_) {}
 app.setPath('userData', userDataDir);
+// Surface HERMES_HOME in the main process too (agnes.js reads .env from here)
+process.env.HERMES_HOME = userDataDir;
 
 const storage = new Storage(userDataDir);
 
@@ -38,6 +72,9 @@ let gatewayClient = null;
 let aguiServer = null;
 let aguiPort = 0;
 let gatewayReady = false; // true only after gatewayClient WS 'open' fires
+// Track every BrowserWindow we own so the "window-all-closed" guard and
+// clean-shutdown hooks know when the user is fully done.
+const allWindows = new Set();
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -80,8 +117,76 @@ function createWindow() {
 
   mainWindow.on('closed', () => {
     mainWindow = null;
+    allWindows.delete(mainWindow);
   });
+  allWindows.add(mainWindow);
 }
+
+// ── Detached result panel — same dist, narrower URL ───────────────────────
+// Mirrors Chrome's "move tab to a new window" gesture. The new window loads
+// dist/index.html with ?panel=result so App.jsx skips the Sidebar/ChatLayout
+// and renders the ResultPanel standalone. Both windows share the same AG-UI
+// bridge (HTTP) and Hermes gateway (WS in main), so live workflow runs and
+// tabs stay in sync.
+function createDetachedPanelWindow(opts = {}) {
+  const { workflowId = '', tab = 'overview', sessionId = '', collapsed = 'false' } = opts;
+  const params = new URLSearchParams({
+    panel: 'result',
+    workflowId,
+    tab,
+    sessionId,
+    collapsed,
+  });
+  const url = `file:///${path.join(__dirname, '..', 'dist', 'index.html').replace(/\\/g, '/')}?${params.toString()}#/${encodeURIComponent(workflowId || 'result')}`;
+  const win = new BrowserWindow({
+    width: 960,
+    height: 720,
+    minWidth: 480,
+    minHeight: 360,
+    backgroundColor: '#0f1419',
+    title: 'Abcyesno · 结果面板',
+    show: false,
+    icon: path.join(__dirname, 'bach-icon.png'),
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      webviewTag: true,
+      backgroundThrottling: false,
+    },
+  });
+  win.once('ready-to-show', () => {
+    win.center();
+    win.show();
+  });
+  win.webContents.on('render-process-gone', (_e, details) => {
+    log('main', `detached-panel render-process-gone: reason=${details.reason} exitCode=${details.exitCode}`);
+  });
+  win.webContents.on('console-message', (_e, level, message, line, sourceId) => {
+    const levelName = ['verbose', 'info', 'warning', 'error'][level] || level;
+    log('detached-panel', `[${levelName}] ${message} (${sourceId}:${line})`);
+  });
+  win.on('closed', () => allWindows.delete(win));
+  allWindows.add(win);
+  win.loadURL(url);
+  return win;
+}
+
+ipcMain.handle('detach-result-panel', (_event, opts) => {
+  // Don't allow duplicate windows for the exact same workflow/tab combo —
+  // focus the existing one instead. (Same UX as Chrome re-opening a tab.)
+  const target = `wf=${opts?.workflowId || ''}|tab=${opts?.tab || 'overview'}|s=${opts?.sessionId || ''}`;
+  for (const w of allWindows) {
+    if (w.__detachKey === target) {
+      if (w.isMinimized()) w.restore();
+      w.focus();
+      return { success: true, reused: true };
+    }
+  }
+  const win = createDetachedPanelWindow(opts || {});
+  win.__detachKey = target;
+  return { success: true, reused: false };
+});
 
 function findAvailablePort(host, startPort) {
   return new Promise((resolve, reject) => {
@@ -148,6 +253,18 @@ async function doStartBackend() {
     if (type === 'approval.request') {
       if (mainWindow) {
         mainWindow.webContents.send('approval-request', params.payload || params);
+      }
+    } else if (type === 'sudo.request') {
+      if (mainWindow) {
+        mainWindow.webContents.send('sudo-request', params.payload || params);
+      }
+    } else if (type === 'secret.request') {
+      if (mainWindow) {
+        mainWindow.webContents.send('secret-request', params.payload || params);
+      }
+    } else if (type === 'terminal.read.request') {
+      if (mainWindow) {
+        mainWindow.webContents.send('terminal-read-request', params.payload || params);
       }
     }
   });
@@ -273,6 +390,15 @@ ipcMain.handle('get-version', () => {
   return `1.3.0`;
 });
 
+// Browser automation (§5.5): tell the renderer the CDP endpoint + the marker URL
+// its <webview> must load so Python's pw_browser_* tools can find and drive it.
+ipcMain.handle('get-browser-info', () => {
+  return {
+    cdpUrl: process.env.PW_CDP_URL || '',
+    marker: process.env.PW_WEBVIEW_MARKER || '',
+  };
+});
+
 ipcMain.handle('get-agui-port', () => {
   // Only expose the port to the renderer after the gateway WebSocket is
   // truly connected.  Without this guard Bootstrap reads aguiPort as soon
@@ -280,6 +406,87 @@ ipcMain.handle('get-agui-port', () => {
   // Hermes is still starting — causing the first message to hit
   // "Hermes gateway not connected".
   return gatewayReady ? aguiPort : 0;
+});
+
+// Studio workbench: proxy Agnes calls through IPC (avoids renderer fetch/CSP issues)
+const agnes = require('./backend/agnes');
+ipcMain.handle('studio-call', async (event, { action, params }) => {
+  try {
+    if (action === 'generate-image') {
+      const url = await agnes.generateImage(params);
+      return { ok: true, url };
+    }
+    if (action === 'generate-video') {
+      const url = await agnes.generateVideo(params);
+      return { ok: true, url };
+    }
+    if (action === 'prepare-export') {
+      const project = params.project || {};
+      const timeline = Array.isArray(params.timeline) ? params.timeline : [];
+      const shotCfg = params.shotCfg || {};
+      const shots = Array.isArray(params.shots) ? params.shots : [];
+      if (!timeline.length) return { ok: false, error: '时间轴为空' };
+
+      const [w, h] = String(project.res || '1080×1920').split('×').map(Number);
+      const fps = Number(project.fps || 30) || 30;
+      const safeName = String(project.name || 'short_drama').replace(/[^\w一-龥-]/g, '_');
+
+      const home = process.env.HERMES_HOME || path.join(os.homedir(), '.hermes_portable_data');
+      const draftDir = path.join(home, 'studio_exports', `${safeName}.draft`);
+      const matsDir = path.join(draftDir, 'materials');
+      fs.mkdirSync(matsDir, { recursive: true });
+
+      const videos = [];
+      const images = [];
+      const segments = [];
+      let start = 0;
+      let idx = 0;
+      for (const k of timeline) {
+        const cfg = shotCfg[k] || { dur: 4, trans: 'none' };
+        const dur = Math.max(1, cfg.dur) * 1000000; // microseconds
+        const sh = shots.find((x) => x.key === k) || {};
+        idx += 1;
+        const id = `m${idx}`;
+        let materialId = null;
+        if (sh.videoUrl) {
+          const dest = await agnes.downloadMedia(sh.videoUrl, matsDir, `shot_${k}`);
+          videos.push({ id, path: path.relative(draftDir, dest).replace(/\\/g, '/'), duration: dur });
+          materialId = id;
+        } else if (sh.imgUrl) {
+          const dest = await agnes.downloadMedia(sh.imgUrl, matsDir, `shot_${k}`);
+          images.push({ id, path: path.relative(draftDir, dest).replace(/\\/g, '/'), duration: dur });
+          materialId = id;
+        } else {
+          continue;
+        }
+        const seg = { material_id: materialId, target_timerange: { start, duration: dur } };
+        if (cfg.trans && cfg.trans !== 'none') seg.transition = { type: cfg.trans };
+        segments.push(seg);
+        start += dur;
+      }
+      if (!segments.length) {
+        return { ok: false, error: '没有可导出的素材（请先在「分镜」页生成图/视频）' };
+      }
+
+      const draft = {
+        app_version: '5.0.0', fps, width: w || 1080, height: h || 1920,
+        version: '1.0.0',
+        materials: { videos, images, audios: [], texts: [], transitions: [] },
+        tracks: [{ type: 'video', id: 't1', segments }],
+      };
+      fs.writeFileSync(path.join(draftDir, 'draft_content.json'), JSON.stringify(draft, null, 2), 'utf-8');
+      fs.writeFileSync(
+        path.join(draftDir, 'draft_meta.json'),
+        JSON.stringify({ app_version: '5.0.0', platform: 'pc', project: 'draft', tm: Date.now() }, null, 2),
+        'utf-8'
+      );
+      const totalSec = start / 1000000;
+      return { ok: true, json: draft, totalSec, count: segments.length, draftDir };
+    }
+    return { ok: false, error: `未知 action: ${action}` };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
 });
 
 ipcMain.handle('get-api-key-status', () => {
@@ -328,6 +535,18 @@ ipcMain.handle('set-api-key', async (_event, key) => {
       if (type === 'approval.request') {
         if (mainWindow) {
           mainWindow.webContents.send('approval-request', params.payload || params);
+        }
+      } else if (type === 'sudo.request') {
+        if (mainWindow) {
+          mainWindow.webContents.send('sudo-request', params.payload || params);
+        }
+      } else if (type === 'secret.request') {
+        if (mainWindow) {
+          mainWindow.webContents.send('secret-request', params.payload || params);
+        }
+      } else if (type === 'terminal.read.request') {
+        if (mainWindow) {
+          mainWindow.webContents.send('terminal-read-request', params.payload || params);
         }
       }
     });
@@ -539,11 +758,11 @@ function resolveWsPath(rootKey, sub) {
   return target;
 }
 
-function buildTree(dir, root, depth, maxDepth, maxFiles) {
+async function buildTree(dir, root, depth, maxDepth, maxFiles) {
   if (depth > maxDepth) return [];
   let entries;
   try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
+    entries = await fs.promises.readdir(dir, { withFileTypes: true });
   } catch (_) {
     return [];
   }
@@ -558,11 +777,11 @@ function buildTree(dir, root, depth, maxDepth, maxFiles) {
         name: e.name,
         path: rel,
         type: 'dir',
-        children: buildTree(full, root, depth + 1, maxDepth, maxFiles),
+        children: await buildTree(full, root, depth + 1, maxDepth, maxFiles),
       });
     } else {
       let stat = null;
-      try { stat = fs.statSync(full); } catch (_) {}
+      try { stat = await fs.promises.stat(full); } catch (_) {}
       children.push({
         name: e.name,
         path: rel,
@@ -581,18 +800,18 @@ ipcMain.handle('list-workspace', async (_event, opts = {}) => {
   const sub = opts.path || '';
   const base = WS_ROOTS[rootKey];
   const target = resolveWsPath(rootKey, sub);
-  const isDir = (() => { try { return fs.statSync(target).isDirectory(); } catch (_) { return false; } })();
+  let isDir = false;
+  try { isDir = (await fs.promises.stat(target)).isDirectory(); } catch (_) {}
   const rootName = rootKey === 'project' ? 'abcyesno (项目)' : 'HERMES_HOME';
   if (!isDir) {
     return { root: rootKey, path: sub, name: rootName, type: 'dir', error: 'not a directory', children: [] };
   }
-  const children = (() => {
-    try {
-      return buildTree(target, target, 0, 5, 500);
-    } catch (err) {
-      return [];
-    }
-  })();
+  let children;
+  try {
+    children = await buildTree(target, target, 0, 5, 500);
+  } catch (err) {
+    children = [];
+  }
   return { root: rootKey, path: sub, name: rootName, type: 'dir', children };
 });
 
@@ -601,7 +820,7 @@ ipcMain.handle('read-file', async (_event, opts = {}) => {
   const rel = opts.path || '';
   const full = resolveWsPath(rootKey, rel);
   let stat;
-  try { stat = fs.statSync(full); } catch (err) {
+  try { stat = await fs.promises.stat(full); } catch (err) {
     return { path: rel, error: 'file not found' };
   }
   if (stat.isDirectory()) return { path: rel, error: 'is a directory' };
@@ -613,7 +832,7 @@ ipcMain.handle('read-file', async (_event, opts = {}) => {
     return { path: rel, ext, size: stat.size, binary: true };
   }
   let content = '';
-  try { content = fs.readFileSync(full, 'utf8'); } catch (err) {
+  try { content = await fs.promises.readFile(full, 'utf8'); } catch (err) {
     return { path: rel, ext, size: stat.size, error: 'read failed' };
   }
   return { path: rel, ext, size: stat.size, content };
@@ -645,7 +864,7 @@ ipcMain.handle('read-local-image', async (_event, p) => {
   }
   let stat;
   try {
-    stat = fs.statSync(fp);
+    stat = await fs.promises.stat(fp);
   } catch (err) {
     return { dataUrl: null, error: 'not found: ' + fp };
   }
@@ -658,7 +877,7 @@ ipcMain.handle('read-local-image', async (_event, p) => {
     ext === '.svg' ? 'image/svg+xml' :
     'image/' + ext.replace('.', '');
   try {
-    const buf = fs.readFileSync(fp);
+    const buf = await fs.promises.readFile(fp);
     const b64 = buf.toString('base64');
     return { dataUrl: `data:${mime};base64,${b64}` };
   } catch (err) {

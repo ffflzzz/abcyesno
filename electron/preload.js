@@ -19,6 +19,7 @@ function off(channel, cb) {
 contextBridge.exposeInMainWorld('hermes', {
   // Lifecycle & runtime
   getVersion: () => ipcRenderer.invoke('get-version'),
+  getBrowserInfo: () => ipcRenderer.invoke('get-browser-info'),
   getStatus: () => ipcRenderer.invoke('get-status'),
   getAguiPort: () => ipcRenderer.invoke('get-agui-port'),
   getApiKeyStatus: () => ipcRenderer.invoke('get-api-key-status'),
@@ -84,6 +85,12 @@ contextBridge.exposeInMainWorld('hermes', {
   // file:// images, so the main process reads + encodes them.
   readLocalImage: (p) => ipcRenderer.invoke('read-local-image', p),
 
+  // Pop the result panel into a standalone Electron window. The new window
+  // shares the same backend (AG-UI/Hermes) — only the surrounding chrome
+  // (Sidebar, ChatLayout) is omitted. Mirrors Chrome's "move tab to a new
+  // window" gesture.
+  detachResultPanel: (opts) => ipcRenderer.invoke('detach-result-panel', opts || {}),
+
   // Event subscriptions
   on,
   off,
@@ -99,4 +106,7 @@ contextBridge.exposeInMainWorld('hermes', {
 
   // Permission mode: push default/yolo to the backend for the current session.
   setPermissionMode: (mode, sessionId) => ipcRenderer.invoke('set-permission-mode', mode, sessionId),
+
+  // Studio workbench: call Agnes image/video generation via IPC (main process)
+  studioCall: (action, params) => ipcRenderer.invoke('studio-call', { action, params }),
 });

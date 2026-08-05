@@ -31,6 +31,9 @@
     },
     "asarUnpack": [],
     "asar": false,
+    "extraResources": [
+      { "from": "build/playwright-browsers", "to": "playwright-browsers" }
+    ],
     "files": [
       "dist/**/*",
       "electron/**/*",

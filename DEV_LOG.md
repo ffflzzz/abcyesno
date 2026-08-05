@@ -1615,3 +1615,41 @@ hydrate 拒绝覆盖运行中会话 / 切回会话拿到内存增量而非磁盘
 ### 构建/部署
 `node scripts/check-tdz.js` clean → `index-CRNP3VHY.js` (599.56 kB) + `index-C6JhJWQ7.css` (100.79 kB)，
 已部署 `release/win-unpacked/resources/app/dist`，已清 Cache / Code Cache / GPUCache。
+
+---
+
+## 2026-08-01 — 打通 Agnes 原生视觉（图片此前从未真正送达模型）
+
+### 现象
+发截图给 agent，agent 完全看不见图；偶发 `400 input length too long`。
+
+### 根因（两处叠加）
+1. **前端把 base64 当文本发**。`ChatLayout.handleSend` 把 Composer 的 `[[IMG:i]]` 占位符
+   还原成 `![图片1](data:image/png;base64,...)` 直接拼进消息文本，一路原样送到
+   `prompt.submit({text})`。模型收到的是几十万个 base64 字符的**纯文本**——看不到像素，
+   还撑爆 context（`input length too long` 即源于此）。历史回放让每轮重发一遍旧图。
+2. **Hermes 视觉路由静默降级**。`decide_image_input_mode()` 在 `auto` 下查 models.dev
+   能力表；我们的 `provider: custom` + `agnes-2.5-flash` 查不到 → 返回 `None` → 落到
+   `return "text"` → 走 `_enrich_with_attached_images`（纯文字描述），不生成
+   native `image_url` content parts。
+
+### 改动
+| 文件 | 改动 |
+| --- | --- |
+| `src/hooks/useAgentStream.js` | `splitInlineImages()` 把内联图换成 `[附图N]`，图字节改走独立 `images` 字段；历史消息同样剥离；本地 message 保留 dataUrl 供气泡显示 |
+| `electron/backend/agui-server.js` | `resolveRunContext` 捕获 `images`；新增 `attachTurnImages()`，在 `runOnce()` 的 `prompt.submit` 前逐张调 Hermes `image.attach_bytes` |
+| `electron/backend/default-config.yaml`<br>`~/.hermes_portable_data/config.yaml` | 新增 `agent.image_input_mode: native` |
+
+设计取舍：复用 Hermes TUI 既有的原生视觉管线（`image.attach_bytes` → `attached_images`
+→ `build_native_content_parts`），而不是在 agui-server 里自己拼 content parts——这样
+后端零 provider 相关代码，且白拿 25MB 上限校验、magic-bytes 嗅探、超限自动缩图重试。
+
+### 验证
+- `decide_image_input_mode('custom','agnes-2.5-flash',cfg)`：修复前 `text` → 修复后 **`native`**。
+- 剥离实测：281 字符样本 → 29 字符。
+- TDZ clean → `vite build` 通过（`index-DM3hpCOd.js` 603.50 kB）→ 多会话回归 10/10。
+- 已部署 dist + agui-server.js + default-config.yaml，已清缓存。
+
+### 遗留
+`abcyesno_sessions.json` 的 user 消息仍存完整 dataUrl（~600KB 且持续增长）。剥离会让
+重开会话时气泡丢图，需要先把图落盘再引用路径才能解，暂未处理。

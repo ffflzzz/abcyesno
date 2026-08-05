@@ -7,6 +7,7 @@ const os = require('os');
 const { EventEncoder } = require('@ag-ui/encoder');
 const { v4: uuidv4 } = require('uuid');
 const { log } = require('./logger');
+const agnes = require('./agnes');
 
 function findAvailablePort(host, startPort) {
   return new Promise((resolve, reject) => {
@@ -231,7 +232,8 @@ function createAgUIServer(getGatewayClient, storage, options) {
     const assistantId = forwardedProps.assistantId || agentId || 'default';
     const skillId = forwardedProps.skillId;
     const requestedModel = forwardedProps.model;
-    return { method, agentId, threadId, runId, messages, forwardedProps, assistantId, skillId, requestedModel };
+    const images = payload.images || body.images || [];
+    return { method, agentId, threadId, runId, messages, forwardedProps, assistantId, skillId, requestedModel, images };
   }
 
   // Cache recent session.status validations so we don't hit the gateway on
@@ -469,18 +471,23 @@ function createAgUIServer(getGatewayClient, storage, options) {
 
         case 'reasoning.delta':
           // Real model reasoning tokens (from chat_completion_helpers / _fire_reasoning_delta).
-          // Without this case they fall through to default → RAW → frontend drops them.
+          // Forwarded as its OWN CUSTOM event so the frontend can render a dedicated
+          // ReasoningBlock distinct from the shallow thinking indicator.
           if (payload && typeof payload.text === 'string' && payload.text.trim()) {
             setPhase('thinking');
-            send({ type: 'CUSTOM', name: 'thinking.delta', value: { text: payload.text } });
+            send({ type: 'CUSTOM', name: 'reasoning.delta', value: { text: payload.text } });
           }
           break;
 
         case 'reasoning.available':
-          // Structured reasoning (non-verbose) — forward for the indicator.
+          // Structured reasoning snapshot (non-streaming path, e.g. verbose=False
+          // models or model_progress callback). Distinct from `reasoning.delta`
+          // (streaming increments) so the frontend can replace reasoningText
+          // wholesale instead of appending — otherwise the same reasoning is
+          // streamed AND snapshotted and we'd render it twice.
           if (payload && typeof payload.text === 'string' && payload.text.trim()) {
             setPhase('thinking');
-            send({ type: 'CUSTOM', name: 'thinking.delta', value: { text: payload.text } });
+            send({ type: 'CUSTOM', name: 'reasoning.snapshot', value: { text: payload.text } });
           }
           break;
 
@@ -515,6 +522,11 @@ function createAgUIServer(getGatewayClient, storage, options) {
           const durationMs = startTs ? Date.now() - startTs : undefined;
           toolStartTimes.delete(toolCallId);
           emitToolEnd(toolCallId, result, durationMs, false);
+          // Inline diff emitted by some tools (e.g. file edits). Attach to the
+          // tool card so the frontend can render a real diff instead of raw text.
+          if (payload && payload.inline_diff) {
+            send({ type: 'CUSTOM', name: 'tool.inline_diff', value: { toolCallId, diff: payload.inline_diff } });
+          }
           setPhase('text_generating');
           break;
         }
@@ -542,26 +554,37 @@ function createAgUIServer(getGatewayClient, storage, options) {
         case 'message.complete':
         case 'message.end': {
           const text = payload && (payload.text || payload.rendered);
+          // Real per-run token / cost accounting from the backend. Forward so the
+          // frontend can replace its character-estimate ContextUsage with real numbers.
+          if (payload && payload.usage) {
+            send({ type: 'CUSTOM', name: 'usage.update', value: payload.usage });
+          }
           setPhase('idle');
           finalize(text);
           break;
         }
 
+        case 'session.usage': {
+          // Live cumulative usage pushes during a session.
+          if (payload) {
+            send({ type: 'CUSTOM', name: 'usage.update', value: payload });
+          }
+          break;
+        }
+
         case 'status.update': {
+          const kind = payload && typeof payload.kind === 'string' ? payload.kind : '';
           let text = payload && typeof payload.text === 'string' ? payload.text : '';
-          const isError = payload && (payload.kind === 'error' || /❌|error|fail|timed out/i.test(text));
+          const isError = kind === 'error' || /❌|error|fail|timed out/i.test(text);
           if (isError) {
             hasRunError = true;
             send({ type: 'RUN_ERROR', runId: ctx.runId, message: text });
-          } else if (text) {
-            // Suppress verbose reasoning / kaomoji noise from status lines.
-            // Patterns: ◎_◎ reasoning..., ( ˘ ˘)♡ cogitating, etc.
-            if (/^[◎◯][_ ]?[◎◯]|[\(（][^\n]*[\)）]\s*[♡♥❤💖]?\s*[a-z]+ing\b|[a-z]+\.(reasoning|mulling|thinking|deliberating|pondering)/i.test(text)) {
-              text = '';
-            }
-            if (text && !hasTextDelta) {
-              ensureMessageStarted('assistant');
-              emitTextDelta(text);
+          } else {
+            // status.update is a STATUS channel (compacting / loading / etc.),
+            // NOT message content. Forward to the frontend StatusBar instead of
+            // polluting the assistant message body.
+            if (text) {
+              send({ type: 'CUSTOM', name: 'status.update', value: { kind, text } });
             }
           }
           break;
@@ -604,6 +627,78 @@ function createAgUIServer(getGatewayClient, storage, options) {
           break;
         }
 
+        // --- P1: 通知 / 状态 / 工具进度 / 子 agent / MOA / 后台任务 / 评审 ---
+        case 'notification.show': {
+          // { id?, key?, kind?, level?, text?, ttl_ms? }
+          send({ type: 'CUSTOM', name: 'notification.show', value: payload || {} });
+          break;
+        }
+        case 'notification.clear': {
+          send({ type: 'CUSTOM', name: 'notification.clear', value: payload || {} });
+          break;
+        }
+
+        case 'tool.progress': {
+          // { name?, preview? } — transient tool progress line.
+          if (payload && (payload.name || payload.preview)) {
+            send({ type: 'CUSTOM', name: 'tool.progress', value: { name: payload.name, preview: payload.preview } });
+          }
+          break;
+        }
+        case 'tool.generating': {
+          // { name? } — "model is generating tool call X".
+          if (payload && payload.name) {
+            send({ type: 'CUSTOM', name: 'tool.generating', value: { name: payload.name } });
+          }
+          break;
+        }
+
+        case 'browser.progress': {
+          // Agent-driven browser activity (route B / pw_browser_* tools).
+          // payload = { message, level }. Forward verbatim; the frontend mirrors
+          // it as a live progress log inside the BrowserPanel.
+          if (payload && payload.message) {
+            send({ type: 'CUSTOM', name: 'browser.progress', value: { message: payload.message, level: payload.level || 'info' } });
+          }
+          break;
+        }
+
+        case 'subagent.spawn_requested':
+        case 'subagent.start':
+        case 'subagent.thinking':
+        case 'subagent.tool':
+        case 'subagent.progress':
+        case 'subagent.complete': {
+          // Subagent mirror events. Forward verbatim with the event name as the
+          // CUSTOM name; the frontend upserts into a subagent list keyed by id.
+          send({ type: 'CUSTOM', name: type, value: payload || {} });
+          break;
+        }
+
+        case 'moa.reference': {
+          // { count?, index?, label?, text? }
+          send({ type: 'CUSTOM', name: 'moa.reference', value: payload || {} });
+          break;
+        }
+        case 'moa.aggregating': {
+          // { aggregator? }
+          send({ type: 'CUSTOM', name: 'moa.aggregating', value: payload || {} });
+          break;
+        }
+
+        case 'background.complete': {
+          // { task_id, text } — a prompt.background task finished.
+          send({ type: 'CUSTOM', name: 'background.complete', value: payload || {} });
+          break;
+        }
+        case 'review.summary': {
+          // { text? } — a code review / self-review summary.
+          if (payload && payload.text) {
+            send({ type: 'CUSTOM', name: 'review.summary', value: { text: payload.text } });
+          }
+          break;
+        }
+
         default:
           // Forward anything else as a raw source event for debugging.
           send({ type: 'RAW', runId: ctx.runId, event: { type, params }, source: 'hermes' });
@@ -623,9 +718,23 @@ function createAgUIServer(getGatewayClient, storage, options) {
         reject(new Error('Hermes turn timed out'));
       }, timeoutMs);
 
+      let settled = false;
       const cleanup = () => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timer);
         client.off('event', handler);
+        // Also remove disconnect listeners
+        if (typeof client.off === 'function') {
+          client.off('close', onDisconnect);
+          client.off('disconnect', onDisconnect);
+        }
+      };
+
+      const onDisconnect = () => {
+        cleanup();
+        translator.finalize('');
+        reject(new Error('Hermes gateway disconnected'));
       };
 
       const handler = (type, params) => {
@@ -658,6 +767,11 @@ function createAgUIServer(getGatewayClient, storage, options) {
       };
 
       client.on('event', handler);
+      // Detect gateway disconnect mid-turn so we don't hang until the 30-min timeout.
+      if (typeof client.on === 'function') {
+        client.on('close', onDisconnect);
+        client.on('disconnect', onDisconnect);
+      }
     });
 
     return { promise, translator };
@@ -811,25 +925,31 @@ function createAgUIServer(getGatewayClient, storage, options) {
       return res.end();
     }
 
-    // Open the HITL subscriber for the delegated workflow and publish the
-    // workflowRunId so the Python tool can map its events back to this SSE stream.
-    if (wfDelegated) {
-      wfRunId = 'wf-' + ctx.runId;
-      workflowSubscribers.set(wfRunId, (obj) => sendSSE(res, encoder, obj));
-      try {
-        const base = process.env.HERMES_HOME || path.join(os.homedir(), '.hermes_portable_data');
-        const dir = path.join(base, 'workflow_hitl');
-        fs.mkdirSync(dir, { recursive: true });
+    // Open the workflow-event subscriber and publish the workflowRunId so the
+    // Python langgraph_agent tool can forward progress/artifact/done events
+    // back to this SSE stream via HTTP POST /api/ag-ui/workflow-event.
+    // Always register (not just for wfDelegated) so that ANY langgraph_agent
+    // call — whether triggered by a ContractForm, @mention, or the model's
+    // own tool-use decision — gets verbose progress forwarding.
+    wfRunId = 'wf-' + ctx.runId;
+    workflowSubscribers.set(wfRunId, (obj) => sendSSE(res, encoder, obj));
+    try {
+      const base = process.env.HERMES_HOME || path.join(os.homedir(), '.hermes_portable_data');
+      const dir = path.join(base, 'workflow_hitl');
+      fs.mkdirSync(dir, { recursive: true });
+        // Per-run coordination file so concurrent workflows don't overwrite
+        // Per-run coordination file so concurrent workflows don't overwrite
+        // each other. Python side globs for .wf_active_*.json.
+        const coordFile = path.join(dir, `.wf_active_${ctx.runId}.json`);
         fs.writeFileSync(
-          path.join(dir, '.wf_active.json'),
+          coordFile,
           JSON.stringify({ runId: wfRunId, threadId: ctx.threadId }),
           'utf-8'
         );
-        log('agui-server', `registered HITL subscriber ${wfRunId}`);
+        log('agui-server', `registered workflow-event subscriber ${wfRunId} → ${coordFile}`);
       } catch (e) {
-        log('agui-server', `HITL coord write failed: ${e.message}`);
+        log('agui-server', `workflow coord write failed: ${e.message}`);
       }
-    }
 
     sendSSE(res, encoder, { type: 'RUN_STARTED', threadId: ctx.threadId, runId: ctx.runId });
 
@@ -850,12 +970,49 @@ function createAgUIServer(getGatewayClient, storage, options) {
       return hermesSessionId;
     }
 
+    // ── Native vision: queue this turn's images before the prompt ──────────
+    // The renderer strips inline `data:image/...;base64,` URLs out of the
+    // message text (sending that as text both blinds the model and blows the
+    // context) and ships the bytes here instead. `image.attach_bytes` writes
+    // them into the gateway's images dir and appends them to the session's
+    // `attached_images` queue, which the very next `prompt.submit` drains into
+    // provider-native `image_url` content parts. This is exactly the path the
+    // Hermes TUI uses, so nothing provider-specific lives in this file.
+    async function attachTurnImages(hermesSessionId) {
+      const imgs = Array.isArray(ctx.images) ? ctx.images : [];
+      if (imgs.length === 0) return;
+      for (let i = 0; i < imgs.length; i++) {
+        const img = imgs[i] || {};
+        const b64 =
+          typeof img === 'string'
+            ? img
+            : img.dataUrl || img.data || img.content_base64 || '';
+        if (!b64) continue;
+        try {
+          const r = await client.request(
+            'image.attach_bytes',
+            {
+              session_id: hermesSessionId,
+              content_base64: b64,
+              filename: img.filename || `image_${i + 1}.png`,
+            },
+            60000
+          );
+          log('agui-server', `image attached: ${(r && r.path) || '?'} (${(r && r.bytes) || 0}B)`);
+        } catch (e) {
+          // A bad image must not kill the turn — the text still goes through.
+          log('agui-server', `image.attach_bytes failed: ${(e && e.message) || e}`);
+        }
+      }
+    }
+
     async function runOnce(hermesSessionId) {
       // The turn can stay open for a long time when a workflow pauses at a
       // human-in-the-loop approval gate (the graph waits on the control-file
       // channel until the user decides). Default to 30 min; override via env.
       const turnTimeoutMs = Number(process.env.ABC_AGUI_TURN_TIMEOUT || 1800000);
       const { promise: turnPromise, translator } = waitForHermesTurn(client, hermesSessionId, ctx, res, encoder, turnTimeoutMs);
+      await attachTurnImages(hermesSessionId);
       await client.request('prompt.submit', { session_id: hermesSessionId, text }, 120000);
       await turnPromise;
       return translator;
@@ -887,7 +1044,16 @@ function createAgUIServer(getGatewayClient, storage, options) {
       log('agui-server', `agent/run error: ${err.message}`);
       sendSSE(res, encoder, { type: 'RUN_ERROR', message: err.message });
     }
-    if (wfDelegated && wfRunId) workflowSubscribers.delete(wfRunId);
+    if (wfRunId) {
+      workflowSubscribers.delete(wfRunId);
+      // Clean up per-run coordination file so stale entries don't misroute
+      // future workflow runs.
+      try {
+        const base = process.env.HERMES_HOME || path.join(os.homedir(), '.hermes_portable_data');
+        const coordFile = path.join(base, 'workflow_hitl', `.wf_active_${ctx.runId}.json`);
+        if (fs.existsSync(coordFile)) fs.unlinkSync(coordFile);
+      } catch (_) { /* best-effort */ }
+    }
     activeTurnSenders.delete(ctx.runId);
     clearUiActiveCoord();
     res.end();
@@ -1077,6 +1243,125 @@ function createAgUIServer(getGatewayClient, storage, options) {
     } catch (err) {
       log('agui-server', `transcribe failed: ${err.message}`);
       return res.json({ error: err.message });
+    }
+  });
+
+  // ── Studio workbench: real Agnes image generation ──────────────────────
+  app.post('/api/studio/generate-image', async (req, res) => {
+    try {
+      const body = req.body || {};
+      const prompt = body.prompt;
+      if (!prompt) return res.json({ ok: false, error: 'prompt 必填' });
+      const url = await agnes.generateImage({
+        prompt,
+        size: body.size || '2K',
+        ratio: body.ratio || '1:1',
+      });
+      return res.json({ ok: true, url });
+    } catch (e) {
+      log('agui-server', `studio image failed: ${e.message}`);
+      return res.json({ ok: false, error: e.message });
+    }
+  });
+
+  // ── Studio workbench: real Agnes video generation (async poll) ─────────
+  app.post('/api/studio/generate-video', async (req, res) => {
+    try {
+      const body = req.body || {};
+      const prompt = body.prompt;
+      if (!prompt) return res.json({ ok: false, error: 'prompt 必填' });
+      const url = await agnes.generateVideo({
+        prompt,
+        image: body.image || undefined,
+        width: body.width || 1152,
+        height: body.height || 768,
+        num_frames: body.num_frames || 81,
+        frame_rate: body.frame_rate || 24,
+      });
+      return res.json({ ok: true, url });
+    } catch (e) {
+      log('agui-server', `studio video failed: ${e.message}`);
+      return res.json({ ok: false, error: e.message });
+    }
+  });
+
+  // ── Studio workbench: export Jianying draft with real downloaded media ──
+  app.post('/api/studio/prepare-export', async (req, res) => {
+    try {
+      const body = req.body || {};
+      const project = body.project || {};
+      const timeline = Array.isArray(body.timeline) ? body.timeline : [];
+      const shotCfg = body.shotCfg || {};
+      const shots = Array.isArray(body.shots) ? body.shots : [];
+      if (!timeline.length) return res.json({ ok: false, error: '时间轴为空' });
+
+      const [w, h] = String(project.res || '1080×1920').split('×').map(Number);
+      const fps = Number(project.fps || 30) || 30;
+      const safeName = String(project.name || 'short_drama').replace(/[^\w一-龥-]/g, '_');
+
+      const home = process.env.HERMES_HOME || path.join(os.homedir(), '.hermes_portable_data');
+      const draftDir = path.join(home, 'studio_exports', `${safeName}.draft`);
+      const matsDir = path.join(draftDir, 'materials');
+      fs.mkdirSync(matsDir, { recursive: true });
+
+      const videos = [];
+      const images = [];
+      const segments = [];
+      let start = 0;
+      let idx = 0;
+      for (const k of timeline) {
+        const cfg = shotCfg[k] || { dur: 4, trans: 'none' };
+        const dur = Math.max(1, cfg.dur) * 1000000; // microseconds
+        const sh = shots.find((x) => x.key === k) || {};
+        idx += 1;
+        const id = `m${idx}`;
+        let materialId = null;
+        if (sh.videoUrl) {
+          const dest = await agnes.downloadMedia(sh.videoUrl, matsDir, `shot_${k}`);
+          videos.push({ id, path: path.relative(draftDir, dest).replace(/\\/g, '/'), duration: dur });
+          materialId = id;
+        } else if (sh.imgUrl) {
+          const dest = await agnes.downloadMedia(sh.imgUrl, matsDir, `shot_${k}`);
+          images.push({ id, path: path.relative(draftDir, dest).replace(/\\/g, '/'), duration: dur });
+          materialId = id;
+        } else {
+          continue; // skip shots without any generated media
+        }
+        const seg = { material_id: materialId, target_timerange: { start, duration: dur } };
+        if (cfg.trans && cfg.trans !== 'none') seg.transition = { type: cfg.trans };
+        segments.push(seg);
+        start += dur;
+      }
+      if (!segments.length) {
+        return res.json({ ok: false, error: '没有可导出的素材（请先在「分镜」页生成图/视频）' });
+      }
+
+      const draft = {
+        app_version: '5.0.0',
+        fps,
+        width: w || 1080,
+        height: h || 1920,
+        version: '1.0.0',
+        materials: { videos, images, audios: [], texts: [], transitions: [] },
+        tracks: [{ type: 'video', id: 't1', segments }],
+      };
+      fs.writeFileSync(path.join(draftDir, 'draft_content.json'), JSON.stringify(draft, null, 2), 'utf-8');
+      fs.writeFileSync(
+        path.join(draftDir, 'draft_meta.json'),
+        JSON.stringify({ app_version: '5.0.0', platform: 'pc', project: 'draft', tm: Date.now() }, null, 2),
+        'utf-8'
+      );
+
+      return res.json({
+        ok: true,
+        draftDir,
+        count: segments.length,
+        totalSec: start / 1000000,
+        json: draft,
+      });
+    } catch (e) {
+      log('agui-server', `studio export failed: ${e.message}`);
+      return res.json({ ok: false, error: e.message });
     }
   });
 
