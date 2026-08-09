@@ -44,15 +44,41 @@ function stripMd(text, maxLen = 60) {
   return s;
 }
 
-function formatTime(ts) {
+function formatRelativeTime(ts) {
   if (!ts) return "";
-  const d = new Date(ts);
   const now = new Date();
-  const isToday = d.toDateString() === now.toDateString();
-  if (isToday) {
-    return `${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}`;
-  }
+  const d = new Date(ts);
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startOfDay = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const diffDays = Math.floor((startOfToday - startOfDay) / (1000 * 60 * 60 * 24));
+  if (diffDays === 0) return "今天";
+  if (diffDays === 1) return "昨天";
+  if (diffDays === 2) return "前天";
+  if (diffDays >= 3 && diffDays <= 7) return `${diffDays}天前`;
   return `${d.getMonth() + 1}/${d.getDate()}`;
+}
+
+function isDefaultTitle(title) {
+  const t = (title || "").trim();
+  return !t || t === "新会话";
+}
+
+/** Build a meaningful session title. Falls back to the first message preview
+ *  when the backend never set a real title, so the list isn't all "新会话". */
+function getSessionDisplayTitle(s) {
+  const t = (s.title || "").trim();
+  if (!isDefaultTitle(t)) return stripMd(t, 24);
+  const fromPreview = stripMd(s.preview || "", 24);
+  if (fromPreview && fromPreview !== "无消息") return fromPreview;
+  return "新会话";
+}
+
+/** Sidebar subtitle: show the user's rename if present, otherwise nothing
+ *  (we don't echo message previews here per UX request). */
+function getSessionDisplayPreview(s) {
+  const t = (s.title || "").trim();
+  if (!isDefaultTitle(t)) return stripMd(t, 50);
+  return "";
 }
 
 // ── Tab constants ──
@@ -217,13 +243,18 @@ export default function Sidebar({
                   <div className="session-row">
                     <div className="session-title">
                       {running && <span className="session-running-dot" title="正在生成" />}
-                      {stripMd(s.title, 24)}
+                      {getSessionDisplayTitle(s)}
                     </div>
-                    <div className="session-time">{formatTime(s.updatedAt)}</div>
+                    <div className="session-time">{formatRelativeTime(s.updatedAt)}</div>
                   </div>
-                  <div className="session-preview" title={stripMd(s.preview || "")}>
-                    {running ? "正在生成…" : stripMd(s.preview, 50) || "无消息"}
-                  </div>
+                  {(() => {
+                    const preview = getSessionDisplayPreview(s);
+                    return preview ? (
+                      <div className="session-preview" title={preview}>
+                        {running ? "正在生成…" : preview}
+                      </div>
+                    ) : null;
+                  })()}
                   <button
                     className="session-menu"
                     onClick={(e) => { e.stopPropagation(); onDeleteSession(s.id); }}

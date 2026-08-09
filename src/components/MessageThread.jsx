@@ -12,6 +12,7 @@ import ApprovalBubble from "./ApprovalBubble.jsx";
 import GeneratedComponent from "./GeneratedComponent.jsx";
 import TableBlock from "./ui/TableBlock.jsx";
 import MessageActions from "./MessageActions.jsx";
+import ImageChip from "./ui/ImageChip.jsx";
 import { useContractEvents } from "../hooks/useContractEvents.js";
 import bachAvatar from "../assets/bach-avatar.png";
 
@@ -188,6 +189,20 @@ function sanitizeImpl(raw) {
   // ════════════════════════════════════════
   t = t.replace(/\s*\.{2,3}\s*$/gm, "");          // trailing dots on lines
   t = t.replace(/\n{3,}/g, "\n\n");               // collapse 3+ blank lines
+
+  // Phase 3.5: 清洗破损 markdown 表格残留的孤立竖线。
+  // 模型（尤其 reasoning 模型）偶尔输出不合格表格：表头只有一个 `|`、
+  // 分隔行不是 `|---|`、后续行无 `|`。ReactMarkdown 无法解析 → 退化为
+  // 裸 "|xxx" 文本，极难看。GFM 表格允许省略首尾 `|`，因此只在「该行
+  // 含 ≤1 个竖线」时剥离首尾孤立 `|`，对合法多列表格无任何影响。
+  t = t.split("\n").map((line) => {
+    const pipeCount = (line.match(/\|/g) || []).length;
+    if (pipeCount <= 1) {
+      return line.replace(/^\s*\|/, "").replace(/\|\s*$/, "");
+    }
+    return line;
+  }).join("\n");
+
   t = t.split("\n").map((l) => l.trimEnd()).join("\n").trim();
 
   return t;
@@ -1160,16 +1175,16 @@ function MessageThread({ messages = [], loading, streamPhase, thinkingText, reas
               />
             ) : (
               <>
-                {/* Standalone data-URL images for user messages — rendered
-                    outside ReactMarkdown so Virtuoso can't unmount them */}
+                {/* Standalone data-URL images for user messages — rendered as
+                    compact chips with hover thumbnails so they don't dominate
+                    the bubble. */}
                 {userImages && userImages.length > 0 && (
                   <div className="user-attached-images">
                     {userImages.map((img, i) => (
-                      <img
+                      <ImageChip
                         key={`uimg-${i}`}
                         src={img.src}
-                        alt={img.alt || `截图${i + 1}`}
-                        className="user-attached-img"
+                        fileName={img.alt || `图片${i + 1}`}
                         onClick={() => handleImageClick(img.src, img.alt)}
                       />
                     ))}

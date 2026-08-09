@@ -24,9 +24,17 @@ export function setManifests(list) {
       seen.add(m.id);
       return true;
     });
-    // Only replace if filtering produced results; otherwise keep current (bundled).
+    // Merge into bundled manifests: backend is source of truth for runtime
+    // fields (input_schema, output_schema, capabilities), but bundled carries
+    // frontend-only metadata such as ui.component/name that the backend must
+    // not need to know about.
     if (filtered.length) {
-      manifests = filtered;
+      const byId = new Map(manifests.map((m) => [m.id, m]));
+      for (const m of filtered) {
+        const existing = byId.get(m.id);
+        byId.set(m.id, existing ? { ...existing, ...m } : m);
+      }
+      manifests = Array.from(byId.values());
     }
   }
   // IMPORTANT: manifests is NEVER cleared to []. Worst case = bundled fallback.

@@ -138,6 +138,23 @@ function ChatShell({
   const onSessionUpdatedRef = useRef(onSessionUpdated);
   onSessionUpdatedRef.current = onSessionUpdated;
 
+  // Generate a short summarized session title via the backend summarizer.
+  // Fire-and-forget: caller decides what to do with the result.
+  const generateSessionTitle = useCallback(async (sid, userText, assistantText) => {
+    if (!aguiPort) return "";
+    try {
+      const res = await fetch(`http://localhost:${aguiPort}/api/session-title`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userText, assistantText }),
+      });
+      const data = await res.json().catch(() => ({}));
+      return (data.title || "").trim();
+    } catch (err) {
+      return "";
+    }
+  }, [aguiPort]);
+
   // Persist a session when ANY of its runs finishes — including sessions that
   // are running in the background while the user looks at a different one.
   // Before per-session streams existed this lived in an isStreaming effect,
@@ -151,12 +168,20 @@ function ChatShell({
     const assistantMsg = [...uiMessages].reverse().find((m) => m.role === "assistant");
     const patch = { messages: uiMessages };
     const stored = (sessionsListRef.current || []).find((s) => s.id === sid);
-    if (userMsg && stored?.title === "新会话") {
-      patch.title = (userMsg.content || "").slice(0, 24).replace(/\n/g, " ") || "新会话";
-    }
     if (assistantMsg) {
       const clean = sanitizeMessageContent(assistantMsg.content || "");
       patch.preview = clean.slice(0, 45).replace(/\n/g, " ") || "(新对话)";
+    }
+    // Don't hardcode the first N chars as the title. When the session still
+    // has the default title, kick off an async model summary that patches
+    // session.title once it returns; until then the header/sidebar fall back
+    // to the assistant name. Failures keep the default title.
+    if (userMsg && stored?.title === "新会话") {
+      const userText = (userMsg.content || "").replace(/\n/g, " ").trim();
+      const assistantText = sanitizeMessageContent(assistantMsg?.content || "").replace(/\n/g, " ").trim();
+      generateSessionTitle(sid, userText, assistantText)
+        .then((t) => { if (t) h.updateSession(sid, { title: t }); })
+        .catch(() => {});
     }
     h.updateSession(sid, patch)
       .then(() => {

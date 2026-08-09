@@ -437,7 +437,7 @@ export default function ResultPanel({
         <div className="result-workflow">
           {Workbench ? (
             <Workbench manifest={activeManifest} session={session} onSend={onSend} onStop={onStop}
-              onRun={() => handleContractRun(activeManifest, {})} onExit={() => onSelectWorkflow?.("")}
+              onRun={(inputObj) => handleContractRun(activeManifest, inputObj || {})} onExit={() => onSelectWorkflow?.("")}
               disabled={!backendStatus?.gatewayConnected} model={model} backendStatus={backendStatus} />
           ) : (
             <>

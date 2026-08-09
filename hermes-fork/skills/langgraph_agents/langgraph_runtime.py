@@ -411,16 +411,26 @@ def _collect_artifacts(state: Any) -> List[Dict[str, Any]]:
     if not isinstance(state, dict):
         return []
     artifacts: List[Dict[str, Any]] = []
+    # Character bible (locked after first-episode first-frame approval).
+    for ch in state.get("character_bible") or []:
+        if not isinstance(ch, dict):
+            continue
+        ref = ch.get("ref_image")
+        if ref:
+            name = ch.get("name") or "unknown"
+            safe = "".join(c if c.isalnum() or c in "_-" else "_" for c in str(name))
+            artifacts.append({"id": f"character_{safe}", "type": "image", "source": "path", "path": ref, "label": f"角色·{name}"})
+    episode = state.get("current_episode", 0)
     for r in state.get("shot_results") or []:
         if not isinstance(r, dict):
             continue
         idx = r.get("index")
         if r.get("keyframe_path"):
-            artifacts.append({"id": f"shot_{idx}_keyframe", "type": "image", "source": "path", "path": r["keyframe_path"], "label": f"分镜图#{idx}"})
+            artifacts.append({"id": f"shot_{idx}_keyframe", "type": "image", "source": "path", "path": r["keyframe_path"], "label": f"分镜图#{idx}", "episode": episode})
         if r.get("video_path"):
-            artifacts.append({"id": f"shot_{idx}_video", "type": "video", "source": "path", "path": r["video_path"], "label": f"视频#{idx}"})
+            artifacts.append({"id": f"shot_{idx}_video", "type": "video", "source": "path", "path": r["video_path"], "label": f"视频#{idx}", "episode": episode})
         if r.get("tts_audio_path"):
-            artifacts.append({"id": f"shot_{idx}_tts", "type": "audio", "source": "path", "path": r["tts_audio_path"], "label": f"配音#{idx}"})
+            artifacts.append({"id": f"shot_{idx}_tts", "type": "audio", "source": "path", "path": r["tts_audio_path"], "label": f"配音#{idx}", "episode": episode})
     if state.get("final_video_path"):
         artifacts.append({"id": "final_video", "type": "video", "source": "path", "path": state["final_video_path"], "label": "成片"})
     if state.get("jianying_draft_path"):

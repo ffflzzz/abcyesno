@@ -9,26 +9,22 @@
 // Adding a new specialized workbench = write the component + register it below
 // + set the manifest's `ui` field. No router code changes.
 
-import ManjuCraftWorkbench from "./ManjuCraftWorkbench.jsx";
 // Generic, data-driven renderers (spec P4): a new workflow only needs a
 // `graph` in its manifest + ui.type "blueprint"/"timeline" — no new component.
 import BlueprintWorkbench from "./BlueprintWorkbench.jsx";
 import TimelineWorkbench from "./TimelineWorkbench.jsx";
 // Custom short-drama production studio (script → assets → storyboard →
 // edit/export a Jianying draft). Frontend authoring workbench; opened in the
-// sidebar when its manifest is selected from the SkillPanel.
+// sidebar when its manifest is selected from the SkillPanel. This is the
+// unified video-production front-end for the manjucraft_agent LangGraph
+// pipeline — all manju_craft/manjucraft functionality converges here.
 import StudioWorkbench from "./StudioWorkbench.jsx";
 
 const WORKBENCHES = {
-  // Hand-written first-version workbench (spec decision ③) for the manju_craft
-  // video pipeline. Each node exposes a per-step artifact slot so the "every
-  // step's output is observable" UX is verifiable before the backend streams
-  // real workflow.* events.
-  ManjuCraftWorkbench,
   // Generic renderers driven entirely by manifest.graph.
   BlueprintWorkbench,
   TimelineWorkbench,
-  // Custom short-drama production studio.
+  // Custom short-drama production studio (unified video-production frontend).
   StudioWorkbench,
 };
 

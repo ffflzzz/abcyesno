@@ -971,10 +971,10 @@ body {
   border-bottom-right-radius: 5px;
 }
 
-/* User-attached images rendered outside ReactMarkdown (data-URL extraction) */
+/* User-attached images rendered as compact chips with hover thumbnails */
 .user-attached-images {
   display: flex;
-  flex-direction: column;
+  flex-wrap: wrap;
   gap: 6px;
   margin-bottom: 6px;
 }
@@ -984,6 +984,89 @@ body {
   border-radius: 8px;
   cursor: pointer;
   object-fit: contain;
+}
+
+/* ── ImageChip: compact filename + hover thumbnail ── */
+.image-chip,
+.composer-image-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 13px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1;
+  vertical-align: middle;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s ease, border-color 0.15s ease;
+  max-width: 100%;
+}
+.image-chip:hover,
+.composer-image-chip:hover {
+  background: var(--panel);
+  border-color: var(--border-strong, var(--border));
+}
+.image-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 160px;
+}
+
+/* Composer chip uses CSS attr() tooltip (native DOM, no React state) */
+.composer-image-chip {
+  position: relative;
+}
+.composer-image-chip:hover::after {
+  content: "";
+  position: absolute;
+  bottom: 34px;
+  left: 0;
+  width: 160px;
+  height: 120px;
+  background-image: attr(data-img-src url);
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-color: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  z-index: 1000;
+  pointer-events: none;
+}
+
+/* React ImageChip tooltip rendered fixed to avoid clipping inside scrollers */
+.image-chip-tooltip {
+  position: fixed;
+  width: 160px;
+  height: 120px;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  z-index: 1000;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.image-chip-tooltip.loaded {
+  opacity: 1;
+}
+.image-chip-tooltip img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 4px;
 }
 
 /* Assistant replies are NOT wrapped in a speech bubble — rendered as a
@@ -1003,7 +1086,7 @@ body {
   line-height: 1.55;
   word-break: break-word;
   overflow-wrap: anywhere;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .message-bubble.error {
@@ -1847,6 +1930,8 @@ body {
   color: var(--text);
   word-break: break-word;
   overflow-wrap: anywhere;
+  max-width: 100%;
+  min-width: 0;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
 }
@@ -1875,7 +1960,7 @@ body {
   color: var(--text);
   letter-spacing: -0.005em;
 }
-.message-markdown h1 { font-size: 1.55em; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+.message-markdown h1 { font-size: 1.5em; padding-bottom: 4px; }
 .message-markdown h2 { font-size: 1.32em; }
 .message-markdown h3 { font-size: 1.16em; }
 .message-markdown h4 { font-size: 1.04em; color: var(--muted-text); }
@@ -1964,7 +2049,8 @@ body {
 
 /* ── GFM Table styling (dark theme) ───────────────── */
 .md-table-wrapper {
-  overflow-x: auto;
+  overflow: auto;
+  max-height: 360px;
   margin: 8px 0;
   border-radius: 8px;
   border: 1px solid var(--border, #2a2e36);
@@ -2063,6 +2149,9 @@ body {
 /* ul / ol / li styles live in the consolidated .message-markdown block above. */
 
 .message-markdown table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
   border-collapse: collapse;
   font-size: 13px;
 }
@@ -4189,15 +4278,25 @@ body {
   white-space: pre-wrap;
 }
 .composer-inline-img {
-  display: inline-block;
-  vertical-align: middle;
-  max-height: 88px;
-  max-width: 160px;
-  border-radius: 6px;
+  /* legacy class kept for safety; chips now use .composer-image-chip */
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 13px;
+  background: var(--panel-2);
   border: 1px solid var(--border);
-  margin: 0 2px;
-  cursor: default;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1;
+  vertical-align: middle;
+  cursor: pointer;
   user-select: none;
+  transition: background 0.15s ease, border-color 0.15s ease;
+  max-width: 100%;
+  margin: 0 2px;
+  position: relative;
 }
 
 .composer-attachment-row {
@@ -6292,7 +6391,8 @@ body[--resizing="1"] .result-panel-resize-handle::before {
 
 /* ---- table ---- */
 .ui-table-scroll {
-  overflow-x: auto;
+  overflow: auto;
+  max-height: 360px;
 }
 .ui-table table {
   border-collapse: collapse;

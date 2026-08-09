@@ -1,15 +1,17 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import Icon from "../components/Icon.jsx";
+import { subscribeContractEvents } from "../contract/eventBus.js";
 import "./StudioWorkbench.css";
 
-// Short-drama production studio workbench.
+// Short-drama production studio workbench — unified video production front-end.
 //
-// Frontend authoring UI: script → assets → storyboard → edit/export. The final
-// "成片" step builds a Jianying (CapCut) draft_content.json so the cut can be
-// refined in Jianying. Generation steps are mocked client-side for now (same
-// pattern as ManjuCraftWorkbench's mock run); they can later call manju_craft's
-// builder via onRun. Adding this workbench required NO router/App.jsx change —
-// only: this component + registry entry + a manifest with ui.type "workbench".
+// This workbench is the single UI entry for the manjucraft_agent LangGraph
+// pipeline (script → assets → storyboard → export). It drives the backend by
+// calling onRun(input), then consumes workflow.* contract events to update the
+// 4-phase UI, the asset library, the shot list, and the export timeline.
+//
+// The legacy manju_craft stand-alone form is removed from the manifest
+// whitelist; this workbench is the only video-production entry point.
 
 const PHASES = [
   { id: "script", label: "剧本" },
@@ -18,32 +20,23 @@ const PHASES = [
   { id: "export", label: "成片" },
 ];
 
-const ASSET_DEFS = {
-  character: [
-    { name: "林夕", tag: "女主·实习生", views: ["正面", "侧面", "全身"] },
-    { name: "顾屿", tag: "男主·霸总", views: ["正面", "侧面", "全身"] },
-  ],
-  scene: [
-    { name: "雨夜天桥", tag: "第1集", views: ["全景", "近景", "空镜"] },
-    { name: "集团大堂", tag: "第2集", views: ["全景", "近景", "空镜"] },
-  ],
-  prop: [
-    { name: "旧怀表", tag: "关键道具", views: ["正面", "细节", "佩戴"] },
-  ],
-};
-
-const DEMO_SHOTS = [
-  { ep: 1, n: 1, script: "雨夜，林夕撑伞跑过天桥，怀表从包里滑落。", cam: "特写·手持", model: "agnes-2.5-flash", prompt: "雨夜天桥，女生撑伞奔跑，脚下积水倒映霓虹" },
-  { ep: 1, n: 2, script: "顾屿的车撞上护栏，他茫然抬头，记忆碎片闪回。", cam: "中景·慢镜", model: "agnes-2.5-flash", prompt: "豪华轿车追尾护栏，男主失神，雨刷摆动" },
-  { ep: 1, n: 3, script: "林夕拾起怀表，背面刻着熟悉的名字。", cam: "近景·推镜", model: "agnes-2.5-flash", prompt: "女生指尖特写，旧怀表背面刻字" },
-  { ep: 2, n: 1, script: "集团大堂，顾屿恢复记忆，却假装不识林夕。", cam: "全景·固定", model: "agnes-2.5-flash", prompt: "大理石大堂，男女主对峙，玻璃幕墙反光" },
-  { ep: 2, n: 2, script: "林夕递交辞呈，转身时眼泪落下。", cam: "中景·跟拍", model: "agnes-2.5-flash", prompt: "女生递信封，背影，电梯门缓缓关上" },
-  { ep: 2, n: 3, script: "顾屿追出，倒数三秒在雨中喊出她的名字。", cam: "全景·航拍", model: "agnes-2.5-flash", prompt: "雨中广场，男主奔跑呼喊，镜头拉升" },
-];
-
 const PX_PER_SEC = 48;
 const US = 1_000_000; // Jianying timerange unit = microseconds
 const shotKey = (s) => `${s.ep}-${s.n}`;
+
+function eventType(ev) {
+  return ev?.type || ev?.name || "";
+}
+
+function phaseForStep(stepId) {
+  if (!stepId) return "script";
+  if (["parse_script", "plan_episodes"].includes(stepId)) return "script";
+  if (stepId === "generate_characters") return "assets";
+  if (["gate_first_frame", "batch_generate_keyframes", "consistency_check", "gate_each_scene", "fix_drift"].includes(stepId)) {
+    return "storyboard";
+  }
+  return "export";
+}
 
 function PhaseStepper({ phase, done, onGo }) {
   return (
@@ -67,50 +60,64 @@ function PhaseStepper({ phase, done, onGo }) {
   );
 }
 
-function AssetLibrary({ curTab, setCurTab, assetsReady, assetImgs, onGenOne, onGenAll }) {
-  const list = assetsReady[curTab] ? ASSET_DEFS[curTab] : null;
-  const imgs = assetImgs[curTab] || {};
+function AssetLibrary({ curTab, setCurTab, assetsReady, assetImgs, onGenOne, onGenAll, disabled }) {
+  const hasAny = Object.keys(assetImgs.character || {}).length > 0;
+  const list = hasAny ? Object.entries(assetImgs.character || {}).map(([name, url]) => ({ name, tag: "角色", views: ["正面"], url })) : null;
   return (
     <div className="st-col st-left">
       <div className="st-tabs">
-        {Object.keys(ASSET_DEFS).map((t) => (
-          <div
-            key={t}
-            className={`st-tab ${curTab === t ? "active" : ""}`}
-            onClick={() => setCurTab(t)}
-          >
-            {t === "character" ? "角色" : t === "scene" ? "场景" : "道具"}
+        {[
+          { k: "character", label: "角色" },
+          { k: "scene", label: "场景" },
+          { k: "prop", label: "道具" },
+        ].map((t) => (
+          <div key={t.k} className={`st-tab ${curTab === t.k ? "active" : ""}`} onClick={() => setCurTab(t.k)}>
+            {t.label}
           </div>
         ))}
       </div>
       <div className="st-asset-list">
-        {!list && <div className="st-empty">尚未生成<br />去「资产」页一键生成</div>}
-        {list &&
+        {curTab !== "character" && (
+          <div className="st-empty">{curTab === "scene" ? "场景参考由分镜图直接承载" : "道具参考由分镜图直接承载"}</div>
+        )}
+        {curTab === "character" && !list && (
+          <div className="st-empty">
+            尚未生成
+            <br />
+            运行工作流后会在此显示角色参考图
+          </div>
+        )}
+        {curTab === "character" &&
+          list &&
           list.map((a) => (
             <div className="st-asset-card" key={a.name}>
               <div className="st-asset-name">
                 {a.name}
                 <span className="st-asset-tag">{a.tag}</span>
               </div>
-              {imgs[a.name] ? (
-                <div className="st-asset-img"><img src={imgs[a.name]} alt={a.name} /></div>
+              {a.url ? (
+                <div className="st-asset-img">
+                  <img src={a.url} alt={a.name} />
+                </div>
               ) : (
                 <div className="st-views">
                   {a.views.map((v) => (
-                    <div className="st-view" key={v}>{v}</div>
+                    <div className="st-view" key={v}>
+                      {v}
+                    </div>
                   ))}
                 </div>
               )}
               <div className="st-asset-views-label">{a.views.join(" / ")}</div>
             </div>
           ))}
-        {list && (
-          <button className="st-gen-btn" onClick={() => onGenOne(curTab)}>
-            ↻ 重新生成该组
+        {curTab === "character" && list && (
+          <button className="st-gen-btn" onClick={() => onGenOne(curTab)} disabled={disabled}>
+            ↻ 重新生成角色
           </button>
         )}
         <div style={{ marginTop: 14 }}>
-          <button className="st-primary st-block" onClick={onGenAll}>
+          <button className="st-primary st-block" onClick={onGenAll} disabled={disabled}>
             一键生成全部资产 →
           </button>
         </div>
@@ -134,25 +141,23 @@ function StoryboardEditor({ shots, shotState, onGenShot, onGenVideo, onScriptCha
           <div className="st-shot" key={k}>
             <div className="st-shot-col">
               <div className="st-ep-tag">第{s.ep}集 · 镜{s.n}</div>
-              <textarea
-                defaultValue={s.script}
-                onChange={(e) => onScriptChange(k, e.target.value)}
-              />
+              <textarea defaultValue={st.script || s.script || ""} onChange={(e) => onScriptChange(k, e.target.value)} />
             </div>
             <div className="st-shot-col">
               <textarea
-                defaultValue={s.prompt}
+                defaultValue={st.prompt || s.prompt || ""}
                 placeholder="拍摄法 / 提示词"
+                onChange={(e) => onScriptChange(k, e.target.value, "prompt")}
               />
               <div className="st-row2">
-                <select defaultValue={s.cam}>
-                  <option>{s.cam}</option>
+                <select defaultValue={st.cam || s.cam || "特写"}>
                   <option>特写</option>
+                  <option>中景</option>
                   <option>全景</option>
                   <option>俯拍</option>
                 </select>
-                <select defaultValue={s.model}>
-                  <option>{s.model}</option>
+                <select defaultValue={st.model || s.model || "agnes-2.5-flash"}>
+                  <option>agnes-2.5-flash</option>
                   <option>agnes-2.5-pro</option>
                 </select>
               </div>
@@ -169,10 +174,12 @@ function StoryboardEditor({ shots, shotState, onGenShot, onGenVideo, onScriptCha
                 {!st.videoUrl && !st.imgUrl && <div className="st-play" />}
               </div>
               {st.status === "busy" && (
-                <div className="st-mini-prog"><i /></div>
+                <div className="st-mini-prog">
+                  <i />
+                </div>
               )}
               <div className="st-shot-btns">
-                <button className="st-gen-shot" onClick={() => onGenShot(k)}>
+                <button className="st-gen-shot" onClick={() => onGenShot(k)} disabled={st.status === "busy"}>
                   {st.imgUrl ? "↻ 重生成图" : "▶ 生成此镜"}
                 </button>
                 <button className="st-gen-shot st-gen-video" onClick={() => onGenVideo(k)} disabled={st.status === "busy"}>
@@ -208,17 +215,20 @@ function EditConsole({ timeline, shotCfg, shots, selectedClip, totalDur, onSelec
     const track = trackRef.current;
     if (!track) return;
     const rect = track.getBoundingClientRect();
-    const x = e.clientX - rect.left + track.scrollLeft - 100; // minus label width
+    const x = e.clientX - rect.left + track.scrollLeft - 100;
     let acc = 0;
     let toIdx = timeline.length;
     for (let i = 0; i < timeline.length; i++) {
       const w = Math.max(30, (shotCfg[timeline[i]]?.dur || 4) * PX_PER_SEC);
-      if (x < acc + w / 2) { toIdx = i; break; }
+      if (x < acc + w / 2) {
+        toIdx = i;
+        break;
+      }
       acc += w;
     }
     const fromIdx = timeline.indexOf(fromKey);
     if (fromIdx === -1) return;
-    if (fromIdx === toIdx || fromIdx === toIdx - 1) return; // no-op
+    if (fromIdx === toIdx || fromIdx === toIdx - 1) return;
     const next = timeline.slice();
     next.splice(toIdx, 0, next.splice(fromIdx, 1)[0]);
     onReorder(next);
@@ -238,23 +248,14 @@ function EditConsole({ timeline, shotCfg, shots, selectedClip, totalDur, onSelec
     <div className="st-tl-wrap">
       <div className="st-tl-ruler">
         {rulerTicks.map((s) => (
-          <span
-            key={s}
-            className={`st-tick ${s % 5 === 0 ? "maj" : ""}`}
-            style={{ left: 100 + s * PX_PER_SEC }}
-          >
+          <span key={s} className={`st-tick ${s % 5 === 0 ? "maj" : ""}`} style={{ left: 100 + s * PX_PER_SEC }}>
             {s}s
           </span>
         ))}
       </div>
       <div style={{ position: "relative" }}>
         <div className="st-track-labels">视频轨道</div>
-        <div
-          className="st-tl-track"
-          ref={trackRef}
-          onDragOver={(e) => e.preventDefault()}
-          onDrop={handleDrop}
-        >
+        <div className="st-tl-track" ref={trackRef} onDragOver={(e) => e.preventDefault()} onDrop={handleDrop}>
           {timeline.map((k) => {
             const s = byKey[k];
             const c = shotCfg[k] || { dur: 4, trans: "none" };
@@ -272,7 +273,7 @@ function EditConsole({ timeline, shotCfg, shots, selectedClip, totalDur, onSelec
                   onSelect(k);
                 }}
               >
-                <span className="st-clabel">第{s.ep}集·镜{s.n}</span>
+                <span className="st-clabel">{s ? `第${s.ep}集·镜${s.n}` : k}</span>
                 <span className="st-cdur">{c.dur}s</span>
               </div>
             );
@@ -330,7 +331,7 @@ function EditConsole({ timeline, shotCfg, shots, selectedClip, totalDur, onSelec
   );
 }
 
-export default function StudioWorkbench({ manifest, session, onExit, model, backendStatus }) {
+export default function StudioWorkbench({ manifest, session, onExit, model, backendStatus, onRun }) {
   const [phase, setPhase] = useState("script");
   const [done, setDone] = useState({});
   const [tasks, setTasks] = useState([]);
@@ -343,13 +344,20 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
   const [selectedClip, setSelectedClip] = useState(null);
   const [exportJson, setExportJson] = useState(null);
   const [exporting, setExporting] = useState(false);
+  const [runState, setRunState] = useState("idle"); // idle | running | done | error
+  const [runId, setRunId] = useState(null);
+
   const [project, setProject] = useState({
-    name: "倒数三秒说爱你",
+    name: "",
+    script: "",
+    seriesScript: "",
+    mode: "single",
     style: "二次元",
-    eps: 2,
+    eps: 1,
     res: "1080×1920",
     sec: 4,
     fps: 30,
+    consistency: "lock_bible",
   });
 
   const timersRef = useRef([]);
@@ -358,138 +366,186 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
   }, []);
 
   const shotStateRef = useRef(shotState);
-  useEffect(() => { shotStateRef.current = shotState; }, [shotState]);
+  useEffect(() => {
+    shotStateRef.current = shotState;
+  }, [shotState]);
 
-  // Studio backend bridge: Electron renderer → IPC → main process → Agnes API.
-  // Uses window.hermes.studioCall (IPC) to avoid renderer fetch/CSP issues.
-  const api = useCallback(async (action, params) => {
-    try {
-      if (typeof window !== "undefined" && window.hermes && window.hermes.studioCall) {
-        const j = await window.hermes.studioCall(action, params);
-        if (!j.ok) console.error("[Studio API]", action, "→", j.error || j);
-        return j;
+  // Consume workflow.* events globally; the workflow may run in a dedicated
+  // session (via TaskPanel), so session?.id alone is not enough.
+  useEffect(() => {
+    const unsub = subscribeContractEvents((rid, ev) => {
+      if (!ev) return;
+      const type = eventType(ev);
+
+      if (type === "RUN_STARTED") {
+        setRunId(rid);
+        setRunState("running");
+        setTasks([]);
+        setDone({});
+        setPhase("script");
+        setExportJson(null);
+        return;
       }
-      return { ok: false, error: "studioCall 不可用" };
-    } catch (e) {
-      const err = String((e && e.message) || e);
-      console.error("[Studio API]", action, "→", err);
-      return { ok: false, error: err };
-    }
-  }, []);
 
-  // ── tasks ──
-  const addTask = useCallback((name) => {
-    const t = { id: Date.now() + Math.random(), name, status: "run", prog: 0 };
-    setTasks((prev) => [t, ...prev]);
-    return t;
-  }, []);
-  const finishTask = useCallback((id, error) => {
-    setTasks((prev) => prev.map((x) => (x.id === id ? { ...x, prog: 100, status: error ? "err" : "ok", error } : x)));
-  }, []);
-  const tick = useCallback((t, to) => {
-    const iv = setInterval(() => {
-      setTasks((prev) =>
-        prev.map((x) => {
-          if (x.id !== t.id) return x;
-          const next = Math.min(to, x.prog + Math.max(4, (to - x.prog) / 8));
-          if (next >= to) {
-            clearInterval(iv);
-            return { ...x, prog: 100, status: "ok" };
+      // Only accept events belonging to the latest run.
+      if (runId && rid !== runId) return;
+      if (!runId && type !== "RUN_STARTED") {
+        // First non-start event locks the run id.
+        setRunId(rid);
+      }
+
+      if (type === "RUN_ERROR") {
+        setRunState("error");
+        const msg = ev.payload?.message || ev.message || "运行失败";
+        setTasks((prev) =>
+          prev.map((t) => (t.status === "run" ? { ...t, status: "err", error: msg, prog: 100 } : t))
+        );
+        return;
+      }
+
+      if (type === "workflow.progress") {
+        const p = ev.payload || {};
+        const step = p.step_id || "step";
+        const status = p.status || "running";
+        const msg = p.message || step;
+        const ph = phaseForStep(step);
+        setPhase(ph);
+        if (status === "done") {
+          setDone((prev) => ({ ...prev, [ph]: true }));
+        }
+        setTasks((prev) => {
+          const existing = prev.find((t) => t.step === step);
+          if (!existing) {
+            return [
+              {
+                id: `${rid}-${step}`,
+                name: msg,
+                step,
+                status: status === "done" ? "ok" : "run",
+                prog: status === "done" ? 100 : 25,
+              },
+              ...prev,
+            ];
           }
-          return { ...x, prog: next };
-        })
-      );
-    }, 120);
-    timersRef.current.push(iv);
-  }, []);
+          return prev.map((t) =>
+            t.step === step
+              ? {
+                  ...t,
+                  name: msg,
+                  status: status === "done" ? "ok" : "run",
+                  prog: status === "done" ? 100 : Math.max(t.prog, Math.min(95, t.prog + 10)),
+                }
+              : t
+          );
+        });
+        return;
+      }
 
-  // ── assets (real Agnes image generation) ──
-  const genAssetImage = useCallback(async (t, asset) => {
-    const label = { character: "角色三视图设定", scene: "场景概念图", prop: "道具细节图" }[t];
-    const task = addTask(`生成 ${asset.name} 参考图`);
-    tick(task, 100);
-    const j = await api("generate-image", {
-      prompt: `${asset.name}，${asset.tag}，${label}，高细节，电影级，统一风格`,
-      size: "2K",
-      ratio: "3:4",
+      if (type === "workflow.artifact") {
+        const a = ev.payload || {};
+        ingestArtifact(a);
+        return;
+      }
+
+      if (type === "workflow.done") {
+        setRunState("done");
+        setDone({ script: true, assets: true, storyboard: true, export: true });
+        setPhase("export");
+        setTasks((prev) => prev.map((t) => (t.status === "run" ? { ...t, status: "ok", prog: 100 } : t)));
+      }
     });
-    if (j && j.ok && j.url) {
-      setAssetImgs((prev) => ({ ...prev, [t]: { ...(prev[t] || {}), [asset.name]: j.url } }));
-      finishTask(task.id);
-    } else {
-      finishTask(task.id, (j && j.error) || "生成失败");
+    return unsub;
+  }, [runId]);
+
+  function ingestArtifact(a) {
+    const { id, type, path, label, url, episode } = a;
+    const src = url || path;
+    if (!src) return;
+
+    // Character reference images from the locked bible.
+    if (type === "image" && (label || "").includes("角色")) {
+      const name = (label || "").replace(/^角色·/, "").trim() || "角色";
+      setAssetImgs((prev) => ({
+        ...prev,
+        character: { ...(prev.character || {}), [name]: src },
+      }));
+      setAssetsReady((prev) => ({ ...prev, character: true }));
+      return;
     }
-  }, [api, addTask, tick, finishTask]);
 
-  const genOne = useCallback(async (t) => {
-    await Promise.all(ASSET_DEFS[t].map((a) => genAssetImage(t, a)));
-    setAssetsReady((prev) => ({ ...prev, [t]: true }));
-  }, [genAssetImage]);
-  const genAll = useCallback(async () => {
-    for (const t of ["character", "scene", "prop"]) await genOne(t);
-  }, [genOne]);
+    // Per-shot keyframes.
+    const kfMatch = id && String(id).match(/^shot_(\d+)_keyframe$/);
+    if (kfMatch) {
+      const idx = parseInt(kfMatch[1], 10);
+      const ep = episode ?? 1;
+      const key = `${ep}-${idx + 1}`;
+      setShotState((prev) => ({
+        ...prev,
+        [key]: { ...(prev[key] || {}), status: "img", imgUrl: src, ep, n: idx + 1 },
+      }));
+      return;
+    }
 
-  // ── shots (real Agnes image + video generation) ──
-  const genShot = useCallback(async (k) => {
-    const s = DEMO_SHOTS.find((x) => shotKey(x) === k);
-    setShotState((prev) => ({ ...prev, [k]: { ...(prev[k] || {}), status: "busy" } }));
-    const task = addTask(`生成 第${s.ep}集·镜${s.n} 关键帧`);
-    tick(task, 100);
-    const j = await api("generate-image", {
-      prompt: `${s.prompt}，${project.style}风格，电影级镜头，高细节`,
-      size: "2K",
-      ratio: "9:16",
-    });
-    const prev = shotStateRef.current[k] || {};
-    const st = { ...prev, status: j && j.ok ? "img" : "error" };
-    if (j && j.ok && j.url) st.imgUrl = j.url;
-    else st.error = j && j.error;
-    setShotState((prev2) => ({ ...prev2, [k]: st }));
-    finishTask(task.id, (j && !j.ok && j.error) || undefined);
-  }, [api, addTask, tick, finishTask, project.style]);
+    // Per-shot videos.
+    const vidMatch = id && String(id).match(/^shot_(\d+)_video$/);
+    if (vidMatch) {
+      const idx = parseInt(vidMatch[1], 10);
+      const ep = episode ?? 1;
+      const key = `${ep}-${idx + 1}`;
+      setShotState((prev) => ({
+        ...prev,
+        [key]: { ...(prev[key] || {}), status: "done", videoUrl: src, ep, n: idx + 1 },
+      }));
+      return;
+    }
 
-  const genVideoShot = useCallback(async (k) => {
-    const s = DEMO_SHOTS.find((x) => shotKey(x) === k);
-    const prevImg = shotStateRef.current[k] && shotStateRef.current[k].imgUrl;
-    setShotState((prev) => ({ ...prev, [k]: { ...(prev[k] || {}), status: "busy" } }));
-    const task = addTask(`生成 第${s.ep}集·镜${s.n} 视频`);
-    tick(task, 100);
-    const j = await api("generate-video", {
-      prompt: `${s.prompt}，${project.style}风格，自然运动，电影级镜头`,
-      image: prevImg || undefined,
-      width: 1152,
-      height: 768,
-      num_frames: 81,
-      frame_rate: 24,
-    });
-    const prev = shotStateRef.current[k] || {};
-    const st = { ...prev, status: j && j.ok ? "done" : (prev.imgUrl ? "img" : "error") };
-    if (j && j.ok && j.url) st.videoUrl = j.url;
-    else st.error = j && j.error;
-    setShotState((prev2) => ({ ...prev2, [k]: st }));
-    finishTask(task.id, (j && !j.ok && j.error) || undefined);
-  }, [api, addTask, tick, finishTask, project.style]);
+    // Per-shot TTS audio.
+    const ttsMatch = id && String(id).match(/^shot_(\d+)_tts$/);
+    if (ttsMatch) {
+      const idx = parseInt(ttsMatch[1], 10);
+      const ep = episode ?? 1;
+      const key = `${ep}-${idx + 1}`;
+      setShotState((prev) => ({
+        ...prev,
+        [key]: { ...(prev[key] || {}), audioUrl: src, ep, n: idx + 1 },
+      }));
+      return;
+    }
 
-  const onScriptChange = useCallback((k, val) => {
-    setShotState((prev) => ({ ...prev, [k]: { ...(prev[k] || {}), script: val } }));
-  }, []);
+    // Final video.
+    if (id === "final_video") {
+      setExportJson((prev) => ({ ...(prev || {}), finalVideo: src }));
+      return;
+    }
 
-  // Sync timeline from generated shots (preserve user reorder).
+    // Jianying draft.
+    if (id === "jianying_draft") {
+      setExportJson((prev) => ({ ...(prev || {}), draftPath: src }));
+    }
+  }
+
+  // Build shot list and timeline from incoming artifacts.
+  const shots = useMemo(() => {
+    const list = Object.entries(shotState)
+      .filter(([, st]) => st.ep && st.n)
+      .map(([key, st]) => ({ key, ep: st.ep, n: st.n, script: st.script || "", prompt: st.prompt || "", cam: "特写", model: "agnes-2.5-flash" }));
+    list.sort((a, b) => (a.ep === b.ep ? a.n - b.n : a.ep - b.ep));
+    return list;
+  }, [shotState]);
+
   useEffect(() => {
     setTimeline((prev) => {
-      const doneKeys = DEMO_SHOTS.filter((s) => {
-        const st = shotState[shotKey(s)] || {};
+      const ready = shots.filter((s) => {
+        const st = shotState[s.key] || {};
         return st.status === "img" || st.status === "done";
-      }).map(shotKey);
-      const set = new Set(doneKeys);
+      }).map((s) => s.key);
+      const set = new Set(ready);
       const kept = prev.filter((k) => set.has(k));
       const keptSet = new Set(kept);
-      const added = doneKeys.filter((k) => !keptSet.has(k));
-      const next = kept.concat(added);
-      // ensure cfg exists for each
-      return next;
+      const added = ready.filter((k) => !keptSet.has(k));
+      return kept.concat(added);
     });
-  }, [shotState]);
+  }, [shotState, shots]);
 
   useEffect(() => {
     setShotCfg((prev) => {
@@ -500,6 +556,110 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
       return next;
     });
   }, [timeline, project.sec]);
+
+  const api = useCallback(
+    async (action, params) => {
+      try {
+        if (typeof window !== "undefined" && window.hermes && window.hermes.studioCall) {
+          const j = await window.hermes.studioCall(action, params);
+          if (!j.ok) console.error("[Studio API]", action, "→", j.error || j);
+          return j;
+        }
+        return { ok: false, error: "studioCall 不可用" };
+      } catch (e) {
+        const err = String((e && e.message) || e);
+        console.error("[Studio API]", action, "→", err);
+        return { ok: false, error: err };
+      }
+    },
+    []
+  );
+
+  // ── asset regeneration (reuses the standalone Agnes IPC) ──
+  const genOne = useCallback(
+    async (t) => {
+      if (t !== "character") return;
+      const names = Object.keys(assetImgs.character || {});
+      for (const name of names) {
+        const task = { id: Date.now() + Math.random(), name: `重生成 ${name}`, status: "run", prog: 0 };
+        setTasks((prev) => [task, ...prev]);
+        const j = await api("generate-image", {
+          prompt: `${name}，角色设定图，${project.style}风格，高细节，统一风格`,
+          size: "2K",
+          ratio: "3:4",
+        });
+        if (j && j.ok && j.url) {
+          setAssetImgs((prev) => ({ ...prev, character: { ...(prev.character || {}), [name]: j.url } }));
+        }
+        setTasks((prev) => prev.map((x) => (x.id === task.id ? { ...x, status: j?.ok ? "ok" : "err", error: j?.error, prog: 100 } : x)));
+      }
+    },
+    [api, assetImgs.character, project.style]
+  );
+
+  const genAll = useCallback(async () => {
+    // The real agent will generate characters when the pipeline runs.
+    // This button just advances the phase if already generated; otherwise
+    // prompts the user to run the pipeline from the script page.
+    if (Object.keys(assetImgs.character || {}).length === 0) {
+      setPhase("script");
+      return;
+    }
+    setPhase("storyboard");
+  }, [assetImgs.character]);
+
+  // ── per-shot regeneration (standalone Agnes IPC, independent of the agent) ──
+  const genShot = useCallback(
+    async (k) => {
+      const s = shots.find((x) => shotKey(x) === k);
+      const st = shotState[k] || {};
+      setShotState((prev) => ({ ...prev, [k]: { ...st, status: "busy" } }));
+      const j = await api("generate-image", {
+        prompt: `${st.prompt || s?.prompt || ""}，${project.style}风格，电影级镜头，高细节`,
+        size: "2K",
+        ratio: "9:16",
+      });
+      setShotState((prev) => ({
+        ...prev,
+        [k]: {
+          ...prev[k],
+          status: j?.ok ? "img" : "error",
+          imgUrl: j?.ok ? j.url : prev[k]?.imgUrl,
+          error: j?.ok ? undefined : j?.error,
+        },
+      }));
+    },
+    [api, shots, shotState, project.style]
+  );
+
+  const genVideoShot = useCallback(
+    async (k) => {
+      const st = shotState[k] || {};
+      setShotState((prev) => ({ ...prev, [k]: { ...st, status: "busy" } }));
+      const j = await api("generate-video", {
+        prompt: `${st.prompt || ""}，${project.style}风格，自然运动，电影级镜头`,
+        image: st.imgUrl || undefined,
+        width: 1152,
+        height: 768,
+        num_frames: 81,
+        frame_rate: 24,
+      });
+      setShotState((prev) => ({
+        ...prev,
+        [k]: {
+          ...prev[k],
+          status: j?.ok ? "done" : (prev[k]?.imgUrl ? "img" : "error"),
+          videoUrl: j?.ok ? j.url : prev[k]?.videoUrl,
+          error: j?.ok ? undefined : j?.error,
+        },
+      }));
+    },
+    [api, shotState, project.style]
+  );
+
+  const onScriptChange = useCallback((k, val, field = "script") => {
+    setShotState((prev) => ({ ...prev, [k]: { ...(prev[k] || {}), [field]: val } }));
+  }, []);
 
   const onReorder = useCallback((next) => setTimeline(next), []);
   const onCfgChange = useCallback((k, patch) => {
@@ -515,56 +675,75 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
   }, []);
   const onSelect = useCallback((k) => setSelectedClip(k), []);
 
-  // ── export ──
-  const totalDur = useMemo(
-    () => timeline.reduce((sum, k) => sum + (shotCfg[k]?.dur || 4), 0),
-    [timeline, shotCfg]
-  );
+  // ── export (prepare Jianying draft from real generated videos/images) ──
+  const totalDur = useMemo(() => timeline.reduce((sum, k) => sum + (shotCfg[k]?.dur || 4), 0), [timeline, shotCfg]);
 
   const handleExport = useCallback(async () => {
     if (!timeline.length) {
-      setExportJson({ error: "没有可导出的镜头，请先到「分镜」页生成" });
+      setExportJson((prev) => ({ ...(prev || {}), error: "没有可导出的镜头，请先到「分镜」页生成" }));
       return;
     }
     const shotsPayload = timeline.map((k) => {
-      const s = DEMO_SHOTS.find((x) => shotKey(x) === k);
+      const s = shots.find((x) => shotKey(x) === k);
       const st = shotState[k] || {};
       return { key: k, ep: s?.ep, n: s?.n, videoUrl: st.videoUrl || null, imgUrl: st.imgUrl || null };
     });
     setExporting(true);
-    const t = addTask("导出剪映工程（下载素材 + 生成草稿）");
-    tick(t, 100);
+    const t = { id: Date.now() + Math.random(), name: "导出剪映工程（下载素材 + 生成草稿）", status: "run", prog: 0 };
+    setTasks((prev) => [t, ...prev]);
     const j = await api("prepare-export", {
-      project,
+      project: { name: project.name || "short_drama", res: project.res, fps: project.fps },
       timeline,
       shotCfg,
       shots: shotsPayload,
     });
     setExporting(false);
     if (j && j.ok) {
-      setExportJson({ json: j.json, totalSec: j.totalSec, count: j.count, draftDir: j.draftDir });
+      setExportJson((prev) => ({ ...(prev || {}), json: j.json, totalSec: j.totalSec, count: j.count, draftDir: j.draftDir }));
     } else {
-      setExportJson({ error: (j && j.error) || "导出失败" });
+      setExportJson((prev) => ({ ...(prev || {}), error: (j && j.error) || "导出失败" }));
     }
-    finishTask(t.id);
-  }, [timeline, shotCfg, project, shotState, api, addTask, tick, finishTask]);
+    setTasks((prev) => prev.map((x) => (x.id === t.id ? { ...x, status: j?.ok ? "ok" : "err", error: j?.error, prog: 100 } : x)));
+  }, [timeline, shotCfg, project, shots, shotState, api]);
 
   const goPhase = useCallback((id) => {
     setPhase(id);
-    setDone((prev) => (id === "script" ? prev : { ...prev, script: true }));
-    if (id === "storyboard") setDone((prev) => ({ ...prev, assets: true }));
-    if (id === "export") setDone((prev) => ({ ...prev, storyboard: true }));
   }, []);
 
-  function handleScriptGenerate() {
-    const t = addTask("拆分剧本 → 资产 + 分镜");
-    tick(t, 100);
-    const to = setTimeout(() => {
-      setDone((prev) => ({ ...prev, script: true }));
-      setPhase("assets");
-    }, 700);
-    timersRef.current.push(to);
+  function handleStart() {
+    if (!onRun) return;
+    const script = project.mode === "series" ? project.seriesScript : project.script;
+    if (!script || !script.trim()) {
+      alert(project.mode === "series" ? "请填写系列脚本" : "请填写剧本");
+      return;
+    }
+    // Reset state for a fresh run.
+    setRunState("running");
+    setRunId(null);
+    setTasks([]);
+    setDone({});
+    setPhase("script");
+    setAssetImgs({ character: {}, scene: {}, prop: {} });
+    setAssetsReady({ character: false, scene: false, prop: false });
+    setShotState({});
+    setTimeline([]);
+    setExportJson(null);
+
+    const input = {
+      mode: project.mode,
+      script: project.mode === "single" ? project.script : undefined,
+      series_script: project.mode === "series" ? project.seriesScript : undefined,
+      style: project.style,
+      project_name: project.name || undefined,
+      total_episodes: project.mode === "series" ? Number(project.eps) : undefined,
+      consistency_policy: project.mode === "series" ? project.consistency : undefined,
+      resolution: project.res,
+      sec_per_shot: Number(project.sec),
+    };
+    onRun(input);
   }
+
+  const running = runState === "running";
 
   return (
     <div className="st-workbench" onClick={() => selectedClip && setSelectedClip(null)}>
@@ -590,6 +769,7 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
           assetImgs={assetImgs}
           onGenOne={genOne}
           onGenAll={genAll}
+          disabled={running}
         />
 
         <div className="st-center">
@@ -597,25 +777,39 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
             <div className="st-card">
               <label className="st-fld">
                 <span>项目名</span>
-                <input
-                  value={project.name}
-                  onChange={(e) => setProject((p) => ({ ...p, name: e.target.value }))}
-                />
+                <input value={project.name} onChange={(e) => setProject((p) => ({ ...p, name: e.target.value }))} placeholder="倒数三秒说爱你" />
               </label>
+
               <label className="st-fld">
-                <span>剧本 / 大纲</span>
+                <span>模式</span>
+                <select value={project.mode} onChange={(e) => setProject((p) => ({ ...p, mode: e.target.value }))}>
+                  <option value="single">单条视频</option>
+                  <option value="series">多集连载</option>
+                </select>
+              </label>
+
+              <label className="st-fld">
+                <span>{project.mode === "series" ? "系列脚本 / 大纲" : "剧本 / 大纲"}</span>
                 <textarea
-                  defaultValue="都市爱情短剧。霸总顾屿在雨夜车祸失忆，只记得女孩林夕的声音。林夕是他公司的实习生，为还债接近他，却在相处中动了真心。当记忆归来，他必须在家族利益与真爱间抉择。"
+                  value={project.mode === "series" ? project.seriesScript : project.script}
+                  onChange={(e) =>
+                    setProject((p) =>
+                      p.mode === "series" ? { ...p, seriesScript: e.target.value } : { ...p, script: e.target.value }
+                    )
+                  }
                   style={{ minHeight: 90 }}
+                  placeholder={
+                    project.mode === "series"
+                      ? "整部连载的大纲/剧情，将按集数拆分…"
+                      : "描述你要的漫剧情节…"
+                  }
                 />
               </label>
+
               <div className="st-row2">
                 <label className="st-fld">
                   <span>风格</span>
-                  <select
-                    value={project.style}
-                    onChange={(e) => setProject((p) => ({ ...p, style: e.target.value }))}
-                  >
+                  <select value={project.style} onChange={(e) => setProject((p) => ({ ...p, style: e.target.value }))}>
                     <option>二次元</option>
                     <option>写实</option>
                     <option>3D</option>
@@ -626,19 +820,31 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
                   <input
                     type="number"
                     min="1"
-                    max="6"
+                    max="24"
                     value={project.eps}
-                    onChange={(e) => setProject((p) => ({ ...p, eps: e.target.value }))}
+                    disabled={project.mode !== "series"}
+                    onChange={(e) => setProject((p) => ({ ...p, eps: Math.max(1, parseInt(e.target.value, 10) || 1) }))}
                   />
                 </label>
               </div>
+
+              {project.mode === "series" && (
+                <label className="st-fld">
+                  <span>跨集一致性</span>
+                  <select
+                    value={project.consistency}
+                    onChange={(e) => setProject((p) => ({ ...p, consistency: e.target.value }))}
+                  >
+                    <option value="lock_bible">锁定角色圣经</option>
+                    <option value="per_episode">每集独立</option>
+                  </select>
+                </label>
+              )}
+
               <div className="st-row2">
                 <label className="st-fld">
                   <span>分辨率</span>
-                  <select
-                    value={project.res}
-                    onChange={(e) => setProject((p) => ({ ...p, res: e.target.value }))}
-                  >
+                  <select value={project.res} onChange={(e) => setProject((p) => ({ ...p, res: e.target.value }))}>
                     <option>1080×1920（竖屏）</option>
                     <option>1920×1080（横屏）</option>
                   </select>
@@ -654,27 +860,26 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
                   />
                 </label>
               </div>
-              <button className="st-primary" onClick={handleScriptGenerate}>
-                生成资产与分镜 →
+
+              <button className="st-primary" onClick={handleStart} disabled={running || !onRun}>
+                {running ? "工作流运行中…" : "生成资产与分镜 →"}
               </button>
-              <div className="st-hint">点击后模拟：生成角色/场景/道具参考图 → 自动拆出分镜。</div>
+              <div className="st-hint">点击后调用 manjucraft_agent：拆分剧本 → 生成角色 → 首帧/分镜审批 → 视频/配音 → 导出剪映草稿。</div>
             </div>
           )}
 
           {phase === "assets" && (
             <div className="st-card">
-              <div className="st-hint">
-                资产由独立工作流（manju_assets）生成，分镜在生成时引用这里的参考图保证一致性。点击下方按钮模拟生成。
-              </div>
-              <button className="st-primary" onClick={genAll}>
-                一键生成全部资产 →
+              <div className="st-hint">角色参考图由工作流生成并锁定到角色圣经（series 模式下首集批准后即锁定）。</div>
+              <button className="st-primary" onClick={genAll} disabled={running}>
+                下一步：分镜 →
               </button>
             </div>
           )}
 
           {phase === "storyboard" && (
             <StoryboardEditor
-              shots={DEMO_SHOTS}
+              shots={shots}
               shotState={shotState}
               onGenShot={genShot}
               onGenVideo={genVideoShot}
@@ -691,20 +896,14 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
                 <div className="st-row2">
                   <label className="st-fld">
                     <span>分辨率</span>
-                    <select
-                      value={project.res}
-                      onChange={(e) => setProject((p) => ({ ...p, res: e.target.value }))}
-                    >
+                    <select value={project.res} onChange={(e) => setProject((p) => ({ ...p, res: e.target.value }))}>
                       <option>1080×1920</option>
                       <option>1920×1080</option>
                     </select>
                   </label>
                   <label className="st-fld">
                     <span>帧率 fps</span>
-                    <select
-                      value={project.fps}
-                      onChange={(e) => setProject((p) => ({ ...p, fps: parseInt(e.target.value, 10) }))}
-                    >
+                    <select value={project.fps} onChange={(e) => setProject((p) => ({ ...p, fps: parseInt(e.target.value, 10) }))}>
                       <option>30</option>
                       <option>25</option>
                       <option>60</option>
@@ -714,12 +913,22 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
                 <button className="st-primary" onClick={handleExport} disabled={exporting}>
                   {exporting ? "导出中…（下载素材 + 生成草稿）" : "导出剪映工程 ↓"}
                 </button>
+                {exportJson?.finalVideo && (
+                  <div className="st-hint" style={{ marginTop: 10 }}>
+                    成片已生成：{exportJson.finalVideo}
+                  </div>
+                )}
+                {exportJson?.draftPath && (
+                  <div className="st-hint" style={{ marginTop: 10 }}>
+                    剪映草稿：{exportJson.draftPath}
+                  </div>
+                )}
               </div>
 
               <EditConsole
                 timeline={timeline}
                 shotCfg={shotCfg}
-                shots={DEMO_SHOTS}
+                shots={shots}
                 selectedClip={selectedClip}
                 totalDur={totalDur}
                 onSelect={onSelect}
@@ -728,18 +937,21 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
                 onDelete={onDelete}
               />
 
-              {exportJson && exportJson.error && (
-                <div className="st-export-note st-export-note-err">{exportJson.error}</div>
-              )}
+              {exportJson && exportJson.error && <div className="st-export-note st-export-note-err">{exportJson.error}</div>}
               {exportJson && exportJson.json && (
                 <div className="st-export-json">
                   <pre>{`draft_content.json\n\n${JSON.stringify(exportJson.json, null, 2)}`}</pre>
                   <div className="st-export-note">
-                    工程已生成并下载真实素材到本地：<br />
-                    📁 {exportJson.draftDir}<br />
-                    &nbsp;&nbsp;├─ draft_content.json（上）<br />
-                    &nbsp;&nbsp;├─ draft_meta.json<br />
-                    &nbsp;&nbsp;└─ materials/（{exportJson.count} 个真实 shot_*.mp4 / .png，剪映按相对路径找素材）<br />
+                    工程已生成并下载真实素材到本地：
+                    <br />
+                    📁 {exportJson.draftDir}
+                    <br />
+                    &nbsp;&nbsp;├─ draft_content.json（上）
+                    <br />
+                    &nbsp;&nbsp;├─ draft_meta.json
+                    <br />
+                    &nbsp;&nbsp;└─ materials/（{exportJson.count} 个真实 shot_*.mp4 / .png，剪映按相对路径找素材）
+                    <br />
                     用剪映「导入草稿」打开即可精修。总时长 ≈ {exportJson.totalSec.toFixed(0)}s。
                   </div>
                 </div>

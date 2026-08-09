@@ -1,0 +1,71 @@
+{
+  "id": "manjucraft_agent",
+  "name": "漫剧生成 v2",
+  "description": "根据脚本生成竖屏漫剧视频（剪映草稿），支持单条与多集长剧（series）两种模式。单条 = 一次运行一条视频；series = 一次运行 N 集连载，跨集角色由角色圣经锁定。",
+  "category": "media",
+  "icon": "film",
+  "version": "1.0.0",
+  "entry": "agents/manjucraft_agent/agent.py",
+  "runtime": "inprocess",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "script": {
+        "type": "string",
+        "minLength": 1,
+        "x_ui": { "control": "textarea", "label": "脚本", "placeholder": "描述你要的漫剧情节（single 模式）…" }
+      },
+      "style": {
+        "type": "string",
+        "enum": ["写实", "二次元", "3D"],
+        "default": "二次元",
+        "x_ui": { "control": "select", "label": "风格" }
+      },
+      "project_name": {
+        "type": "string",
+        "x_ui": { "control": "text", "label": "项目名（可选）" }
+      },
+      "mode": {
+        "type": "string",
+        "enum": ["single", "series"],
+        "default": "single",
+        "x_ui": { "control": "select", "label": "模式" }
+      },
+      "series_script": {
+        "type": "string",
+        "x_ui": { "control": "textarea", "label": "系列脚本（series 模式）", "placeholder": "整部连载的大纲/剧情，将按集数拆分" }
+      },
+      "total_episodes": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 24,
+        "default": 3,
+        "x_ui": { "control": "number", "label": "集数" }
+      },
+      "consistency_policy": {
+        "type": "string",
+        "enum": ["lock_bible", "per_episode"],
+        "default": "lock_bible",
+        "x_ui": { "control": "select", "label": "跨集一致性" }
+      }
+    },
+    "required": []
+  },
+  "output_schema": {
+    "summary": "markdown",
+    "artifacts": [
+      { "id": "video", "type": "video", "source": "path", "label": "成片" },
+      { "id": "jianying", "type": "file", "mime": "application/json", "source": "path", "label": "剪映草稿" },
+      { "id": "assets", "type": "file", "mime": "application/zip", "source": "path", "label": "素材包" }
+    ]
+  },
+  "capabilities": ["video-generation", "script-to-video", "series"],
+  "approval_gates": [
+    { "gate_id": "first_frame", "label": "首帧确认", "allowSteer": true, "modes": ["single", "series"], "episodes": "first" },
+    { "gate_id": "episode_ready", "label": "本集确认", "allowSteer": true, "modes": ["series"], "episodes": "later" },
+    { "gate_id": "each_scene", "label": "分镜确认", "allowSteer": true, "modes": ["single", "series"], "episodes": "first" },
+    { "gate_id": "end", "label": "成片确认", "allowSteer": false, "modes": ["single", "series"], "episodes": "first" }
+  ],
+  "progress_events": ["workflow.progress", "workflow.artifact", "workflow.approval", "workflow.done"],
+  "notes": "series 模式：首集走 first_frame/each_scene/end 三个完整门（首帧门批准即锁定 character_bible）；续集仅走轻量 episode_ready 门，跳过 each_scene/end（一致性由 bible 担保）。"
+}

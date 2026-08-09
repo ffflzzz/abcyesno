@@ -33,7 +33,7 @@ function findAvailablePort(host, startPort) {
 function looksLikeVideoTask(t) {
   if (!t) return false;
   const lower = t.toLowerCase();
-  const keywords = ['视频', '剪映', 'jianying', 'manju', '做一条', '生成视频', 'video', 'manjucraft', 'manju-craft'];
+  const keywords = ['视频', '剪映', 'jianying', 'manju', '做一条', '生成视频', 'video', 'manjucraft', 'manju-craft', '系列', '连载', '多集', 'episode'];
   return keywords.some((k) => lower.includes(k));
 }
 
@@ -202,9 +202,10 @@ function createAgUIServer(getGatewayClient, storage, options) {
       const m = mfMap.get(token) || mfMap.get(token.replace(/_/g, ' '));
       if (m && !targets.includes(m)) targets.push(m);
     }
-    // 3. legacy video auto-delegation (main assistant only)
+    // 3. legacy video auto-delegation (main assistant only) -> default to the
+    //    new manjucraft_agent (v2); old manju_craft still selectable by @ mention.
     if ((!skillId || skillId === 'default') && looksLikeVideoTask(text)) {
-      const manju = mfMap.get('manju_craft');
+      const manju = mfMap.get('manjucraft_agent') || mfMap.get('manju_craft');
       if (manju && !targets.includes(manju)) targets.push(manju);
     }
     return targets.length > 0 ? targets[0] : null;
@@ -866,7 +867,9 @@ function createAgUIServer(getGatewayClient, storage, options) {
     // legacy video auto-delegation. Opens the HITL subscriber so the workflow's
     // workflow.* events relay back to this SSE stream.
     const mentionTarget = resolveMentionDelegation(text, ctx.forwardedProps.mentions, ctx.skillId);
-    let delegatedAgent = ctx.skillId === 'manju-craft' ? 'manju_craft' : (mentionTarget ? mentionTarget.id : null);
+    let delegatedAgent = ctx.skillId === 'manju-craft' ? 'manju_craft'
+      : (ctx.skillId === 'manjucraft-agent' || ctx.skillId === 'manjucraft_agent') ? 'manjucraft_agent'
+      : (mentionTarget ? mentionTarget.id : null);
 
     // A structured ContractForm / Workbench invoke ("请调用 langgraph_agent 工具…"
     // carrying agent_name) also targets a workflow. Resolve its agent_name so the
@@ -912,7 +915,7 @@ function createAgUIServer(getGatewayClient, storage, options) {
         '你是主助手。如果上述请求涉及视频生成、剪映或 manju-craft 工作流，',
         '请直接调用 langgraph_agent 工具，参数为：',
         '{',
-        '  "agent_name": "manju_craft",',
+        '  "agent_name": "manjucraft_agent",',
         `  "input": ${JSON.stringify(text)}`,
         '}',
         '不要解释你打算做什么，直接发起 langgraph_agent 调用；工具执行结果会返回给用户。',
@@ -1243,6 +1246,46 @@ function createAgUIServer(getGatewayClient, storage, options) {
     } catch (err) {
       log('agui-server', `transcribe failed: ${err.message}`);
       return res.json({ error: err.message });
+    }
+  });
+
+  // ── Auto-generate a short, summarized session title from the first
+  //    exchange. Replaces the old "first N chars" hack with a real model
+  //    summary so the header / sidebar don't show raw message fragments.
+  //    Failures return an empty title and the caller keeps its fallback. ──
+  app.post('/api/session-title', async (req, res) => {
+    try {
+      const body = req.body || {};
+      const userText = String(body.userText || '').slice(0, 800);
+      const assistantText = String(body.assistantText || '').slice(0, 1500);
+      if (!userText && !assistantText) return res.json({ title: '' });
+      const key = readAgnesApiKey();
+      if (!key) return res.json({ title: '' });
+      const sys = '你是会话标题生成器。根据一段对话（用户提问与助手回答），用中文生成一个不超过 12 字的简洁标题，概括对话主题。只输出标题本身，不要标点、不要引号、不要解释、不要换行。';
+      const user = `用户：${userText}\n助手：${assistantText}`;
+      const upstream = await fetch('https://apihub.agnes-ai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+        body: JSON.stringify({
+          model: 'agnes-2.5-flash',
+          messages: [
+            { role: 'system', content: sys },
+            { role: 'user', content: user },
+          ],
+          max_tokens: 48,
+          temperature: 0.3,
+        }),
+      });
+      const data = await upstream.json().catch(() => ({}));
+      let title = '';
+      const msg = data && data.choices && data.choices[0] && data.choices[0].message;
+      if (msg) title = String(msg.content || '');
+      title = title.replace(/["'"'"'""''「」【】\s]/g, '').trim();
+      if (title.length > 24) title = title.slice(0, 24);
+      return res.json({ title });
+    } catch (err) {
+      log('agui-server', `session-title failed: ${err.message}`);
+      return res.json({ title: '' });
     }
   });
 

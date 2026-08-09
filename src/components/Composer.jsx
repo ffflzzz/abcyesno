@@ -25,19 +25,20 @@ function readFileAsDataURL(file) {
 }
 
 // ── Rich composer (contenteditable) helpers ────────────────────────────
-// Images live inline in the editable surface as contentEditable=false <img>
-// nodes at the caret position. On send we serialize: text → newlines, each
-// <img> → a positional placeholder [[IMG:i]]; the i-th image's dataUrl is
+// Images are inserted as contentEditable=false chips (filename + hover
+// thumbnail) so they don't dominate the composer. On send we serialize each
+// chip → a positional placeholder [[IMG:i]]; the i-th image's dataUrl is
 // stashed in imagesRef. ChatLayout restores [[IMG:i]] to a markdown image so
 // the model sees the picture exactly where the user placed it.
 
-function makeInlineImage(dataUrl, idx) {
-  const img = document.createElement("img");
-  img.src = dataUrl;
-  img.setAttribute("data-inline-img", String(idx));
-  img.setAttribute("contentEditable", "false");
-  img.className = "composer-inline-img";
-  return img;
+function makeInlineImageChip(fileName, dataUrl, idx) {
+  const chip = document.createElement("span");
+  chip.className = "composer-image-chip";
+  chip.setAttribute("data-inline-img", String(idx));
+  chip.setAttribute("data-img-src", dataUrl);
+  chip.setAttribute("contentEditable", "false");
+  chip.textContent = fileName || "图片";
+  return chip;
 }
 
 // Insert a node at the current caret inside `container`; caret then moves
@@ -77,8 +78,9 @@ function serializeEditable(el) {
       out += node.nodeValue.replace(/ /g, "");
     } else if (node.nodeType === Node.ELEMENT_NODE) {
       const tag = node.tagName;
-      if (tag === "IMG") {
-        out += `[[IMG:${node.getAttribute("data-inline-img")}]]`;
+      const inlineIdx = node.getAttribute && node.getAttribute("data-inline-img");
+      if (inlineIdx != null) {
+        out += `[[IMG:${inlineIdx}]]`;
       } else if (tag === "BR") {
         out += "\n";
       } else if (tag === "DIV" || tag === "P") {
@@ -318,13 +320,13 @@ export default function Composer({
   };
 
   // Insert an image inline at the caret; stash its dataUrl for send.
-  const insertImageInline = (dataUrl) => {
+  const insertImageInline = (fileName, dataUrl) => {
     const el = editableRef.current;
     if (!el) return;
     el.focus();
     const idx = imagesRef.current.length;
     imagesRef.current.push(dataUrl);
-    insertNodeAtCaret(el, makeInlineImage(dataUrl, idx));
+    insertNodeAtCaret(el, makeInlineImageChip(fileName, dataUrl, idx));
     recomputeEmpty();
   };
 
@@ -337,7 +339,7 @@ export default function Composer({
         if (file.type && file.type.startsWith("image/")) {
           try {
             const dataUrl = await readFileAsDataURL(file);
-            insertImageInline(dataUrl);
+            insertImageInline(file.name || "", dataUrl);
           } catch (err) {
             console.error("paste image failed", err);
           }
@@ -361,7 +363,7 @@ export default function Composer({
     if (file.type && file.type.startsWith("image/")) {
       try {
         const dataUrl = await readFileAsDataURL(file);
-        insertImageInline(dataUrl);
+        insertImageInline(file.name || "", dataUrl);
       } catch (err) {
         console.error("drop image failed", err);
       }

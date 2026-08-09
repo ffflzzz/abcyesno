@@ -163,7 +163,11 @@ export default function ChatLayout({
           <div className="header-assistant">
             <div className="header-title-row">
               <span className={`header-status-dot ${getStatusLabel(backendStatus, phase).dot}`} />
-              <span className="header-title">{session?.preview || (assistant?.name || "Abcyesno")}</span>
+              <span className="header-title">
+                {session?.title && session.title !== "新会话"
+                  ? session.title
+                  : (assistant?.name || "Abcyesno")}
+              </span>
             </div>
           </div>
         </div>
