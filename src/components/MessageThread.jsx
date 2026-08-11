@@ -800,7 +800,7 @@ function ToolsRow({ items, assistantAvatar, loading, isLastRow, toolStatus = {},
   const toolNames = Object.keys(groups);
 
   return (
-    <div className="message-row assistant">
+    <div className="message-row assistant tool-row">
       <div className={`message-avatar agent-avatar ${toolsRunning ? "tool" : ""}`}>{assistantAvatar}</div>
       <div className="message-col">
         <div className="tool-summary-bar" onClick={toggle}>

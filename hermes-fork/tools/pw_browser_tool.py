@@ -1,20 +1,25 @@
 #!/usr/bin/env python3
-"""Playwright-backed browser automation tools (self-contained, no agent-browser).
+"""Electron-native browser automation tools (self-contained, no Playwright).
 
 This module provides a small, dependency-light browser-automation toolset that
 drives the app's *built-in* Chromium (spec §5.5, route B). The browser is not a
-separate Playwright-launched process — it is the ``<webview>`` rendered inside the
-app's "浏览器" sidebar panel, which is Electron's own bundled Chromium.
+separate Playwright-launched process — it is the ``<webview>`` rendered inside
+the app's "浏览器" sidebar panel, which is Electron's own bundled Chromium.
 
-To drive it, the Python side connects to Electron over the DevTools Protocol
-(``playwright.sync_api.chromium.connect_over_cdp(PW_CDP_URL)``) and selects the
-embedded webview by its marker URL (``PW_WEBVIEW_MARKER``). No second LLM, no Node
-toolchain, no separately-bundled Chromium. The Hermes agent's *own* LLM drives the
-visible, in-app browser step by step through these atomic tools.
+To drive it, the renderer reports the guest webview's ``webContentsId`` to the
+Electron main process, which runs a tiny localhost-only HTTP driver service
+(``PW_BROWSER_DRIVER_URL``, default http://127.0.0.1:18923). This module is a
+thin HTTP client: it POSTs navigate / snapshot / click / type / scroll /
+screenshot / close actions to that service, which operates the *visible*,
+in-app browser natively via ``webContents.loadURL`` / ``executeJavaScript`` /
+``capturePage``. No second LLM, no Node toolchain, no separately-bundled
+Chromium, and crucially no Playwright ``connect_over_cdp`` (which cannot target
+Electron ``<webview>`` guests). The Hermes agent's *own* LLM drives the visible
+browser step by step through these atomic tools, so the user watches the
+automation live, inside the app.
 
 Requires (set by the Electron main process before spawn):
-  * ``PW_CDP_URL``  — http://127.0.0.1:<remote-debugging-port>
-  * ``PW_WEBVIEW_MARKER`` — the data: URL the sidebar webview loads as its sentinel
+  * ``PW_BROWSER_DRIVER_URL`` — http://127.0.0.1:<driver-port>
 
 Tools (toolset ``browser-pw``):
   pw_browser_navigate  -- open a URL
@@ -23,27 +28,28 @@ Tools (toolset ``browser-pw``):
   pw_browser_type      -- fill an input
   pw_browser_scroll    -- scroll the page
   pw_browser_screenshot-- save a PNG and return its path
-  pw_browser_close     -- tear down the session's browser
+  pw_browser_close     -- reset the in-app browser to its idle page
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
-import tempfile
-import threading
 import time
-from pathlib import Path
-from typing import Any, Dict, Optional
+import urllib.error
+import urllib.request
+from typing import Any, Dict
 
 from tools.registry import registry, tool_error, tool_result
 
 logger = logging.getLogger(__name__)
 
-# Per-task_id browser state. Hermes is single-user/desktop, but we still key by
-# task_id so concurrent automation tasks don't clobber each other's page.
-_STATE_LOCK = threading.Lock()
-_SESSIONS: Dict[str, _Session] = {}
+# Lightweight session registry. The in-app browser is a single shared visible
+# <webview>; we only track *which* task_ids have an active session so the
+# snapshot/click/type/scroll/screenshot tools require a preceding navigate and
+# close() can free the slot. Keyed by task_id (Hermes is single-user/desktop).
+_SESSIONS: Dict[str, bool] = {}
 
 
 def _emit_progress(task_id: str, message: str, level: str = "info") -> None:
@@ -65,152 +71,74 @@ def _emit_progress(task_id: str, message: str, level: str = "info") -> None:
         pass
 
 
-# Shared CDP connection to Electron's built-in Chromium. A single embedded
-# <webview> panel exists in the app; all task_ids drive that same visible page.
-_DEFAULT_MARKER = "data:text/html,<title>browser-pw-marker</title>"
-_PW = None          # playwright sync runner
-_BROWSER = None     # connected Browser (Electron, via CDP)
-_PAGE = None        # the embedded webview Page
+# Localhost-only HTTP client. Build a custom opener that ignores any proxy env
+# (HTTP_PROXY / HTTPS_PROXY) so requests to 127.0.0.1 never get routed through a
+# proxy — hermes-runner may set a proxy for upstream Agnes calls.
+_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
-def _is_main_window(url: str) -> bool:
-    """Heuristic: the app's own BrowserWindow loads index.html (file:// or dev
-    server). The embedded <webview> loads the marker data: URL or a user URL."""
-    u = url or ""
-    return ("index.html" in u) or (u.startswith("file://") and "index" in u)
+def _driver_url() -> str:
+    return os.environ.get("PW_BROWSER_DRIVER_URL", "").rstrip("/")
 
 
-def _find_webview_page(browser, marker: str, timeout: float = 12.0):
-    """Scan CDP targets for the embedded webview (identified by its marker URL).
+def _http(method: str, path: str, payload: Dict[str, Any] = None, timeout: float = 35) -> Dict[str, Any]:
+    url = _driver_url() + path
+    data = None
+    headers = {"Content-Type": "application/json"}
+    if payload is not None:
+        data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    with _opener.open(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
 
-    Falls back to the first non-main-window page when the marker URL is gone
-    (e.g. the user manually navigated away) so agent control still works.
+
+def _wait_ready(timeout: float = 15.0) -> None:
+    """Poll the driver's /health until the in-app webview is registered.
+
+    The user must have the 浏览器 panel open (it reports its webview id on
+    dom-ready). If the panel is closed the driver answers NOT_READY and this
+    raises a helpful error rather than hanging forever.
     """
+    url = _driver_url()
+    if not url:
+        raise RuntimeError(
+            "PW_BROWSER_DRIVER_URL not set — browser automation only works inside the desktop app"
+        )
     deadline = time.time() + timeout
+    last_err = "driver not reachable"
     while time.time() < deadline:
-        candidates = []
-        for ctx in browser.contexts:
-            for page in ctx.pages:
-                try:
-                    url = page.url or ""
-                except Exception:
-                    url = ""
-                if url == marker or "browser-pw-marker" in url:
-                    return page
-                if not _is_main_window(url) and url:
-                    candidates.append(page)
-        if candidates:
-            # Prefer a fresh marker (data: URL), else the first non-main page.
-            for p in candidates:
-                try:
-                    if (p.url or "").startswith("data:"):
-                        return p
-                except Exception:
-                    pass
-            return candidates[0]
-        time.sleep(0.3)
+        try:
+            health = _http("GET", "/health", timeout=5)
+            if health.get("ready"):
+                return
+            last_err = "浏览器面板未就绪（webview 未注册）"
+        except Exception as exc:  # server down / not listening yet
+            last_err = str(exc)
+        time.sleep(0.4)
     raise RuntimeError(
-        "browser panel not found — open the 浏览器 panel in the app, then retry"
+        f"browser panel not ready ({last_err}) — 请打开应用内的「浏览器」面板，然后重试"
     )
 
 
-def _acquire_page():
-    """Connect to Electron over CDP (once) and return the embedded webview page."""
-    global _PW, _BROWSER, _PAGE
-    with _STATE_LOCK:
-        if _PAGE is not None and not _PAGE.is_closed():
-            return _PAGE
-        # Stale connection — drop it before reconnecting.
-        if _PW is not None:
-            try:
-                _PW.stop()
-            except Exception:
-                pass
-        _PW = _BROWSER = _PAGE = None
-    cdp_url = os.environ.get("PW_CDP_URL")
-    if not cdp_url:
-        raise RuntimeError(
-            "PW_CDP_URL not set — browser automation only works inside the desktop app"
-        )
-    marker = os.environ.get("PW_WEBVIEW_MARKER") or _DEFAULT_MARKER
-    from playwright.sync_api import sync_playwright
-
-    pw = sync_playwright().start()
-    try:
-        browser = pw.chromium.connect_over_cdp(cdp_url)
-    except Exception as exc:
-        try:
-            pw.stop()
-        except Exception:
-            pass
-        raise RuntimeError(f"cannot connect to Electron CDP at {cdp_url}: {exc}")
-    page = _find_webview_page(browser, marker)
-    with _STATE_LOCK:
-        _PW, _BROWSER, _PAGE = pw, browser, page
-    return page
+def _require_session(task_id: str) -> None:
+    _SESSIONS[task_id] = True
 
 
 def check_pw_browser_requirements() -> bool:
-    """Tool availability gate: Playwright importable + Electron CDP endpoint set.
+    """Tool availability gate: the driver endpoint must be set and reachable.
 
-    The browser is Electron's own Chromium, so no separate Chromium build is
-    required (unlike the old launched-process design).
+    We do NOT require the webview to be registered yet — the agent may open the
+    浏览器 panel itself. Requiring only the driver server to respond keeps the
+    tools available whenever the desktop app is running.
     """
+    url = _driver_url()
+    if not url:
+        return False
     try:
-        from playwright.sync_api import sync_playwright  # noqa: F401
+        _http("GET", "/health", timeout=3)
+        return True
     except Exception:
         return False
-    return bool(os.environ.get("PW_CDP_URL"))
-
-
-class _Session:
-    """Wraps the single embedded webview page (shared across task_ids)."""
-
-    def __init__(self, page) -> None:
-        self.page = page
-
-    def close(self) -> None:
-        # The browser is the app's embedded panel — don't tear it down. Just
-        # reset it to the marker so the next automation starts from a blank page.
-        try:
-            if self.page and not self.page.is_closed():
-                marker = os.environ.get("PW_WEBVIEW_MARKER") or _DEFAULT_MARKER
-                self.page.goto(marker, timeout=5000, wait_until="domcontentloaded")
-        except Exception:
-            pass
-
-
-def _get_session(task_id: str, headless: bool = False) -> _Session:
-    page = _acquire_page()
-    with _STATE_LOCK:
-        sess = _SESSIONS.get(task_id)
-        if sess is None:
-            sess = _Session(page)
-            _SESSIONS[task_id] = sess
-        return sess
-
-
-def _resolve(locator_str: str, task_id: str = "default"):
-    """Turn a CSS / xpath / text= selector string into a Playwright locator.
-
-    The session is looked up by the explicit ``task_id`` (passed through from the
-    handler) rather than a module-level global, so concurrent automation tasks
-    can't resolve the wrong page.
-    """
-    sess = _SESSIONS.get(task_id)
-    if sess is None:
-        raise RuntimeError("no active browser session")
-    page = sess.page
-    s = (locator_str or "").strip()
-    if s.startswith("//") or s.startswith("(/"):
-        return page.locator(f"xpath={s}")
-    if s.startswith("text="):
-        return page.get_by_text(s[len("text="):], exact=False).first
-    if s.startswith("role="):
-        return page.get_by_role(s[len("role="):])
-    if s.startswith("placeholder="):
-        return page.get_by_placeholder(s[len("placeholder="):])
-    return page.locator(s)
 
 
 # ---------------------------------------------------------------------------
@@ -221,115 +149,121 @@ def pw_browser_navigate(url: str, task_id: str = "default", headless: bool = Fal
     if not url or not str(url).strip():
         return tool_error("url is required")
     _emit_progress(task_id, f"🌐 打开 {url}", "info")
-    sess = _get_session(task_id, bool(headless))
     try:
-        sess.page.goto(str(url).strip(), wait_until="load", timeout=30000)
-    except Exception as exc:  # navigation timeout / bad URL
+        _wait_ready()
+        r = _http("POST", "/navigate", {"url": str(url).strip()}, timeout=35)
+    except Exception as exc:
         _emit_progress(task_id, f"❌ 导航失败: {exc}", "error")
         return tool_error(f"navigation failed: {exc}")
-    title = sess.page.title()
-    _emit_progress(task_id, f"✅ 已加载 — {title or sess.page.url}", "ok")
-    return tool_result({
-        "ok": True,
-        "url": sess.page.url,
-        "title": title,
-    })
+    if not r.get("ok"):
+        _emit_progress(task_id, f"❌ 导航失败: {r.get('error')}", "error")
+        return tool_error(f"navigation failed: {r.get('error')}")
+    _require_session(task_id)
+    title = r.get("title") or ""
+    _emit_progress(task_id, f"✅ 已加载 — {title or r.get('url')}", "ok")
+    return tool_result({"ok": True, "url": r.get("url"), "title": title})
 
 
 def pw_browser_snapshot(task_id: str = "default", max_chars: int = 8000) -> str:
-    sess = _SESSIONS.get(task_id)
-    if sess is None:
+    if task_id not in _SESSIONS:
         return tool_error("no active browser session; call pw_browser_navigate first")
     _emit_progress(task_id, "📄 读取页面文本…", "info")
     try:
-        text = sess.page.inner_text("body") or ""
+        r = _http("POST", "/snapshot", {}, timeout=20)
     except Exception as exc:
         _emit_progress(task_id, f"❌ snapshot 失败: {exc}", "error")
         return tool_error(f"snapshot failed: {exc}")
-    text = text.strip()
+    if not r.get("ok"):
+        _emit_progress(task_id, f"❌ snapshot 失败: {r.get('error')}", "error")
+        return tool_error(f"snapshot failed: {r.get('error')}")
+    text = (r.get("text") or "").strip()
     if len(text) > max_chars:
         text = text[:max_chars] + "\n…(truncated)"
     _emit_progress(task_id, f"✅ 拿到 {len(text)} 字符", "ok")
-    return tool_result({"ok": True, "url": sess.page.url, "text": text})
+    return tool_result({"ok": True, "url": r.get("url"), "text": text})
 
 
 def pw_browser_click(ref: str, task_id: str = "default") -> str:
-    sess = _SESSIONS.get(task_id)
-    if sess is None:
+    if task_id not in _SESSIONS:
         return tool_error("no active browser session; call pw_browser_navigate first")
     if not ref or not str(ref).strip():
         return tool_error("ref (selector) is required")
     _emit_progress(task_id, f"👆 点击 {ref}", "info")
     try:
-        _resolve(str(ref).strip(), task_id).first.click(timeout=10000)
+        r = _http("POST", "/click", {"ref": str(ref).strip()}, timeout=15)
     except Exception as exc:
         _emit_progress(task_id, f"❌ 点击失败: {exc}", "error")
         return tool_error(f"click failed: {exc}")
+    if not r.get("ok"):
+        _emit_progress(task_id, f"❌ 点击失败: {r.get('error')}", "error")
+        return tool_error(f"click failed: {r.get('error')}")
     _emit_progress(task_id, "✅ 点击完成", "ok")
-    return tool_result({"ok": True, "url": sess.page.url})
+    return tool_result({"ok": True, "url": r.get("url")})
 
 
 def pw_browser_type(ref: str, text: str, task_id: str = "default") -> str:
-    sess = _SESSIONS.get(task_id)
-    if sess is None:
+    if task_id not in _SESSIONS:
         return tool_error("no active browser session; call pw_browser_navigate first")
     if not ref or not str(ref).strip():
         return tool_error("ref (selector) is required")
     preview = (text or "")[:32] + ("…" if text and len(text) > 32 else "")
     _emit_progress(task_id, f"⌨️  在 {ref} 填写 «{preview}»", "info")
     try:
-        _resolve(str(ref).strip(), task_id).first.fill(str(text or ""), timeout=10000)
+        r = _http("POST", "/type", {"ref": str(ref).strip(), "text": str(text or "")}, timeout=15)
     except Exception as exc:
         _emit_progress(task_id, f"❌ 输入失败: {exc}", "error")
         return tool_error(f"type failed: {exc}")
+    if not r.get("ok"):
+        _emit_progress(task_id, f"❌ 输入失败: {r.get('error')}", "error")
+        return tool_error(f"type failed: {r.get('error')}")
     _emit_progress(task_id, "✅ 输入完成", "ok")
-    return tool_result({"ok": True, "url": sess.page.url})
+    return tool_result({"ok": True, "url": r.get("url")})
 
 
 def pw_browser_scroll(direction: str = "down", task_id: str = "default") -> str:
-    sess = _SESSIONS.get(task_id)
-    if sess is None:
+    if task_id not in _SESSIONS:
         return tool_error("no active browser session; call pw_browser_navigate first")
     direction = (direction or "down").strip().lower()
     _emit_progress(task_id, f"📜 滚动 {direction}", "info")
     try:
-        delta = -800 if direction == "up" else 800
-        sess.page.mouse.wheel(0, delta)
+        r = _http("POST", "/scroll", {"direction": direction}, timeout=15)
     except Exception as exc:
         _emit_progress(task_id, f"❌ 滚动失败: {exc}", "error")
         return tool_error(f"scroll failed: {exc}")
+    if not r.get("ok"):
+        _emit_progress(task_id, f"❌ 滚动失败: {r.get('error')}", "error")
+        return tool_error(f"scroll failed: {r.get('error')}")
     _emit_progress(task_id, "✅ 滚动完成", "ok")
-    return tool_result({"ok": True, "url": sess.page.url})
+    return tool_result({"ok": True, "url": r.get("url")})
 
 
 def pw_browser_screenshot(task_id: str = "default") -> str:
-    sess = _SESSIONS.get(task_id)
-    if sess is None:
+    if task_id not in _SESSIONS:
         return tool_error("no active browser session; call pw_browser_navigate first")
     _emit_progress(task_id, "🖼️  截图…", "info")
     try:
-        out_dir = Path(os.environ.get("HERMES_HOME", tempfile.gettempdir())) / "browser-shots"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        path = out_dir / f"shot-{task_id}-{int(__import__('time').time())}.png"
-        sess.page.screenshot(path=str(path))
+        r = _http("POST", "/screenshot", {}, timeout=20)
     except Exception as exc:
         _emit_progress(task_id, f"❌ 截图失败: {exc}", "error")
         return tool_error(f"screenshot failed: {exc}")
-    _emit_progress(task_id, f"✅ 已保存 {path.name}", "ok")
-    return tool_result({"ok": True, "path": str(path), "url": sess.page.url})
+    if not r.get("ok"):
+        _emit_progress(task_id, f"❌ 截图失败: {r.get('error')}", "error")
+        return tool_error(f"screenshot failed: {r.get('error')}")
+    _emit_progress(task_id, f"✅ 已保存 {os.path.basename(r.get('path', ''))}", "ok")
+    return tool_result({"ok": True, "path": r.get("path"), "url": r.get("url")})
 
 
 def pw_browser_close(task_id: str = "default") -> str:
-    with _STATE_LOCK:
-        sess = _SESSIONS.pop(task_id, None)
-    if sess is None:
-        return tool_result({"ok": True, "closed": False, "note": "no active session"})
+    _SESSIONS.pop(task_id, None)
     _emit_progress(task_id, "✖️  关闭浏览器会话", "info")
     try:
-        sess.close()
+        r = _http("POST", "/close", {}, timeout=15)
     except Exception as exc:
         _emit_progress(task_id, f"❌ 关闭失败: {exc}", "error")
         return tool_error(f"close failed: {exc}")
+    if not r.get("ok"):
+        _emit_progress(task_id, f"❌ 关闭失败: {r.get('error')}", "error")
+        return tool_error(f"close failed: {r.get('error')}")
     _emit_progress(task_id, "✅ 已关闭", "ok")
     return tool_result({"ok": True, "closed": True})
 
@@ -353,11 +287,11 @@ def _schema(name: str, description: str, props: Dict[str, Any], required: list) 
 _PW_TOOL_SCHEMAS = [
     _schema(
         "pw_browser_navigate",
-        "Open a URL in the in-app 浏览器 panel (Electron's built-in Chromium) and return the page title+url. Start here before any other pw_browser_* call.",
+        "Open a URL in the in-app 浏览器 panel (Electron's built-in Chromium, driven natively) and return the page title+url. Start here before any other pw_browser_* call.",
         {
             "url": {"type": "string", "description": "Full URL to open, e.g. https://example.com"},
             "task_id": {"type": "string", "description": "Session id (default 'default'). Use a stable id per automation task."},
-            "headless": {"type": "boolean", "description": "Ignored in embedded mode — the browser is always the in-app 浏览器 panel (visible)."},
+            "headless": {"type": "boolean", "description": "Ignored — the browser is always the in-app 浏览器 panel (visible)."},
         },
         ["url"],
     ),
@@ -408,7 +342,7 @@ _PW_TOOL_SCHEMAS = [
     ),
     _schema(
         "pw_browser_close",
-        "Close the automation browser for this task_id and free resources.",
+        "Reset the in-app browser for this task_id back to its idle page and free the session slot.",
         {
             "task_id": {"type": "string", "description": "Session id used in pw_browser_navigate."},
         },

@@ -1,5 +1,7 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import Icon from "../components/Icon.jsx";
+import ApprovalBubble from "../components/ApprovalBubble.jsx";
+import WorkflowGraphPanel from "../components/WorkflowGraphPanel.jsx";
 import { subscribeContractEvents } from "../contract/eventBus.js";
 import "./StudioWorkbench.css";
 
@@ -346,6 +348,16 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
   const [exporting, setExporting] = useState(false);
   const [runState, setRunState] = useState("idle"); // idle | running | done | error
   const [runId, setRunId] = useState(null);
+  // HITL approval gate (first-frame / each-scene / end) surfaced while running
+  // inside the workbench. The chat-shell ApprovalBubble is NOT mounted here, so
+  // we render our own overlay and route the decision through the file control
+  // channel (window.hermes.sendWorkflowInterrupt).
+  const [approval, setApproval] = useState(null);
+  // Live LangGraph node-trace (topology + per-node status map).
+  const [topology, setTopology] = useState(null);
+  const [trace, setTrace] = useState({});
+  const [traceEpisode, setTraceEpisode] = useState(0);
+  const [traceTotal, setTraceTotal] = useState(1);
 
   const [project, setProject] = useState({
     name: "",
@@ -354,16 +366,134 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
     mode: "single",
     style: "二次元",
     eps: 1,
-    res: "1080×1920",
+    res: "1080x1920",
     sec: 4,
     fps: 30,
     consistency: "lock_bible",
+    fixedChars: "",
   });
 
   const timersRef = useRef([]);
   useEffect(() => {
     return () => timersRef.current.forEach((t) => clearInterval(t));
   }, []);
+
+  // ── Persistence: save/restore workbench state across page switches ────────
+  const storageKey = useMemo(() => {
+    const sid = session?.id || "default";
+    const mid = manifest?.id || "studio";
+    return `abcyesno:studio:${mid}:${sid}`;
+  }, [session?.id, manifest?.id]);
+
+  const loadPersistedState = useCallback(() => {
+    try {
+      const raw = localStorage.getItem(storageKey);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object") return null;
+      // Do not restore an active run; it cannot be resumed from the frontend.
+      if (parsed.runState === "running") {
+        parsed.runState = "idle";
+      }
+      return parsed;
+    } catch {
+      return null;
+    }
+  }, [storageKey]);
+
+  const clearPersistedState = useCallback(() => {
+    try {
+      localStorage.removeItem(storageKey);
+    } catch {}
+  }, [storageKey]);
+
+  // Restore once on mount.
+  useEffect(() => {
+    const saved = loadPersistedState();
+    if (!saved) return;
+    if (saved.project) setProject(saved.project);
+    if (saved.phase) setPhase(saved.phase);
+    if (saved.done) setDone(saved.done);
+    if (saved.tasks) setTasks(saved.tasks);
+    if (saved.assetsReady) setAssetsReady(saved.assetsReady);
+    if (saved.assetImgs) setAssetImgs(saved.assetImgs);
+    if (saved.curTab) setCurTab(saved.curTab);
+    if (saved.shotState) setShotState(saved.shotState);
+    if (saved.shotCfg) setShotCfg(saved.shotCfg);
+    if (saved.timeline) setTimeline(saved.timeline);
+    if (saved.selectedClip !== undefined) setSelectedClip(saved.selectedClip);
+    if (saved.exportJson) setExportJson(saved.exportJson);
+    if (saved.runState) setRunState(saved.runState);
+    if (saved.runId) setRunId(saved.runId);
+  }, [loadPersistedState]); // only run when key changes (mount)
+
+  // Debounced save whenever meaningful state changes.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      try {
+        const payload = {
+          project,
+          phase,
+          done,
+          tasks,
+          assetsReady,
+          assetImgs,
+          curTab,
+          shotState,
+          shotCfg,
+          timeline,
+          selectedClip,
+          exportJson,
+          runState,
+          runId,
+        };
+        localStorage.setItem(storageKey, JSON.stringify(payload));
+      } catch (err) {
+        console.error("studio persistence save failed", err);
+      }
+    }, 1000);
+    return () => clearTimeout(t);
+  }, [
+    storageKey,
+    project,
+    phase,
+    done,
+    tasks,
+    assetsReady,
+    assetImgs,
+    curTab,
+    shotState,
+    shotCfg,
+    timeline,
+    selectedClip,
+    exportJson,
+    runState,
+    runId,
+  ]);
+
+  // Parse the fixed-characters textarea into [{name, prompt}].
+  // Accepts two line formats: "名称=描述" or "名称：描述". Blank lines ignored.
+  function parseFixedCharacters(text) {
+    if (!text || typeof text !== "string") return [];
+    const out = [];
+    for (const raw of text.split(/\n+/)) {
+      const line = raw.trim();
+      if (!line) continue;
+      let name = "", prompt = "";
+      const eq = line.indexOf("=");
+      const colon = line.search(/[:：]/);
+      const sep = eq >= 0 && (colon < 0 || eq < colon) ? eq : colon;
+      if (sep >= 0) {
+        name = line.slice(0, sep).trim();
+        prompt = line.slice(sep + 1).trim();
+      } else {
+        name = line;
+      }
+      if (!name) continue;
+      out.push({ name, prompt });
+    }
+    return out;
+  }
 
   const shotStateRef = useRef(shotState);
   useEffect(() => {
@@ -384,6 +514,10 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
         setDone({});
         setPhase("script");
         setExportJson(null);
+        setTopology(null);
+        setTrace({});
+        setTraceEpisode(0);
+        setTraceTotal(1);
         return;
       }
 
@@ -396,10 +530,50 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
 
       if (type === "RUN_ERROR") {
         setRunState("error");
+        setApproval(null);
+        // Mark the currently active (running) node as errored in the trace.
+        setTrace((prev) => {
+          const next = { ...prev };
+          for (const k in next) if (next[k] === "running") next[k] = "error";
+          return next;
+        });
         const msg = ev.payload?.message || ev.message || "运行失败";
         setTasks((prev) =>
           prev.map((t) => (t.status === "run" ? { ...t, status: "err", error: msg, prog: 100 } : t))
         );
+        return;
+      }
+
+      if (type === "workflow.graph") {
+        const p = ev.payload || {};
+        setTopology({ nodes: p.nodes || [], edges: p.edges || [] });
+        setTraceTotal(p.totalEpisodes || 1);
+        setTrace({});
+        return;
+      }
+
+      if (type === "workflow.trace") {
+        const p = ev.payload || {};
+        if (p.node) {
+          setTrace((prev) => ({ ...prev, [p.node]: p.status }));
+          if (typeof p.episode === "number") setTraceEpisode(p.episode);
+        }
+        return;
+      }
+
+      if (type === "workflow.approval") {
+        const p = ev.payload || {};
+        setApproval({
+          id: p.gate_id || "workflow-approval",
+          operation: p.gate_id || "workflow-approval",
+          source: "workflow",
+          runId: p.workflowRunId,
+          gateId: p.gate_id,
+          label: p.label,
+          message: p.message || p.label || "工作流需要确认",
+          artifacts: p.artifacts || [],
+          allowSteer: !!p.allowSteer,
+        });
         return;
       }
 
@@ -448,9 +622,18 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
       }
 
       if (type === "workflow.done") {
+        setApproval(null);
         setRunState("done");
         setDone({ script: true, assets: true, storyboard: true, export: true });
         setPhase("export");
+        // Settle the trace: every known node becomes done (unless already error).
+        setTrace((prev) => {
+          const next = { ...prev };
+          (topology?.nodes || []).forEach((n) => {
+            if (next[n.id] !== "error") next[n.id] = "done";
+          });
+          return next;
+        });
         setTasks((prev) => prev.map((t) => (t.status === "run" ? { ...t, status: "ok", prog: 100 } : t)));
       }
     });
@@ -522,6 +705,27 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
     if (id === "jianying_draft") {
       setExportJson((prev) => ({ ...(prev || {}), draftPath: src }));
     }
+  }
+
+  // Resume a paused LangGraph HITL gate from inside the workbench. The chat
+  // ApprovalBubble is not mounted here, so we drive the file control channel
+  // (window.hermes.sendWorkflowInterrupt) directly and clear our local gate.
+  async function handleWorkbenchApprove(choice, remember, steerText) {
+    if (!approval) return;
+    try {
+      const hasSteer = !!(choice && steerText && steerText.trim());
+      const api = typeof window !== "undefined" && window.hermes;
+      if (api && api.sendWorkflowInterrupt) {
+        await api.sendWorkflowInterrupt({
+          workflowRunId: approval.runId,
+          decision: choice ? (hasSteer ? "steer" : "approve") : "reject",
+          steerText: hasSteer ? steerText : "",
+        });
+      }
+    } catch (err) {
+      console.error("workbench approval response failed", err);
+    }
+    setApproval(null);
   }
 
   // Build shot list and timeline from incoming artifacts.
@@ -723,6 +927,10 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
     setTasks([]);
     setDone({});
     setPhase("script");
+    setTopology(null);
+    setTrace({});
+    setTraceEpisode(0);
+    setTraceTotal(1);
     setAssetImgs({ character: {}, scene: {}, prop: {} });
     setAssetsReady({ character: false, scene: false, prop: false });
     setShotState({});
@@ -739,6 +947,7 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
       consistency_policy: project.mode === "series" ? project.consistency : undefined,
       resolution: project.res,
       sec_per_shot: Number(project.sec),
+      characters: parseFixedCharacters(project.fixedChars),
     };
     onRun(input);
   }
@@ -752,11 +961,51 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
           {manifest?.name || "短剧制片工作台"}
           <small>前端编排台 · 导出剪映工程</small>
         </div>
-        {onExit && (
-          <button className="st-icon-btn" onClick={onExit} title="退出工作台">
-            <Icon name="close" size={14} />
+        <div className="st-topbar-actions">
+          <button
+            className="st-icon-btn"
+            onClick={() => {
+              clearPersistedState();
+              setPhase("script");
+              setDone({});
+              setTasks([]);
+              setAssetsReady({ character: false, scene: false, prop: false });
+              setAssetImgs({ character: {}, scene: {}, prop: {} });
+              setShotState({});
+              setShotCfg({});
+              setTimeline([]);
+              setSelectedClip(null);
+              setExportJson(null);
+              setRunState("idle");
+              setRunId(null);
+              setTopology(null);
+              setTrace({});
+              setTraceEpisode(0);
+              setTraceTotal(1);
+              setProject({
+                name: "",
+                script: "",
+                seriesScript: "",
+                mode: "single",
+                style: "二次元",
+                eps: 1,
+                res: "1080x1920",
+                sec: 4,
+                fps: 30,
+                consistency: "lock_bible",
+                fixedChars: "",
+              });
+            }}
+            title="重置工作台"
+          >
+            <Icon name="refresh" size={14} />
           </button>
-        )}
+          {onExit && (
+            <button className="st-icon-btn" onClick={onExit} title="退出工作台">
+              <Icon name="close" size={14} />
+            </button>
+          )}
+        </div>
       </div>
 
       <PhaseStepper phase={phase} done={done} onGo={goPhase} />
@@ -774,106 +1023,137 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
 
         <div className="st-center">
           {phase === "script" && (
-            <div className="st-card">
-              <label className="st-fld">
-                <span>项目名</span>
-                <input value={project.name} onChange={(e) => setProject((p) => ({ ...p, name: e.target.value }))} placeholder="倒数三秒说爱你" />
-              </label>
-
-              <label className="st-fld">
-                <span>模式</span>
-                <select value={project.mode} onChange={(e) => setProject((p) => ({ ...p, mode: e.target.value }))}>
-                  <option value="single">单条视频</option>
-                  <option value="series">多集连载</option>
-                </select>
-              </label>
-
-              <label className="st-fld">
-                <span>{project.mode === "series" ? "系列脚本 / 大纲" : "剧本 / 大纲"}</span>
-                <textarea
-                  value={project.mode === "series" ? project.seriesScript : project.script}
-                  onChange={(e) =>
-                    setProject((p) =>
-                      p.mode === "series" ? { ...p, seriesScript: e.target.value } : { ...p, script: e.target.value }
-                    )
-                  }
-                  style={{ minHeight: 90 }}
-                  placeholder={
-                    project.mode === "series"
-                      ? "整部连载的大纲/剧情，将按集数拆分…"
-                      : "描述你要的漫剧情节…"
-                  }
-                />
-              </label>
-
-              <div className="st-row2">
+            <div className="st-card st-form-card">
+              <div className="st-section">
+                <div className="st-section-title">项目信息</div>
                 <label className="st-fld">
-                  <span>风格</span>
-                  <select value={project.style} onChange={(e) => setProject((p) => ({ ...p, style: e.target.value }))}>
-                    <option>二次元</option>
-                    <option>写实</option>
-                    <option>3D</option>
-                  </select>
+                  <span>项目名</span>
+                  <input value={project.name} onChange={(e) => setProject((p) => ({ ...p, name: e.target.value }))} placeholder="倒数三秒说爱你" />
                 </label>
+
                 <label className="st-fld">
-                  <span>集数</span>
-                  <input
-                    type="number"
-                    min="1"
-                    max="24"
-                    value={project.eps}
-                    disabled={project.mode !== "series"}
-                    onChange={(e) => setProject((p) => ({ ...p, eps: Math.max(1, parseInt(e.target.value, 10) || 1) }))}
-                  />
+                  <span>模式</span>
+                  <select value={project.mode} onChange={(e) => setProject((p) => ({ ...p, mode: e.target.value }))}>
+                    <option value="single">单条视频</option>
+                    <option value="series">多集连载</option>
+                  </select>
                 </label>
               </div>
 
-              {project.mode === "series" && (
+              <div className="st-section">
+                <div className="st-section-title">内容设定</div>
                 <label className="st-fld">
-                  <span>跨集一致性</span>
-                  <select
-                    value={project.consistency}
-                    onChange={(e) => setProject((p) => ({ ...p, consistency: e.target.value }))}
-                  >
-                    <option value="lock_bible">锁定角色圣经</option>
-                    <option value="per_episode">每集独立</option>
-                  </select>
-                </label>
-              )}
-
-              <div className="st-row2">
-                <label className="st-fld">
-                  <span>分辨率</span>
-                  <select value={project.res} onChange={(e) => setProject((p) => ({ ...p, res: e.target.value }))}>
-                    <option>1080×1920（竖屏）</option>
-                    <option>1920×1080（横屏）</option>
-                  </select>
-                </label>
-                <label className="st-fld">
-                  <span>每镜秒数</span>
-                  <input
-                    type="number"
-                    min="2"
-                    max="12"
-                    value={project.sec}
-                    onChange={(e) => setProject((p) => ({ ...p, sec: parseInt(e.target.value, 10) || 4 }))}
+                  <span>{project.mode === "series" ? "系列脚本 / 大纲" : "剧本 / 大纲"}</span>
+                  <textarea
+                    value={project.mode === "series" ? project.seriesScript : project.script}
+                    onChange={(e) =>
+                      setProject((p) =>
+                        p.mode === "series" ? { ...p, seriesScript: e.target.value } : { ...p, script: e.target.value }
+                      )
+                    }
+                    placeholder={
+                      project.mode === "series"
+                        ? "整部连载的大纲/剧情，将按集数拆分…"
+                        : "描述你要的漫剧情节…"
+                    }
                   />
+                </label>
+
+                <div className="st-row2">
+                  <label className="st-fld">
+                    <span>风格</span>
+                    <select value={project.style} onChange={(e) => setProject((p) => ({ ...p, style: e.target.value }))}>
+                      <option>二次元</option>
+                      <option>写实</option>
+                      <option>3D</option>
+                    </select>
+                  </label>
+                  <label className="st-fld">
+                    <span>集数</span>
+                    <input
+                      type="number"
+                      min="1"
+                      max="24"
+                      value={project.eps}
+                      disabled={project.mode !== "series"}
+                      onChange={(e) => setProject((p) => ({ ...p, eps: Math.max(1, parseInt(e.target.value, 10) || 1) }))}
+                    />
+                  </label>
+                </div>
+
+                {project.mode === "series" && (
+                  <label className="st-fld">
+                    <span>跨集一致性</span>
+                    <select
+                      value={project.consistency}
+                      onChange={(e) => setProject((p) => ({ ...p, consistency: e.target.value }))}
+                    >
+                      <option value="lock_bible">锁定角色圣经</option>
+                      <option value="per_episode">每集独立</option>
+                    </select>
+                  </label>
+                )}
+              </div>
+
+              <div className="st-section">
+                <div className="st-section-title">生成参数</div>
+                <div className="st-row2">
+                  <label className="st-fld">
+                    <span>分辨率</span>
+                    <select value={project.res} onChange={(e) => setProject((p) => ({ ...p, res: e.target.value }))}>
+                      <option value="1080x1920">1080×1920（竖屏）</option>
+                      <option value="1920x1080">1920×1080（横屏）</option>
+                      <option value="2560x1440">2560×1440（2K 横屏）</option>
+                      <option value="3840x2160">3840×2160（4K 横屏）</option>
+                    </select>
+                  </label>
+                  <label className="st-fld">
+                    <span>每镜秒数</span>
+                    <input
+                      type="number"
+                      min="2"
+                      max="12"
+                      value={project.sec}
+                      onChange={(e) => setProject((p) => ({ ...p, sec: parseInt(e.target.value, 10) || 4 }))}
+                    />
+                  </label>
+                </div>
+              </div>
+
+              <div className="st-section">
+                <div className="st-section-title">角色设定</div>
+                <label className="st-fld st-fld-col">
+                  <span>固定角色（可选，用于一致性）</span>
+                  <textarea
+                    rows={3}
+                    value={project.fixedChars}
+                    placeholder={"每行一个，如：\n糯糯=白色长毛猫，女，温柔但毒舌\n老周=60岁男人，沉默寡言，左手有旧伤疤"}
+                    onChange={(e) => setProject((p) => ({ ...p, fixedChars: e.target.value }))}
+                  />
+                  <small className="st-sub">格式：名称=描述 或 名称：描述。这些角色不会由 AI 重新生成设定，直接锁定进角色圣经。</small>
                 </label>
               </div>
 
-              <button className="st-primary" onClick={handleStart} disabled={running || !onRun}>
-                {running ? "工作流运行中…" : "生成资产与分镜 →"}
-              </button>
-              <div className="st-hint">点击后调用 manjucraft_agent：拆分剧本 → 生成角色 → 首帧/分镜审批 → 视频/配音 → 导出剪映草稿。</div>
+              <div className="st-form-actions">
+                <button className="st-primary" onClick={handleStart} disabled={running || !onRun}>
+                  {running ? "工作流运行中…" : "生成资产与分镜 →"}
+                </button>
+                <div className="st-hint">点击后调用 manjucraft_agent：拆分剧本 → 生成角色 → 首帧/分镜审批 → 视频/配音 → 导出剪映草稿。</div>
+              </div>
             </div>
           )}
 
           {phase === "assets" && (
-            <div className="st-card">
-              <div className="st-hint">角色参考图由工作流生成并锁定到角色圣经（series 模式下首集批准后即锁定）。</div>
-              <button className="st-primary" onClick={genAll} disabled={running}>
-                下一步：分镜 →
-              </button>
+            <div className="st-card st-form-card">
+              <div className="st-section">
+                <div className="st-section-title">角色资产</div>
+                <div className="st-hint">角色参考图由工作流生成并锁定到角色圣经（series 模式下首集批准后即锁定）。确认无误后进入分镜编排。</div>
+              </div>
+              <div className="st-form-actions">
+                <button className="st-primary" onClick={genAll} disabled={running}>
+                  下一步：分镜 →
+                </button>
+              </div>
             </div>
           )}
 
@@ -890,39 +1170,46 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
           {phase === "export" && (
             <div className="st-export-wrap">
               <div className="st-card">
-                <div className="st-hint">
-                  横轨时间轴：shot 按时长占宽度，左右拖拽换顺序。点击片段打开详情编辑时长/转场。编排完点「导出剪映工程」生成 draft JSON。
-                </div>
-                <div className="st-row2">
-                  <label className="st-fld">
-                    <span>分辨率</span>
-                    <select value={project.res} onChange={(e) => setProject((p) => ({ ...p, res: e.target.value }))}>
-                      <option>1080×1920</option>
-                      <option>1920×1080</option>
-                    </select>
-                  </label>
-                  <label className="st-fld">
-                    <span>帧率 fps</span>
-                    <select value={project.fps} onChange={(e) => setProject((p) => ({ ...p, fps: parseInt(e.target.value, 10) }))}>
-                      <option>30</option>
-                      <option>25</option>
-                      <option>60</option>
-                    </select>
-                  </label>
-                </div>
-                <button className="st-primary" onClick={handleExport} disabled={exporting}>
-                  {exporting ? "导出中…（下载素材 + 生成草稿）" : "导出剪映工程 ↓"}
-                </button>
-                {exportJson?.finalVideo && (
-                  <div className="st-hint" style={{ marginTop: 10 }}>
-                    成片已生成：{exportJson.finalVideo}
+                <div className="st-section">
+                  <div className="st-section-title">导出设置</div>
+                  <div className="st-hint">
+                    横轨时间轴：shot 按时长占宽度，左右拖拽换顺序。点击片段打开详情编辑时长/转场。编排完点「导出剪映工程」生成 draft JSON。
                   </div>
-                )}
-                {exportJson?.draftPath && (
-                  <div className="st-hint" style={{ marginTop: 10 }}>
-                    剪映草稿：{exportJson.draftPath}
+                  <div className="st-row2">
+                    <label className="st-fld">
+                      <span>分辨率</span>
+                      <select value={project.res} onChange={(e) => setProject((p) => ({ ...p, res: e.target.value }))}>
+                        <option value="1080x1920">1080×1920</option>
+                        <option value="1920x1080">1920×1080</option>
+                        <option value="2560x1440">2560×1440</option>
+                        <option value="3840x2160">3840×2160</option>
+                      </select>
+                    </label>
+                    <label className="st-fld">
+                      <span>帧率 fps</span>
+                      <select value={project.fps} onChange={(e) => setProject((p) => ({ ...p, fps: parseInt(e.target.value, 10) }))}>
+                        <option>30</option>
+                        <option>25</option>
+                        <option>60</option>
+                      </select>
+                    </label>
                   </div>
-                )}
+                </div>
+                <div className="st-form-actions">
+                  <button className="st-primary" onClick={handleExport} disabled={exporting}>
+                    {exporting ? "导出中…（下载素材 + 生成草稿）" : "导出剪映工程 ↓"}
+                  </button>
+                  {exportJson?.finalVideo && (
+                    <div className="st-hint" style={{ marginTop: 10 }}>
+                      成片已生成：{exportJson.finalVideo}
+                    </div>
+                  )}
+                  {exportJson?.draftPath && (
+                    <div className="st-hint" style={{ marginTop: 10 }}>
+                      剪映草稿：{exportJson.draftPath}
+                    </div>
+                  )}
+                </div>
               </div>
 
               <EditConsole
@@ -961,9 +1248,29 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
         </div>
 
         <div className="st-col st-right">
+          {topology && (
+            <WorkflowGraphPanel
+              topology={topology}
+              trace={trace}
+              runState={runState}
+              episode={traceEpisode}
+              total={traceTotal}
+            />
+          )}
+          {running && !topology && (
+            <div className="wf-panel wf-panel-skeleton">
+              <div className="wf-head">
+                <span className="wf-title">运行追踪</span>
+                <span className="wf-live">● LIVE</span>
+              </div>
+              <div className="wf-canvas">
+                <div className="wf-empty">等待图结构…</div>
+              </div>
+            </div>
+          )}
           <div style={{ padding: 14 }}>
             <h3 className="st-sec-title">任务中心</h3>
-            {tasks.length === 0 && <div className="st-empty">暂无任务</div>}
+            {tasks.length === 0 && !topology && <div className="st-empty">暂无任务</div>}
             {tasks.map((t) => (
               <div className={`st-task${t.status === "err" ? " st-task-err" : ""}`} key={t.id}>
                 <div className="st-task-t">
@@ -981,6 +1288,14 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
           </div>
         </div>
       </div>
+
+      {/* HITL approval gate overlay — renders the returned image(s) and the
+          approve / reject / steer controls when the backend pauses at a gate. */}
+      {approval && (
+        <div className="st-approval-overlay">
+          <ApprovalBubble approval={approval} onRespond={handleWorkbenchApprove} />
+        </div>
+      )}
     </div>
   );
 }

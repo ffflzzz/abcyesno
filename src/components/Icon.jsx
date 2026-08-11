@@ -71,6 +71,7 @@ import {
   BarChart3,       // bar-chart / usage stats
   AppWindow,       // app-window / "move tab to new window"
   Maximize2,       // maximize-2 (detach)
+  Home,            // home / launcher
 } from "lucide-react";
 
 // Single source of truth: name -> Lucide component.
@@ -166,6 +167,8 @@ const MAP = {
   "app-window": AppWindow,
   detach: AppWindow,
   "maximize-2": Maximize2,
+  home: Home,
+  launcher: Home,
   // neutral fallback for unknown names
   default: CircleDot,
 };

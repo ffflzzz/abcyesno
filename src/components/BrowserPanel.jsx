@@ -91,6 +91,21 @@ export default function BrowserPanel({ progress = [] } = {}) {
   const handleDomReady = () => {
     setReady(true);
     syncNavState();
+    // Report the guest webContentsId to the main process so the Electron-native
+    // driver service can drive this same visible <webview> (replaces the old
+    // Playwright connect_over_cdp route, which could not target Electron webviews).
+    try {
+      if (webviewRef.current && typeof webviewRef.current.getWebContentsId === 'function') {
+        window.hermes && window.hermes.reportBrowserWebview(webviewRef.current.getWebContentsId());
+      }
+    } catch (_) {}
+  };
+
+  const handleWebviewDestroyed = () => {
+    try {
+      window.hermes && window.hermes.clearBrowserWebview();
+    } catch (_) {}
+    setReady(false);
   };
 
   const handleWebviewEvent = (e) => {
@@ -233,6 +248,7 @@ export default function BrowserPanel({ progress = [] } = {}) {
               onDidNavigate={handleWebviewEvent}
               onDidNavigateInPage={handleWebviewEvent}
               onDomReady={handleDomReady}
+              onDestroyed={handleWebviewDestroyed}
             />
             {showHint && (
               <div className="bp-hint">
@@ -243,7 +259,7 @@ export default function BrowserPanel({ progress = [] } = {}) {
                 </span>
                 {showCdpWarn && (
                   <div className="bp-cdp-warn">
-                    ⚠ Playwright CDP 未连通 — Agent 端 pw_browser_* 工具将不可用。
+                    ⚠ Agent 浏览器驱动未连通 — 请确认桌面已启动且未禁用浏览器面板。
                   </div>
                 )}
               </div>

@@ -411,8 +411,14 @@ def _collect_artifacts(state: Any) -> List[Dict[str, Any]]:
     if not isinstance(state, dict):
         return []
     artifacts: List[Dict[str, Any]] = []
-    # Character bible (locked after first-episode first-frame approval).
-    for ch in state.get("character_bible") or []:
+    # Character images. ``character_bible`` is populated (locked) only AFTER the
+    # first-episode first-frame gate approves, so before that the freshly
+    # generated first-frame images live in ``characters``. Use whichever exists,
+    # preferring the bible once it is set (avoids duplicate artifacts after lock).
+    char_source = state.get("character_bible") or []
+    if not char_source:
+        char_source = state.get("characters") or []
+    for ch in char_source:
         if not isinstance(ch, dict):
             continue
         ref = ch.get("ref_image")
@@ -445,6 +451,41 @@ def _collect_artifacts(state: Any) -> List[Dict[str, Any]]:
         text = state.get("greeting") or state.get("reply")
         artifacts.append({"id": "text", "type": "text", "source": "text", "text": text, "label": "回复"})
     return artifacts
+
+
+def _extract_graph_topology(graph: Any) -> tuple:
+    """Return ``(nodes, edges)`` for the live LangGraph trace panel.
+
+    Uses ``graph.get_graph()`` which exposes the full edge list — including
+    conditional (branch) edges such as the series loop-back — so the panel can
+    render the real DAG instead of a guessed linear chain. Falls back to an
+    empty topology if introspection fails for any reason, so the caller can
+    degrade gracefully.
+    """
+    nodes: List[str] = []
+    edges: List[Dict[str, str]] = []
+    try:
+        gg = graph.get_graph()
+        raw_nodes = getattr(gg, "nodes", None)
+        if isinstance(raw_nodes, dict):
+            nodes = [k for k in raw_nodes.keys() if k not in ("__start__", "__end__")]
+        raw_edges = getattr(gg, "edges", None)
+        if isinstance(raw_edges, list):
+            for e in raw_edges:
+                src = getattr(e, "source", None)
+                tgt = getattr(e, "target", None)
+                if src is None and isinstance(e, (list, tuple)) and len(e) >= 1:
+                    src = e[0]
+                if tgt is None and isinstance(e, (list, tuple)) and len(e) >= 2:
+                    tgt = e[1]
+                if not src or not tgt:
+                    continue
+                if src in ("__start__",) or tgt in ("__end__",):
+                    continue
+                edges.append({"from": str(src), "to": str(tgt)})
+    except Exception:
+        nodes, edges = [], []
+    return nodes, edges
 
 
 def _run_async(coro):
@@ -561,6 +602,55 @@ async def _run_graph_with_hitl(
         except Exception:
             return None
 
+    # ── Topology for the live trace panel (emitted once at run start) ──
+    # Provide node labels from the agent's curated WORKFLOW_STAGES (which also
+    # defines the canonical order) and the real edge list from the compiled
+    # graph so the series loop-back is preserved. Include total episodes so the
+    # panel can show "第 N/Total 集" during a series run.
+    topo_nodes, topo_edges = _extract_graph_topology(graph)
+    # Fallback: if graph introspection yields nothing (e.g. an exotic compiled
+    # graph), derive a stable topology from the agent's own stage_map. This
+    # guarantees the frontend always receives a usable DAG.
+    if not topo_nodes and stage_map:
+        topo_nodes = [n for n, _ in stage_map]
+        for i in range(len(topo_nodes) - 1):
+            topo_edges.append({"from": topo_nodes[i], "to": topo_nodes[i + 1]})
+        if "finalize_episode" in topo_nodes:
+            if "parse_script" in topo_nodes:
+                topo_edges.append({"from": "finalize_episode", "to": "parse_script"})
+            if "finalize_series" in topo_nodes:
+                topo_edges.append({"from": "finalize_episode", "to": "finalize_series"})
+    _topo_ids = set(topo_nodes)
+    labeled_nodes = []
+    _seen = set()
+    for _n, _l in stage_map:
+        if _n in _seen:
+            continue
+        _seen.add(_n)
+        labeled_nodes.append({"id": _n, "label": _l})
+    for _nid in topo_nodes:
+        if _nid not in _seen:
+            _seen.add(_nid)
+            labeled_nodes.append({"id": _nid, "label": _nid})
+    _total_eps = 1
+    try:
+        _total_eps = int((input_state or {}).get("total_episodes", 1) or 1)
+    except Exception:
+        _total_eps = 1
+    on_event(
+        "workflow.graph",
+        {"nodes": labeled_nodes, "edges": topo_edges, "totalEpisodes": _total_eps},
+    )
+
+    _prev_trace_node = None  # last node we marked "running", for done transition
+
+    def _trace(node_name, status_kind):
+        try:
+            _ep = int((last_state or {}).get("current_episode", 0) or 0)
+        except Exception:
+            _ep = 0
+        on_event("workflow.trace", {"node": node_name, "status": status_kind, "episode": _ep})
+
     pending = input_state
     while True:
         interrupted = None
@@ -576,6 +666,12 @@ async def _run_graph_with_hitl(
                         continue
                     if node_name in node_to_index:
                         emit_progress(node_name, "running")
+                    # Live node trace (NOT deduped — series mode re-runs nodes).
+                    if node_name in node_to_index or node_name in _topo_ids:
+                        if _prev_trace_node and _prev_trace_node != node_name:
+                            _trace(_prev_trace_node, "done")
+                        _trace(node_name, "running")
+                        _prev_trace_node = node_name
                 st = snapshot()
                 if st is not None:
                     last_state = st
@@ -610,6 +706,7 @@ async def _run_graph_with_hitl(
 
         if node_name and node_name in node_to_index:
             emit_progress(node_name, "pending", message)
+            _trace(node_name, "pending")
 
         st = snapshot()
         if st is not None:
@@ -642,6 +739,8 @@ async def _run_graph_with_hitl(
         pending = Command(resume=decision)
 
     # Normal completion.
+    if _prev_trace_node:
+        _trace(_prev_trace_node, "done")
     emit_progress("finalize", "done")
     st = snapshot()
     if st is not None:

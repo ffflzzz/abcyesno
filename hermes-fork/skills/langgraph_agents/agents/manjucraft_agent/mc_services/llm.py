@@ -75,12 +75,33 @@ _SCRIPT_PARSE_SYSTEM_PROMPT = """你是一位专业的漫剧（短剧/短视频�
 只输出 JSON 对象，不要任何解释和 markdown 代码块。字段名必须严格与上面一致。"""
 
 
-async def parse_script_to_shots(script: str, *, model: str | None = None) -> list[dict]:
-    """Parse a script into a list of shot dictionaries."""
+async def parse_script_to_shots(script: str, *, model: str | None = None, skip_characters: bool = False) -> list[dict]:
+    """Parse a script into a list of shot dictionaries.
+
+    When ``skip_characters`` is True the role list is fixed by the user, so we
+    only ask the model for the shot list (it may still surface additional minor
+    roles in ``characters`` which ``parse_script`` will append, but the user's
+    fixed roles are never overwritten).
+    """
     if MOCK:
         # Deterministic smoke output matching the real LLM JSON shape
         # ({shots, characters}) so the character_bible lock (episode 0 ->
         # later episodes reuse) is observable offline.
+        if skip_characters:
+            # Fixed-characters mode: model only produces shots, no roles.
+            return {
+                "shots": [
+                    {
+                        "index": 0,
+                        "description": "烟测试场景（固定角色）",
+                        "dialogue": "这是一段烟测试旁白。",
+                        "duration": 3.0,
+                        "prompt": "A gray placeholder scene for smoke testing, cinematic, consistent style",
+                        "video_prompt": "Subtle camera movement on a gray placeholder scene",
+                    }
+                ],
+                "characters": [],
+            }
         return {
             "shots": [
                 {

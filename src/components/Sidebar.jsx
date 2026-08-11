@@ -84,7 +84,6 @@ function getSessionDisplayPreview(s) {
 // ── Tab constants ──
 const TABS = [
   { id: "chat", label: "对话", name: "chat" },
-  { id: "workflow", label: "工作流", name: "workflow" },
   { id: "tasks", label: "任务", name: "tasks" },
 ];
 
@@ -106,12 +105,7 @@ export default function Sidebar({
   onToggle,
   onOpenSkills,
   onOpenSettings,
-  onOpenMarket,
   backendStatus,
-  manifests = [],
-  selectedWorkflowId,
-  onSelectWorkflow,
-  onWorkflowRun,          // triggers independent workflow session run
   // ── Task panel props ──
   taskManager,           // { tasks, selectedTaskId, onSelectTask, createTask, stopTask, clearCompleted, clearAll }
 }) {
@@ -131,16 +125,6 @@ export default function Sidebar({
   useEffect(() => {
     try { localStorage.setItem("abcyesno:sidebarTab", activeTab); } catch (_) {}
   }, [activeTab]);
-
-  // Map manifest icon to a unified Icon name
-  const workflowIconName = (icon) => {
-    switch (icon) {
-      case "chat": return "chat";
-      case "film": return "film";
-      case "image": return "image";
-      default: return "workflow";
-    }
-  };
 
   const assistantMap = useMemo(() => {
     const map = {};
@@ -205,14 +189,6 @@ export default function Sidebar({
     setContextMenu(null);
   }
 
-  // ── Handle workflow run from sidebar → independent session + open dashboard ──
-  function handleWorkflowRun(manifest) {
-    // Select this workflow so ResultPanel shows its dashboard
-    if (onSelectWorkflow) onSelectWorkflow(manifest.id);
-    // Actually trigger the run (creates dedicated session, sends envelope).
-    if (onWorkflowRun) onWorkflowRun(manifest, {});
-  }
-
   // ── Render helpers for each tab ──
 
   /** Chat tab: session list only (no assistant switcher — single agent) */
@@ -269,49 +245,6 @@ export default function Sidebar({
               <div className="empty-hint">暂无会话，点击上方创建</div>
             )}
           </div>
-        </div>
-      </div>
-    );
-  }
-
-  /** Workflow tab: card grid */
-  function renderWorkflowTab() {
-    return (
-      <div className="sidebar-tab-content">
-        <div className="workflow-grid">
-          {manifests.map((m) => {
-            const active = m.id === selectedWorkflowId;
-            return (
-              <div
-                key={m.id}
-                className={`wf-card ${active ? "active" : ""}`}
-                onClick={() => onSelectWorkflow && onSelectWorkflow(m.id)}
-                title={m.description || m.name}
-              >
-                <div className="wf-card-icon"><Icon name={workflowIconName(m.icon)} size={20} /></div>
-                <div className="wf-card-body">
-                  <div className="wf-card-name">{m.name}</div>
-                  <div className="wf-card-desc">{m.description || m.ui?.title || ""}</div>
-                </div>
-                {/* Run button — spawns background task */}
-                {taskManager && (
-                  <button
-                    className="wf-card-run"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleWorkflowRun(m);
-                    }}
-                    title="后台运行此工作流"
-                  >
-                    <Icon name="play" size={14} /> 运行
-                  </button>
-                )}
-              </div>
-            );
-          })}
-          {manifests.length === 0 && (
-            <div className="empty-hint">暂无工作流</div>
-          )}
         </div>
       </div>
     );
@@ -383,13 +316,11 @@ export default function Sidebar({
         {/* Tab content area */}
         <div className="sidebar-body">
           {activeTab === "chat" && renderChatTab()}
-          {activeTab === "workflow" && renderWorkflowTab()}
           {activeTab === "tasks" && renderTasksTab()}
         </div>
 
         {/* Footer */}
         <div className="sidebar-footer">
-          <button className="footer-btn" title="市场" onClick={onOpenMarket}><Icon name="market" size={14} /> 市场</button>
           <button className="footer-btn" title="技能" onClick={onOpenSkills}><Icon name="skills" size={14} /> 技能</button>
           <button className="footer-btn" title="设置" onClick={onOpenSettings}><Icon name="settings" size={14} /> 设置</button>
         </div>

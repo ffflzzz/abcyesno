@@ -5,7 +5,10 @@ import ApiKeyModal from "./components/ApiKeyModal.jsx";
 import MarketPanel from "./components/MarketPanel.jsx";
 import CreateAssistantModal from "./components/CreateAssistantModal.jsx";
 import SettingsPanel from "./components/SettingsPanel.jsx";
+import Launcher from "./components/Launcher.jsx";
+import TabBar from "./components/TabBar.jsx";
 import ResultPanel from "./components/ResultPanel.jsx";
+import StudioWorkbench from "./workbenches/StudioWorkbench.jsx";
 import BrowserPanel from "./components/BrowserPanel.jsx";
 import ConfirmModal from "./components/ConfirmModal.jsx";
 import BlockRequestDialog from "./components/BlockRequestDialog.jsx";
@@ -15,6 +18,38 @@ import { sanitizeMessageContent } from "./components/MessageThread.jsx";
 import { useAgentStream } from "./hooks/useAgentStream.js";
 import { useTaskManager } from "./components/TaskPanel.jsx";
 import { ErrorBoundary } from "./ErrorBoundary.jsx";
+
+// Module-level wrapper so the studio view can be created by a function call
+// instead of inline JSX. esbuild's JSX extraction for the conditional const
+// (`studioView = cond ? <JSX/> : null`) was dropping local variable bindings
+// (activeManifest, studioRunHandler, handleWorkflowRun) in the extracted helper,
+// causing "X is not defined" at runtime. A plain function call passes values
+// explicitly, avoiding the helper scope-split bug.
+function StudioHost({ manifest, session, model, backendStatus, onExit, onRun }) {
+  return (
+    <div className="workbench-host">
+      <StudioWorkbench
+        manifest={manifest}
+        session={session}
+        onExit={onExit}
+        model={model}
+        backendStatus={backendStatus}
+        onRun={onRun}
+      />
+    </div>
+  );
+}
+
+// Module-level runner used for workflow onRun/onWorkflowRun props. The actual
+// implementation lives on `handleWorkflowRunRef.current` inside the App
+// component; we mirror that ref onto this module-level holder so the JSX
+// props never have to close over a component-local variable. This avoids the
+// esbuild minify bug where local variable bindings were dropped inside
+// extracted conditional-JSX helpers.
+const workflowRunRef = { current: null };
+export function runStudioWorkflow(inputObj) {
+  return workflowRunRef.current?.(inputObj);
+}
 
 class ResultPanelErrorBoundary extends React.Component {
   constructor(props) {
@@ -366,15 +401,17 @@ function ChatShell({
   // stream architecture (useAgentStream Map<sessionId>) handles this natively.
   const handleWorkflowRunRef = useRef(null);
   handleWorkflowRunRef.current = async (manifest, inputObj = {}) => {
-    if (!hermes || !manifest) return null;
+    const m =
+      manifest || manifests.find((x) => x.id === selectedWorkflowId) || null;
+    if (!hermes || !m) return null;
     try {
       const assistantId = selectedAssistantId || "default";
       const wfSession = await hermes.createSession(
         assistantId,
-        `工作流: ${manifest.name || manifest.id}`
+        `工作流: ${m.name || m.id}`
       );
       const envelope = {
-        agent_name: manifest.id,
+        agent_name: m.id,
         input: inputObj,
         thread_id: wfSession.id,
       };
@@ -388,10 +425,11 @@ function ChatShell({
     }
   };
 
-  // Stable callback for ResultPanel / Sidebar.
-  const handleWorkflowRun = useCallback((manifest, inputObj) => {
-    return handleWorkflowRunRef.current?.(manifest, inputObj);
-  }, []);
+  // Mirror the per-instance ref onto the module-level holder so JSX props can
+  // reference the module-level `runStudioWorkflow` instead of a component-local
+  // variable. This avoids the esbuild minify bug where local callbacks placed
+  // inside conditional JSX lose their minified binding at runtime.
+  workflowRunRef.current = handleWorkflowRunRef.current;
 
   // ── Detach: open the standalone window AND clear the in-window state so
   //    the panel doesn't render in two places at once. We clear the active
@@ -537,12 +575,7 @@ function ChatShell({
         onToggle={() => setSidebarOpen((o) => !o)}
         onOpenSkills={onToggleSkills}
         onOpenSettings={() => setShowSettings(true)}
-        onOpenMarket={() => setShowMarket(true)}
         backendStatus={backendStatus}
-        manifests={manifests}
-        selectedWorkflowId={selectedWorkflowId}
-        onSelectWorkflow={onSelectWorkflow}
-        onWorkflowRun={handleWorkflowRun}
         taskManager={taskManager}
       />
       <ChatLayout
@@ -648,7 +681,7 @@ function ChatShell({
         session={session}
         onSend={handleSend}
         onStop={handleStop}
-        onWorkflowRun={handleWorkflowRun}
+        onWorkflowRun={runStudioWorkflow}
         model={model}
         backendStatus={backendStatus}
         onSelectWorkflow={onSelectWorkflow}
@@ -742,11 +775,166 @@ export default function App({ aguiPort }) {
   });
   const hermes = window.hermes;
 
+  // Global shortcut: F10 opens the Settings panel from anywhere in the app.
+  useEffect(() => {
+    if (!hermes || !hermes.onOpenSettings) return;
+    const cb = () => setShowSettings(true);
+    hermes.onOpenSettings(cb);
+    return () => {
+      if (hermes.offOpenSettings) hermes.offOpenSettings(cb);
+    };
+  }, []);
+
+  // Renderer-side F12 fallback: when focus is inside the app DOM (main window,
+  // inputs, modals), catching keydown here reliably opens DevTools even if the
+  // OS/global F12 registration was stolen by another app. The main process
+  // "open-devtools" IPC toggles the dock. Webview-focused F12 still goes through
+  // the globalShortcut path in main.js.
+  // After opening, we push keyboard focus back to the main-window composer so
+  // that the NEXT F12 press is still caught here and toggles the dock closed
+  // (otherwise focus lands in the DevTools panel and the key is lost).
+  useEffect(() => {
+    if (!hermes || !hermes.openDevTools) return;
+    function pullFocusToComposer() {
+      // Close the Settings modal so the composer is reachable, then move
+      // keyboard focus back into the main window DOM. This lets a subsequent
+      // F12 press be caught by this listener to toggle DevTools closed.
+      setShowSettings(false);
+      setTimeout(() => {
+        try {
+          const el = document.querySelector('.composer-input, textarea, input');
+          if (el && el.focus) el.focus();
+          else if (document.body && document.body.focus) document.body.focus();
+        } catch (_) {}
+      }, 120);
+    }
+    function onKey(e) {
+      if (e.key === 'F12') {
+        e.preventDefault();
+        hermes.openDevTools()
+          .then(pullFocusToComposer)
+          .catch((err) => console.error('openDevTools failed', err));
+      }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   // Contract layer: manifests drive the generic rendering components, and
   // selectedWorkflowId remembers which contract workflow (if any) is active in
   // the composer. Adding a workflow never touches this file beyond the data.
   const [manifests, setManifests] = useState(() => listManifests());
   const [selectedWorkflowId, setSelectedWorkflowId] = useState("");
+
+  // ── Browser-style tabs ──────────────────────────────────────────────
+  // Each tab owns a snapshot of the per-surface state (assistant / session /
+  // workflow / result panel). ChatShell stays mounted at all times (hidden via
+  // CSS when the active tab is the homepage) so background streams never drop
+  // when you switch tabs. Switching a tab saves the current surface state into
+  // the leaving tab and restores the target tab's saved state into the global
+  // variables ChatShell reads — effectively each tab is an independent surface.
+  const [tabs, setTabs] = useState(() => [
+    { id: "tab-home", type: "homepage", title: "启动台", icon: "home", assistantId: "", sessionId: "", workflowId: "", resultOpen: false, resultCollapsed: false },
+  ]);
+  const [activeTabId, setActiveTabId] = useState("tab-home");
+  const tabsRef = useRef(tabs);
+  tabsRef.current = tabs;
+
+  const persistActiveInto = useCallback((leavingId) => {
+    setTabs((prev) => prev.map((t) => t.id === leavingId
+      ? { ...t, assistantId: selectedAssistantId, sessionId: selectedSessionId, workflowId: selectedWorkflowId, resultOpen: resultPanelOpen, resultCollapsed: resultPanelCollapsed }
+      : t));
+  }, [selectedAssistantId, selectedSessionId, selectedWorkflowId, resultPanelOpen, resultPanelCollapsed]);
+
+  const applyTabState = useCallback((tab) => {
+    setSelectedAssistantId(tab.assistantId || "");
+    setSelectedSessionId(tab.sessionId || "");
+    setSelectedWorkflowId(tab.workflowId || "");
+    setResultPanelOpen(!!tab.resultOpen);
+    setResultPanelCollapsed(!!tab.resultCollapsed);
+  }, []);
+
+  const activateExisting = useCallback((id) => {
+    if (id === activeTabId) return;
+    persistActiveInto(activeTabId);
+    const tab = tabsRef.current.find((t) => t.id === id);
+    if (tab) applyTabState(tab);
+    setActiveTabId(id);
+  }, [activeTabId, persistActiveInto, applyTabState]);
+
+  const createTab = useCallback((partial) => {
+    // Save the current surface state into the tab we're leaving, then open a
+    // new tab and bind the global surface state to it.
+    persistActiveInto(activeTabId);
+    const id = `tab-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const tab = {
+      id, type: "homepage", title: "启动台", icon: "home",
+      assistantId: "", sessionId: "", workflowId: "", resultOpen: false, resultCollapsed: false,
+      ...partial,
+    };
+    setTabs((prev) => [...prev, tab]);
+    applyTabState(tab);
+    setActiveTabId(id);
+    return id;
+  }, [activeTabId, persistActiveInto, applyTabState]);
+
+  // Convert the current homepage tab into an app tab instead of opening a new
+  // tab. The user can press "+" if they actually want a fresh homepage.
+  const openApp = useCallback((partial) => {
+    const active = tabsRef.current.find((t) => t.id === activeTabId);
+    if (active && active.type === "homepage") {
+      const updated = { ...active, ...partial };
+      setTabs((prev) => prev.map((t) => t.id === activeTabId ? updated : t));
+      applyTabState(updated);
+    } else {
+      createTab(partial);
+    }
+  }, [activeTabId, applyTabState, createTab]);
+
+  const closeTab = useCallback((id) => {
+    // Keep at least one tab open.
+    if (tabs.length <= 1) return;
+    const idx = tabs.findIndex((t) => t.id === id);
+    const remaining = tabs.filter((t) => t.id !== id);
+    setTabs(remaining);
+    if (id === activeTabId) {
+      const neighbor = remaining[Math.min(idx, remaining.length - 1)] || remaining[0];
+      if (neighbor) {
+        applyTabState(neighbor);
+        setActiveTabId(neighbor.id);
+      }
+    }
+  }, [tabs, activeTabId, applyTabState]);
+
+  // Full workbench tab: clicking the workbench's "exit" button turns the
+  // current studio tab back into a homepage tab.
+  const exitToHome = useCallback(() => {
+    const active = tabsRef.current.find((t) => t.id === activeTabId);
+    if (active && active.type === "studio") {
+      const homeTab = { ...active, type: "homepage", title: "启动台", icon: "home", workflowId: "", resultOpen: false, resultCollapsed: false };
+      setTabs((prev) => prev.map((t) => t.id === activeTabId ? homeTab : t));
+      applyTabState(homeTab);
+    } else {
+      setSelectedWorkflowId("");
+      setResultPanelOpen(false);
+    }
+  }, [activeTabId, applyTabState]);
+
+  // Homepage app grid — data-driven so future LangGraph agents are just new
+  // entries here. Clicking an entry on the homepage converts the current
+  // homepage tab into that app tab; the user presses "+" when they really
+  // want a fresh homepage tab.
+  const homepageApps = useMemo(() => [
+    {
+      key: "chat", title: "对话", icon: "chat", color: "#111827",
+      onClick: () => openApp({ type: "chat", title: "对话", icon: "chat", assistantId: selectedAssistantId || "" }),
+    },
+    {
+      key: "studio", title: "漫剧go", icon: "film", color: "linear-gradient(135deg, #0d9488, #14b8a6)",
+      onClick: () => openApp({ type: "studio", title: "漫剧go", icon: "film", workflowId: "manjucraft_agent", resultOpen: true, resultCollapsed: false, assistantId: selectedAssistantId || "" }),
+    },
+    // 未来新增 LangGraph agent：在此追加 { key, title, icon, color, onClick: () => openApp({ ... }) }
+  ], [openApp, selectedAssistantId]);
 
   // ── Detach: owns the IPC + clears in-window workflow state ──
   // Lives in App (not ChatShell) because setSelectedWorkflowId /
@@ -1114,10 +1302,91 @@ export default function App({ aguiPort }) {
     () => sessions.find((s) => s.id === selectedSessionId),
     [sessions, selectedSessionId]
   );
+  const activeManifest = useMemo(
+    () => manifests.find((m) => m.id === selectedWorkflowId) || null,
+    [manifests, selectedWorkflowId]
+  );
+
+  const activeTab = tabs.find((t) => t.id === activeTabId) || tabs[0];
+
+  const tabBar = (
+    <TabBar
+      tabs={tabs}
+      activeTabId={activeTabId}
+      onActivate={activateExisting}
+      onClose={closeTab}
+      onAdd={() => createTab({ type: "homepage" })}
+    />
+  );
+
+  const overlayModals = (
+    <>
+      {showCreateModal && (
+        <CreateAssistantModal
+          skills={skills}
+          onCreate={handleCreateAssistant}
+          onClose={() => setShowCreateModal(false)}
+        />
+      )}
+      {showSettings && (
+        <SettingsPanel
+          apiKey={apiKey}
+          hasApiKey={apiKeySet || !!apiKey}
+          model={model}
+          theme={theme}
+          onThemeChange={handleThemeChange}
+          onEditApiKey={() => {
+            setShowSettings(false);
+            setShowKeyModal(true);
+          }}
+          onClose={() => setShowSettings(false)}
+          version={version}
+        />
+      )}
+      <ConfirmModal
+        open={!!confirmDialog}
+        title={confirmDialog?.title || ""}
+        message={confirmDialog?.message || ""}
+        danger={confirmDialog?.danger || false}
+        onConfirm={confirmDialog?.onConfirm}
+        onClose={() => setConfirmDialog(null)}
+      />
+      {blockQueue[0] && (
+        <BlockRequestDialog blockRequest={blockQueue[0]} onRespond={handleBlockRespond} />
+      )}
+    </>
+  );
+
+  if (activeTab.type === "studio" && activeManifest) {
+    return (
+      <ErrorBoundary>
+        <div className="app">
+          {tabBar}
+          <div className="tab-content">
+            <div className="workbench-host">
+              <StudioWorkbench
+                manifest={activeManifest}
+                session={session}
+                onExit={exitToHome}
+                model={model}
+                backendStatus={backendStatus}
+                onRun={runStudioWorkflow}
+              />
+            </div>
+          </div>
+        </div>
+        {overlayModals}
+      </ErrorBoundary>
+    );
+  }
 
   return (
     <ErrorBoundary>
       <div className="app">
+        {tabBar}
+        <div className="tab-content">
+          <>
+              <div className="chat-host" style={{ display: activeTab.type === "homepage" ? "none" : "flex" }}>
         <ChatShell
           assistant={assistant}
           session={session}
@@ -1174,39 +1443,14 @@ export default function App({ aguiPort }) {
           onOpenBrowserPanel={openBrowserPanel}
           onDetachResultPanel={handleDetachResultPanel}
         />
+              </div>
+              {activeTab.type === "homepage" && (
+                <Launcher apps={homepageApps} />
+              )}
+          </>
+        </div>
       </div>
-      {showCreateModal && (
-        <CreateAssistantModal
-          skills={skills}
-          onCreate={handleCreateAssistant}
-          onClose={() => setShowCreateModal(false)}
-        />
-      )}
-      {showSettings && (
-        <SettingsPanel
-          apiKey={apiKey}
-          hasApiKey={apiKeySet || !!apiKey}
-          model={model}
-          theme={theme}
-          onThemeChange={handleThemeChange}
-          onEditApiKey={() => {
-            setShowSettings(false);
-            setShowKeyModal(true);
-          }}
-          onClose={() => setShowSettings(false)}
-        />
-      )}
-      <ConfirmModal
-        open={!!confirmDialog}
-        title={confirmDialog?.title || ""}
-        message={confirmDialog?.message || ""}
-        danger={confirmDialog?.danger || false}
-        onConfirm={confirmDialog?.onConfirm}
-        onClose={() => setConfirmDialog(null)}
-      />
-      {blockQueue[0] && (
-        <BlockRequestDialog blockRequest={blockQueue[0]} onRespond={handleBlockRespond} />
-      )}
+      {overlayModals}
     </ErrorBoundary>
   );
 }

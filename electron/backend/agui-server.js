@@ -37,6 +37,115 @@ function looksLikeVideoTask(t) {
   return keywords.some((k) => lower.includes(k));
 }
 
+// Parse a free-text manju prompt into a STRUCTURED input object the
+// manjucraft_agent backend understands. The backend only reads series mode
+// from a structured {mode, series_script} object (free text is always treated
+// as single), so we must detect "series" intent here rather than trusting the
+// model to re-structure the input itself. Missing/invalid fields fall back to
+// sane defaults so the agent never raises.
+function parseManjuInput(text) {
+  if (!text) return { mode: "single", script: "" };
+  const lower = text.toLowerCase();
+  const isSeries =
+    /系列|连载|多集|\bepisode\b|第[一二三四五六七八九十\d]+集|(\d+)\s*集/.test(text);
+  // Default episode count: explicit "N集" wins, else 3.
+  let totalEpisodes = 3;
+  const m = text.match(/(\d+)\s*集/);
+  if (m) totalEpisodes = Math.min(24, Math.max(1, parseInt(m[1], 10)));
+  // Style hint.
+  let style = "二次元";
+  if (/写实/.test(text)) style = "写实";
+  else if (/3d|三维/.test(lower)) style = "3D";
+
+  // Optional project / series name. These keys ARE consumed by the backend's
+  // build_initial_state_obj, so extracting them is meaningful.
+  // Series / project name. These are SEPARATE keys:
+  //  - series_name: prefer an explicit "剧名/系列名: xxx" label, then a 《书名号》 title.
+  //  - project_name: only the "项目名: xxx" label.
+  // (Previously 项目名 leaked into series_name — fixed.)
+  const seriesLabel = (text.match(/(?:系列名|剧名|系列)\s*[:：]\s*([^\n，。,（）()]{1,30})/) || [])[1];
+  const bracketName = (text.match(/《([^》]{1,20})》/) || [])[1];
+  const seriesName = (seriesLabel || bracketName || "").trim() || undefined;
+  const projectName = (text.match(/项目名\s*[:：]\s*([^\n，。,（）()]{1,30})/) || [])[1];
+
+  // --- Resolution / duration (now consumed by the agent) ---
+  // Explicit "WxH" / "W×H" / "W*H" anywhere wins.
+  let resolution = null;
+  const resMatch = text.match(/(\d{3,5})\s*[x×*]\s*(\d{3,5})/);
+  if (resMatch) resolution = `${resMatch[1]}x${resMatch[2]}`;
+  else if (/竖屏|portrait/.test(lower)) resolution = "1080x1920";
+  else if (/横屏|landscape/.test(lower)) resolution = "1920x1080";
+  else if (/2k|1440p/.test(lower)) resolution = "2560x1440";
+  else if (/4k|2160p/.test(lower)) resolution = "3840x2160";
+
+  // Explicit "每镜N秒" / "N秒/镜" / "N秒每镜" → sec_per_shot.
+  let secPerShot = 0;
+  const secMatch = text.match(/每镜\s*(\d+(?:\.\d+)?)\s*秒|(\d+(?:\.\d+)?)\s*秒\s*[每/]\s*镜/);
+  if (secMatch) secPerShot = parseFloat(secMatch[1] || secMatch[2]);
+
+  // --- Fixed characters (user-supplied role specs for consistency) ---
+  // Supported line formats:
+  //   角色：名-描述 / 角色:名=描述   (block introduced by a "角色" label)
+  //   名=描述  /  名：描述           (bare, when prefixed by 固定角色/角色设定)
+  // We only scan a "fixed characters" section if the text contains such a
+  // marker; otherwise we leave characters empty so the LLM discovers roles.
+  const characters = [];
+  // A "固定角色/角色设定" marker introduces the role specs. Capture everything
+  // after the marker up to end-of-text or a line starting with a known param
+  // label (分辨率/每镜/项目名/...), so trailing prose (e.g. the 《》 title) is
+  // excluded. Each spec is "名=描述" / "名：描述" / "名-描述". One per line
+  // (newline). A comma inside a prompt is preserved; a comma that separates two
+  // specs ("阿杰-...，阿猫=...") is split only when the part after it is itself
+  // a "name sep desc" spec.
+  const charMarker = text.match(/(?:固定角色|角色设定|角色)\s*[:：]?\s*([\s\S]*?)(?:\n\s*(?:分辨率|每镜|项目名|系列名|剧名|风格|模式)\s*[:：]|\n\s*生成|\n\s*《|$)/);
+  if (charMarker) {
+    const chunk = charMarker[1];
+    const lines = chunk.split(/\n+/).map((s) => s.trim()).filter(Boolean);
+    for (const line of lines) {
+      if (/生成|系列|项目|分辨率|每镜|视频|漫剧|剪映/.test(line)) continue;
+      // Split a line on a comma only when the comma is followed by another
+      // "name sep desc" spec (so inline multi-role stays readable).
+      const segs = line.split(/，(?=[^，]+[=：:-])/).map((s) => s.trim()).filter(Boolean);
+      for (const cand of segs) {
+        if (/生成|系列|项目|分辨率|每镜|视频|漫剧|剪映/.test(cand)) continue;
+        const eq = cand.indexOf("=");
+        const colon = cand.search(/[:：]/);
+        const dash = cand.indexOf("-");
+        const scores = [eq, colon, dash].filter((x) => x >= 1);
+        if (!scores.length) continue;
+        const sep = Math.min(...scores);
+        let name = cand.slice(0, sep).replace(/^角色\s*/, "").trim();
+        let prompt = cand.slice(sep + 1).trim();
+        name = name.replace(/[-=]\s*$/, "").trim();
+        if (name && prompt) characters.push({ name, prompt });
+      }
+    }
+  }
+
+  const common = {};
+  if (resolution) common.resolution = resolution;
+  if (secPerShot > 0) common.sec_per_shot = secPerShot;
+  if (characters.length) common.characters = characters;
+
+  if (isSeries) {
+    const out = {
+      mode: "series",
+      series_script: text,
+      total_episodes: totalEpisodes,
+      consistency_policy: "lock_bible",
+      style,
+      ...common,
+    };
+    if (seriesName) out.series_name = seriesName.trim();
+    if (projectName) out.project_name = projectName.trim();
+    return out;
+  }
+  const out = { mode: "single", script: text, style, ...common };
+  if (projectName) out.project_name = projectName.trim();
+  if (seriesName) out.project_name = seriesName.trim(); // single has no series_name; reuse as project alias
+  return out;
+}
+
 // (resolveMentionDelegation moved inside createAgUIServer below — it closes
 // over the inner discoverManifests() which is not in module scope.)
 
@@ -616,6 +725,14 @@ function createAgUIServer(getGatewayClient, storage, options) {
         case 'workflow.done':
           send({ type: 'CUSTOM', name: 'workflow.done', value: payload });
           break;
+        case 'workflow.graph':
+          // DAG topology for the live node-trace panel. value = { nodes, edges, totalEpisodes }.
+          send({ type: 'CUSTOM', name: 'workflow.graph', value: payload });
+          break;
+        case 'workflow.trace':
+          // Per-node execution trace. value = { node, status: running|done|pending, episode }.
+          send({ type: 'CUSTOM', name: 'workflow.trace', value: payload });
+          break;
 
         // --- Agent 自渲染 UI 组件层 ----
         // Hermes 的 render_ui tool 通过 emit 该事件，把结构化 UI 描述透传给前端
@@ -895,11 +1012,14 @@ function createAgUIServer(getGatewayClient, storage, options) {
     if (delegatedAgent && text) {
       // A workflow (via @ mention, sidebar entry, or video auto-delegation) is
       // targeted: instruct the model to invoke that LangGraph agent directly.
+      // Pass a STRUCTURED input object (not raw text) so the backend reads
+      // mode/series_script correctly — otherwise free text always falls back to
+      // single mode.
       text = [
         '请立即调用 langgraph_agent 工具，参数如下：',
         '{',
         `  "agent_name": "${delegatedAgent}",`,
-        `  "input": ${JSON.stringify(text)}`,
+        `  "input": ${JSON.stringify(parseManjuInput(text))}`,
         '}',
         '不要解释、不要加载 skill、不要调用其它工具，直接发起 langgraph_agent 调用。',
       ].join('\n');
@@ -907,7 +1027,7 @@ function createAgUIServer(getGatewayClient, storage, options) {
       // When talking to the main assistant, proactively delegate video-generation
       // tasks to the dedicated manju_craft agent. The langgraph_agent tool is part
       // of the hermes-cli toolset, so the model can invoke it and the frontend will
-      // render the tool call card.
+      // render the tool call card. Structured input so series intent is preserved.
       text = [
         '用户请求如下：',
         `${text}`,
@@ -916,7 +1036,7 @@ function createAgUIServer(getGatewayClient, storage, options) {
         '请直接调用 langgraph_agent 工具，参数为：',
         '{',
         '  "agent_name": "manjucraft_agent",',
-        `  "input": ${JSON.stringify(text)}`,
+        `  "input": ${JSON.stringify(parseManjuInput(text))}`,
         '}',
         '不要解释你打算做什么，直接发起 langgraph_agent 调用；工具执行结果会返回给用户。',
       ].join('\n');
@@ -1338,7 +1458,10 @@ function createAgUIServer(getGatewayClient, storage, options) {
       const shots = Array.isArray(body.shots) ? body.shots : [];
       if (!timeline.length) return res.json({ ok: false, error: '时间轴为空' });
 
-      const [w, h] = String(project.res || '1080×1920').split('×').map(Number);
+      const resStr = String(project.res || '1080x1920');
+      const resMatch = resStr.match(/(\d{3,5})\s*[x×*]\s*(\d{3,5})/);
+      const w = resMatch ? parseInt(resMatch[1], 10) : 1080;
+      const h = resMatch ? parseInt(resMatch[2], 10) : 1920;
       const fps = Number(project.fps || 30) || 30;
       const safeName = String(project.name || 'short_drama').replace(/[^\w一-龥-]/g, '_');
 

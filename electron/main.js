@@ -1,8 +1,9 @@
-const { app, BrowserWindow, Menu, ipcMain, shell, dialog } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, shell, dialog, webContents, globalShortcut } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const net = require('net');
+const http = require('http');
 const { HermesRunner } = require('./backend/hermes-runner');
 const { GatewayClient } = require('./backend/gateway-client');
 const { createAgUIServer } = require('./backend/agui-server');
@@ -55,6 +56,16 @@ app.commandLine.appendSwitch('remote-debugging-port', String(PW_CDP_PORT));
 process.env.PW_CDP_URL = `http://127.0.0.1:${PW_CDP_PORT}`;
 process.env.PW_WEBVIEW_MARKER = BROWSER_PW_MARKER;
 
+// ── Browser automation driver service (spec §5.5, route B, native) ──
+// Instead of Playwright connect_over_cdp (which cannot target Electron's
+// <webview> guests), the renderer reports the guest webContentsId here, and a
+// tiny localhost-only HTTP service drives that *visible* webview natively via
+// webContents.loadURL / executeJavaScript / capturePage. The Python side
+// (pw_browser_tool.py) POSTs action requests to this service. Port is bound to
+// 127.0.0.1 only; override via PW_BROWSER_DRIVER_PORT.
+const PW_BROWSER_DRIVER_PORT = parseInt(process.env.PW_BROWSER_DRIVER_PORT || '18923', 10) || 18923;
+process.env.PW_BROWSER_DRIVER_URL = `http://127.0.0.1:${PW_BROWSER_DRIVER_PORT}`;
+
 // Use a stable writable user-data dir under the user home to avoid temp/permission issues
 const userDataDir = path.join(os.homedir(), '.hermes_portable_data');
 try {
@@ -75,6 +86,216 @@ let gatewayReady = false; // true only after gatewayClient WS 'open' fires
 // Track every BrowserWindow we own so the "window-all-closed" guard and
 // clean-shutdown hooks know when the user is fully done.
 const allWindows = new Set();
+
+// ── Browser automation driver (Electron-native <webview> driver) ──
+// `browserWebviewId` is the guest webContentsId reported by the renderer once
+// the 浏览器 panel's <webview> is dom-ready. The driver service below uses it
+// to drive the *visible* in-app browser. Cleared (self-heal) when the id is
+// stale/destroyed so a reopened panel re-registers cleanly.
+let browserWebviewId = null;
+let browserDriverServer = null;
+
+// Page-side selector resolver shared by /click and /type. Supports the same
+// selector vocabulary the old Playwright tools accepted: css, //xpath,
+// text=..., role=..., placeholder=....
+const DRIVER_RESOLVER_JS = `
+function __abcResolve(sel){
+  if(!sel) return null;
+  if(sel.startsWith('text=')){
+    var t=sel.slice(5);
+    var all=Array.prototype.slice.call(document.querySelectorAll('*'));
+    var el=all.filter(function(e){return e.children.length===0 && (e.textContent||'').trim()===t;})[0];
+    if(el) return el;
+    return all.filter(function(e){return (e.textContent||'').indexOf(t)>=0;})[0] || null;
+  }
+  if(sel.startsWith('placeholder=')) return document.querySelector('[placeholder="'+sel.slice(11)+'"]');
+  if(sel.startsWith('role=')) return document.querySelector('[role="'+sel.slice(5)+'"]');
+  if(sel.startsWith('//')){ try{ return document.evaluate(sel, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue; }catch(_){ return null; } }
+  return document.querySelector(sel);
+}
+`;
+
+// Resolve the reported guest webContents, returning null (and forgetting the
+// id) if it is missing or has been destroyed. This makes the driver self-heal
+// when the 浏览器 panel is closed and later reopened with a fresh id.
+function getBrowserWebviewWC() {
+  if (browserWebviewId == null) return null;
+  try {
+    const wc = webContents.fromId(browserWebviewId);
+    if (!wc || wc.isDestroyed()) {
+      browserWebviewId = null;
+      return null;
+    }
+    return wc;
+  } catch (_) {
+    browserWebviewId = null;
+    return null;
+  }
+}
+
+function sendDriverJson(res, code, obj) {
+  const body = JSON.stringify(obj);
+  res.writeHead(code, {
+    'Content-Type': 'application/json',
+    'Access-Control-Allow-Origin': '*',
+  });
+  res.end(body);
+}
+
+// Native <webview> driver: a minimal JSON-over-HTTP RPC the Python browser
+// tools call. All endpoints require the panel to be open (webview registered);
+// otherwise they return 503 {ok:false, error:'NOT_READY'} so the tool can poll.
+async function handleBrowserDriverRequest(req, res) {
+  const url = req.url || '/';
+  if (req.method === 'GET' && url === '/health') {
+    return sendDriverJson(res, 200, {
+      ok: true,
+      ready: browserWebviewId != null,
+      webviewId: browserWebviewId,
+    });
+  }
+  if (req.method !== 'POST') {
+    return sendDriverJson(res, 405, { ok: false, error: 'method not allowed' });
+  }
+  let raw = '';
+  try {
+    for await (const chunk of req) raw += chunk;
+  } catch (_) {
+    return sendDriverJson(res, 400, { ok: false, error: 'bad request body' });
+  }
+  let payload = {};
+  try {
+    if (raw) payload = JSON.parse(raw);
+  } catch (_) {
+    payload = {};
+  }
+
+  const wc = getBrowserWebviewWC();
+  if (!wc) return sendDriverJson(res, 503, { ok: false, error: 'NOT_READY' });
+
+  try {
+    if (url === '/navigate') {
+      const target = payload.url;
+      if (!target) return sendDriverJson(res, 400, { ok: false, error: 'url required' });
+      await wc.loadURL(String(target));
+      const title = await wc.executeJavaScript('document.title').catch(() => '');
+      return sendDriverJson(res, 200, { ok: true, url: wc.getURL(), title: title || '' });
+    }
+    if (url === '/snapshot') {
+      const text = await wc.executeJavaScript('document.body ? document.body.innerText : ""');
+      return sendDriverJson(res, 200, { ok: true, url: wc.getURL(), text: text || '' });
+    }
+    if (url === '/click') {
+      const sel = payload.ref || payload.selector || '';
+      if (!sel) return sendDriverJson(res, 400, { ok: false, error: 'selector required' });
+      const js = `(function(){${DRIVER_RESOLVER_JS} var e=__abcResolve(${JSON.stringify(sel)}); if(!e) return false; e.click(); return true;})()`;
+      const ok = await wc.executeJavaScript(js);
+      if (!ok) return sendDriverJson(res, 400, { ok: false, error: 'element not found for ' + sel });
+      return sendDriverJson(res, 200, { ok: true, url: wc.getURL() });
+    }
+    if (url === '/type') {
+      const sel = payload.ref || payload.selector || '';
+      const text = payload.text != null ? String(payload.text) : '';
+      if (!sel) return sendDriverJson(res, 400, { ok: false, error: 'selector required' });
+      const js = `(function(){${DRIVER_RESOLVER_JS} var e=__abcResolve(${JSON.stringify(sel)}); if(!e) return false; var proto=(e.tagName==='TEXTAREA')?HTMLTextAreaElement.prototype:HTMLInputElement.prototype; var setter=Object.getOwnPropertyDescriptor(proto,'value').set; setter.call(e, ${JSON.stringify(text)}); e.dispatchEvent(new Event('input',{bubbles:true})); e.dispatchEvent(new Event('change',{bubbles:true})); return true;})()`;
+      const ok = await wc.executeJavaScript(js);
+      if (!ok) return sendDriverJson(res, 400, { ok: false, error: 'element not found for ' + sel });
+      return sendDriverJson(res, 200, { ok: true, url: wc.getURL() });
+    }
+    if (url === '/scroll') {
+      const direction = (payload.direction || 'down').toString().trim().toLowerCase();
+      const delta = direction === 'up' ? -800 : 800;
+      await wc.executeJavaScript(`window.scrollBy(0, ${delta})`);
+      return sendDriverJson(res, 200, { ok: true, url: wc.getURL() });
+    }
+    if (url === '/screenshot') {
+      const img = await wc.capturePage();
+      const outDir = path.join(userDataDir, 'browser-shots');
+      fs.mkdirSync(outDir, { recursive: true });
+      const filePath = path.join(outDir, `shot-${Date.now()}.png`);
+      fs.writeFileSync(filePath, img.toPNG());
+      return sendDriverJson(res, 200, { ok: true, path: filePath, url: wc.getURL() });
+    }
+    if (url === '/close') {
+      await wc.loadURL(BROWSER_PW_MARKER);
+      return sendDriverJson(res, 200, { ok: true });
+    }
+    return sendDriverJson(res, 404, { ok: false, error: 'unknown route ' + url });
+  } catch (exc) {
+    return sendDriverJson(res, 500, { ok: false, error: exc && exc.message ? exc.message : String(exc) });
+  }
+}
+
+function startBrowserDriver() {
+  if (browserDriverServer) return;
+  browserDriverServer = http.createServer((req, res) => {
+    handleBrowserDriverRequest(req, res).catch((exc) => {
+      try {
+        sendDriverJson(res, 500, { ok: false, error: exc && exc.message ? exc.message : String(exc) });
+      } catch (_) {}
+    });
+  });
+  browserDriverServer.on('error', (exc) => log('browser-driver', `server error: ${exc && exc.message ? exc.message : String(exc)}`));
+  browserDriverServer.listen(PW_BROWSER_DRIVER_PORT, '127.0.0.1', () => {
+    log('browser-driver', `listening on 127.0.0.1:${PW_BROWSER_DRIVER_PORT}`);
+  });
+}
+
+function stopBrowserDriver() {
+  if (browserDriverServer) {
+    try { browserDriverServer.close(); } catch (_) {}
+    browserDriverServer = null;
+  }
+}
+
+// Toggle DevTools for whichever renderer window currently has focus (main
+// window or a detached result panel). Falls back to the main window if no
+// window reports focus. Used by the global F12 shortcut.
+function toggleFocusedDevTools() {
+  const focused = BrowserWindow.getFocusedWindow();
+  if (focused && !focused.isDestroyed()) {
+    const wc = focused.webContents;
+    if (wc.isDevToolsOpened()) wc.closeDevTools();
+    else wc.openDevTools({ mode: 'right' });
+    return;
+  }
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.webContents.isDevToolsOpened()) mainWindow.webContents.closeDevTools();
+    else mainWindow.webContents.openDevTools({ mode: 'right' });
+  }
+}
+
+// On machines where the OS/third-party app grabs the global F12 hotkey
+// (common on Lenovo laptops), globalShortcut.register('F12') fails and the
+// renderer-side keydown can't reach the key when focus is inside the DevTools
+// panel (DevTools is a separate renderer process). Wire the F12 capture
+// directly onto the DevTools webContents so it can still be closed with F12
+// from inside the panel. devToolsWebContents may be null at the exact
+// devtools-opened tick, so retry briefly until it's available.
+function wireDevToolsHotkey(win) {
+  if (!win || win.isDestroyed()) return;
+  win.webContents.on('devtools-opened', () => {
+    log('shortcut', 'devtools-opened for a window');
+    const attach = () => {
+      const dt = win.webContents.devToolsWebContents;
+      if (!dt) {
+        setTimeout(attach, 50);
+        return;
+      }
+      dt.on('before-input-event', (_event, input) => {
+        if (input && input.key === 'F12') {
+          _event.preventDefault();
+          if (win.webContents.isDevToolsOpened()) {
+            win.webContents.closeDevTools();
+            log('shortcut', 'devtools F12 hit -> closed');
+          }
+        }
+      });
+      log('shortcut', 'devtools F12 hotkey wired');
+    };
+    attach();
+  });
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -99,6 +320,8 @@ function createWindow() {
     mainWindow.show();
     mainWindow.focus();
   });
+
+  wireDevToolsHotkey(mainWindow);
 
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
     log('main', `render-process-gone: reason=${details.reason} exitCode=${details.exitCode}`);
@@ -155,6 +378,8 @@ function createDetachedPanelWindow(opts = {}) {
       backgroundThrottling: false,
     },
   });
+  wireDevToolsHotkey(win);
+
   win.once('ready-to-show', () => {
     win.center();
     win.show();
@@ -290,58 +515,20 @@ async function doStartBackend() {
 }
 
 app.whenReady().then(async () => {
-  // Native application menu (Help carries the DevTools entry).
-  const template = [
-    {
-      label: '文件',
-      submenu: [{ role: 'quit', label: '退出' }],
-    },
-    {
-      label: '编辑',
-      submenu: [
-        { role: 'undo', label: '撤销' },
-        { role: 'redo', label: '重做' },
-        { type: 'separator' },
-        { role: 'cut', label: '剪切' },
-        { role: 'copy', label: '复制' },
-        { role: 'paste', label: '粘贴' },
-        { role: 'selectall', label: '全选' },
-      ],
-    },
-    {
-      label: '帮助',
-      submenu: [
-        {
-          label: '开发控制台 (DevTools)',
-          accelerator: 'F12',
-          click: () => {
-            if (mainWindow) mainWindow.webContents.openDevTools({ mode: 'right' });
-          },
-        },
-        {
-          label: '打开数据目录',
-          click: async () => {
-            try { await shell.openPath(userDataDir); } catch (_) {}
-          },
-        },
-        {
-          label: '关于 Abcyesno',
-          click: () => {
-            dialog.showMessageBox(mainWindow || undefined, {
-              title: '关于 Abcyesno',
-              message: 'Abcyesno v1.3.0\n便携桌面 Agent 平台',
-            });
-          },
-        },
-      ],
-    },
-  ];
-  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+  // Native application menu is intentionally removed. Its entries (DevTools,
+  // data directory, about, quit) now live inside the in-app Settings panel,
+  // so the window chrome is just a clean title bar (no 文件/编辑/帮助 bar).
+  Menu.setApplicationMenu(null);
 
   // Show the window immediately so the user sees a loading surface while
   // Hermes starts in the background. The frontend Bootstrap renders a
   // spinner until the backend is ready.
   createWindow();
+
+  // Start the Electron-native browser driver service (127.0.0.1 only). The
+  // 浏览器 panel reports its webview id via IPC once dom-ready; until then the
+  // driver answers NOT_READY and the Python tools poll/retry.
+  startBrowserDriver();
 
   try {
     await startBackend();
@@ -356,6 +543,41 @@ app.whenReady().then(async () => {
       createWindow();
     }
   });
+
+  // Global shortcuts for quick debugging & settings access.
+  // F12 toggles DevTools on the currently focused renderer window.
+  // F10 pops open the in-app Settings panel.
+  const f12Registered = globalShortcut.register('F12', () => {
+    log('shortcut', 'F12 pressed -> toggleFocusedDevTools');
+    toggleFocusedDevTools();
+  });
+  const f10Registered = globalShortcut.register('F10', () => {
+    log('shortcut', 'F10 pressed -> open-settings');
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      // If DevTools is open it renders as a native overlay above the main
+      // window DOM and would hide the Settings modal. Close it first so the
+      // modal is actually visible.
+      try {
+        if (mainWindow.webContents.isDevToolsOpened()) mainWindow.webContents.closeDevTools();
+      } catch (_) {}
+      mainWindow.focus();
+      mainWindow.webContents.send('open-settings');
+    }
+  });
+  log('shortcut', `global shortcut registration: F12=${globalShortcut.isRegistered('F12')} F10=${globalShortcut.isRegistered('F10')}`);
+  if (!f12Registered) {
+    // F12 is likely grabbed by an OS/third-party app (common on Lenovo laptops
+    // where Vantage/Hotkeys reserve F12). Register an app-level Ctrl+Shift+I
+    // DevTools toggle as a focus-independent fallback so DevTools can still be
+    // closed reliably even when focus is in the DevTools panel.
+    const cssi = globalShortcut.register('Control+Shift+I', () => {
+      log('shortcut', 'Ctrl+Shift+I pressed -> toggleFocusedDevTools');
+      toggleFocusedDevTools();
+    });
+    log('shortcut', `F12 unavailable; registered Ctrl+Shift+I as DevTools toggle = ${globalShortcut.isRegistered('Control+Shift+I')}`);
+    if (!cssi) log('shortcut', 'WARN: both F12 and Ctrl+Shift+I failed to register. DevTools can only be toggled via the Settings panel button.');
+  }
 });
 
 app.on('window-all-closed', () => {
@@ -368,6 +590,7 @@ app.on('window-all-closed', () => {
     gatewayClient = null;
   }
   if (hermesRunner) hermesRunner.stop();
+  stopBrowserDriver();
   if (process.platform !== 'darwin') {
     app.quit();
   }
@@ -383,11 +606,40 @@ app.on('before-quit', () => {
     gatewayClient = null;
   }
   if (hermesRunner) hermesRunner.stop();
+  stopBrowserDriver();
+  globalShortcut.unregisterAll();
 });
 
 // IPC handlers
 ipcMain.handle('get-version', () => {
   return `1.3.0`;
+});
+
+// Settings-panel entry that used to live in the native 帮助 menu: toggle the
+// DevTools dock on the main window (renderer can't do this directly under
+// contextIsolation, so it goes through the main process). Toggles so the same
+// key/button can open and close it. When opening, bring the main window back
+// to the foreground so the renderer-side F12 fallback can still receive the
+// next keypress to close the dock.
+ipcMain.handle('open-devtools', () => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    const wc = mainWindow.webContents;
+    if (wc.isDevToolsOpened()) {
+      wc.closeDevTools();
+    } else {
+      wc.openDevTools({ mode: 'right' });
+      // Return OS focus to the main window so the renderer-side F12 keydown
+      // listener keeps working after the dock opens.
+      try { mainWindow.focus(); } catch (_) {}
+    }
+  }
+  return { ok: true };
+});
+
+// Settings-panel entry that used to live in the native 文件 menu: quit the app.
+ipcMain.handle('quit-app', () => {
+  app.quit();
+  return { ok: true };
 });
 
 // Browser automation (§5.5): tell the renderer the CDP endpoint + the marker URL
@@ -396,7 +648,21 @@ ipcMain.handle('get-browser-info', () => {
   return {
     cdpUrl: process.env.PW_CDP_URL || '',
     marker: process.env.PW_WEBVIEW_MARKER || '',
+    driverUrl: process.env.PW_BROWSER_DRIVER_URL || '',
   };
+});
+
+// Browser automation (§5.5, route B): the renderer reports the guest webview's
+// webContentsId so the native driver service can drive the visible <webview>.
+ipcMain.on('browser-webview-ready', (_e, id) => {
+  if (typeof id === 'number' && id > 0) {
+    browserWebviewId = id;
+    log('browser-driver', `webview registered: webContentsId=${id}`);
+  }
+});
+ipcMain.on('browser-webview-destroyed', () => {
+  browserWebviewId = null;
+  log('browser-driver', 'webview unregistered');
 });
 
 ipcMain.handle('get-agui-port', () => {

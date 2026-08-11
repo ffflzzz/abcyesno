@@ -8,7 +8,9 @@
     "build": "vite build",
     "electron:build": "npm run build && electron-builder --win",
     "electron:dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
-    "postinstall": "electron-builder install-app-deps"
+    "postinstall": "electron-builder install-app-deps",
+    "selfdiag": "node scripts/runtime-diag.mjs",
+    "selfdiag:attach": "node scripts/runtime-diag.mjs --attach"
   },
   "build": {
     "appId": "com.hermes.agent",

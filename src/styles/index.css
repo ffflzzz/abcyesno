@@ -62,8 +62,111 @@ body {
 
 .app {
   display: flex;
+  flex-direction: column;
   height: 100vh;
   width: 100%;
+  overflow: hidden;
+}
+
+/* ── Browser-style tab bar ── */
+.tabbar {
+  display: flex;
+  align-items: stretch;
+  height: 40px;
+  flex-shrink: 0;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  padding: 0 8px;
+}
+.tabbar-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.tabbar-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px 0 12px;
+  max-width: 200px;
+  border-right: 1px solid var(--border);
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+  font-size: 13px;
+  white-space: nowrap;
+  transition: background 0.12s, color 0.12s;
+}
+.tabbar-tab:hover {
+  background: var(--panel-2);
+  color: var(--text);
+}
+.tabbar-tab.active {
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+.tabbar-tab-icon {
+  display: inline-flex;
+  opacity: 0.85;
+}
+.tabbar-tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tabbar-tab-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-left: 2px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.tabbar-tab-close:hover {
+  background: rgba(248, 113, 113, 0.18);
+  color: #f87171;
+}
+.tabbar-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  margin: 6px 0 6px 4px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.tabbar-add:hover {
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+/* ── Tab content host ── */
+.tab-content {
+  position: relative;
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+}
+.chat-host {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+.workbench-host {
+  flex: 1;
+  display: flex;
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -869,6 +972,14 @@ body {
 .message-row.tool {
   justify-content: center;
   padding: 4px 0;
+}
+
+/* Tool-call row sits right above the next message (often a large user bubble).
+   Virtuoso ignores item margins for spacing, so use padding-bottom — it IS
+   counted in the measured item height. Keeps the compact tool bar from
+   visually touching the bubble below it. */
+.message-row.tool-row {
+  padding-bottom: 14px;
 }
 
 .message-row.tool .tool-card {
@@ -7128,4 +7239,82 @@ body[--resizing="1"] .result-panel-resize-handle::before {
   min-width: 0 !important;
   border-left: 0 !important;
   border-top: 1px solid var(--border);
+}
+
+/* ── Launcher (启动台) — compact app grid homepage ── */
+.launcher {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+  overflow: auto;
+}
+.launcher--simple {
+  align-items: flex-start;
+  justify-content: flex-start;
+  padding: 48px 56px;
+}
+.launcher-apps {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 18px;
+}
+.launcher-heading {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+.launcher-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px 24px;
+}
+.launcher-app {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 4px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  transition: transform 0.15s ease;
+}
+.launcher-app:hover {
+  transform: translateY(-2px);
+}
+.launcher-app-icon {
+  width: 56px;
+  height: 56px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 16px;
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.launcher-app:hover .launcher-app-icon {
+  transform: scale(1.06);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.16);
+}
+.launcher-app-name {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+/* danger text variant for ghost buttons (e.g. 退出应用) */
+.danger-text {
+  color: #f87171 !important;
+}
+.danger-text:hover {
+  border-color: #f87171 !important;
 }

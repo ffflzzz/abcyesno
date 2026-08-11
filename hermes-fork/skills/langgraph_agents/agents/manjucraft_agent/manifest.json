@@ -47,6 +47,27 @@
         "enum": ["lock_bible", "per_episode"],
         "default": "lock_bible",
         "x_ui": { "control": "select", "label": "跨集一致性" }
+      },
+      "resolution": {
+        "type": "string",
+        "x_ui": { "control": "text", "label": "分辨率（可选，如 1080x1920 / 竖屏 / 2K）", "placeholder": "1080x1920" }
+      },
+      "sec_per_shot": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 30,
+        "x_ui": { "control": "number", "label": "每镜秒数（可选，0=AI 自动）" }
+      },
+      "characters": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string" },
+            "prompt": { "type": "string" }
+          }
+        },
+        "x_ui": { "control": "repeat", "label": "固定角色（可选，用于一致性）" }
       }
     },
     "required": []

@@ -87,6 +87,13 @@ class AgentState(TypedDict):
     project_name: str
     api_key: str
 
+    # --- rendering params (debt #6: consumed by gen/draft nodes) ---
+    resolution: str                 # "WxH" string, e.g. "1080x1920" (portrait default)
+    sec_per_shot: float             # default per-shot duration override (0 = use LLM per-shot)
+
+    # --- fixed characters (debt: user-supplied role specs for consistency) ---
+    fixed_characters: NotRequired[list[Character]]  # injected verbatim; bypasses LLM char parse
+
     # --- parsed shots / characters ---
     shots: list[Shot]
     characters: list[Character]

@@ -11,15 +11,16 @@ platforms: [windows, macos, linux]
 requires_toolsets: [browser-pw]
 metadata:
   hermes:
-    tags: [browser, web, playwright, automation]
+    tags: [browser, web, electron, automation]
     related_skills: [computer-use]
 ---
 
-# Browser Automation (Playwright / Path B)
+# Browser Automation (Electron-native / Path B)
 
 The `browser-pw` toolset exposes seven atomic tools that let you drive a bundled
 Chromium step by step. No second LLM, no Node toolchain, no login — your own
-reasoning decides which tool to call next.
+reasoning decides which tool to call next. No Playwright either: the tools talk
+to a tiny HTTP driver service running in the Electron main process.
 
 ## When to use
 
@@ -68,8 +69,15 @@ Pass a stable `task_id` per automation task. Multiple tasks with different
 
 - The browser is the app's **built-in Chromium**, embedded as a `<webview>` in the
   "浏览器" sidebar panel (spec §5.5, route B) — not a separate Playwright window.
-  The agent drives this same visible page over CDP, so the user watches the
-  operations live. No `headless` option (the panel is always shown).
+  The renderer reports the webview's `webContentsId` to the Electron main process,
+  which runs a localhost-only HTTP driver (`PW_BROWSER_DRIVER_URL`,
+  default http://127.0.0.1:18923). The `pw_browser_*` tools POST navigate /
+  snapshot / click / type / scroll / screenshot / close to that driver, which
+  operates the **same visible page** natively via `webContents.loadURL` /
+  `executeJavaScript` / `capturePage`. The user watches every operation live.
+  No `headless` option (the panel is always shown), and no CDP `connect_over_cdp`
+  (which cannot target Electron `<webview>` guests — the reason this was switched
+  from the old Playwright route).
 - If a tool reports *"browser panel not found"*, the user must open the 浏览器
   panel first (header globe icon, or it auto-opens when you call a `pw_browser_*`
   tool). The panel only exists inside the desktop app.

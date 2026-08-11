@@ -269,9 +269,14 @@ class HermesRunner {
       // Cap tool-calling iterations so a confused model doesn't spin forever.
       HERMES_TUI_MAX_TURNS: process.env.HERMES_TUI_MAX_TURNS || '15',
       // Enable the Hermes toolsets. `hermes-cli` carries langgraph_agent and
-      // shell/file tools; `browser-pw` adds the 7 pw_browser_* Playwright tools
+      // shell/file tools; `browser-pw` adds the 7 pw_browser_* native-driver tools
       // (Path B browser automation). Override via HERMES_TUI_TOOLSETS to roll back.
       HERMES_TUI_TOOLSETS: process.env.HERMES_TUI_TOOLSETS || 'hermes-cli,browser-pw',
+      // Endpoint of the Electron-native browser driver service (main process,
+      // 127.0.0.1:18923). pw_browser_tool.py POSTs navigate/snapshot/click/...
+      // here to drive the visible in-app <webview>. Set by the main process; we
+      // forward it verbatim into the backend env.
+      PW_BROWSER_DRIVER_URL: process.env.PW_BROWSER_DRIVER_URL || 'http://127.0.0.1:18923',
       // Point Playwright at the Chromium build bundled with the portable app.
       // In a packaged build process.resourcesPath -> release/win-unpacked/resources,
       // so browsers live in resources/playwright-browsers (copied via extraResources).

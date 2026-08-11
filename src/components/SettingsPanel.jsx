@@ -7,12 +7,27 @@ function maskKey(key) {
   return `${key.slice(0, 4)}...${key.slice(-4)}`;
 }
 
-export default function SettingsPanel({ apiKey = "", hasApiKey = false, model = "", theme = "dark", onThemeChange, onEditApiKey, onClose }) {
+export default function SettingsPanel({ apiKey = "", hasApiKey = false, model = "", theme = "dark", onThemeChange, onEditApiKey, onClose, version = "" }) {
   const [openDirStatus, setOpenDirStatus] = useState("");
 
   useEffect(() => {
     setOpenDirStatus("");
   }, []);
+
+  async function handleOpenDevTools() {
+    // Close the settings modal first so keyboard focus returns to the main
+    // window and the renderer-side F12 listener can later toggle DevTools off.
+    if (onClose) onClose();
+    if (window.hermes && window.hermes.openDevTools) {
+      try { await window.hermes.openDevTools(); } catch (err) { console.error("openDevTools failed", err); }
+    }
+  }
+
+  async function handleQuit() {
+    if (window.hermes && window.hermes.quitApp) {
+      try { await window.hermes.quitApp(); } catch (err) { console.error("quitApp failed", err); }
+    }
+  }
 
   async function handleOpenDataDir() {
     setOpenDirStatus("");
@@ -112,6 +127,35 @@ export default function SettingsPanel({ apiKey = "", hasApiKey = false, model = 
             </div>
           </div>
           {openDirStatus && <div className="settings-status-error">{openDirStatus}</div>}
+        </div>
+
+        {/* 高级（原原生菜单栏的功能迁移至此） */}
+        <div className="settings-group">
+          <div className="settings-group-title">高级</div>
+          <div className="settings-item">
+            <div className="settings-item-text">
+              <div className="settings-item-name">开发控制台</div>
+              <div className="settings-item-desc">打开/关闭开发者工具（F12；若 F12 被系统占用，请用 Ctrl+Shift+I）。</div>
+            </div>
+            <div className="settings-item-control">
+              <button className="ghost" onClick={handleOpenDevTools}>切换</button>
+            </div>
+          </div>
+          <div className="settings-item">
+            <div className="settings-item-text">
+              <div className="settings-item-name">关于 Abcyesno</div>
+              <div className="settings-item-desc">Abcyesno {version ? `v${version}` : "v1.3.0"} · 便携桌面 Agent 平台</div>
+            </div>
+          </div>
+          <div className="settings-item">
+            <div className="settings-item-text">
+              <div className="settings-item-name">退出应用</div>
+              <div className="settings-item-desc">关闭并退出 Abcyesno。</div>
+            </div>
+            <div className="settings-item-control">
+              <button className="ghost danger-text" onClick={handleQuit}>退出</button>
+            </div>
+          </div>
         </div>
 
         <div className="modal-actions">

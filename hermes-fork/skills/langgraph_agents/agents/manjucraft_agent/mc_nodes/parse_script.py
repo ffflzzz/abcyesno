@@ -11,6 +11,11 @@ async def parse_script(state: AgentState) -> dict:
 
     Steering notes (if any from a prior gate) are folded into the parse prompt
     so the user's adjustment actually takes effect (debt #5).
+
+    Fixed characters (user-supplied) bypass the LLM character parse entirely:
+    they are injected verbatim and the LLM is only asked for shots + any extra
+    characters it discovers. This guarantees cross-episode consistency for the
+    roles the user cares about (debt: fixed_characters).
     """
     state["status"] = "parsing"
     ep = int(state.get("current_episode", 0) or 0)
@@ -24,7 +29,10 @@ async def parse_script(state: AgentState) -> dict:
     if steer:
         script = f"[用户修改意见：{steer}]\n{script}"
 
-    parsed = await parse_script_to_shots(script)
+    fixed = state.get("fixed_characters") or []
+    # When fixed characters are supplied, don't ask the LLM to invent roles —
+    # only to lay out shots (and optionally discover additional minor roles).
+    parsed = await parse_script_to_shots(script, skip_characters=bool(fixed))
 
     if isinstance(parsed, list):
         raw_shots = parsed
@@ -33,21 +41,46 @@ async def parse_script(state: AgentState) -> dict:
         raw_shots = parsed.get("shots", [])
         raw_characters = parsed.get("characters", [])
 
+    # Override per-shot duration when the user set a global sec_per_shot.
+    sec_override = float(state.get("sec_per_shot") or 0.0)
+
     shots = []
     for i, raw in enumerate(raw_shots):
+        dur = float(raw.get("duration", 5.0))
+        if sec_override > 0:
+            dur = sec_override
         shots.append({
             "index": raw.get("index", i),
             "description": raw.get("description", ""),
             "dialogue": raw.get("dialogue", ""),
-            "duration": float(raw.get("duration", 5.0)),
+            "duration": dur,
             "prompt": raw.get("prompt", ""),
             "video_prompt": raw.get("video_prompt", ""),
         })
 
     characters = []
+    seen_names = set()
+    if fixed:
+        # User-supplied roles take precedence and are locked verbatim. No
+        # ref_image yet — generate_characters fills it (ep0) or reuses bible.
+        for c in fixed:
+            name = c.get("name", "").strip()
+            if not name or name.lower() in seen_names:
+                continue
+            seen_names.add(name.lower())
+            characters.append({
+                "name": name,
+                "prompt": c.get("prompt", ""),
+                "ref_image": c.get("ref_image", "") or "",
+            })
     for raw in raw_characters:
+        name = (raw.get("name") or "").strip()
+        if not name or name.lower() in seen_names:
+            # Skip LLM-echoed duplicates of user-fixed roles.
+            continue
+        seen_names.add(name.lower())
         characters.append({
-            "name": raw.get("name", ""),
+            "name": name,
             "prompt": raw.get("prompt", ""),
             "ref_image": "",
         })

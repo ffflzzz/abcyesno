@@ -478,6 +478,51 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
         // into the eventBus keyed by the run's threadId. The generic workbenches
         // subscribe via useContractEvents(session.id).
         emitContractEvent(sess.id, { type: name, payload: value });
+
+        // Also notify the user when a workflow gate pauses execution, because
+        // in chat mode the inline ApprovalBubble lives in the message footer
+        // and may be below the fold.
+        if (name === "workflow.approval") {
+          const label = value?.label || value?.gate_id || "工作流确认";
+          emitToastShow({
+            key: `wf-approval-${value?.workflowRunId || sess.id}`,
+            level: "warning",
+            text: `⏸ ${label} 需要确认，请在对话底部审批`,
+            kind: "ttl",
+            ttlMs: 0, // persistent until user interacts
+          });
+        }
+
+        // Surface workflow errors in the chat stream so they are not swallowed
+        // when the workbench is not visible (e.g. chat-mode langgraph_agent).
+        if (name === "workflow.error") {
+          const msg = value?.message || "工作流运行出错";
+          sess.error = msg;
+          sess.phase = "idle";
+          sess.thinkingSince = null;
+          appendMessage(sess, {
+            id: `wf-error-${Date.now()}`,
+            role: "assistant",
+            content: `❌ ${msg}`,
+            createdAt: Date.now(),
+            isError: true,
+          });
+          settle(sess);
+        } else if (name === "workflow.done" && value?.status && value.status !== "done") {
+          const status = value.status;
+          const msg = value?.error || (status === "rejected" ? "工作流已被拒绝" : status === "timeout" ? "审批等待超时" : `工作流结束：${status}`);
+          sess.error = msg;
+          sess.phase = "idle";
+          sess.thinkingSince = null;
+          appendMessage(sess, {
+            id: `wf-done-${Date.now()}`,
+            role: "assistant",
+            content: `⚠️ ${msg}`,
+            createdAt: Date.now(),
+            isError: true,
+          });
+          settle(sess);
+        }
       } else if (name === "ui.render") {
         // Agent 自渲染 UI 组件能力（spec: AGENT_UI_RENDER_SPEC.md §3.1）。
         // 安全：未知 type 或非法 blockId 静默丢弃（§6）。

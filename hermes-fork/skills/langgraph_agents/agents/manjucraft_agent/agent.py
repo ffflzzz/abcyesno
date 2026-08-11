@@ -46,12 +46,71 @@ def _slugify(text: str, max_len: int = 40) -> str:
     return cleaned[:max_len].rstrip("-")
 
 
+# Canonical resolution presets (key -> "WxH"). The frontend passes one of these
+# strings; chat mode may pass "竖屏"/"横屏"/"1080p"/"2K"/"4K" which we normalize.
+_RESOLUTION_PRESETS = {
+    "竖屏": "1080x1920",
+    "portrait": "1080x1920",
+    "横屏": "1920x1080",
+    "landscape": "1920x1080",
+    "方形": "1080x1080",
+    "square": "1080x1080",
+    "1080p": "1920x1080",
+    "1080": "1920x1080",
+    "2k": "2560x1440",
+    "1440p": "2560x1440",
+    "4k": "3840x2160",
+    "2160p": "3840x2160",
+}
+
+
+def parse_resolution(value) -> str:
+    """Normalize a resolution spec into "WxH".
+
+    Accepts explicit "WxH"/"W×H"/"W*H" (any of 720/1080/1440/2160 height),
+    preset keywords (竖屏/横屏/1080p/2K/4K...), or a bare integer (treated as
+    the long edge). Falls back to the default portrait 1080x1920.
+    """
+    if not value:
+        return "1080x1920"
+    s = str(value).strip().lower()
+    if s in _RESOLUTION_PRESETS:
+        return _RESOLUTION_PRESETS[s]
+    # Explicit WxH / W×H / W*H (allow either dimension order; keep as given).
+    m = re.search(r"(\d{3,5})\s*[x×*]\s*(\d{3,5})", s)
+    if m:
+        w, h = int(m.group(1)), int(m.group(2))
+        if 320 <= w <= 7680 and 320 <= h <= 7680:
+            return f"{w}x{h}"
+    # Bare integer -> long edge, default to portrait.
+    if re.fullmatch(r"\d{3,5}", s):
+        n = int(s)
+        if 320 <= n <= 7680:
+            # Heuristic: a lone number with no aspect hint defaults to portrait.
+            return f"{n}x{n}" if n >= 2000 else f"1080x{n}" if n > 1080 else f"{n}x1920"
+    return "1080x1920"
+
+
+def parse_seconds_per_shot(value) -> float:
+    """Parse the per-shot duration override; 0 means 'let the LLM decide'."""
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if n <= 0:
+        return 0.0
+    # Clamp to a sane 1–30s range.
+    return max(1.0, min(30.0, n))
+
+
 def _resolve_api_key() -> str:
     """Return the Agnes API key from env or Hermes config."""
     return _get_agnes_credentials()[1]
 
 
-def build_initial_state(input_text: str, project_name: str = None, style: str = "二次元") -> Dict[str, Any]:
+def build_initial_state(input_text: str, project_name: str = None, style: str = "二次元",
+                         resolution: str = None, sec_per_shot: float = 0.0,
+                         fixed_characters: list = None) -> Dict[str, Any]:
     """Map the runtime's free-text input to the AgentState (single mode)."""
     api_key = _resolve_api_key()
     if not api_key:
@@ -79,6 +138,9 @@ def build_initial_state(input_text: str, project_name: str = None, style: str = 
         "style": style,
         "project_name": resolved_project,
         "api_key": api_key,
+        "resolution": parse_resolution(resolution),
+        "sec_per_shot": parse_seconds_per_shot(sec_per_shot),
+        "fixed_characters": list(fixed_characters or []),
         "shots": [],
         "characters": [],
         "shot_results": [],
@@ -99,12 +161,19 @@ def build_initial_state_obj(obj: Dict[str, Any]) -> Dict[str, Any]:
     The runtime calls this when the frontend submits a manifest-driven form.
     ``mode`` selects single (needs ``script``) vs series (needs ``series_script``).
     """
+    # Tolerate a free-text string (e.g. legacy chat delegation that forgot to
+    # structure the input, or an upstream adapter that passed raw text). Fall
+    # back to single-mode with the string as the script instead of hard-failing
+    # with "input must be an object".
     if not isinstance(obj, dict):
-        raise RuntimeError("manjucraft_agent input must be an object")
+        return build_initial_state(str(obj or ""), project_name=project_name, style=style)
 
     mode = (obj.get("mode") or "single").strip().lower() or "single"
     style = (obj.get("style") or "二次元").strip() or "二次元"
     project_name = (obj.get("project_name") or "").strip()
+    resolution = parse_resolution(obj.get("resolution"))
+    sec_per_shot = parse_seconds_per_shot(obj.get("sec_per_shot"))
+    fixed_characters = _normalize_fixed_characters(obj.get("characters") or obj.get("fixed_characters"))
 
     api_key = _resolve_api_key()
     if not api_key:
@@ -135,6 +204,9 @@ def build_initial_state_obj(obj: Dict[str, Any]) -> Dict[str, Any]:
             "style": style,
             "project_name": project_name or f"manjucraft-series-{datetime.now():%Y%m%d-%H%M%S}",
             "api_key": api_key,
+            "resolution": resolution,
+            "sec_per_shot": sec_per_shot,
+            "fixed_characters": fixed_characters,
             "shots": [],
             "characters": [],
             "shot_results": [],
@@ -152,7 +224,35 @@ def build_initial_state_obj(obj: Dict[str, Any]) -> Dict[str, Any]:
     script = (obj.get("script") or "").strip()
     if not script:
         raise RuntimeError("manjucraft_agent single mode requires a non-empty 'script'")
-    return build_initial_state(script, project_name=project_name, style=style)
+    return build_initial_state(
+        script, project_name=project_name, style=style,
+        resolution=resolution, sec_per_shot=sec_per_shot, fixed_characters=fixed_characters,
+    )
+
+
+def _normalize_fixed_characters(value) -> list:
+    """Coerce a `characters`/`fixed_characters` input into a list of Character dicts.
+
+    Accepts either a list of {name, prompt} dicts, or a list of already-formed
+    Character dicts (with ref_image). Anything unparseable is skipped so the
+    pipeline never hard-fails on a malformed user spec.
+    """
+    if not isinstance(value, list):
+        return []
+    out = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        name = (item.get("name") or "").strip()
+        prompt = (item.get("prompt") or "").strip()
+        if not name:
+            continue
+        out.append({
+            "name": name,
+            "prompt": prompt,
+            "ref_image": (item.get("ref_image") or "").strip(),
+        })
+    return out
 
 
 # --- Workflow stage map (contract L5) -----------------------------------

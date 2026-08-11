@@ -20,6 +20,11 @@ contextBridge.exposeInMainWorld('hermes', {
   // Lifecycle & runtime
   getVersion: () => ipcRenderer.invoke('get-version'),
   getBrowserInfo: () => ipcRenderer.invoke('get-browser-info'),
+  // Browser automation (§5.5, route B): the renderer reports the <webview>'s
+  // guest webContentsId to the main process so the native driver service can
+  // drive the *visible* in-app browser. Sent once the webview is dom-ready.
+  reportBrowserWebview: (id) => ipcRenderer.send('browser-webview-ready', id),
+  clearBrowserWebview: () => ipcRenderer.send('browser-webview-destroyed'),
   getStatus: () => ipcRenderer.invoke('get-status'),
   getAguiPort: () => ipcRenderer.invoke('get-agui-port'),
   getApiKeyStatus: () => ipcRenderer.invoke('get-api-key-status'),
@@ -27,6 +32,10 @@ contextBridge.exposeInMainWorld('hermes', {
   setApiKey: (key) => ipcRenderer.invoke('set-api-key', key),
   logError: (msg) => ipcRenderer.invoke('log-error', msg),
   openDataDir: () => ipcRenderer.invoke('open-data-dir'),
+
+  // Settings-panel equivalents of the old native menu entries.
+  openDevTools: () => ipcRenderer.invoke('open-devtools'),
+  quitApp: () => ipcRenderer.invoke('quit-app'),
 
   // Assistants
   listAssistants: () => ipcRenderer.invoke('list-assistants'),
@@ -99,6 +108,10 @@ contextBridge.exposeInMainWorld('hermes', {
   // Backend lifecycle
   onAguiReady: (cb) => on('agui-ready', cb),
   offAguiReady: (cb) => off('agui-ready', cb),
+
+  // Global shortcuts pushed from the main process.
+  onOpenSettings: (cb) => on('open-settings', cb),
+  offOpenSettings: (cb) => off('open-settings', cb),
 
   // Direct interrupt fallback (used when CopilotKit's stopGeneration cannot
   // reach the AG-UI runtime in time).
