@@ -13,6 +13,7 @@ import BrowserPanel from "./components/BrowserPanel.jsx";
 import ConfirmModal from "./components/ConfirmModal.jsx";
 import BlockRequestDialog from "./components/BlockRequestDialog.jsx";
 import { initContract, listManifests } from "./contract/registry.js";
+import { launcherApps } from "./contract/manifests.generated.js";
 import { subscribeContractEvents } from "./contract/eventBus.js";
 import { sanitizeMessageContent } from "./components/MessageThread.jsx";
 import { useAgentStream } from "./hooks/useAgentStream.js";
@@ -971,20 +972,23 @@ export default function App({ aguiPort }) {
     }
   }, [activeTabId, applyTabState]);
 
-  // Homepage app grid — data-driven so future LangGraph agents are just new
-  // entries here. Clicking an entry on the homepage converts the current
-  // homepage tab into that app tab; the user presses "+" when they really
-  // want a fresh homepage tab.
+  // Homepage app grid — data-driven from the build-time injected launcherApps
+  // (generated from agent manifest.json). The "对话" entry is the base chat
+  // surface, not a LangGraph workflow, so it stays hardcoded here; every other
+  // entry comes from a manifest with a `launcher` field. Adding an agent that
+  // exposes a launcher entry requires no edit to this file.
   const homepageApps = useMemo(() => [
     {
       key: "chat", title: "对话", icon: "chat", color: "#111827",
       onClick: () => openApp({ type: "chat", title: "对话", icon: "chat", assistantId: selectedAssistantId || "" }),
     },
-    {
-      key: "studio", title: "漫剧go", icon: "film", color: "linear-gradient(135deg, #0d9488, #14b8a6)",
-      onClick: () => openApp({ type: "studio", title: "漫剧go", icon: "film", workflowId: "manjucraft_agent", resultOpen: true, resultCollapsed: false, assistantId: selectedAssistantId || "" }),
-    },
-    // 未来新增 LangGraph agent：在此追加 { key, title, icon, color, onClick: () => openApp({ ... }) }
+    ...launcherApps.map((app) => ({
+      key: app.key,
+      title: app.title,
+      icon: app.icon,
+      color: app.color,
+      onClick: () => openApp({ type: "studio", title: app.title, icon: app.icon, workflowId: app.workflowId, resultOpen: true, resultCollapsed: false, assistantId: selectedAssistantId || "" }),
+    })),
   ], [openApp, selectedAssistantId]);
 
   // ── Detach: owns the IPC + clears in-window workflow state ──

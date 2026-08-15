@@ -13,24 +13,49 @@
       "prompt": {
         "type": "string",
         "minLength": 1,
-        "x_ui": { "control": "textarea", "label": "提示词", "placeholder": "描述你要生成的画面…" }
+        "x_ui": {
+          "control": "textarea",
+          "label": "提示词",
+          "placeholder": "描述你要生成的画面…"
+        }
       },
       "size": {
         "type": "string",
-        "enum": ["1024x768", "1024x1024", "768x1024"],
+        "enum": [
+          "1024x768",
+          "1024x1024",
+          "768x1024"
+        ],
         "default": "1024x768",
-        "x_ui": { "control": "select", "label": "尺寸" }
+        "x_ui": {
+          "control": "select",
+          "label": "尺寸"
+        }
       }
     },
-    "required": ["prompt"]
+    "required": [
+      "prompt"
+    ]
   },
   "output_schema": {
     "summary": "markdown",
     "artifacts": [
-      { "id": "image", "type": "image", "source": "path", "label": "生成结果" }
+      {
+        "id": "image",
+        "type": "image",
+        "source": "path",
+        "label": "生成结果"
+      }
     ]
   },
-  "capabilities": ["image-generation"],
+  "capabilities": [
+    "image-generation"
+  ],
   "approval_gates": [],
-  "progress_events": ["step_started", "step_progress", "artifact_produced"]
+  "progress_events": [
+    "step_started",
+    "step_progress",
+    "artifact_produced"
+  ],
+  "hidden": true
 }

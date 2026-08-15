@@ -188,7 +188,13 @@ class AgnesLLM:
 
 
 def discover_agents() -> List[str]:
-    """Return sorted list of agent package names found on disk."""
+    """Return sorted list of agent package names found on disk.
+
+    Agents whose ``manifest.json`` carries ``"hidden": true`` are excluded so
+    test/demo/legacy packages (manju_craft, hello_agent, image_gen, …) are never
+    invocable via the ``langgraph_agent`` tool, matching the manifest-driven
+    exposure contract on the Node/frontend side.
+    """
     seen: set = set()
     agents: List[str] = []
     for root in _agent_search_dirs():
@@ -196,6 +202,14 @@ def discover_agents() -> List[str]:
             continue
         for d in root.iterdir():
             if d.is_dir() and (d / "agent.py").is_file() and d.name not in seen:
+                mf = d / "manifest.json"
+                if mf.is_file():
+                    try:
+                        data = json.loads(mf.read_text(encoding="utf-8"))
+                        if isinstance(data, dict) and data.get("hidden"):
+                            continue
+                    except Exception:
+                        pass
                 seen.add(d.name)
                 agents.append(d.name)
     return sorted(agents)

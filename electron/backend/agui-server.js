@@ -29,139 +29,11 @@ function findAvailablePort(host, startPort) {
 
 // Minimal AG-UI Runtime Bridge: translates CopilotKit SSE requests into
 // Hermes gateway JSON-RPC calls over the persistent WebSocket connection.
-// Video-task heuristic (used both for legacy auto-delegation and the @ parser).
-// Only matches video *creation* intent. Watching / playing / searching a video in
-// a browser (e.g. "打开bilibili播放视频") must NOT be hijacked by manjucraft.
-function looksLikeVideoTask(t) {
-  if (!t) return false;
-  const lower = t.toLowerCase();
-  // Negative signals: these indicate the user wants to watch/browse a video,
-  // not generate one. Bail out immediately.
-  const watchSignals = [
-    '打开', '播放', '观看', '看', '搜', '搜索', 'bilibili', 'b站', '哔哩哔哩',
-    'youtube', 'youtu.be', '抖音', '快手', '小红书', '腾讯', '优酷', '爱奇艺',
-    'mp4', 'url', 'http', 'www.', '.com', '链接',
-  ];
-  if (watchSignals.some((k) => lower.includes(k))) return false;
-  // Creation-only keywords. Plain "视频" is intentionally absent — it is too
-  // broad and would catch "播放视频" / "搜索视频" browser requests.
-  const keywords = [
-    '剪映', 'jianying', 'manju', 'manjucraft', 'manju-craft', '漫剧',
-    '做一条', '生成视频', '生成短片', '生成动画', '制作视频', '创作视频',
-    'video generate', 'generate video', 'create video', 'make a video',
-    '系列', '连载', '多集', 'episode',
-  ];
-  return keywords.some((k) => lower.includes(k));
-}
-
-// Parse a free-text manju prompt into a STRUCTURED input object the
-// manjucraft_agent backend understands. The backend only reads series mode
-// from a structured {mode, series_script} object (free text is always treated
-// as single), so we must detect "series" intent here rather than trusting the
-// model to re-structure the input itself. Missing/invalid fields fall back to
-// sane defaults so the agent never raises.
-function parseManjuInput(text) {
-  if (!text) return { mode: "single", script: "" };
-  const lower = text.toLowerCase();
-  const isSeries =
-    /系列|连载|多集|\bepisode\b|第[一二三四五六七八九十\d]+集|(\d+)\s*集/.test(text);
-  // Default episode count: explicit "N集" wins, else 3.
-  let totalEpisodes = 3;
-  const m = text.match(/(\d+)\s*集/);
-  if (m) totalEpisodes = Math.min(24, Math.max(1, parseInt(m[1], 10)));
-  // Style hint.
-  let style = "二次元";
-  if (/写实/.test(text)) style = "写实";
-  else if (/3d|三维/.test(lower)) style = "3D";
-
-  // Optional project / series name. These keys ARE consumed by the backend's
-  // build_initial_state_obj, so extracting them is meaningful.
-  // Series / project name. These are SEPARATE keys:
-  //  - series_name: prefer an explicit "剧名/系列名: xxx" label, then a 《书名号》 title.
-  //  - project_name: only the "项目名: xxx" label.
-  // (Previously 项目名 leaked into series_name — fixed.)
-  const seriesLabel = (text.match(/(?:系列名|剧名|系列)\s*[:：]\s*([^\n，。,（）()]{1,30})/) || [])[1];
-  const bracketName = (text.match(/《([^》]{1,20})》/) || [])[1];
-  const seriesName = (seriesLabel || bracketName || "").trim() || undefined;
-  const projectName = (text.match(/项目名\s*[:：]\s*([^\n，。,（）()]{1,30})/) || [])[1];
-
-  // --- Resolution / duration (now consumed by the agent) ---
-  // Explicit "WxH" / "W×H" / "W*H" anywhere wins.
-  let resolution = null;
-  const resMatch = text.match(/(\d{3,5})\s*[x×*]\s*(\d{3,5})/);
-  if (resMatch) resolution = `${resMatch[1]}x${resMatch[2]}`;
-  else if (/竖屏|portrait/.test(lower)) resolution = "1080x1920";
-  else if (/横屏|landscape/.test(lower)) resolution = "1920x1080";
-  else if (/2k|1440p/.test(lower)) resolution = "2560x1440";
-  else if (/4k|2160p/.test(lower)) resolution = "3840x2160";
-
-  // Explicit "每镜N秒" / "N秒/镜" / "N秒每镜" → sec_per_shot.
-  let secPerShot = 0;
-  const secMatch = text.match(/每镜\s*(\d+(?:\.\d+)?)\s*秒|(\d+(?:\.\d+)?)\s*秒\s*[每/]\s*镜/);
-  if (secMatch) secPerShot = parseFloat(secMatch[1] || secMatch[2]);
-
-  // --- Fixed characters (user-supplied role specs for consistency) ---
-  // Supported line formats:
-  //   角色：名-描述 / 角色:名=描述   (block introduced by a "角色" label)
-  //   名=描述  /  名：描述           (bare, when prefixed by 固定角色/角色设定)
-  // We only scan a "fixed characters" section if the text contains such a
-  // marker; otherwise we leave characters empty so the LLM discovers roles.
-  const characters = [];
-  // A "固定角色/角色设定" marker introduces the role specs. Capture everything
-  // after the marker up to end-of-text or a line starting with a known param
-  // label (分辨率/每镜/项目名/...), so trailing prose (e.g. the 《》 title) is
-  // excluded. Each spec is "名=描述" / "名：描述" / "名-描述". One per line
-  // (newline). A comma inside a prompt is preserved; a comma that separates two
-  // specs ("阿杰-...，阿猫=...") is split only when the part after it is itself
-  // a "name sep desc" spec.
-  const charMarker = text.match(/(?:固定角色|角色设定|角色)\s*[:：]?\s*([\s\S]*?)(?:\n\s*(?:分辨率|每镜|项目名|系列名|剧名|风格|模式)\s*[:：]|\n\s*生成|\n\s*《|$)/);
-  if (charMarker) {
-    const chunk = charMarker[1];
-    const lines = chunk.split(/\n+/).map((s) => s.trim()).filter(Boolean);
-    for (const line of lines) {
-      if (/生成|系列|项目|分辨率|每镜|视频|漫剧|剪映/.test(line)) continue;
-      // Split a line on a comma only when the comma is followed by another
-      // "name sep desc" spec (so inline multi-role stays readable).
-      const segs = line.split(/，(?=[^，]+[=：:-])/).map((s) => s.trim()).filter(Boolean);
-      for (const cand of segs) {
-        if (/生成|系列|项目|分辨率|每镜|视频|漫剧|剪映/.test(cand)) continue;
-        const eq = cand.indexOf("=");
-        const colon = cand.search(/[:：]/);
-        const dash = cand.indexOf("-");
-        const scores = [eq, colon, dash].filter((x) => x >= 1);
-        if (!scores.length) continue;
-        const sep = Math.min(...scores);
-        let name = cand.slice(0, sep).replace(/^角色\s*/, "").trim();
-        let prompt = cand.slice(sep + 1).trim();
-        name = name.replace(/[-=]\s*$/, "").trim();
-        if (name && prompt) characters.push({ name, prompt });
-      }
-    }
-  }
-
-  const common = {};
-  if (resolution) common.resolution = resolution;
-  if (secPerShot > 0) common.sec_per_shot = secPerShot;
-  if (characters.length) common.characters = characters;
-
-  if (isSeries) {
-    const out = {
-      mode: "series",
-      series_script: text,
-      total_episodes: totalEpisodes,
-      consistency_policy: "lock_bible",
-      style,
-      ...common,
-    };
-    if (seriesName) out.series_name = seriesName.trim();
-    if (projectName) out.project_name = projectName.trim();
-    return out;
-  }
-  const out = { mode: "single", script: text, style, ...common };
-  if (projectName) out.project_name = projectName.trim();
-  if (seriesName) out.project_name = seriesName.trim(); // single has no series_name; reuse as project alias
-  return out;
-}
+// Delegation is manifest-driven: no per-workflow keyword sniffing or input
+// parsing lives in the bridge. The frontend entry / ContractForm / @mention
+// resolves which agent to invoke (by manifest id) and passes either structured
+// input (from the manifest's input_schema) or free text; the generic
+// langgraph_agent tool + each agent's own build_initial_state* handle the rest.
 
 // (resolveMentionDelegation moved inside createAgUIServer below — it closes
 // over the inner discoverManifests() which is not in module scope.)
@@ -191,10 +63,12 @@ function createAgUIServer(getGatewayClient, storage, options) {
     try {
       backgroundRuns.delete(br.wfRunId);
       workflowSubscribers.delete(br.wfRunId);
+      clearEventBuffer(br.wfRunId);
       const base = process.env.HERMES_HOME || path.join(os.homedir(), '.hermes_portable_data');
       const coordFile = path.join(base, 'workflow_hitl', `.wf_active_${br.ctx.runId}.json`);
       try { if (fs.existsSync(coordFile)) fs.unlinkSync(coordFile); } catch (_) {}
       activeTurnSenders.delete(br.ctx.runId);
+      clearEventBuffer(br.ctx.runId);
       try { clearUiActiveCoord(); } catch (_) {}
       try {
         sendSSE(br.res, br.encoder, { type: 'RUN_FINISHED', threadId: br.ctx.threadId, runId: br.ctx.runId });
@@ -207,6 +81,47 @@ function createAgUIServer(getGatewayClient, storage, options) {
   // render_ui tool 在 Hermes 进程内通过 HTTP 桥把 ui.render 事件回传，这里按
   // runId 路由到当前对话轮的 SSE 流。与 workflowSubscribers 平行，但覆盖所有轮次。
   const activeTurnSenders = new Map();
+
+  // ── 事件桥缓冲（重连/缓冲）──────────────────────────────────────────
+  // Python 侧可在任意时刻 POST workflow.* / ui.render 事件——包括订阅者尚未
+  // 注册、或 SSE 断开重连的瞬态窗口。无订阅者时不丢弃，而是按 runId 暂存，
+  // 订阅者注册/重连时回放。这直接规避「workflow.started 早于订阅注册 → 后台
+  // run 未置 keepOpen → SSE 被提前关闭 → 后续事件全丢」的竞态。
+  const pendingEventBuffer = new Map(); // runId -> [{ event, ts }]
+  const EVENT_BUFFER_MAX = 500;
+  const EVENT_BUFFER_TTL_MS = 10 * 60 * 1000; // 10 分钟
+
+  function bufferEvent(runId, event) {
+    if (!runId) return;
+    const now = Date.now();
+    let buf = pendingEventBuffer.get(runId);
+    if (!buf) {
+      buf = [];
+      pendingEventBuffer.set(runId, buf);
+    }
+    // TTL 兜底，防止 runId 永久泄漏。
+    while (buf.length && now - buf[0].ts > EVENT_BUFFER_TTL_MS) buf.shift();
+    // 上限兜底：丢最旧，防无界增长。
+    if (buf.length >= EVENT_BUFFER_MAX) buf.shift();
+    buf.push({ event, ts: now });
+  }
+
+  function drainEventBuffer(runId, send) {
+    const buf = pendingEventBuffer.get(runId);
+    if (!buf) return;
+    pendingEventBuffer.delete(runId);
+    for (const { event } of buf) {
+      try {
+        send(event);
+      } catch (_) {
+        /* best-effort */
+      }
+    }
+  }
+
+  function clearEventBuffer(runId) {
+    pendingEventBuffer.delete(runId);
+  }
 
   // 协调文件：每条对话轮开始时写入当前 runId，供 Python 侧 render_ui tool 发现
   // 自己属于哪个 SSE 流（与 workflow_hitl/.wf_active.json 同构）。
@@ -311,7 +226,10 @@ function createAgUIServer(getGatewayClient, storage, options) {
         try {
           if (fs.existsSync(mf)) {
             const data = JSON.parse(fs.readFileSync(mf, 'utf8'));
-            if (data && data.id) out.push(data);
+            // Skip hidden agents (test/demo/legacy) so they never surface in
+            // the contract endpoint nor become @mention/mentions delegation
+            // targets. Production exposure is a data decision, not a code one.
+            if (data && data.id && !data.hidden) out.push(data);
           }
         } catch (e) {
           log('agui-server', `manifest read failed ${mf}: ${e.message}`);
@@ -325,12 +243,11 @@ function createAgUIServer(getGatewayClient, storage, options) {
   // Resolve which workflow (if any) a turn is delegated to. Sources, in order:
   //   1. explicit `mentions` array (workflow ids) from the frontend
   //   2. `@Name` / `@id` tokens embedded in the user text
-  //   3. legacy auto-delegation of video tasks to manju_craft (main assistant)
   // Returns the matched manifest object, or null. The caller opens the HITL
   // subscriber keyed by this workflow so its workflow.* events relay back.
   // Defined INSIDE createAgUIServer so it closes over discoverManifests()
   // (which is function-local here, not module-scope).
-  function resolveMentionDelegation(text, mentions, skillId) {
+  function resolveMentionDelegation(text, mentions) {
     const mfMap = new Map();
     for (const m of discoverManifests()) {
       if (m.id) mfMap.set(m.id, m);
@@ -352,12 +269,6 @@ function createAgUIServer(getGatewayClient, storage, options) {
       const token = mm[1];
       const m = mfMap.get(token) || mfMap.get(token.replace(/_/g, ' '));
       if (m && !targets.includes(m)) targets.push(m);
-    }
-    // 3. legacy video auto-delegation (main assistant only) -> default to the
-    //    new manjucraft_agent (v2); old manju_craft still selectable by @ mention.
-    if ((!skillId || skillId === 'default') && looksLikeVideoTask(text)) {
-      const manju = mfMap.get('manjucraft_agent') || mfMap.get('manju_craft');
-      if (manju && !targets.includes(manju)) targets.push(manju);
     }
     return targets.length > 0 ? targets[0] : null;
   }
@@ -419,12 +330,11 @@ function createAgUIServer(getGatewayClient, storage, options) {
     if (effectiveModel) {
       createParams.model = effectiveModel;
     }
-    // Map frontend assistant skill IDs to Hermes skill IDs.
+    // Frontend assistant skill IDs are already Hermes skill IDs (from
+    // listSkills); pass them through verbatim. No per-workflow mapping.
     const skillId = ctx.skillId;
     if (skillId && skillId !== 'default') {
-      // The actual Hermes skill is 'langgraph-agents'; 'manju-craft' is just
-      // a frontend assistant label pointing to the manju_craft LangGraph agent.
-      createParams.skill_id = skillId === 'manju-craft' ? 'langgraph-agents' : skillId;
+      createParams.skill_id = skillId;
     }
     log('agui-server', `session.create params: ${JSON.stringify(createParams)}`);
     const created = await client.request('session.create', createParams, 30000);
@@ -1022,18 +932,14 @@ function createAgUIServer(getGatewayClient, storage, options) {
     let text = lastUser && lastUser.content ? extractText(lastUser.content) : '';
 
     // @ mention protocol (spec §2): resolve which workflow this turn delegates
-    // to. Either an explicit `mentions` array, an `@Name` token in the text, or
-    // legacy video auto-delegation. Opens the HITL subscriber so the workflow's
-    // workflow.* events relay back to this SSE stream.
-    const mentionTarget = resolveMentionDelegation(text, ctx.forwardedProps.mentions, ctx.skillId);
-    let delegatedAgent = ctx.skillId === 'manju-craft' ? 'manju_craft'
-      : (ctx.skillId === 'manjucraft-agent' || ctx.skillId === 'manjucraft_agent') ? 'manjucraft_agent'
-      : (mentionTarget ? mentionTarget.id : null);
+    // to via an explicit `mentions` array or an `@Name` token. Purely
+    // manifest-driven — no keyword sniffing, no per-workflow mapping.
+    const mentionTarget = resolveMentionDelegation(text, ctx.forwardedProps.mentions);
+    let delegatedAgent = mentionTarget ? mentionTarget.id : null;
 
-    // A structured ContractForm / Workbench invoke ("请调用 langgraph_agent 工具…"
-    // carrying agent_name) also targets a workflow. Resolve its agent_name so the
-    // HITL/workflow subscriber opens (wfDelegated) and the Python tool can stream
-    // workflow.* events back, instead of falling back to sync graph.invoke().
+    // A structured ContractForm / Workbench invoke carries agent_name explicitly
+    // (built by the frontend from the manifest's input_schema). Resolve it so
+    // the Python langgraph_agent tool streams workflow.* events back.
     const isStructuredInvoke =
       /langgraph_agent/.test(text) && /agent_name/.test(text);
     if (isStructuredInvoke) {
@@ -1041,48 +947,21 @@ function createAgUIServer(getGatewayClient, storage, options) {
       if (m) delegatedAgent = m[1];
     }
 
-    const wfDelegated =
-      !!delegatedAgent ||
-      ((!ctx.skillId || ctx.skillId === 'default') && looksLikeVideoTask(text));
     let wfRunId = null;
 
-    // Contract layer: if the frontend already sent a structured invocation
-    // (from a ContractForm / Workbench), route it directly - no hardcoded
-    // rewriting. The agent_name comes from the manifest, so this is
-    // data-driven, not a per-workflow branch.
-    if (!isStructuredInvoke) {
-    if (delegatedAgent && text) {
-      // A workflow (via @ mention, sidebar entry, or video auto-delegation) is
-      // targeted: instruct the model to invoke that LangGraph agent directly.
-      // Pass a STRUCTURED input object (not raw text) so the backend reads
-      // mode/series_script correctly — otherwise free text always falls back to
-      // single mode.
+    // @mention delegation (free text): instruct the model to invoke the
+    // resolved agent with the raw text as input. Structured input
+    // (mode/series_script/…) is the ContractForm/Workbench's responsibility —
+    // the bridge never parses workflow-specific input.
+    if (!isStructuredInvoke && delegatedAgent && text) {
       text = [
-        '请立即调用 langgraph_agent 工具，参数如下：',
+        '请调用 langgraph_agent 工具，参数如下：',
         '{',
         `  "agent_name": "${delegatedAgent}",`,
-        `  "input": ${JSON.stringify(parseManjuInput(text))}`,
+        `  "input": ${JSON.stringify(text)}`,
         '}',
         '不要解释、不要加载 skill、不要调用其它工具，直接发起 langgraph_agent 调用。',
       ].join('\n');
-    } else if ((!ctx.skillId || ctx.skillId === 'default') && text && looksLikeVideoTask(text)) {
-      // When talking to the main assistant, proactively delegate video-generation
-      // tasks to the dedicated manju_craft agent. The langgraph_agent tool is part
-      // of the hermes-cli toolset, so the model can invoke it and the frontend will
-      // render the tool call card. Structured input so series intent is preserved.
-      text = [
-        '用户请求如下：',
-        `${text}`,
-        '',
-        '你是主助手。如果上述请求涉及视频生成、剪映或 manju-craft 工作流，',
-        '请直接调用 langgraph_agent 工具，参数为：',
-        '{',
-        '  "agent_name": "manjucraft_agent",',
-        `  "input": ${JSON.stringify(parseManjuInput(text))}`,
-        '}',
-        '不要解释你打算做什么，直接发起 langgraph_agent 调用；工具执行结果会返回给用户。',
-      ].join('\n');
-    }
     }
     if (!text) {
       sendSSE(res, encoder, { type: 'RUN_STARTED', threadId: ctx.threadId, runId: ctx.runId });
@@ -1093,11 +972,14 @@ function createAgUIServer(getGatewayClient, storage, options) {
     // Open the workflow-event subscriber and publish the workflowRunId so the
     // Python langgraph_agent tool can forward progress/artifact/done events
     // back to this SSE stream via HTTP POST /api/ag-ui/workflow-event.
-    // Always register (not just for wfDelegated) so that ANY langgraph_agent
-    // call — whether triggered by a ContractForm, @mention, or the model's
-    // own tool-use decision — gets verbose progress forwarding.
+    // Always register so that ANY langgraph_agent call — whether triggered by
+    // a ContractForm, @mention, or the model's own tool-use decision — gets
+    // verbose progress forwarding.
     wfRunId = 'wf-' + ctx.runId;
     workflowSubscribers.set(wfRunId, (obj) => sendSSE(res, encoder, obj));
+    // 回放订阅注册前已缓冲的事件（重连/竞态兜底）：早到的 workflow.started 会
+    // 在这里被补发并正确置 keepOpen，避免后台 run 的 SSE 被提前关闭。
+    drainEventBuffer(wfRunId, (obj) => sendSSE(res, encoder, obj));
     // 登记后台 run 句柄（keepOpen 初始 false，收到 workflow.started 后置 true）
     backgroundRuns.set(wfRunId, {
       wfRunId, res, encoder, ctx,
@@ -1127,6 +1009,8 @@ function createAgUIServer(getGatewayClient, storage, options) {
     // UI) can push ui.render events back from the Hermes process over HTTP.
     const turnSend = (obj) => sendSSE(res, encoder, obj);
     activeTurnSenders.set(ctx.runId, turnSend);
+    // 回放该 runId 缓冲的 ui.render 事件（重连/竞态兜底）。
+    drainEventBuffer(ctx.runId, turnSend);
     writeUiActiveCoord(ctx.runId, ctx.threadId);
 
     async function getReadyHermesSession() {
@@ -1231,6 +1115,7 @@ function createAgUIServer(getGatewayClient, storage, options) {
       if (wfRunId) {
         workflowSubscribers.delete(wfRunId);
         backgroundRuns.delete(wfRunId);
+        clearEventBuffer(wfRunId);
         try {
           const base = process.env.HERMES_HOME || path.join(os.homedir(), '.hermes_portable_data');
           const coordFile = path.join(base, 'workflow_hitl', `.wf_active_${ctx.runId}.json`);
@@ -1238,6 +1123,7 @@ function createAgUIServer(getGatewayClient, storage, options) {
         } catch (_) { /* best-effort */ }
       }
       activeTurnSenders.delete(ctx.runId);
+      clearEventBuffer(ctx.runId);
       clearUiActiveCoord();
       res.end();
     }
@@ -1312,8 +1198,9 @@ function createAgUIServer(getGatewayClient, storage, options) {
       }
       const send = activeTurnSenders.get(runId);
       if (!send) {
-        log('agui-server', `ui-event dropped (no active turn) for ${runId}`);
-        return res.json({ status: 'dropped', runId });
+        bufferEvent(runId, { type: 'CUSTOM', name: 'ui.render', value: payload });
+        log('agui-server', `ui-event buffered (no active turn) for ${runId}`);
+        return res.json({ status: 'buffered', runId });
       }
       // 透传白名单已在 useAgentStream 侧校验；这里只保证必要字段存在。
       if (!payload || !payload.type || !payload.blockId) {
@@ -1339,8 +1226,10 @@ function createAgUIServer(getGatewayClient, storage, options) {
       }
       const send = workflowSubscribers.get(runId);
       if (!send) {
-        log('agui-server', `workflow-event dropped (no subscriber) for ${runId}`);
-        return res.json({ status: 'dropped', runId });
+        // 订阅者尚未注册 / SSE 断开重连窗口：缓冲而非丢弃，待订阅者注册时回放。
+        bufferEvent(runId, { type: 'CUSTOM', name: `workflow.${eventType}`, value: payload });
+        log('agui-server', `workflow-event buffered (no subscriber) for ${runId}`);
+        return res.json({ status: 'buffered', runId });
       }
       send({ type: 'CUSTOM', name: `workflow.${eventType}`, value: payload });
       // 后台 run 生命周期钩子（contract B）：

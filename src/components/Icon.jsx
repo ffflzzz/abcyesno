@@ -11,6 +11,7 @@ import {
   Search,           // search
   ChevronRight,     // chevron
   Film,             // film
+  Clapperboard,     // clapperboard
   Image,            // image
   X,                // close / x
   Check,            // check
@@ -88,6 +89,7 @@ const MAP = {
   search: Search,
   chevron: ChevronRight,
   film: Film,
+  clapperboard: Clapperboard,
   image: Image,
 
   close: X,

@@ -12,7 +12,10 @@
     "properties": {
       "project_name": {
         "type": "string",
-        "x_ui": { "control": "text", "label": "项目名（可选）" }
+        "x_ui": {
+          "control": "text",
+          "label": "项目名（可选）"
+        }
       }
     },
     "required": []
@@ -20,11 +23,24 @@
   "output_schema": {
     "summary": "markdown",
     "artifacts": [
-      { "id": "jianying", "type": "file", "mime": "application/json", "label": "剪映草稿" }
+      {
+        "id": "jianying",
+        "type": "file",
+        "mime": "application/json",
+        "label": "剪映草稿"
+      }
     ]
   },
-  "capabilities": ["short-drama-studio", "script-to-video"],
+  "capabilities": [
+    "short-drama-studio",
+    "script-to-video"
+  ],
   "approval_gates": [],
   "progress_events": [],
-  "ui": { "type": "workbench", "component": "StudioWorkbench", "title": "短剧制片工作台" }
+  "ui": {
+    "type": "workbench",
+    "component": "StudioWorkbench",
+    "title": "短剧制片工作台"
+  },
+  "hidden": true
 }

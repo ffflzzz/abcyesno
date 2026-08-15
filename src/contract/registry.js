@@ -1,15 +1,11 @@
 // Manifest registry (L1 discovery). The backend /api/ag-ui/contract/manifests
-// is the source of truth when reachable; a bundled fallback keeps the UI usable
-// offline. Both are pure DATA: adding a workflow = adding one manifest object,
-// never a new component or new branch.
-//
-// WHITELIST: only production workflows are exposed in the UI. Test/demo
-// workflows (hello_agent, image_gen) were temporary validation artifacts and
-// have been removed from the bundled set. If the backend still serves them
-// (stale manifest.json on disk), they are filtered out here.
-import bundledManifests from "./manifests.js";
+// is the source of truth when reachable; the bundled fallback keeps the UI
+// usable offline. Both are pure DATA generated at build time from the agent
+// manifest.json files (see scripts/gen-contract.mjs): adding a workflow never
+// touches a component or branch here.
+import { manifests as bundledManifests, allowedIds as bundledAllowedIds } from "./manifests.generated.js";
 
-const ALLOWED_IDS = new Set(bundledManifests.map((m) => m.id));
+const ALLOWED_IDS = new Set(bundledAllowedIds);
 
 let manifests = bundledManifests.slice();
 let initialized = false;

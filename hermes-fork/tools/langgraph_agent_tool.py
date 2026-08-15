@@ -71,25 +71,35 @@ def _make_http_emitter(run_id: str):
     process, so we cannot share a closure with the Node-side SSE connection; an
     HTTP POST to the local agui-server bridges the process boundary.
     """
+    import time
     import urllib.request
 
     port = os.environ.get("AGUI_PORT") or "9121"
     url = f"http://127.0.0.1:{port}/api/ag-ui/workflow-event"
 
     def emit(event_type: str, payload: Any) -> None:
-        try:
-            body = json.dumps(
-                {"type": event_type, "payload": payload, "runId": run_id}
-            ).encode("utf-8")
-            req = urllib.request.Request(
-                url,
-                data=body,
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            urllib.request.urlopen(req, timeout=5)
-        except Exception as exc:  # pragma: no cover - best-effort forwarding
-            logger.warning("workflow event emit failed: %s", exc)
+        body = json.dumps(
+            {"type": event_type, "payload": payload, "runId": run_id}
+        ).encode("utf-8")
+        last_exc = None
+        # 重试退避：事件桥瞬态不可用（Node 侧重启 / 订阅者注册前的竞态窗口）时
+        # 短暂重试，避免后台 workflow 事件被静默丢弃。仅在失败路径阻塞（最坏
+        # ~3.5s），正常运行零开销。
+        for delay in (0.0, 0.5, 1.0, 2.0):
+            if delay:
+                time.sleep(delay)
+            try:
+                req = urllib.request.Request(
+                    url,
+                    data=body,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                urllib.request.urlopen(req, timeout=5)
+                return
+            except Exception as exc:  # pragma: no cover - best-effort forwarding
+                last_exc = exc
+        logger.warning("workflow event emit failed after retries: %s", last_exc)
 
     return emit
 

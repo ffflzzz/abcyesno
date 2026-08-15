@@ -12,13 +12,25 @@
     "properties": {
       "input": {
         "type": "string",
-        "x_ui": { "control": "textarea", "label": "输入", "placeholder": "说点什么…" }
+        "x_ui": {
+          "control": "textarea",
+          "label": "输入",
+          "placeholder": "说点什么…"
+        }
       }
     },
-    "required": ["input"]
+    "required": [
+      "input"
+    ]
   },
-  "output_schema": { "summary": "markdown", "artifacts": [] },
-  "capabilities": ["chat"],
+  "output_schema": {
+    "summary": "markdown",
+    "artifacts": []
+  },
+  "capabilities": [
+    "chat"
+  ],
   "approval_gates": [],
-  "progress_events": []
+  "progress_events": [],
+  "hidden": true
 }

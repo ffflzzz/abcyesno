@@ -1,7 +1,7 @@
 ---
 name: langgraph-agents
-description: Delegate tasks to LangGraph agents through the Hermes harness.
-version: 0.1.0
+description: Delegate tasks to LangGraph agents through the Hermes harness. Agents are discovered from manifest.json files beside each agent package — exposure, input schema, and UI wiring are pure data.
+version: 0.2.0
 author: Abcyesno Project
 tags:
   - langgraph
@@ -18,69 +18,85 @@ metadata:
 
 # LangGraph Agents Skill
 
-Use this skill when you want to hand off a short, self-contained task to a
-LangGraph agent instead of solving it inline with Hermes tools.
-
-## When to use
-
-- The task maps cleanly to a small state-machine or multi-node workflow.
-- You want to keep the main Hermes conversation thin while a dedicated agent
-  performs the work.
-- The agent already exists under the `langgraph-agents` skill.
+Use this skill when you want to hand off a task to a LangGraph agent (a
+multi-node state machine / workflow) instead of solving it inline with Hermes
+tools. Delegation is **manifest-driven**: the bridge, the frontend, and the
+`langgraph_agent` tool all discover agents from data, never from per-agent
+hardcoded branches.
 
 ## Tool
 
 - **`langgraph_agent`**
-  - `agent_name` (string, required): Name of the agent package. Currently
-    `hello_agent` and `manju_craft` are available.
-  - `input` (string, required): The user input or task description passed to
-    the agent.
-  - `thread_id` (string, optional): A conversation thread id. When omitted a
-    fresh id is generated.
+  - `agent_name` (string, required): The agent package id (its manifest `id`).
+    Only non-hidden agents are invocable.
+  - `input` (string | object, required): Free text OR a structured object
+    matching the agent's `input_schema` (contract L2).
+  - `thread_id` (string, optional): A thread id; a stable one is derived when
+    omitted.
 
-## Example
-
-```json
-{
-  "agent_name": "hello_agent",
-  "input": "world",
-  "thread_id": "demo-thread-1"
-}
-```
-
-### ManjuCraft example
+This is an **asynchronous** tool: it returns a `started` envelope immediately
+and the workflow runs on a background thread. Progress, artifacts, approval
+gates, and completion arrive as `workflow.*` events — never call the tool again
+to poll.
 
 ```json
 {
-  "agent_name": "manju_craft",
-  "input": "一只小猫在草地上玩耍",
-  "thread_id": "manju-demo-1"
+  "agent_name": "manjucraft_agent",
+  "input": { "mode": "single", "script": "一只小猫在草地上玩耍", "style": "二次元" }
 }
 ```
-
-The `manju_craft` agent expects a short script in `input` and turns it into a
-video via the manju-craft LangGraph workflow (script parsing → keyframes →
-consistency check → video generation → TTS → merge → Jianying draft). It reads
-the Agnes API key from `AGNES_API_KEY` or from the active Hermes config.
-
-For a credit-free smoke test, set `MANJU_CRAFT_MOCK=1` before invoking the
-agent. This replaces media generation with local stubs and exercises the full
-graph structure without calling image/video/TTS services.
 
 ## Available agents
 
-- `hello_agent` — a one-node greeting/echo agent that calls the Agnes AI LLM.
-- `manju_craft` — video-generation workflow adapted from the manju-craft
-  project. Runs headlessly and produces `final.mp4`, `draft_content.json`, and
-  `assets.zip` under `~/.manjucraft/projects/<project_name>/`.
+- `manjucraft_agent` — the single production workflow (短剧制片工作台). Turns a
+  script into a vertical short-drama/manju video: script parsing → characters →
+  first-frame/storyboard approval gates → video/TTS → merge → Jianying draft
+  export. Supports `single` and `series` modes (series locks a character bible
+  across episodes). Reads the Agnes API key from `AGNES_API_KEY` or the active
+  Hermes config.
 
-## Adding agents
+For a credit-free smoke test, set `MANJU_CRAFT_MOCK=1` before invoking the
+agent — media generation is replaced with local stubs and the full graph
+structure (incl. HITL gates) is exercised without image/video/TTS calls.
 
-Create a new directory under `skills/langgraph_agents/agents/<agent_name>/` with
-an `agent.py` that exposes either:
+## Agent manifest contract (L1)
 
-- a compiled graph as `graph` or `workflow`, or
-- a `build_graph()` factory returning a compilable LangGraph graph.
+Each agent package lives at `agents/<id>/` and ships two files:
 
-The runtime loads the package on first use and invokes it with a
-`MessagesState` containing the user's input as a `HumanMessage`.
+1. `agent.py` — exposes a compiled `graph` / `workflow`, or a `build_graph()`
+   factory. May also define `build_initial_state(text)` /
+   `build_initial_state_obj(obj)`, `WORKFLOW_STAGES`, and `summarize_state`.
+2. `manifest.json` — pure data describing the agent to the bridge + frontend:
+
+```jsonc
+{
+  "id": "my_agent",              // tool agent_name + delegation id
+  "name": "我的工作流",           // display name
+  "hidden": false,               // true = test/demo/legacy, never exposed
+  "entry": "agents/my_agent/agent.py",
+  "runtime": "inprocess",
+  "skill_id": "langgraph-agents", // optional Hermes skill mapping
+  "input_schema": { "type": "object", "properties": { /* L2 */ } },
+  "output_schema": { "summary": "markdown", "artifacts": [ /* L3 */ ] },
+  "capabilities": ["..."],
+  "approval_gates": [ { "gate_id": "...", "label": "...", "allowSteer": true } ],
+  "progress_events": ["workflow.progress", "workflow.artifact", "workflow.done"],
+  "ui": { "type": "workbench", "component": "StudioWorkbench", "title": "..." },
+  "launcher": { "title": "漫剧go", "icon": "film", "color": "..." }
+}
+```
+
+`ui` and `launcher` are optional frontend metadata. If `launcher` is present the
+agent appears on the app homepage; if `ui.component` is present it opens in a
+dedicated workbench, otherwise the generic ContractForm renders from
+`input_schema`.
+
+## Adding an agent (data-driven, no frontend edits)
+
+1. Create `agents/<id>/agent.py` exposing a graph.
+2. Create `agents/<id>/manifest.json` (above), with `hidden: false` (or omit it)
+   plus optional `ui` / `launcher` metadata.
+3. Rebuild. The build-time codegen (`scripts/gen-contract.mjs`, wired into the
+   Vite plugin) scans the manifests and injects the bundled contract + whitelist
+   + launcher entries. The backend (`discover_manifests` / `discover_agents`)
+   reads the same files at runtime and honors `hidden`.

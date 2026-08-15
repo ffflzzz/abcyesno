@@ -13,30 +13,71 @@
       "script": {
         "type": "string",
         "minLength": 1,
-        "x_ui": { "control": "textarea", "label": "脚本", "placeholder": "描述你要的漫剧情节…" }
+        "x_ui": {
+          "control": "textarea",
+          "label": "脚本",
+          "placeholder": "描述你要的漫剧情节…"
+        }
       },
       "style": {
         "type": "string",
-        "enum": ["写实", "二次元", "3D"],
+        "enum": [
+          "写实",
+          "二次元",
+          "3D"
+        ],
         "default": "二次元",
-        "x_ui": { "control": "select", "label": "风格" }
+        "x_ui": {
+          "control": "select",
+          "label": "风格"
+        }
       },
       "project_name": {
         "type": "string",
-        "x_ui": { "control": "text", "label": "项目名（可选）" }
+        "x_ui": {
+          "control": "text",
+          "label": "项目名（可选）"
+        }
       }
     },
-    "required": ["script"]
+    "required": [
+      "script"
+    ]
   },
   "output_schema": {
     "summary": "markdown",
     "artifacts": [
-      { "id": "video", "type": "video", "source": "path", "label": "成片" },
-      { "id": "jianying", "type": "file", "mime": "application/json", "source": "path", "label": "剪映草稿" },
-      { "id": "assets", "type": "file", "mime": "application/zip", "source": "path", "label": "素材包" }
+      {
+        "id": "video",
+        "type": "video",
+        "source": "path",
+        "label": "成片"
+      },
+      {
+        "id": "jianying",
+        "type": "file",
+        "mime": "application/json",
+        "source": "path",
+        "label": "剪映草稿"
+      },
+      {
+        "id": "assets",
+        "type": "file",
+        "mime": "application/zip",
+        "source": "path",
+        "label": "素材包"
+      }
     ]
   },
-  "capabilities": ["video-generation", "script-to-video"],
+  "capabilities": [
+    "video-generation",
+    "script-to-video"
+  ],
   "approval_gates": [],
-  "progress_events": ["step_started", "step_progress", "artifact_produced"]
+  "progress_events": [
+    "step_started",
+    "step_progress",
+    "artifact_produced"
+  ],
+  "hidden": true
 }
