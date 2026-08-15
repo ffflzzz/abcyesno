@@ -84,6 +84,11 @@ class Storage {
   }
 
   _defaultAssistants() {
+    // Only the default ABC assistant lives here. The legacy Manju Craft
+    // entry was removed when the bundled manju-craft LangGraph agent was
+    // deleted (2026-08-15 cleanup) — its skillId pointed at a skill that
+    // no longer exists. Workflow assistants (e.g. 短剧制片工作台) flow
+    // through the manifest/codegen path, not this hardcoded list.
     return [
       {
         id: 'default',
@@ -93,17 +98,6 @@ class Storage {
         avatar: '',
         defaultModel: 'agnes-2.5-flash',
         capabilities: ['chat', 'tools'],
-        config: {},
-        createdAt: 0,
-      },
-      {
-        id: 'manju-craft',
-        name: 'Manju Craft',
-        skillId: 'manju-craft',
-        description: '剪映视频生成工作流，发送脚本即可制作视频',
-        avatar: '',
-        defaultModel: 'agnes-2.5-flash',
-        capabilities: ['video', 'jianying', 'workflow'],
         config: {},
         createdAt: 0,
       },
