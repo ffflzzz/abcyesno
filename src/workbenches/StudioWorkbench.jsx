@@ -5,6 +5,28 @@ import WorkflowGraphPanel from "../components/WorkflowGraphPanel.jsx";
 import { subscribeContractEvents } from "../contract/eventBus.js";
 import "./StudioWorkbench.css";
 
+// Module-level state cache keyed by workflowId.
+//
+// Why: switching tabs (e.g. 漫剧go → 启动台 → 漫剧go) unmounts StudioWorkbench;
+// without persistence, all in-progress work (timeline, shot list, generated
+// assets, current phase, project form data, run state, loop-animation trace)
+// is destroyed on unmount. The user reported "一切换窗口就崩溃丢失正在跑的进程"
+// because the workflow was still running in the backend but the workbench had
+// lost all visual context.
+//
+// Pattern: each useState is initialized from `_studioCache[key]`. A cleanup
+// effect on unmount persists the latest values back to the cache. The cache
+// survives React component lifecycle as long as the renderer process lives.
+const _studioCache = {}; // { [workflowId]: { phase, runState, runId, project, ... } }
+
+function _readCache(key, fallback) {
+  return _studioCache[key] !== undefined ? _studioCache[key] : fallback;
+}
+
+function _writeCache(key, patch) {
+  _studioCache[key] = { ...(_studioCache[key] || {}), ...patch };
+}
+
 // Short-drama production studio workbench — unified video production front-end.
 //
 // This workbench is the single UI entry for the manjucraft_agent LangGraph
@@ -334,32 +356,35 @@ function EditConsole({ timeline, shotCfg, shots, selectedClip, totalDur, onSelec
 }
 
 export default function StudioWorkbench({ manifest, session, onExit, model, backendStatus, onRun }) {
-  const [phase, setPhase] = useState("script");
-  const [done, setDone] = useState({});
-  const [tasks, setTasks] = useState([]);
-  const [assetsReady, setAssetsReady] = useState({ character: false, scene: false, prop: false });
-  const [assetImgs, setAssetImgs] = useState({ character: {}, scene: {}, prop: {} });
-  const [curTab, setCurTab] = useState("character");
-  const [shotState, setShotState] = useState({});
-  const [shotCfg, setShotCfg] = useState({});
-  const [timeline, setTimeline] = useState([]);
-  const [selectedClip, setSelectedClip] = useState(null);
-  const [exportJson, setExportJson] = useState(null);
-  const [exporting, setExporting] = useState(false);
-  const [runState, setRunState] = useState("idle"); // idle | running | done | error
-  const [runId, setRunId] = useState(null);
+  // Module-level cache key: every workflowId gets its own persistent state.
+  const cacheKey = manifest?.id || "__default_studio__";
+
+  const [phase, setPhaseRaw] = useState(_readCache(cacheKey + ":phase", "script"));
+  const [done, setDoneRaw] = useState(_readCache(cacheKey + ":done", {}));
+  const [tasks, setTasksRaw] = useState(_readCache(cacheKey + ":tasks", []));
+  const [assetsReady, setAssetsReadyRaw] = useState(_readCache(cacheKey + ":assetsReady", { character: false, scene: false, prop: false }));
+  const [assetImgs, setAssetImgsRaw] = useState(_readCache(cacheKey + ":assetImgs", { character: {}, scene: {}, prop: {} }));
+  const [curTab, setCurTabRaw] = useState(_readCache(cacheKey + ":curTab", "character"));
+  const [shotState, setShotStateRaw] = useState(_readCache(cacheKey + ":shotState", {}));
+  const [shotCfg, setShotCfgRaw] = useState(_readCache(cacheKey + ":shotCfg", {}));
+  const [timeline, setTimelineRaw] = useState(_readCache(cacheKey + ":timeline", []));
+  const [selectedClip, setSelectedClipRaw] = useState(_readCache(cacheKey + ":selectedClip", null));
+  const [exportJson, setExportJsonRaw] = useState(_readCache(cacheKey + ":exportJson", null));
+  const [exporting, setExportingRaw] = useState(_readCache(cacheKey + ":exporting", false));
+  const [runState, setRunStateRaw] = useState(_readCache(cacheKey + ":runState", "idle")); // idle | running | done | error
+  const [runId, setRunIdRaw] = useState(_readCache(cacheKey + ":runId", null));
   // HITL approval gate (first-frame / each-scene / end) surfaced while running
   // inside the workbench. The chat-shell ApprovalBubble is NOT mounted here, so
   // we render our own overlay and route the decision through the file control
   // channel (window.hermes.sendWorkflowInterrupt).
-  const [approval, setApproval] = useState(null);
+  const [approval, setApprovalRaw] = useState(_readCache(cacheKey + ":approval", null));
   // Live LangGraph node-trace (topology + per-node status map).
-  const [topology, setTopology] = useState(null);
-  const [trace, setTrace] = useState({});
-  const [traceEpisode, setTraceEpisode] = useState(0);
-  const [traceTotal, setTraceTotal] = useState(1);
+  const [topology, setTopologyRaw] = useState(_readCache(cacheKey + ":topology", null));
+  const [trace, setTraceRaw] = useState(_readCache(cacheKey + ":trace", {}));
+  const [traceEpisode, setTraceEpisodeRaw] = useState(_readCache(cacheKey + ":traceEpisode", 0));
+  const [traceTotal, setTraceTotalRaw] = useState(_readCache(cacheKey + ":traceTotal", 1));
 
-  const [project, setProject] = useState({
+  const [project, setProjectRaw] = useState(_readCache(cacheKey + ":project", {
     name: "",
     script: "",
     seriesScript: "",
@@ -371,12 +396,68 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
     fps: 30,
     consistency: "lock_bible",
     fixedChars: "",
-  });
+  }));
 
   // 智能输入：自然语言 → 自动填表
-  const [nlText, setNlText] = useState("");
-  const [nlParsing, setNlParsing] = useState(false);
-  const [nlError, setNlError] = useState("");
+  const [nlText, setNlTextRaw] = useState(_readCache(cacheKey + ":nlText", ""));
+  const [nlParsing, setNlParsingRaw] = useState(_readCache(cacheKey + ":nlParsing", false));
+  const [nlError, setNlErrorRaw] = useState(_readCache(cacheKey + ":nlError", ""));
+
+  // Refs that always hold the latest value of each piece of state. The wrapped
+  // setters read the latest from these refs so functional updates like
+  // `setPhase((p) => p + 1)` always see the most recent value (avoiding the
+  // stale closure trap that React's own useState setter handles by capturing
+  // a queue — we cannot do that here without re-implementing it).
+  const phaseRef = useRef(phase); phaseRef.current = phase;
+  const doneRef = useRef(done); doneRef.current = done;
+  const tasksRef = useRef(tasks); tasksRef.current = tasks;
+  const assetsReadyRef = useRef(assetsReady); assetsReadyRef.current = assetsReady;
+  const assetImgsRef = useRef(assetImgs); assetImgsRef.current = assetImgs;
+  const curTabRef = useRef(curTab); curTabRef.current = curTab;
+  const shotStateRef = useRef(shotState); shotStateRef.current = shotState;
+  const shotCfgRef = useRef(shotCfg); shotCfgRef.current = shotCfg;
+  const timelineRef = useRef(timeline); timelineRef.current = timeline;
+  const selectedClipRef = useRef(selectedClip); selectedClipRef.current = selectedClip;
+  const exportJsonRef = useRef(exportJson); exportJsonRef.current = exportJson;
+  const exportingRef = useRef(exporting); exportingRef.current = exporting;
+  const runStateRef = useRef(runState); runStateRef.current = runState;
+  const runIdRef = useRef(runId); runIdRef.current = runId;
+  const approvalRef = useRef(approval); approvalRef.current = approval;
+  const topologyRef = useRef(topology); topologyRef.current = topology;
+  const traceRef = useRef(trace); traceRef.current = trace;
+  const traceEpisodeRef = useRef(traceEpisode); traceEpisodeRef.current = traceEpisode;
+  const traceTotalRef = useRef(traceTotal); traceTotalRef.current = traceTotal;
+  const projectRef = useRef(project); projectRef.current = project;
+  const nlTextRef = useRef(nlText); nlTextRef.current = nlText;
+  const nlParsingRef = useRef(nlParsing); nlParsingRef.current = nlParsing;
+  const nlErrorRef = useRef(nlError); nlErrorRef.current = nlError;
+
+  // Wrapped setters: each one writes the new value to the module-level cache
+  // immediately so that if the component is unmounted before its cleanup runs
+  // (e.g. fast tab switching during heavy state churn) nothing is lost.
+  const setPhase = (v) => { const prev = phaseRef.current; const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { phase: n }); setPhaseRaw(n); };
+  const setDone = (v) => { const prev = doneRef.current; const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { done: n }); setDoneRaw(n); };
+  const setTasks = (v) => { const prev = tasksRef.current; const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { tasks: n }); setTasksRaw(n); };
+  const setAssetsReady = (v) => { const prev = assetsReadyRef.current; const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { assetsReady: n }); setAssetsReadyRaw(n); };
+  const setAssetImgs = (v) => { const prev = assetImgsRef.current; const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { assetImgs: n }); setAssetImgsRaw(n); };
+  const setCurTab = (v) => { const prev = curTabRef.current; const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { curTab: n }); setCurTabRaw(n); };
+  const setShotState = (v) => { const prev = shotStateRef.current; const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { shotState: n }); setShotStateRaw(n); };
+  const setShotCfg = (v) => { const prev = shotCfgRef.current; const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { shotCfg: n }); setShotCfgRaw(n); };
+  const setTimeline = (v) => { const prev = timelineRef.current; const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { timeline: n }); setTimelineRaw(n); };
+  const setSelectedClip = (v) => { const prev = selectedClipRef.current; const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { selectedClip: n }); setSelectedClipRaw(n); };
+  const setExportJson = (v) => { const prev = exportJsonRef.current; const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { exportJson: n }); setExportJsonRaw(n); };
+  const setExporting = (v) => { const prev = exportingRef.current; const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { exporting: n }); setExportingRaw(n); };
+  const setRunState = (v) => { const prev = runStateRef.current; const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { runState: n }); setRunStateRaw(n); };
+  const setRunId = (v) => { const prev = runIdRef.current; const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { runId: n }); setRunIdRaw(n); };
+  const setApproval = (v) => { const prev = approvalRef.current; const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { approval: n }); setApprovalRaw(n); };
+  const setTopology = (v) => { const prev = topologyRef.current; const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { topology: n }); setTopologyRaw(n); };
+  const setTrace = (v) => { const prev = traceRef.current; const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { trace: n }); setTraceRaw(n); };
+  const setTraceEpisode = (v) => { const prev = traceEpisodeRef.current; const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { traceEpisode: n }); setTraceEpisodeRaw(n); };
+  const setTraceTotal = (v) => { const prev = traceTotalRef.current; const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { traceTotal: n }); setTraceTotalRaw(n); };
+  const setProject = (v) => { const prev = projectRef.current; const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { project: n }); setProjectRaw(n); };
+  const setNlText = (v) => { const prev = nlTextRef.current; const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { nlText: n }); setNlTextRaw(n); };
+  const setNlParsing = (v) => { const prev = nlParsingRef.current; const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { nlParsing: n }); setNlParsingRaw(n); };
+  const setNlError = (v) => { const prev = nlErrorRef.current; const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { nlError: n }); setNlErrorRaw(n); };
 
   async function handleSmartFill() {
     if (!nlText.trim() || nlParsing) return;
@@ -528,11 +609,6 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
     }
     return out;
   }
-
-  const shotStateRef = useRef(shotState);
-  useEffect(() => {
-    shotStateRef.current = shotState;
-  }, [shotState]);
 
   // Consume workflow.* events globally; the workflow may run in a dedicated
   // session (via TaskPanel), so session?.id alone is not enough.

@@ -455,14 +455,12 @@ function ChatShell({
       const text = `请调用 langgraph_agent 工具完成任务：\n${JSON.stringify(envelope)}`;
       // Send to the dedicated workflow session — not selectedSessionId.
       await doSend(text, undefined, wfSession.id);
-      // Auto-switch the active chat tab to the workflow session so the user
-      // immediately sees the langgraph_agent tool card and the SubagentPanel
-      // (workflow trace + loop animation) inside the chat — otherwise the
-      // workflow runs in an invisible session and the user has nothing to watch.
-      // NOTE: this closure lives inside ChatShell (not App), so it must go
-      // through the `onSelectSession` prop — `setSelectedSessionId` is App's
-      // useState setter and is NOT in scope here (would throw ReferenceError).
-      onSelectSession?.(wfSession.id);
+      // Auto-switch disabled (regression 2026-08-15: switching selectedSessionId to
+      // wfSession.id unmounted StudioWorkbench and wiped all in-progress state
+      // (timeline / tasks / assets / runState / topology). The workflow still
+      // runs in a dedicated Hermes session in the background; the user can
+      // navigate to its chat tab manually from the sidebar to watch the
+      // langgraph_agent tool card + SubagentPanel loop animation.
       return wfSession.id;
     } catch (err) {
       console.error("[workflow run] failed", err);
