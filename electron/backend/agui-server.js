@@ -1219,7 +1219,17 @@ function createAgUIServer(getGatewayClient, storage, options) {
     try {
       const body = req.body || {};
       const runId = body.runId || body.workflowRunId;
-      const eventType = body.type;
+      // Normalize the event type. The Python emitter sends the FULL name
+      // ("workflow.started", "workflow.progress", "workflow.done", ...) as
+      // `type`, while the Node bridge expects the bare suffix ("started",
+      // "progress", ...) and adds the `workflow.` prefix itself when framing
+      // the AG-UI CUSTOM event name. If we don't strip the prefix here we get
+      // a doubled "workflow.workflow.started" name AND the `eventType ===
+      // 'started'` keep-open hook below never fires — which silently closed the
+      // SSE before the background run finished (symptom: "buffered (no
+      // subscriber)"). Accept both forms for safety.
+      const rawType = body.type || '';
+      const eventType = rawType.startsWith('workflow.') ? rawType.slice('workflow.'.length) : rawType;
       const payload = body.payload || {};
       if (!runId || !eventType) {
         return res.json({ status: 'error', message: 'runId and type are required' });

@@ -1059,7 +1059,7 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
       sec_per_shot: Number(project.sec),
       characters: parseFixedCharacters(project.fixedChars),
     };
-    onRun(input);
+    onRun(manifest, input);
   }
 
   const running = runState === "running";

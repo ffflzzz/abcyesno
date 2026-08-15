@@ -48,8 +48,8 @@ function StudioHost({ manifest, session, model, backendStatus, onExit, onRun }) 
 // esbuild minify bug where local variable bindings were dropped inside
 // extracted conditional-JSX helpers.
 const workflowRunRef = { current: null };
-export function runStudioWorkflow(inputObj) {
-  return workflowRunRef.current?.(inputObj);
+export function runStudioWorkflow(manifest, inputObj) {
+  return workflowRunRef.current?.(manifest, inputObj);
 }
 
 class ResultPanelErrorBoundary extends React.Component {
