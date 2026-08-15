@@ -423,11 +423,24 @@ function ChatShell({
   // Each workflow invocation gets its own Hermes session so chat and workflows
   // can run concurrently without aborting each other. The per-session multi-
   // stream architecture (useAgentStream Map<sessionId>) handles this natively.
+  // Failures are surfaced via alert + console.error so the user can see why
+  // the workflow didn't start (previously they were silently swallowed).
   const handleWorkflowRunRef = useRef(null);
   handleWorkflowRunRef.current = async (manifest, inputObj = {}) => {
     const m =
       manifest || manifests.find((x) => x.id === selectedWorkflowId) || null;
-    if (!hermes || !m) return null;
+    if (!hermes) {
+      const msg = "hermes 桥未加载（window.hermes 不存在），请检查 Electron 主进程。";
+      console.error("[workflow run]", msg);
+      alert("启动工作流失败：" + msg);
+      return null;
+    }
+    if (!m) {
+      const msg = `找不到 manifest（selectedWorkflowId=${selectedWorkflowId}），工作台可能未正确初始化。`;
+      console.error("[workflow run]", msg, "available ids=", manifests.map((x) => x.id));
+      alert("启动工作流失败：" + msg);
+      return null;
+    }
     try {
       const assistantId = selectedAssistantId || "default";
       const wfSession = await hermes.createSession(
@@ -444,7 +457,8 @@ function ChatShell({
       await doSend(text, undefined, wfSession.id);
       return wfSession.id;
     } catch (err) {
-      console.error("workflow run failed", err);
+      console.error("[workflow run] failed", err);
+      alert(`启动工作流失败：${err?.message || String(err)}`);
       return null;
     }
   };
