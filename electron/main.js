@@ -846,6 +846,91 @@ ipcMain.handle('get-status', async () => {
   };
 });
 
+// 读便携版 ~/.hermes_portable_data/.env 的 Agnes 凭据（与 HermesRunner 同步来源）。
+function readAgnesCredentials() {
+  const envFile = path.join(os.homedir(), '.hermes_portable_data', '.env');
+  let apiKey = '', baseUrl = '';
+  try {
+    const txt = fs.readFileSync(envFile, 'utf-8');
+    for (const line of txt.split(/\r?\n/)) {
+      const m = line.match(/^([A-Z_]+)=(.*)$/);
+      if (!m) continue;
+      const v = m[2].trim().replace(/^["']|["']$/g, '');
+      if (m[1] === 'AGNES_API_KEY') apiKey = v || apiKey;
+      else if (m[1] === 'AGNES_BASE_URL') baseUrl = v || baseUrl;
+    }
+  } catch {}
+  if (!apiKey) apiKey = process.env.AGNES_API_KEY || '';
+  if (!baseUrl) baseUrl = process.env.AGNES_BASE_URL || 'https://apihub.agnes-ai.com/v1';
+  const model = process.env.AGNES_TEXT_MODEL || 'agnes-2.5-flash';
+  return { apiKey, baseUrl, model };
+}
+
+// 工作台智能输入 → 自然语言解析为结构化 inputObj（调 Agnes chat completions）。
+// 返回 { inputObj } 或 { error }。
+ipcMain.handle('parse-workflow-intent', async (_e, nlText, _manifestId) => {
+  const text = String(nlText || '').trim();
+  if (!text) return { error: '请输入需求描述' };
+  const creds = readAgnesCredentials();
+  if (!creds.apiKey) return { error: 'AGNES_API_KEY 未配置（~/.hermes_portable_data/.env）' };
+
+  const prompt = `你是漫剧生成助手的输入解析器。用户用自然语言描述需求，从描述中提取关键字段，严格输出 JSON（不要任何解释、注释或 markdown 代码块）：
+
+{
+  "project_name": "string, 项目名（从描述推断或取首句关键词）",
+  "script": "string, 完整的漫剧脚本/剧情描述（保留用户原话的关键剧情，可适当润色）",
+  "mode": "'single' 或 'series'",
+  "total_episodes": "int, 多集时填整数，single 时填 1",
+  "style": "'写实'/'二次元'/'3D' 之一",
+  "characters": [{"name": "角色名", "prompt": "角色外观描述"}]
+}
+
+用户描述：${text}
+
+输出 JSON：`;
+
+  try {
+    const resp = await fetch(`${creds.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${creds.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: creds.model,
+        messages: [{ role: 'user', content: prompt }],
+        response_format: { type: 'json_object' },
+        temperature: 0.3,
+      }),
+    });
+    if (!resp.ok) {
+      const t = await resp.text();
+      return { error: `LLM 调用失败 ${resp.status}: ${t.slice(0, 200)}` };
+    }
+    const data = await resp.json();
+    const content = data.choices?.[0]?.message?.content || '';
+    let parsed;
+    try { parsed = JSON.parse(content); }
+    catch { return { error: 'LLM 返回非 JSON：' + content.slice(0, 200) } };
+    const inputObj = {
+      project_name: parsed.project_name || '',
+      script: parsed.script || text,
+      mode: parsed.mode === 'series' ? 'series' : 'single',
+      total_episodes: Number(parsed.total_episodes) > 0 ? Math.min(24, Number(parsed.total_episodes)) : 1,
+      style: ['写实', '二次元', '3D'].includes(parsed.style) ? parsed.style : '二次元',
+      characters: Array.isArray(parsed.characters)
+        ? parsed.characters.slice(0, 8).map((c) => ({
+            name: String(c.name || '').trim(),
+            prompt: String(c.prompt || '').trim(),
+          })).filter((c) => c.name && c.prompt)
+        : [],
+    };
+    return { inputObj };
+  } catch (e) {
+    return { error: '解析失败：' + (e.message || String(e)) };
+  }
+});
+
 ipcMain.handle('list-assistants', async () => {
   return storage.listAssistants();
 });

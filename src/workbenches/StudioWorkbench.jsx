@@ -373,6 +373,40 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
     fixedChars: "",
   });
 
+  // 智能输入：自然语言 → 自动填表
+  const [nlText, setNlText] = useState("");
+  const [nlParsing, setNlParsing] = useState(false);
+  const [nlError, setNlError] = useState("");
+
+  async function handleSmartFill() {
+    if (!nlText.trim() || nlParsing) return;
+    setNlParsing(true);
+    setNlError("");
+    try {
+      const resp = await window.hermes.parseWorkflowIntent(nlText, manifest?.id);
+      if (resp?.error) { setNlError(resp.error); return; }
+      const v = resp?.inputObj;
+      if (!v) { setNlError("解析无结果"); return; }
+      const fixedChars = Array.isArray(v.characters) && v.characters.length > 0
+        ? v.characters.map((c) => `${c.name}=${c.prompt}`).join("\n")
+        : "";
+      setProject((p) => ({
+        ...p,
+        name: v.project_name || p.name,
+        script: v.script || p.script,
+        mode: v.mode || p.mode,
+        eps: Number(v.total_episodes) > 0 ? Number(v.total_episodes) : p.eps,
+        style: v.style || p.style,
+        fixedChars: fixedChars || p.fixedChars,
+      }));
+      setNlText("");
+    } catch (e) {
+      setNlError("解析失败：" + (e?.message || String(e)));
+    } finally {
+      setNlParsing(false);
+    }
+  }
+
   const timersRef = useRef([]);
   useEffect(() => {
     return () => timersRef.current.forEach((t) => clearInterval(t));
@@ -1024,6 +1058,41 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
         <div className="st-center">
           {phase === "script" && (
             <div className="st-card st-form-card">
+              <div className="st-section st-smart-input">
+                <div className="st-section-title">
+                  ✨ 智能输入
+                  <small className="st-sub" style={{ marginLeft: 8 }}>
+                    用自然语言描述漫剧需求，自动填表（项目名/脚本/模式/集数/风格/角色）
+                  </small>
+                </div>
+                <textarea
+                  rows={3}
+                  value={nlText}
+                  onChange={(e) => setNlText(e.target.value)}
+                  placeholder={"例如：帮我生成一集漫剧，不少于 30 秒。皮克斯风格。一只小狗在后花园漫步，然后堕落了异度空间，最后变成神威狗。重点突出中间的混沌过程。"}
+                  disabled={nlParsing}
+                />
+                {nlError && <div className="st-smart-error">{nlError}</div>}
+                <div className="st-form-actions" style={{ marginTop: 8 }}>
+                  <button
+                    className="st-primary"
+                    onClick={handleSmartFill}
+                    disabled={!nlText.trim() || nlParsing}
+                  >
+                    {nlParsing ? "解析中…" : "✨ 智能解析填表"}
+                  </button>
+                  {nlText && (
+                    <button
+                      className="st-secondary"
+                      onClick={() => { setNlText(""); setNlError(""); }}
+                      disabled={nlParsing}
+                    >
+                      清空
+                    </button>
+                  )}
+                </div>
+              </div>
+
               <div className="st-section">
                 <div className="st-section-title">项目信息</div>
                 <label className="st-fld">

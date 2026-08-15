@@ -37,6 +37,9 @@ contextBridge.exposeInMainWorld('hermes', {
   openDevTools: () => ipcRenderer.invoke('open-devtools'),
   quitApp: () => ipcRenderer.invoke('quit-app'),
 
+  // Workflow intent parser (smart input → structured inputObj)
+  parseWorkflowIntent: (nlText, manifestId) => ipcRenderer.invoke('parse-workflow-intent', nlText, manifestId),
+
   // Assistants
   listAssistants: () => ipcRenderer.invoke('list-assistants'),
   createAssistant: (data) => ipcRenderer.invoke('create-assistant', data),
