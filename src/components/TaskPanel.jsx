@@ -34,6 +34,15 @@ function statusInfo(status) {
   return STATUS_MAP[status] || STATUS_MAP.pending;
 }
 
+// Turn an agent id like "manju_craft" into a friendly display name "Manju Craft".
+function friendlyName(agent) {
+  if (!agent) return "后台任务";
+  return String(agent)
+    .split(/[_\s-]+/)
+    .map((s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s))
+    .join(" ");
+}
+
 // ── Compact progress bar for running tasks ──
 function TaskProgressBar({ events }) {
   if (!events || events.length === 0) return null;
@@ -307,13 +316,52 @@ export function useTaskManager(onSend, onStop) {
   // Subscribe to contract events to update running tasks
   useEffect(() => {
     const unsub = subscribeContractEvents((runId, ev) => {
+      const evType = ev && (ev.type || "");
       setTasks((prev) => {
         const existing = prev.find((t) => t.runId === runId);
-        if (!existing) return prev; // Don't auto-create tasks; they're created explicitly
 
-        const evType = ev && (ev.type || "");
+        // ── Auto-create a task for chat-invoked langgraph_agent runs ──
+        // The workbench path calls createTask() explicitly, but when the user
+        // triggers langgraph_agent from the chat there is no task yet. We
+        // create one on the first workflow.graph / workflow.started so the run
+        // is observable + persisted (localStorage) without leaving the chat.
+        if (!existing) {
+          if (evType === "workflow.graph" || evType === "workflow.started") {
+            const p = ev.payload || {};
+            const agent = p.agent || "langgraph_agent";
+            const newTask = {
+              id: `task-${runId}-${Date.now()}`,
+              runId,
+              workflowId: agent,
+              agentName: agent,
+              workflowName: friendlyName(agent),
+              status: "running",
+              startedAt: Date.now(),
+              completedAt: null,
+              input: null,
+              sessionId: runId,
+              events: [ev],
+              artifacts: [],
+            };
+            return [newTask, ...prev];
+          }
+          return prev; // Not a workflow run we care about
+        }
+
+        // ── Re-run in the same session: restart the existing task ──
+        if (
+          (evType === "workflow.graph" || evType === "workflow.started") &&
+          (existing.status === "completed" || existing.status === "failed" || existing.status === "stopped")
+        ) {
+          return prev.map((t) =>
+            t.runId === runId
+              ? { ...t, status: "running", startedAt: Date.now(), completedAt: null, events: [ev], artifacts: [] }
+              : t
+          );
+        }
+
+        // ── Normal update of an existing (running) task ──
         let statusUpdate = null;
-
         if (evType === "workflow.progress" || evType === "workflow.step") {
           statusUpdate = "running";
         } else if (evType === "workflow.complete" || evType === "workflow.done") {
@@ -340,9 +388,10 @@ export function useTaskManager(onSend, onStop) {
                 status: statusUpdate || t.status,
                 events: [...(t.events || []), ev],
                 artifacts: newArtifacts,
-                completedAt: statusUpdate === "completed" || statusUpdate === "failed" || statusUpdate === "stopped"
-                  ? Date.now()
-                  : t.completedAt,
+                completedAt:
+                  statusUpdate === "completed" || statusUpdate === "failed" || statusUpdate === "stopped"
+                    ? Date.now()
+                    : t.completedAt,
               }
             : t
         );

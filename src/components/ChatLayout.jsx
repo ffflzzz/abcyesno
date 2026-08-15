@@ -5,6 +5,7 @@ import MessageThread from "./MessageThread.jsx";
 import SkillPanel from "./SkillPanel.jsx";
 import ContextUsage from "./ContextUsage.jsx";
 import Toasts from "./Toasts.jsx";
+import AgentRunMonitor from "./AgentRunMonitor.jsx";
 import { inferStreamingPhase } from "../utils/streamingPhase.js";
 import bachAvatar from "../assets/bach-avatar.png";
 
@@ -80,6 +81,11 @@ export default function ChatLayout({
   editingMessageId = null,
   onSaveEdit,
   onCancelEdit,
+  // ── Persistent live status of the foreground session's background run ──
+  liveTask = null,
+  onStopLiveTask = () => {},
+  onOpenLiveTaskDetail = () => {},
+  onDismissLiveTask = () => {},
 }) {
   const bottomRef = useRef(null);
   const [attachment, setAttachment] = useState(null);
@@ -266,6 +272,15 @@ export default function ChatLayout({
         )}
         <div ref={bottomRef} style={{ display: "none" }} />
       </div>
+
+      {liveTask && (
+        <AgentRunMonitor
+          task={liveTask}
+          onStop={onStopLiveTask}
+          onOpenTaskDetail={onOpenLiveTaskDetail}
+          onDismiss={onDismissLiveTask}
+        />
+      )}
 
       <Composer
           model={model}

@@ -17,6 +17,7 @@ import {
   CircleCheck,      // check-circle
   TriangleAlert,     // warning
   CircleAlert,      // alert
+  CircleHelp,       // question / help
   Info,             // info
   FileText,         // file / doc
   Folder,           // folder
@@ -95,6 +96,8 @@ const MAP = {
   "check-circle": CircleCheck,
   warning: TriangleAlert,
   alert: CircleAlert,
+  question: CircleHelp,
+  help: CircleHelp,
   info: Info,
 
   file: FileText,

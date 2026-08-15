@@ -4,10 +4,11 @@ import Icon from "./Icon.jsx";
 /**
  * BlockRequestDialog — P0 阻塞式用户输入弹窗。
  *
- * 覆盖三类后端 _block() 请求（触发即挂起 agent 线程，必须回执才能继续）：
+ * 覆盖四类后端 _block() 请求（触发即挂起 agent 线程，必须回执才能继续）：
  *  - sudo.request        → 管理员密码输入框（type=password）
  *  - secret.request      → 密钥/环境变量输入框（明文输入）
  *  - terminal.read.request → 终端读取回传（多行文本）
+ *  - clarify.request     → 澄清问题（选择或自由输入）
  *
  * 约定：onRespond(value) 仅回传用户输入值；request_id 与应答 method 由 App 负责组装。
  * 取消（关闭）同样回传空值以主动解除后端挂起（避免线程死等后端超时兜底）。
@@ -40,6 +41,15 @@ const META = {
     multiline: true,
     confirmLabel: "发送",
   },
+  "clarify.request": {
+    title: "需要你的回复",
+    icon: "question",
+    desc: "agent 需要进一步确认才能继续。",
+    inputType: "text",
+    placeholder: "输入你的回答…",
+    multiline: false,
+    confirmLabel: "提交",
+  },
 };
 
 export default function BlockRequestDialog({ blockRequest, onRespond }) {
@@ -49,15 +59,29 @@ export default function BlockRequestDialog({ blockRequest, onRespond }) {
   const [value, setValue] = useState("");
   const inputRef = useRef(null);
 
+  // clarify.request 专用：选项单选状态。
+  const rawChoices = Array.isArray(blockRequest.choices) ? blockRequest.choices.filter((c) => typeof c === "string" && c.trim()) : [];
+  const choiceList = rawChoices.length > 0 ? [...rawChoices, "其他（手动输入）"] : [];
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const isClarify = type === "clarify.request";
+  const hasChoices = choiceList.length > 0;
+  const otherSelected = isClarify && hasChoices && selectedIndex === choiceList.length - 1;
+
   useEffect(() => {
-    if (inputRef.current) inputRef.current.focus();
-  }, []);
+    if (inputRef.current && (!isClarify || otherSelected || !hasChoices)) {
+      inputRef.current.focus();
+    }
+  }, [isClarify, hasChoices, otherSelected]);
 
   const envVar = blockRequest.env_var;
-  const promptText = blockRequest.prompt;
+  const promptText = blockRequest.prompt || blockRequest.question;
 
   function submit() {
-    onRespond(value);
+    if (isClarify && hasChoices && !otherSelected) {
+      onRespond(choiceList[selectedIndex]);
+    } else {
+      onRespond(value);
+    }
   }
   function cancel() {
     onRespond("");
@@ -81,30 +105,51 @@ export default function BlockRequestDialog({ blockRequest, onRespond }) {
           <div className="block-request-prompt">{promptText}</div>
         )}
 
-        {meta.multiline ? (
-          <textarea
-            ref={inputRef}
-            className="block-request-input"
-            value={value}
-            placeholder={meta.placeholder}
-            onChange={(e) => setValue(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) submit();
-            }}
-            rows={4}
-          />
-        ) : (
-          <input
-            ref={inputRef}
-            className="block-request-input"
-            type={meta.inputType}
-            value={value}
-            placeholder={meta.placeholder}
-            onChange={(e) => setValue(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") submit();
-            }}
-          />
+        {isClarify && hasChoices && (
+          <div className="clarify-choices" role="radiogroup">
+            {choiceList.map((choice, idx) => (
+              <label
+                key={idx}
+                className={`clarify-choice ${selectedIndex === idx ? "selected" : ""}`}
+              >
+                <input
+                  type="radio"
+                  name="clarify-choice"
+                  checked={selectedIndex === idx}
+                  onChange={() => setSelectedIndex(idx)}
+                />
+                <span>{choice}</span>
+              </label>
+            ))}
+          </div>
+        )}
+
+        {(!isClarify || !hasChoices || otherSelected) && (
+          meta.multiline ? (
+            <textarea
+              ref={inputRef}
+              className="block-request-input"
+              value={value}
+              placeholder={meta.placeholder}
+              onChange={(e) => setValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) submit();
+              }}
+              rows={4}
+            />
+          ) : (
+            <input
+              ref={inputRef}
+              className="block-request-input"
+              type={meta.inputType}
+              value={value}
+              placeholder={meta.placeholder}
+              onChange={(e) => setValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") submit();
+              }}
+            />
+          )
         )}
 
         <div className="modal-actions">

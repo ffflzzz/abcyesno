@@ -22,6 +22,7 @@ export default function BrowserPanel({ progress = [] } = {}) {
     return 560; // default — wider than before (was 440)
   });
   const webviewRef = useRef(null);
+  const webviewCleanupRef = useRef(null);
   const inputRef = useRef(null);
   const resizingRef = useRef(false);
   // Latest-value refs to dodge the useEffect + setInterval closure trap.
@@ -88,44 +89,71 @@ export default function BrowserPanel({ progress = [] } = {}) {
     setCanGoForward(!!wv.canGoForward && wv.canGoForward());
   };
 
-  const handleDomReady = () => {
-    setReady(true);
-    syncNavState();
-    // Report the guest webContentsId to the main process so the Electron-native
-    // driver service can drive this same visible <webview> (replaces the old
-    // Playwright connect_over_cdp route, which could not target Electron webviews).
-    try {
-      if (webviewRef.current && typeof webviewRef.current.getWebContentsId === 'function') {
-        window.hermes && window.hermes.reportBrowserWebview(webviewRef.current.getWebContentsId());
-      }
-    } catch (_) {}
-  };
-
-  const handleWebviewDestroyed = () => {
-    try {
-      window.hermes && window.hermes.clearBrowserWebview();
-    } catch (_) {}
-    setReady(false);
-  };
-
-  const handleWebviewEvent = (e) => {
-    const wv = webviewRef.current;
-    if (!wv) return;
-    if (e.type === "did-start-loading" || e.type === "did-navigate") {
-      setNavigated(true);
+  // Electron <webview> events (dom-ready, did-navigate, destroyed, etc.) are
+  // NOT standard DOM events and will not be bound by React's prop system. We
+  // must attach them directly via addEventListener on the webview node. Using a
+  // ref callback guarantees binding/unbinding every time the <webview> node is
+  // mounted or unmounted (important because the node is conditionally rendered
+  // while marker is fetched asynchronously).
+  const bindWebview = useCallback((wv) => {
+    if (webviewCleanupRef.current) {
+      webviewCleanupRef.current();
+      webviewCleanupRef.current = null;
     }
-    if (e.type === "did-navigate" || e.type === "did-navigate-in-page") {
+    if (!wv) {
+      webviewRef.current = null;
+      return;
+    }
+    webviewRef.current = wv;
+    const onDomReady = () => {
+      setReady(true);
+      syncNavState();
       try {
-        setUrl(wv.getURL ? wv.getURL() : wv.src || "");
+        if (typeof wv.getWebContentsId === 'function') {
+          const id = wv.getWebContentsId();
+          window.hermes && window.hermes.reportBrowserWebview && window.hermes.reportBrowserWebview(id);
+        }
       } catch (_) {}
-    }
-    syncNavState();
-  };
+    };
+    const onDestroyed = () => {
+      try {
+        window.hermes && window.hermes.clearBrowserWebview && window.hermes.clearBrowserWebview();
+      } catch (_) {}
+      setReady(false);
+    };
+    const onEvent = (e) => {
+      if (e.type === "did-start-loading" || e.type === "did-navigate") {
+        setNavigated(true);
+      }
+      if (e.type === "did-navigate" || e.type === "did-navigate-in-page") {
+        try {
+          setUrl(wv.getURL ? wv.getURL() : wv.src || "");
+        } catch (_) {}
+      }
+      syncNavState();
+    };
+    wv.addEventListener("dom-ready", onDomReady);
+    wv.addEventListener("destroyed", onDestroyed);
+    wv.addEventListener("did-start-loading", onEvent);
+    wv.addEventListener("did-navigate", onEvent);
+    wv.addEventListener("did-navigate-in-page", onEvent);
+    // If the webview is already ready by the time the ref callback runs,
+    // manually fire so we don't miss the registration.
+    try {
+      if (wv.isReady && wv.isReady()) onDomReady();
+    } catch (_) {}
+    webviewCleanupRef.current = () => {
+      wv.removeEventListener("dom-ready", onDomReady);
+      wv.removeEventListener("destroyed", onDestroyed);
+      wv.removeEventListener("did-start-loading", onEvent);
+      wv.removeEventListener("did-navigate", onEvent);
+      wv.removeEventListener("did-navigate-in-page", onEvent);
+    };
+  }, []);
 
-  // CDP-driven navigation (Playwright on the same webview) does NOT fire
-  // did-navigate on this <webview> element, so the URL bar would stay stuck
-  // on the marker. Poll getURL() at 1 Hz using latest-value refs to keep the
-  // bar + navigated state in sync with whatever Playwright is doing.
+  // Native-driver navigation does NOT fire did-navigate on this <webview>
+  // element, so the URL bar would stay stuck on the marker. Poll getURL() at
+  // 1 Hz using latest-value refs to keep the bar + navigated state in sync.
   useEffect(() => {
     if (!marker) return undefined;
     const id = setInterval(() => {
@@ -183,8 +211,9 @@ export default function BrowserPanel({ progress = [] } = {}) {
   };
 
   // Hint overlay shows whenever the webview is sitting on the marker page.
-  // The marker page itself already shows "内置浏览器已就绪", but if Playwright
-  // can't reach CDP we layer an additional warning on top so the user knows.
+  // The marker page is intentionally transparent/empty; this overlay is the
+  // single source of truth for the idle UI, preventing ghosting of duplicate
+  // text. If the native driver isn't reachable, layer an extra warning on top.
   const showHint = ready && !navigated;
   const showCdpWarn = ready && !navigated && !cdpAvailable;
 
@@ -239,16 +268,11 @@ export default function BrowserPanel({ progress = [] } = {}) {
         {marker ? (
           <>
             <webview
-              ref={webviewRef}
+              ref={bindWebview}
               className="browser-webview"
               src={marker}
               partition="pw-browser"
               webpreferences="contextIsolation=true"
-              onDidStartLoading={handleWebviewEvent}
-              onDidNavigate={handleWebviewEvent}
-              onDidNavigateInPage={handleWebviewEvent}
-              onDomReady={handleDomReady}
-              onDestroyed={handleWebviewDestroyed}
             />
             {showHint && (
               <div className="bp-hint">

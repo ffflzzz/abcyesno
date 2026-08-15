@@ -218,6 +218,13 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
         from agent.prompt_builder import computer_use_guidance
         stable_parts.append(computer_use_guidance())
 
+    # Browser-pw — when both computer_use and pw_browser_* are available,
+    # the model must prefer pw_browser_* for any web-page task. Inject after
+    # computer_use guidance so this rule sits on top.
+    if "pw_browser_navigate" in agent.valid_tool_names:
+        from agent.prompt_builder import browser_pw_guidance
+        stable_parts.append(browser_pw_guidance())
+
     nous_subscription_prompt = _r.build_nous_subscription_prompt(agent.valid_tool_names)
     if nous_subscription_prompt:
         stable_parts.append(nous_subscription_prompt)

@@ -51,6 +51,47 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Gateway lifecycle guard (inlined from the removed hermes_cli.cron module).
+# The terminal tool runs inside the gateway process in Abcyesno, so it must
+# never execute commands that would restart/stop the gateway from within.
+# Keeping the guard local avoids the hard dependency on the stripped cron
+# subsystem, which otherwise causes every terminal call to fail with
+# "ModuleNotFoundError: No module named 'hermes_cli.cron'".
+# ---------------------------------------------------------------------------
+_HERMES_GATEWAY_LIFECYCLE_RE = re.compile(
+    r"""
+    # Direct hermes gateway restart/stop/kill (but not start, which is benign).
+    \bhermes\s+gateway\s+(?:restart|stop|kill)\b
+
+    # launchctl operations targeting the ai.hermes.gateway service.
+    | \blaunchctl\s+(?:restart|stop|unload|kickstart)\s+
+      (?:[~./\w]*\bai\.hermes\.gateway\b(?:\.plist)?)
+
+    # systemctl operations targeting the hermes-gateway service.
+    | \bsystemctl\s+(?:restart|stop|start)\s+
+      (?:[^;\n]*?\b)?hermes-gateway(?:\.service)?\b
+
+    # pkill patterns targeting hermes gateway (any flag order, -f pattern).
+    | \bpkill\s+(?:-[a-zA-Z0-9]+\s+)*-f\s+.*\b(?:hermes.*gateway|gateway.*hermes)\b
+
+    # kill hermes gateway process
+    | \bkill\s+(?:-[a-zA-Z0-9]+\s+)*hermes\s+gateway\s+process\b
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+def _contains_gateway_lifecycle_command(text: str) -> bool:
+    """Return True if *text* contains a command that would stop/restart the Hermes gateway.
+
+    Mirrors the guard that used to live in hermes_cli.cron. It intentionally
+    matches only concrete command shapes, not English prose that merely
+    mentions gateways or restarts.
+    """
+    return bool(_HERMES_GATEWAY_LIFECYCLE_RE.search(text))
+
+
+# ---------------------------------------------------------------------------
 # Global interrupt event: set by the agent when a user interrupt arrives.
 # The terminal tool polls this during command execution so it can kill
 # long-running subprocesses immediately instead of blocking until timeout.
@@ -2251,7 +2292,6 @@ def terminal_tool(
         # hermes_cli/gateway.py and the cron-path guard in hermes_cli/cron.py,
         # but applies unconditionally (force=True cannot help here).
         if os.environ.get("_HERMES_GATEWAY") == "1":
-            from hermes_cli.cron import _contains_gateway_lifecycle_command
             if _contains_gateway_lifecycle_command(command):
                 return json.dumps({
                     "output": "",

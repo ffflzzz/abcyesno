@@ -30,10 +30,27 @@ function findAvailablePort(host, startPort) {
 // Minimal AG-UI Runtime Bridge: translates CopilotKit SSE requests into
 // Hermes gateway JSON-RPC calls over the persistent WebSocket connection.
 // Video-task heuristic (used both for legacy auto-delegation and the @ parser).
+// Only matches video *creation* intent. Watching / playing / searching a video in
+// a browser (e.g. "打开bilibili播放视频") must NOT be hijacked by manjucraft.
 function looksLikeVideoTask(t) {
   if (!t) return false;
   const lower = t.toLowerCase();
-  const keywords = ['视频', '剪映', 'jianying', 'manju', '做一条', '生成视频', 'video', 'manjucraft', 'manju-craft', '系列', '连载', '多集', 'episode'];
+  // Negative signals: these indicate the user wants to watch/browse a video,
+  // not generate one. Bail out immediately.
+  const watchSignals = [
+    '打开', '播放', '观看', '看', '搜', '搜索', 'bilibili', 'b站', '哔哩哔哩',
+    'youtube', 'youtu.be', '抖音', '快手', '小红书', '腾讯', '优酷', '爱奇艺',
+    'mp4', 'url', 'http', 'www.', '.com', '链接',
+  ];
+  if (watchSignals.some((k) => lower.includes(k))) return false;
+  // Creation-only keywords. Plain "视频" is intentionally absent — it is too
+  // broad and would catch "播放视频" / "搜索视频" browser requests.
+  const keywords = [
+    '剪映', 'jianying', 'manju', 'manjucraft', 'manju-craft', '漫剧',
+    '做一条', '生成视频', '生成短片', '生成动画', '制作视频', '创作视频',
+    'video generate', 'generate video', 'create video', 'make a video',
+    '系列', '连载', '多集', 'episode',
+  ];
   return keywords.some((k) => lower.includes(k));
 }
 
@@ -160,6 +177,31 @@ function createAgUIServer(getGatewayClient, storage, options) {
   // runtime cannot reach the Node SSE closure directly, so it POSTs events to
   // /api/ag-ui/workflow-event and we relay them to the correct SSE stream.
   const workflowSubscribers = new Map();
+
+  // 后台 workflow 作业登记：键为 wfRunId，值为该轮 run 的 SSE 资源句柄。
+  // langgraph_agent 进入 fire-and-forget 后整图转入后台线程执行，本路 SSE
+  // 必须保持打开直到 workflow.done，否则后台事件会被丢弃（contract B）。
+  const backgroundRuns = new Map();
+
+  // 幂等关闭一条后台 run 占用的 SSE：清理 subscriber / 协调文件 / activeTurn，
+  // 发送 RUN_FINISHED 并 end。由 workflow.done 钩子或超时兜底调用。
+  function finishBackgroundRun(br) {
+    if (!br || br.ended) return;
+    br.ended = true;
+    try {
+      backgroundRuns.delete(br.wfRunId);
+      workflowSubscribers.delete(br.wfRunId);
+      const base = process.env.HERMES_HOME || path.join(os.homedir(), '.hermes_portable_data');
+      const coordFile = path.join(base, 'workflow_hitl', `.wf_active_${br.ctx.runId}.json`);
+      try { if (fs.existsSync(coordFile)) fs.unlinkSync(coordFile); } catch (_) {}
+      activeTurnSenders.delete(br.ctx.runId);
+      try { clearUiActiveCoord(); } catch (_) {}
+      try {
+        sendSSE(br.res, br.encoder, { type: 'RUN_FINISHED', threadId: br.ctx.threadId, runId: br.ctx.runId });
+      } catch (_) {}
+    } catch (_) { /* best-effort */ }
+    try { br.res.end(); } catch (_) {}
+  }
 
   // Agent 自渲染 UI 组件层：普通对话轮次（非 workflow）的活跃 SSE sender。
   // render_ui tool 在 Hermes 进程内通过 HTTP 桥把 ui.render 事件回传，这里按
@@ -1056,6 +1098,11 @@ function createAgUIServer(getGatewayClient, storage, options) {
     // own tool-use decision — gets verbose progress forwarding.
     wfRunId = 'wf-' + ctx.runId;
     workflowSubscribers.set(wfRunId, (obj) => sendSSE(res, encoder, obj));
+    // 登记后台 run 句柄（keepOpen 初始 false，收到 workflow.started 后置 true）
+    backgroundRuns.set(wfRunId, {
+      wfRunId, res, encoder, ctx,
+      keepOpen: false, ended: false, timer: null,
+    });
     try {
       const base = process.env.HERMES_HOME || path.join(os.homedir(), '.hermes_portable_data');
       const dir = path.join(base, 'workflow_hitl');
@@ -1160,6 +1207,17 @@ function createAgUIServer(getGatewayClient, storage, options) {
           throw firstErr;
         }
       }
+      const br = backgroundRuns.get(wfRunId);
+      if (br && br.keepOpen) {
+        // 后台 workflow 已启动：保持 SSE 打开，等 workflow.done 再关闭。
+        log('agui-server', `keeping SSE open for background run ${wfRunId}`);
+        const TIMEOUT = Number(process.env.ABC_BACKGROUND_RUN_TIMEOUT || 3600000); // 默认 60 分钟
+        br.timer = setTimeout(() => {
+          log('agui-server', `background run ${wfRunId} exceeded timeout, forcing close`);
+          finishBackgroundRun(br);
+        }, TIMEOUT);
+        return; // 挂起等待 workflow.done，不在这里 end SSE
+      }
       if (translator && !translator.hasError()) {
         sendSSE(res, encoder, { type: 'RUN_FINISHED', threadId: ctx.threadId, runId: ctx.runId });
       }
@@ -1167,19 +1225,22 @@ function createAgUIServer(getGatewayClient, storage, options) {
       log('agui-server', `agent/run error: ${err.message}`);
       sendSSE(res, encoder, { type: 'RUN_ERROR', message: err.message });
     }
-    if (wfRunId) {
-      workflowSubscribers.delete(wfRunId);
-      // Clean up per-run coordination file so stale entries don't misroute
-      // future workflow runs.
-      try {
-        const base = process.env.HERMES_HOME || path.join(os.homedir(), '.hermes_portable_data');
-        const coordFile = path.join(base, 'workflow_hitl', `.wf_active_${ctx.runId}.json`);
-        if (fs.existsSync(coordFile)) fs.unlinkSync(coordFile);
-      } catch (_) { /* best-effort */ }
+    // 正常（非后台）清理；后台 run 由 finishBackgroundRun 在 workflow.done 时清理。
+    const br2 = backgroundRuns.get(wfRunId);
+    if (!(br2 && br2.keepOpen)) {
+      if (wfRunId) {
+        workflowSubscribers.delete(wfRunId);
+        backgroundRuns.delete(wfRunId);
+        try {
+          const base = process.env.HERMES_HOME || path.join(os.homedir(), '.hermes_portable_data');
+          const coordFile = path.join(base, 'workflow_hitl', `.wf_active_${ctx.runId}.json`);
+          if (fs.existsSync(coordFile)) fs.unlinkSync(coordFile);
+        } catch (_) { /* best-effort */ }
+      }
+      activeTurnSenders.delete(ctx.runId);
+      clearUiActiveCoord();
+      res.end();
     }
-    activeTurnSenders.delete(ctx.runId);
-    clearUiActiveCoord();
-    res.end();
   }
 
   async function handleAgentStop(req, res, ctx) {
@@ -1282,6 +1343,20 @@ function createAgUIServer(getGatewayClient, storage, options) {
         return res.json({ status: 'dropped', runId });
       }
       send({ type: 'CUSTOM', name: `workflow.${eventType}`, value: payload });
+      // 后台 run 生命周期钩子（contract B）：
+      //  started → 标记本路 SSE 保持打开，直到 done 才关闭；
+      //  done    → 关闭并保持打开的 SSE（清理 subscriber / coord / end）。
+      if (eventType === 'started') {
+        const br = backgroundRuns.get(runId);
+        if (br) br.keepOpen = true;
+        log('agui-server', `background run marked keep-open: ${runId}`);
+      } else if (eventType === 'done') {
+        const br = backgroundRuns.get(runId);
+        if (br) {
+          clearTimeout(br.timer);
+          finishBackgroundRun(br);
+        }
+      }
       log('agui-server', `relayed workflow.${eventType} -> ${runId}`);
       res.json({ status: 'ok' });
     } catch (err) {

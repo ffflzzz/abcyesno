@@ -578,6 +578,40 @@ def computer_use_guidance(platform_name: Optional[str] = None) -> str:
 # macOS-rendered constant for backwards compatibility (imports/tests).
 COMPUTER_USE_GUIDANCE = computer_use_guidance("darwin")
 
+
+# Guidance injected into the system prompt when the browser-pw toolset is
+# active. Strongly steers the model to use the in-app browser tools for any
+# web-page task, and NOT to fall back to computer_use (which cannot see or
+# drive the embedded <webview> panel).
+def browser_pw_guidance() -> str:
+    """Return browser-pw tool selection guidance for the system prompt."""
+    return (
+        "# In-app Browser Automation (browser-pw)\n"
+        "Whenever the user asks to open / visit / read / fill / click / "
+        "scroll / screenshot a web page, use the `pw_browser_*` tools. "
+        "These drive the app's built-in Chromium <webview> (the 浏览器 panel) "
+        "so the user watches every operation live.\n\n"
+        "## Mandatory tool selection rule\n"
+        "- If the request involves a URL or a web page, ALWAYS use "
+        "`pw_browser_navigate` / `pw_browser_snapshot` / `pw_browser_click` / "
+        "`pw_browser_type` / `pw_browser_scroll` / `pw_browser_screenshot`.\n"
+        "- Do NOT use `computer_use` for web pages. `computer_use` drives the "
+        "desktop background and cannot see or interact with the in-app browser "
+        "panel; it will produce wrong or empty results.\n\n"
+        "## Workflow\n"
+        "1. `pw_browser_navigate` to open the URL first.\n"
+        "2. `pw_browser_snapshot` to read the page text before acting.\n"
+        "3. Pick selectors from the snapshot (CSS, xpath, text=..., placeholder=...).\n"
+        "4. Click / type / scroll, then snapshot again to confirm.\n"
+        "5. `pw_browser_screenshot` only when visual proof is needed.\n"
+        "6. `pw_browser_close` at the end to release the session.\n"
+        "Pass the same `task_id` across all calls in one automation flow.\n"
+    )
+
+
+BROWSER_PW_GUIDANCE = browser_pw_guidance()
+
+
 # ---------------------------------------------------------------------------
 # Mid-turn steering (/steer) — out-of-band user messages
 # ---------------------------------------------------------------------------

@@ -545,6 +545,8 @@ async def _run_graph_with_hitl(
     stage_map: List[tuple],
     hitl_dir: Path,
     hitl_timeout: float,
+    auto_approve: bool = False,
+    agent_name: str = "",
 ):
     """Drive a LangGraph run with streaming progress, artifacts, and HITL.
 
@@ -639,7 +641,7 @@ async def _run_graph_with_hitl(
         _total_eps = 1
     on_event(
         "workflow.graph",
-        {"nodes": labeled_nodes, "edges": topo_edges, "totalEpisodes": _total_eps},
+        {"agent": agent_name, "runId": run_id, "nodes": labeled_nodes, "edges": topo_edges, "totalEpisodes": _total_eps},
     )
 
     _prev_trace_node = None  # last node we marked "running", for done transition
@@ -727,7 +729,10 @@ async def _run_graph_with_hitl(
             },
         )
 
-        decision = await _wait_for_decision(hitl_dir, run_id, hitl_timeout)
+        if auto_approve:
+            decision = {"decision": "approve"}
+        else:
+            decision = await _wait_for_decision(hitl_dir, run_id, hitl_timeout)
         if decision is None:
             on_event("workflow.error", {"message": "审批等待超时，工作流已中止"})
             on_event("workflow.done", {"status": "timeout", "gate_id": gate_id})
@@ -753,6 +758,8 @@ async def _run_graph_with_hitl(
 def run_agent(
     agent_name: str, input_text: str = "", thread_id: Optional[str] = None,
     input_obj: Optional[Dict[str, Any]] = None, on_event=None,
+    run_id: Optional[str] = None, background: bool = False,
+    auto_approve: bool = False,
 ) -> Dict[str, Any]:
     """Run a discovered LangGraph agent with a single text input.
 
@@ -761,10 +768,25 @@ def run_agent(
         input_text: User input or task description passed to the agent.
         thread_id: Optional LangGraph thread id (used as the configurable
             ``thread_id`` even when no checkpointer is configured).
+        run_id: Optional workflow run id. Used both as the HITL decision-file
+            name (``workflow_hitl/<run_id>.json``) and as the ``workflowRunId``
+            carried in ``workflow.*`` events. When omitted, it defaults to
+            ``thread_id`` (then a fresh uuid).
+        background: When True, drive the graph on a daemon thread and return
+            ``{"status": "started", "run_id": ...}`` immediately so the caller
+            (e.g. the Hermes tool executor) is not blocked for the full runtime
+            of a long workflow + HITL gates. Progress/approval/done events still
+            flow through ``on_event`` (contract L5). Recommended for UI-driven
+            invocations that must survive the gateway tool-timeout.
+        auto_approve: When True, every ``interrupt()`` gate is resumed with an
+            ``approve`` decision automatically (still emitting the
+            ``workflow.approval`` event for visibility). Used by headless
+            scripts that have no human in the loop.
 
     Returns:
-        Dict with ``agent``, ``output``, ``thread_id`` and serialized ``messages``,
-        or an ``error`` key on failure.
+        When ``background`` is False: dict with ``agent``, ``output``,
+        ``thread_id`` and serialized ``messages``, or an ``error`` key on
+        failure. When ``background`` is True: a ``started`` envelope.
     """
     try:
         available = discover_agents()
@@ -776,7 +798,8 @@ def run_agent(
         mod = _load_agent_module(agent_name)
         graph = _get_agent_graph(mod)
 
-        effective_thread_id = thread_id or str(uuid.uuid4())
+        effective_thread_id = thread_id or run_id or str(uuid.uuid4())
+        effective_run_id = run_id or effective_thread_id
         config = {"configurable": {"thread_id": effective_thread_id}}
 
         # Per-agent summary override (contract L3). Defaults to the structured
@@ -795,6 +818,49 @@ def run_agent(
         else:
             input_state = MessagesState(messages=[HumanMessage(content=input_text)])
 
+        # ── Background job mode (contract B / fire-and-forget) ──
+        # The whole graph (incl. HITL gates + minutes of generation) runs on a
+        # daemon thread. The tool call returns immediately with a ``started``
+        # envelope; the frontend receives progress/approval/done over the SSE
+        # channel routed by ``effective_run_id``. This avoids the gateway's
+        # per-tool execution timeout entirely.
+        if background:
+            import threading
+
+            def _bg_run() -> None:
+                try:
+                    _run_async(
+                        _run_graph_with_hitl(
+                            graph,
+                            input_state,
+                            config,
+                            on_event,
+                            effective_run_id,
+                            stage_map,
+                            _hitl_dir(),
+                            _hitl_timeout(),
+                            auto_approve=auto_approve,
+                            agent_name=agent_name,
+                        )
+                    )
+                except Exception as exc:  # pragma: no cover - defensive
+                    logger.exception("langgraph background run failed")
+                    if callable(on_event):
+                        try:
+                            on_event("workflow.error", {"message": str(exc)})
+                            on_event("workflow.done", {"status": "error", "error": str(exc)})
+                        except Exception:
+                            pass
+
+            t = threading.Thread(target=_bg_run, daemon=True)
+            t.start()
+            return {
+                "status": "started",
+                "run_id": effective_run_id,
+                "agent": agent_name,
+                "message": "工作流已后台启动，进度将通过事件流实时推送",
+            }
+
         if on_event:
             # Streaming + HITL path (contract L5): progress, artifacts, and
             # approval gates all flow through on_event; the graph may pause at
@@ -805,10 +871,12 @@ def run_agent(
                     input_state,
                     config,
                     on_event,
-                    effective_thread_id,
+                    effective_run_id,
                     stage_map,
                     _hitl_dir(),
                     _hitl_timeout(),
+                    auto_approve=auto_approve,
+                    agent_name=agent_name,
                 )
             )
         else:

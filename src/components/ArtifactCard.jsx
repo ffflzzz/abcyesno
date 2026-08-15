@@ -1,10 +1,12 @@
 import React from "react";
 import Icon from "./Icon.jsx";
+import { useResolvedArtifacts, localPathOf } from "../contract/useResolvedArtifacts.js";
 
 // Generic artifact renderer (L3). Switches on artifact.type only - no
-// per-workflow branch. Local paths are served via file:// so the Electron
-// renderer can open artifacts written by the LangGraph workflow.
-function srcFor(artifact) {
+// per-workflow branch. Local paths are resolved to data URLs via the main
+// process (readLocalImage IPC) so the sandboxed renderer can display images
+// written by the LangGraph workflow - the renderer cannot load file:// directly.
+function fileUrlFor(artifact) {
   const p = artifact || {};
   if (p.source === "url") return p.url;
   if (p.path) return "file://" + p.path.replace(/\\/g, "/");
@@ -13,8 +15,14 @@ function srcFor(artifact) {
 
 export default function ArtifactCard({ artifact }) {
   const a = artifact || {};
+  const resolved = useResolvedArtifacts([a]);
+  const localKey = a.id || a.label || "a0";
+  const resolvedSrc = resolved[localKey];
+  const isLocal = !!localPathOf(a);
   const type = a.type || "file";
-  const src = srcFor(a);
+  // Prefer the IPC-resolved data URL; fall back to file:// so remote/legacy
+  // paths still work (and nothing regresses if IPC is unavailable).
+  const src = isLocal ? resolvedSrc || fileUrlFor(a) : fileUrlFor(a);
   const isSafeUrl = (u) => /^(https?:|file:|data:image\/)/i.test(u || "");
 
   if (type === "video") {

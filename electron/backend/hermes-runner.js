@@ -66,21 +66,27 @@ class HermesRunner {
   }
 
   _syncBuiltinSkills() {
-    // Hermes resolves skills under HERMES_HOME/skills. The bundled
-    // langgraph-agents skill lives in hermes-fork/skills; mirror it into the
-    // writable home dir so preloading via HERMES_TUI_SKILLS actually finds it.
-    const srcDir = path.join(HERMES_FORK, 'skills', 'langgraph_agents');
-    const destDir = path.join(this.hermesHome, 'skills', 'langgraph_agents');
-    if (!fs.existsSync(srcDir)) {
-      log('hermes-runner', `builtin skill source not found: ${srcDir}`);
-      return;
-    }
-    try {
-      fs.mkdirSync(path.dirname(destDir), { recursive: true });
-      const copied = this._copyDirRecursive(srcDir, destDir);
-      log('hermes-runner', `synced builtin skill to ${destDir} (${copied} file(s) updated)`);
-    } catch (err) {
-      log('hermes-runner', `failed to sync builtin skills: ${err.message}`);
+    // Hermes resolves skills under HERMES_HOME/skills by their canonical
+    // skill id (kebab-case). The bundled sources live under hermes-fork/skills
+    // using snake_case directory names, so map source dir -> target skill id.
+    const mappings = [
+      { source: 'langgraph_agents', target: 'langgraph-agents' },
+      { source: 'browser_pw', target: 'browser-pw' },
+    ];
+    for (const { source, target } of mappings) {
+      const srcDir = path.join(HERMES_FORK, 'skills', source);
+      const destDir = path.join(this.hermesHome, 'skills', target);
+      if (!fs.existsSync(srcDir)) {
+        log('hermes-runner', `builtin skill source not found: ${srcDir}`);
+        continue;
+      }
+      try {
+        fs.mkdirSync(path.dirname(destDir), { recursive: true });
+        const copied = this._copyDirRecursive(srcDir, destDir);
+        log('hermes-runner', `synced builtin skill ${target} (${copied} file(s) updated)`);
+      } catch (err) {
+        log('hermes-runner', `failed to sync builtin skill ${target}: ${err.message}`);
+      }
     }
   }
 
@@ -267,7 +273,9 @@ class HermesRunner {
       // POSTs HITL workflow events here so they can reach the frontend SSE.
       AGUI_PORT: process.env.AGUI_PORT || '9121',
       // Cap tool-calling iterations so a confused model doesn't spin forever.
-      HERMES_TUI_MAX_TURNS: process.env.HERMES_TUI_MAX_TURNS || '15',
+      // 15 turns is too low for deep research / multi-step tasks; raise to 100
+      // so the agent can finish long reports without pausing for "好了吗" prompts.
+      HERMES_TUI_MAX_TURNS: process.env.HERMES_TUI_MAX_TURNS || '100',
       // Enable the Hermes toolsets. `hermes-cli` carries langgraph_agent and
       // shell/file tools; `browser-pw` adds the 7 pw_browser_* native-driver tools
       // (Path B browser automation). Override via HERMES_TUI_TOOLSETS to roll back.
@@ -283,8 +291,10 @@ class HermesRunner {
       // In dev (no such dir) this path is harmless: _chromium_installed() falls back
       // to the default cache and ~/.hermes_portable_data/playwright-browsers.
       PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH || path.join(process.resourcesPath || '', 'playwright-browsers'),
-      // Preload the LangGraph agents skill so manju_craft / hello_agent are available.
-      HERMES_TUI_SKILLS: process.env.HERMES_TUI_SKILLS || 'langgraph-agents',
+      // Preload skills for the agent. `langgraph-agents` carries manju_craft /
+      // hello_agent; `browser-pw` injects the strong "use pw_browser_* for web
+      // tasks, NOT computer_use" guidance into the system prompt.
+      HERMES_TUI_SKILLS: process.env.HERMES_TUI_SKILLS || 'langgraph-agents,browser-pw',
       PYTHONPATH: HERMES_FORK + (process.env.PYTHONPATH ? path.delimiter + process.env.PYTHONPATH : ''),
     };
 

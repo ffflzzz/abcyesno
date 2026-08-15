@@ -30,6 +30,11 @@ to a tiny HTTP driver service running in the Electron main process.
 - The user wants a **screenshot** of a web page.
 - The user wants to **click** a button / link / element.
 
+**Tool selection rule:** if the task involves a web page or URL, you MUST use the
+`pw_browser_*` tools. Do NOT use `computer_use` for web pages — `computer_use`
+drives the desktop background and cannot see or interact with the in-app browser
+panel, so it will produce wrong or empty results.
+
 Prefer these tools over describing a page you cannot see. If you need to interact
 with a site, drive it.
 

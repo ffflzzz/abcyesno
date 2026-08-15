@@ -47,6 +47,19 @@ function guessImageName(url, idx) {
   }
 }
 
+// Kawaii spinner phrases emitted by conversation_loop.py (e.g. "٩(๑❛ᴗ❛๑)۶ formulating...").
+// These are transient CLI-style status updates and must NOT be accumulated in thinkingText.
+const KAWAII_SPINNER_RE = new RegExp(
+  "^\\s*(?:\\S*\\([^)]{1,30}\\)\\S*|[^\\p{L}\\p{N}\\s]{1,10})\\s+" +
+    "(pondering|contemplating|musing|cogitating|ruminating|deliberating|mulling|" +
+    "reflecting|processing|reasoning|analyzing|computing|synthesizing|formulating|brainstorming)" +
+    "\\s*\\.\\.\\.\\s*$",
+  "iu"
+);
+function isKawaiiSpinnerPhrase(text) {
+  return typeof text === "string" && KAWAII_SPINNER_RE.test(text.trim());
+}
+
 // Resolve every inline reference to base64 bytes. `file://` needs a trip
 // through the main process (the renderer can't read cross-directory file://).
 async function resolveImagePayload(refs) {
@@ -78,8 +91,10 @@ const UI_BLOCK_MAX = 64;
 // Stall detection
 const STALL_CHECK_INTERVAL = 5000;
 const STALL_THRESHOLD_MS = 60000;
-// SSE reader idle timeout
-const READ_TIMEOUT_MS = 120_000;
+// SSE reader idle timeout. Long research runs can go minutes between visible
+// events (model reasoning, slow tool calls), so 2 minutes falsely aborts them.
+// Align with the agui-server turn timeout (default 30 min) minus a safety margin.
+const READ_TIMEOUT_MS = 1_800_000;
 
 const EMPTY_SNAPSHOT = Object.freeze({
   messages: [],
@@ -362,9 +377,27 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
         }
       } else if (name === "thinking.delta") {
         const text = value?.text || "";
-        // Filter kawaii spinner noise from conversation_loop (e.g. "(◎_◎) mulling...").
-        // Real reasoning content arrives via reasoning.delta (forwarded in agui-server).
-        if (/^[\s\p{P}\p{S}]{1,6}\s+\w+\.\.\.$/u.test(text.trim())) return;
+        const trimmed = text.trim();
+        if (!trimmed) {
+          // Backend clears the spinner between phases.
+          sess.thinkingText = "";
+          publish(sess.id);
+          return;
+        }
+        // Kawaii spinner phrases from conversation_loop (e.g. "٩(๑❛ᴗ❛๑)۶ formulating...")
+        // are transient CLI-style status updates. Show only the latest one instead of
+        // accumulating them all, which matches the CLI spinner behavior.
+        if (isKawaiiSpinnerPhrase(trimmed)) {
+          sess.phase = "thinking";
+          sess.thinkingText = trimmed;
+          publish(sess.id);
+          return;
+        }
+        // Real (non-spinner) thinking text: append, but replace any previous spinner
+        // placeholder so they don't get mixed into the transcript.
+        if (sess.thinkingText && isKawaiiSpinnerPhrase(sess.thinkingText)) {
+          sess.thinkingText = "";
+        }
         sess.phase = "thinking";
         sess.thinkingText += text;
         publish(sess.id);
@@ -478,6 +511,13 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
         // into the eventBus keyed by the run's threadId. The generic workbenches
         // subscribe via useContractEvents(session.id).
         emitContractEvent(sess.id, { type: name, payload: value });
+
+        // B 方案：后台长任务已开始/结束，切换 reader 静默超时放宽开关。
+        if (name === "workflow.started") {
+          sess.backgroundRun = true;
+        } else if (name === "workflow.done") {
+          sess.backgroundRun = false;
+        }
 
         // Also notify the user when a workflow gate pauses execution, because
         // in chat mode the inline ApprovalBubble lives in the message footer
@@ -623,7 +663,14 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
           break;
 
         case "TEXT_MESSAGE_END":
-          if (ev.messageId) patchMessage(sess, ev.messageId, { streaming: false });
+          if (ev.messageId) {
+            // 把本轮累积的深度推理文本绑定到这条 assistant 消息上，
+            // 这样历史消息再次渲染时显示的是它自己的 reasoning，而不是当前全局的。
+            patchMessage(sess, ev.messageId, {
+              streaming: false,
+              reasoning: sess.reasoningText || "",
+            });
+          }
           sess.currentAssistantId = null;
           break;
 
@@ -800,7 +847,11 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
           const readPromise = reader.read();
           // Safety timeout: if Chromium throttles the reader (background tab,
           // GIL pressure), abort instead of hanging forever so the user can retry.
-          const timer = setTimeout(() => controller.abort(), READ_TIMEOUT_MS);
+          // 后台长任务（B 方案）期间不因节点静默 abort；agui-server 的
+          // 60 分钟超时负责兜底关闭 SSE。
+          const timer = setTimeout(() => {
+            if (!sess.backgroundRun) controller.abort();
+          }, READ_TIMEOUT_MS);
           let done;
           let value;
           try {
@@ -843,6 +894,7 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
             sess.phase = "idle";
             sess.thinkingText = "";
             sess.thinkingSince = null;
+            sess.backgroundRun = false;
             publish(sess.id);
           }
           // SSE 被关 / 网络断：把仍处于 running 的工具卡标 interrupted（idempotent）

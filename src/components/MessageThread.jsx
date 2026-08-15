@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from "react";
+import React, { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, forwardRef } from "react";
 import Icon from "./Icon.jsx";
 import { Virtuoso } from "react-virtuoso";
 import ReactMarkdown from "react-markdown";
@@ -15,6 +15,16 @@ import MessageActions from "./MessageActions.jsx";
 import ImageChip from "./ui/ImageChip.jsx";
 import { useContractEvents } from "../hooks/useContractEvents.js";
 import bachAvatar from "../assets/bach-avatar.png";
+
+/**
+ * Virtuoso `components.List` — the actual container that holds the rows.
+ * With `customScrollParent`, the scrollable viewport is `.vs-container` (full
+ * chat width, scrollbar flush against the window edge), but the *list itself*
+ * is capped and centered to match the composer max-width.
+ */
+const CenteredList = forwardRef(function CenteredList(props, ref) {
+  return <div ref={ref} {...props} className="vs-list" />;
+});
 
 function Lightbox({ src, alt, onClose }) {
   useEffect(() => {
@@ -203,6 +213,18 @@ function sanitizeImpl(raw) {
     return line;
   }).join("\n");
 
+  // Phase 4: Repair broken code fences so ReactMarkdown doesn't swallow
+  // headings/lists/tables into a giant <pre> block.
+  // Models often emit malformed markdown: an opening ```bash never gets closed,
+  // or a reply restarts mid-stream producing nested/conflicting fences. We:
+  //   1. Pair fences with a stack (a closing fence has no language tag,
+  //      same marker, and length >= the opening fence).
+  //   2. Remove fence pairs whose inner content is mostly markdown prose
+  //      (headings, lists, tables, bold) — those are bogus code blocks.
+  //   3. Remove unclosed opening fences (their content becomes normal prose).
+  //   4. Keep legitimate code blocks untouched.
+  t = repairFences(t);
+
   t = t.split("\n").map((l) => l.trimEnd()).join("\n").trim();
 
   return t;
@@ -212,6 +234,23 @@ function formatTime(ts) {
   if (!ts) return "";
   const d = new Date(ts);
   return `${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}`;
+}
+
+/**
+ * Some providers / reasoning models return reasoning_content that is identical
+ * to the final assistant content (or a minor whitespace variant). Showing that
+ * inside the "深度推理" block creates confusing duplication. We suppress the
+ * block when reasoning is empty, equals content, or is contained verbatim in
+ * content.
+ */
+function isDuplicateReasoning(reasoning, content) {
+  const r = String(reasoning || "").replace(/\s+/g, " ").trim();
+  const c = String(content || "").replace(/\s+/g, " ").trim();
+  if (!r) return true;
+  if (!c) return false;
+  if (r === c) return true;
+  if (c.includes(r)) return true;
+  return false;
 }
 
 /**
@@ -446,6 +485,71 @@ function extractTextFromAst(node) {
   return null;
 }
 
+/** Count lines that look like markdown prose (headings, lists, tables, bold, numbered lists).
+ *  Single-level `#` is excluded because it is also common in shell comments inside code blocks. */
+function countMdStructureLines(lines) {
+  return lines.filter((l) =>
+    /^#{2,6}\s/.test(l) ||
+    /^[-*+]\s+/.test(l) ||
+    /^\|[^|]+\|[^|]+\|/.test(l) ||
+    /\*\*[^*]+\*\*/.test(l) ||
+    /^\d+\.\s/.test(l)
+  ).length;
+}
+
+/**
+ * Repair broken markdown code fences.
+ * - Pairs opening/closing fences with a stack.
+ * - Removes fence pairs whose inner content is mostly markdown structure
+ *   (those are bogus code blocks that would swallow headings/lists).
+ * - Removes unclosed opening fences so the rest of the message renders normally.
+ * - Leaves legitimate code blocks untouched.
+ */
+function repairFences(text) {
+  const lines = text.split("\n");
+  const fenceRe = /^(\`{3,}|~{3,})(\w*)\s*$/;
+  const fenceLines = [];
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(fenceRe);
+    if (m) fenceLines.push({ idx: i, marker: m[1][0], len: m[1].length, lang: m[2] });
+  }
+  if (fenceLines.length === 0) return text;
+
+  const stack = [];
+  const pairs = [];
+  const unclosed = [];
+  for (const f of fenceLines) {
+    if (stack.length) {
+      const top = stack[stack.length - 1];
+      // A closing fence has no language tag, matches the opener marker, and is at least as long.
+      if (!f.lang && f.marker === top.marker && f.len >= top.len) {
+        pairs.push({ open: top, close: f });
+        stack.pop();
+        continue;
+      }
+    }
+    stack.push(f);
+  }
+  while (stack.length) unclosed.push(stack.pop());
+
+  const removeIdx = new Set();
+  for (const p of pairs) {
+    const span = lines.slice(p.open.idx + 1, p.close.idx);
+    const nonEmpty = span.filter((l) => l.trim()).length;
+    const md = countMdStructureLines(span);
+    // If >25% of the block looks like markdown prose, it is a bogus fence pair.
+    if (nonEmpty > 0 && md / nonEmpty > 0.25) {
+      removeIdx.add(p.open.idx);
+      removeIdx.add(p.close.idx);
+    }
+  }
+  // Drop orphan opening fences; their following content should render as normal prose.
+  for (const f of unclosed) removeIdx.add(f.idx);
+
+  if (removeIdx.size === 0) return text;
+  return lines.map((l, i) => (removeIdx.has(i) ? "" : l)).join("\n");
+}
+
 // ── ASCII / box-drawing art detection ──────────────────────
 // Matches lines heavy in box-drawing Unicode chars (flowcharts, trees, diagrams).
 // A block is "ASCII art" when ≥3 consecutive lines each contain ≥2 box-drawing chars.
@@ -595,6 +699,20 @@ function mapStatus(s) {
   if (s === "interrupted" || s === "cancelled" || s === "canceled") return "interrupted";
   if (s === "pending") return "pending";
   return "complete";
+}
+
+// Kawaii spinner phrases emitted by conversation_loop.py (e.g. "◉_◉ computing...").
+// These are transient CLI-style status updates and should be shown inline with
+// the main spinner instead of as a separate block.
+const KAWAII_SPINNER_RE = new RegExp(
+  "^\\s*(?:\\S*\\([^)]{1,30}\\)\\S*|[^\\p{L}\\p{N}\\s]{1,10})\\s+" +
+    "(pondering|contemplating|musing|cogitating|ruminating|deliberating|mulling|" +
+    "reflecting|processing|reasoning|analyzing|computing|synthesizing|formulating|brainstorming)" +
+    "\\s*\\.\\.\\.\\s*$",
+  "iu"
+);
+function isKawaiiSpinnerPhrase(text) {
+  return typeof text === "string" && KAWAII_SPINNER_RE.test(text.trim());
 }
 
 /**
@@ -967,6 +1085,10 @@ function MessageThread({ messages = [], loading, streamPhase, thinkingText, reas
   // user scrolls up (restored via Virtuoso's atBottomStateChange / followOutput).
   const virtuosoRef = useRef(null);
   const [atBottom, setAtBottom] = useState(true);
+  // Use the outer .vs-container as the single scroll parent so the vertical
+  // scrollbar sits flush against the window edge (no padding gutter) and we
+  // avoid nested scrollers that caused horizontal scrollbar + resize freezes.
+  const [scrollParent, setScrollParent] = useState(null);
 
   const scrollToBottom = useCallback((smooth) => {
     if (virtuosoRef.current) {
@@ -1016,22 +1138,28 @@ function MessageThread({ messages = [], loading, streamPhase, thinkingText, reas
       // which looks cramped and redundant.
       const prevRow = index > 0 ? rows[index - 1] : null;
       const isContinuation = prevRow?.type === "tools";
+      const spinnerText = isKawaiiSpinnerPhrase(thinkingText) ? thinkingText.trim() : "";
       const phaseLabel =
-        !thinkingText
-          ? row.phase === "text_generating" ? "正在生成回复"
-          : row.phase === "tool_executing" ? "正在调用工具"
-          : "正在思考…"
+        !spinnerText
+          ? !thinkingText
+            ? row.phase === "text_generating" ? "正在生成回复"
+            : row.phase === "tool_executing" ? "正在调用工具"
+            : "正在思考…"
+          : ""
           : "";
+      const showStatusLine = spinnerText || phaseLabel;
       return (
         <div className={`message-row assistant${isContinuation ? " continuation" : ""}`}>
           {!isContinuation && <div className="message-avatar agent-avatar thinking">{assistantAvatar}</div>}
           <div className="message-col">
             <div className="assistant-body">
               <div className="bubble-thinking-compact">
-                <div className="btc-line">
-                  <span className="btc-spinner" />
-                  <span className="btc-text">{phaseLabel || "处理中…"}</span>
-                </div>
+                {showStatusLine && (
+                  <div className="btc-line">
+                    <span className="btc-spinner" />
+                    <span className="btc-text">{spinnerText || phaseLabel}</span>
+                  </div>
+                )}
                 {progressStages.length > 0 && (
                   <div className="btc-workflow-progress">
                     <div className="btc-stage-bar">
@@ -1058,7 +1186,9 @@ function MessageThread({ messages = [], loading, streamPhase, thinkingText, reas
                     )}
                   </div>
                 )}
-                <ThinkingTranscript text={thinkingText} collapsed={!isLastRow || streamPhase === "text_generating"} />
+                {!spinnerText && (
+                  <ThinkingTranscript text={thinkingText} collapsed={!isLastRow || streamPhase === "text_generating"} />
+                )}
                 {stalled && (
                   <div className="btc-stall-warning">
                     <span className="btc-stall-icon">⚠</span>
@@ -1191,6 +1321,25 @@ function MessageThread({ messages = [], loading, streamPhase, thinkingText, reas
                   </div>
                 )}
                 {formatContent(displayContent, handleImageClick)}
+                {!isUser && (
+                  (m.reasoning &&
+                    m.reasoning.trim() &&
+                    !isDuplicateReasoning(m.reasoning, displayContent)) ||
+                  (isLast &&
+                    loading &&
+                    reasoningText &&
+                    reasoningText.trim() &&
+                    !isDuplicateReasoning(reasoningText, displayContent))
+                ) && (
+                  <ReasoningBlock
+                    key="reasoning-block"
+                    text={
+                      m.reasoning && m.reasoning.trim()
+                        ? m.reasoning
+                        : reasoningText
+                    }
+                  />
+                )}
               </>
             )}
           </div>
@@ -1225,48 +1374,32 @@ function MessageThread({ messages = [], loading, streamPhase, thinkingText, reas
   };
 
   return (
-    <div className="vs-container">
-      <Virtuoso
-        ref={virtuosoRef}
-        className="vs-content"
-        data={rows}
-        followOutput={(isAtBottom) => (isAtBottom ? "smooth" : false)}
-        atBottomStateChange={setAtBottom}
-        computeItemKey={computeItemKey}
-        itemContent={itemContent}
-        components={{
-          Footer: () => (
-            <>
-              {uiBlocks.length > 0 && (
-                <div className="ui-blocks-region" key="ui-blocks-region">
-                  {uiBlocks.map((b) => (
-                    <GeneratedComponent key={b.blockId} block={b} />
-                  ))}
-                </div>
-              )}
-              {loading && reasoningText && reasoningText.trim() && (
-                <ReasoningBlock key="reasoning-block" text={reasoningText} />
-              )}
-              {subagents.length > 0 && (
-                <SubagentPanel key="subagent-panel" subagents={subagents} />
-              )}
-              {moaRefs.length > 0 && (
-                <MoaBlock key="moa-block" refs={moaRefs} aggregating={moaAggregating} />
-              )}
-              {reviewSummary && (
-                <ReviewSummaryBlock key="review-summary" text={reviewSummary} />
-              )}
-              {approval && (
-                <ApprovalBubble
-                  approval={approval}
-                  onRespond={onRespondApproval}
-                  toolMessages={currentTurnToolMessages}
-                />
-              )}
-            </>
-          ),
-        }}
-      />
+    <div className="vs-wrapper">
+      <div ref={setScrollParent} className="vs-container">
+        <Virtuoso
+          key={scrollParent ? "vs-mounted" : "vs-pending"}
+          ref={virtuosoRef}
+          className="vs-content"
+          customScrollParent={scrollParent}
+          data={rows}
+          initialTopMostItemIndex={rows.length > 0 ? rows.length - 1 : 0}
+          followOutput={(isAtBottom) => (isAtBottom ? "smooth" : false)}
+          atBottomStateChange={setAtBottom}
+          computeItemKey={computeItemKey}
+          itemContent={itemContent}
+          components={{ List: CenteredList, Footer: MessageFooter }}
+          context={{
+            uiBlocks,
+            subagents,
+            moaRefs,
+            moaAggregating,
+            reviewSummary,
+            approval,
+            onRespondApproval,
+            currentTurnToolMessages,
+          }}
+        />
+      </div>
 
       {!atBottom && (
         <button className="scroll-bottom-btn" onClick={() => scrollToBottom(true)} title="回到底部">
@@ -1288,8 +1421,11 @@ function MessageThread({ messages = [], loading, streamPhase, thinkingText, reas
 // React.memo prevents re-render cascade from parent (ChatLayout → App) on
 // every stream token.  Only when messages / loading / streamPhase actually
 // change will the rows be rebuilt and Virtuoso updated.
-export default React.memo(MessageThread);
-
+//
+// NOTE: export default is intentionally at the bottom of the file so the
+// stable MessageFooter component (defined after the P1 helpers) can be placed
+// near the components it assembles.
+//
 // ─────────────────────────────────────────────────────────────────────────
 // P1 增量 UI 组件（深度推理 / 子 agent / MOA / 评审摘要）
 // 这些组件只依赖 Footer 传入的瞬时 props，独立渲染，不进入 Virtuoso 行重算。
@@ -1297,23 +1433,46 @@ export default React.memo(MessageThread);
 
 /**
  * ReasoningBlock — 模型深度推理 token 的折叠展示（区别于浅层 thinking 指示）。
+ * Defaults to expanded, renders inside a scrollable translucent bubble, and
+ * auto-scrolls to the bottom as new reasoning tokens stream in. Manual scroll
+ * up pauses auto-scroll until the user scrolls back to the bottom.
  */
 function ReasoningBlock({ text }) {
-  const [open, setOpen] = useState(false);
-  const preview = text.length > 200 ? text.slice(0, 200) + "…" : text;
+  const [open, setOpen] = useState(true);
+  const bubbleRef = useRef(null);
+  const userScrolledRef = useRef(false);
+  const display = text || "";
+
+  useEffect(() => {
+    const el = bubbleRef.current;
+    if (!el || !open) return;
+    if (!userScrolledRef.current) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [display, open]);
+
+  const handleScroll = useCallback(() => {
+    const el = bubbleRef.current;
+    if (!el) return;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 20;
+    userScrolledRef.current = !nearBottom;
+  }, []);
+
   return (
     <div className="reasoning-block">
       <button className="reasoning-toggle" onClick={() => setOpen((o) => !o)}>
         <Icon name="lightbulb" size={13} />
         <span>深度推理</span>
-        <span className="reasoning-count">{text.length} 字符</span>
+        <span className="reasoning-count">{display.length} 字符</span>
         <Icon name="chevron" size={12} style={{ transform: open ? "rotate(90deg)" : "rotate(0deg)" }} />
       </button>
-      {open ? (
-        <pre className="reasoning-text">{text}</pre>
-      ) : (
-        <pre className="reasoning-text collapsed">{preview}</pre>
-      )}
+      <div
+        ref={bubbleRef}
+        className={`reasoning-bubble ${open ? "" : "collapsed"}`}
+        onScroll={handleScroll}
+      >
+        {display}
+      </div>
     </div>
   );
 }
@@ -1397,3 +1556,59 @@ function ReviewSummaryBlock({ text }) {
     </div>
   );
 }
+
+
+/**
+ * MessageFooter — Virtuoso Footer 组件。
+ *
+ * 之前 Virtuoso 的 `components.Footer` 用内联箭头函数定义，导致每次
+ * MessageThread 重渲染时 Footer 组件类型都变，React 会把整个 Footer 子树
+ * 卸载并重新挂载。结果 ReviewSummaryBlock 等带内部 state 的 P1 组件在每次
+ * 流式 token 到来时都丢失状态，表现为「评审摘要无法展开」。
+ *
+ * 把这个 Footer 提取为模块级稳定组件，动态数据通过 Virtuoso 的 `context`
+ * 传入；context 变化只会触发重渲染，不会导致子树 remount，因此
+ * ReviewSummaryBlock 的展开状态可以保留。
+ */
+function MessageFooter({ context }) {
+  const {
+    uiBlocks,
+    subagents,
+    moaRefs,
+    moaAggregating,
+    reviewSummary,
+    approval,
+    onRespondApproval,
+    currentTurnToolMessages,
+  } = context || {};
+  return (
+    <>
+      {uiBlocks?.length > 0 && (
+        <div className="ui-blocks-region" key="ui-blocks-region">
+          {uiBlocks.map((b) => (
+            <GeneratedComponent key={b.blockId} block={b} />
+          ))}
+        </div>
+      )}
+      {subagents?.length > 0 && (
+        <SubagentPanel key="subagent-panel" subagents={subagents} />
+      )}
+      {moaRefs?.length > 0 && (
+        <MoaBlock key="moa-block" refs={moaRefs} aggregating={moaAggregating} />
+      )}
+      {reviewSummary && (
+        <ReviewSummaryBlock key="review-summary" text={reviewSummary} />
+      )}
+      {approval && (
+        <ApprovalBubble
+          key="approval-bubble"
+          approval={approval}
+          onRespond={onRespondApproval}
+          toolMessages={currentTurnToolMessages}
+        />
+      )}
+    </>
+  );
+}
+
+export default React.memo(MessageThread);

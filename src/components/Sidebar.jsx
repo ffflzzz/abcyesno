@@ -108,12 +108,21 @@ export default function Sidebar({
   backendStatus,
   // ── Task panel props ──
   taskManager,           // { tasks, selectedTaskId, onSelectTask, createTask, stopTask, clearCompleted, clearAll }
+  // Controlled tab (optional): when provided, App owns the tab state so other
+  // surfaces (e.g. the chat-side AgentRunMonitor) can switch to "tasks".
+  sidebarTab,
+  onTabChange,
 }) {
-  // Tab state (persisted per session)
-  const [activeTab, setActiveTab] = useState(() => {
+  // Tab state (persisted per session). Controlled when sidebarTab prop passed.
+  const [internalTab, setInternalTab] = useState(() => {
     try { return localStorage.getItem("abcyesno:sidebarTab") || "chat"; }
     catch (_) { return "chat"; }
   });
+  const activeTab = sidebarTab != null ? sidebarTab : internalTab;
+  const setActiveTab = (t) => {
+    if (onTabChange) onTabChange(t);
+    else setInternalTab(t);
+  };
   const [query, setQuery] = useState("");
   const [contextMenu, setContextMenu] = useState(null);
   const [detail, setDetail] = useState(null);

@@ -30,26 +30,15 @@ app.commandLine.appendSwitch('disable-background-timer-throttling');
 // tools connect_over_cdp(PW_CDP_URL) and select the webview by its marker URL.
 // Port is localhost-only; override via PW_CDP_PORT. Must be set before app ready.
 // Browser marker: tiny self-contained page Playwright can target by URL.
-// Includes visible body so users see a real (idle) page in the panel, not
-// a blank white canvas. Also exposes a `__marker` flag for any consumer that
-// wants to detect the idle state.
+// Keep it visually empty (transparent background, no text) so the React hint
+// overlay in BrowserPanel is the single source of truth for the idle UI.
+// This prevents ghosting/double-text when the overlay and marker page stack.
+// Also exposes a `__marker` flag for any consumer that wants to detect idle.
 const BROWSER_PW_MARKER =
   'data:text/html;charset=utf-8,' + encodeURIComponent(
     `<!doctype html><html><head><meta charset="utf-8"><title>browser-pw-marker</title>` +
-    `<style>html,body{margin:0;height:100%;background:#0d1117;color:#c9d1d9;` +
-    `font-family:-apple-system,Segoe UI,sans-serif;display:flex;align-items:center;` +
-    `justify-content:center;flex-direction:column;gap:14px;user-select:none;}` +
-    `.dot{width:14px;height:14px;border-radius:50%;background:#3fb950;` +
-    `box-shadow:0 0 18px #3fb95080;animation:pulse 1.6s ease-in-out infinite;}` +
-    `h1{margin:0;font-size:18px;font-weight:600;letter-spacing:0.5px;}` +
-    `p{margin:0;font-size:13px;color:#8b949e;text-align:center;line-height:1.6;` +
-    `max-width:340px;}` +
-    `@keyframes pulse{0%,100%{opacity:0.55}50%{opacity:1}}</style>` +
-    `</head><body><div class="dot"></div>` +
-    `<h1>内置浏览器已就绪</h1>` +
-    `<p>可在上方地址栏手动浏览，或等 Agent 调用浏览器工具。<br>` +
-    `（空闲页面 — Agent 一旦驱动将自动切换）</p>` +
-    `<script>window.__browserPwMarker=true;</script></body></html>`
+    `<style>html,body{margin:0;height:100%;background:transparent;}</style>` +
+    `</head><body><script>window.__browserPwMarker=true;</script></body></html>`
   );
 const PW_CDP_PORT = parseInt(process.env.PW_CDP_PORT || '18922', 10) || 18922;
 app.commandLine.appendSwitch('remote-debugging-port', String(PW_CDP_PORT));
@@ -491,6 +480,10 @@ async function doStartBackend() {
       if (mainWindow) {
         mainWindow.webContents.send('terminal-read-request', params.payload || params);
       }
+    } else if (type === 'clarify.request') {
+      if (mainWindow) {
+        mainWindow.webContents.send('clarify-request', params.payload || params);
+      }
     }
   });
 
@@ -813,6 +806,10 @@ ipcMain.handle('set-api-key', async (_event, key) => {
       } else if (type === 'terminal.read.request') {
         if (mainWindow) {
           mainWindow.webContents.send('terminal-read-request', params.payload || params);
+        }
+      } else if (type === 'clarify.request') {
+        if (mainWindow) {
+          mainWindow.webContents.send('clarify-request', params.payload || params);
         }
       }
     });

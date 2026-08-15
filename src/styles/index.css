@@ -780,13 +780,14 @@ body {
   50% { opacity: 0.5; }
 }
 
-/* Chat body — flex 列 + 垂直滚动，水平不裁剪 */
+/* Chat body — flex 列 + 垂直滚动，水平裁剪防止子元素溢出产生窗口级滚动条 */
 .chat-body {
   flex: 1;
   min-height: 0;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  overflow-x: visible;
+  overflow-x: hidden;
   overflow-y: hidden;
 }
 
@@ -931,6 +932,10 @@ body {
   gap: 10px;
   align-items: flex-start;
   width: 100%;
+  /* Allow the row (a flex item of .vs-content) to shrink below its content's
+     min-content width so a wide bubble cannot push past the scroll container
+     and get clipped by overflow-x:hidden. */
+  min-width: 0;
 }
 
 .message-row.user {
@@ -1059,7 +1064,8 @@ body {
 .user-avatar { animation: none; }
 
 .message-bubble {
-  width: fit-content;
+  display: inline-block;
+  width: auto;
   max-width: 100%;
   min-width: 0;
   padding: 6px 12px;
@@ -1069,6 +1075,8 @@ body {
   word-break: break-word;
   overflow-wrap: anywhere;
   overflow: visible;
+  box-sizing: border-box;
+  vertical-align: top;
 }
 
 /* Assistant body can span the full column (no bubble constraint) */
@@ -1077,9 +1085,15 @@ body {
 }
 
 .message-bubble.user {
-  background: var(--user-bubble);
-  color: #fff;
+  /* Muted, theme-aware style instead of bright blue so user bubbles don't
+     dominate the conversation. Reduced vertical padding/line-height keeps
+     single-line bubbles compact. */
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
   border-bottom-right-radius: 5px;
+  padding: 4px 10px;
+  line-height: 1.35;
 }
 
 /* User-attached images rendered as compact chips with hover thumbnails */
@@ -1188,7 +1202,9 @@ body {
   width: 100%;
   max-width: 100%;
   min-width: 0;
-  padding: 2px 0;
+  /* Horizontal padding keeps long prose/lists/code blocks from touching
+     the conversation edges, matching the input box's safety margin. */
+  padding: 2px 16px;
   border-radius: 0;
   background: transparent;
   border: none;
@@ -1198,6 +1214,7 @@ body {
   word-break: break-word;
   overflow-wrap: anywhere;
   overflow: visible;
+  box-sizing: border-box;
 }
 
 .message-bubble.error {
@@ -1205,7 +1222,7 @@ body {
 }
 .assistant-body.error {
   border-left: 2px solid var(--error);
-  padding-left: 10px;
+  padding-left: 14px;
 }
 
 /* Inline thinking block — min-height so panels have room */
@@ -2138,6 +2155,9 @@ body {
   text-decoration: underline;
   text-underline-offset: 2px;
   text-decoration-thickness: 1px;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 .message-markdown a:hover { text-decoration-thickness: 2px; }
 
@@ -4232,30 +4252,55 @@ body {
   50%      { opacity: 0; }
 }
 
-/* ── Virtual scroll container & content ── */
+/* ── Virtual scroll wrapper & content ── */
+/* .vs-wrapper is the non-scrolling flex parent that holds the scroll container
+   and the fixed-position "scroll to bottom" button. */
+.vs-wrapper {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  position: relative;
+}
 .vs-container {
   flex: 1;
   min-height: 0;
+  min-width: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  position: relative;
-  padding: 18px;
+  /* Remove horizontal padding so the vertical scrollbar sits flush against
+     the right window edge instead of floating inside a padded gutter. */
+  padding: 18px 0;
   box-sizing: border-box;
 }
+/* The Virtuoso root with customScrollParent.  Item sizing is controlled by
+   .vs-list (components.List) below; this root just fills the scroll parent
+   and keeps overflow visible so it never creates a nested scroller. */
 .vs-content {
-  /* Elastic: stretch with the window instead of pinning to a fixed 860px
-     island. Keep a sane cap so ultra-wide windows still read comfortably. */
-  max-width: 1180px;
   width: 100%;
+  min-width: 0;
+  overflow: visible !important;
+}
+
+/* Actual list container that holds the message rows.  This is the element
+   whose width is respected by Virtuoso items.  We keep the scroll parent
+   (.vs-container) full-width so the scrollbar hugs the window edge, while
+   the list itself is capped/centered to match the composer shell width. */
+.vs-list {
+  width: 100%;
+  max-width: 900px;
   margin: 0 auto;
+  padding: 0 clamp(16px, 3vw, 32px);
   display: flex;
   flex-direction: column;
   gap: 16px;
+  min-width: 0;
+  box-sizing: border-box;
 }
 .scroll-bottom-btn {
   position: absolute;
   bottom: 16px;
-  right: 20px;
+  right: 12px;
   z-index: 10;
   background: var(--accent);
   color: #fff;
@@ -5491,6 +5536,7 @@ body[--resizing="1"] .result-panel-resize-handle::before {
   align-items: center;
   justify-content: center;
   gap: 6px;
+  background: var(--bg);
   color: var(--text-muted, #888);
   font-size: 13px;
   z-index: 1;
@@ -7033,13 +7079,47 @@ body[--resizing="1"] .result-panel-resize-handle::before {
   outline: none;
   border-color: var(--accent, #6366f1);
 }
+.clarify-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 4px 0 12px;
+}
+.clarify-choice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg, #fff);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.clarify-choice:hover {
+  border-color: var(--accent, #6366f1);
+}
+.clarify-choice.selected {
+  border-color: var(--accent, #6366f1);
+  background: rgba(99, 102, 241, 0.10);
+}
+.clarify-choice input[type="radio"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent, #6366f1);
+  cursor: pointer;
+}
 
-/* ReasoningBlock */
+/* ReasoningBlock — translucent rounded bubble with constrained scroll */
 .reasoning-block {
   margin: 8px 20px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: rgba(245, 158, 11, 0.06);
+  border-radius: 18px;
+  background: rgba(99, 102, 241, 0.10);
+  border: 1px solid rgba(99, 102, 241, 0.22);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.05);
   overflow: hidden;
 }
 .reasoning-toggle,
@@ -7068,22 +7148,44 @@ body[--resizing="1"] .result-panel-resize-handle::before {
   border-radius: 10px;
   padding: 1px 8px;
 }
-.reasoning-text {
-  margin: 0;
-  padding: 10px 14px;
-  font-family: 'SF Mono', Consolas, Menlo, monospace;
-  font-size: 12px;
-  line-height: 1.6;
-  color: var(--muted);
+.reasoning-bubble {
+  margin: 0 10px 10px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.62);
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.7;
   white-space: pre-wrap;
   word-break: break-word;
-  max-height: 320px;
+  /* Fixed max-height forces the inner content to scroll instead of stretching
+     the whole message thread. */
+  max-height: 260px;
   overflow-y: auto;
-  border-top: 1px solid var(--border);
+  transition: max-height 0.2s ease;
 }
-.reasoning-text.collapsed {
-  max-height: 56px;
+.reasoning-bubble.collapsed {
+  max-height: 54px;
   overflow: hidden;
+}
+[data-theme="dark"] .reasoning-block {
+  background: rgba(79, 70, 229, 0.14);
+  border-color: rgba(129, 140, 248, 0.25);
+}
+[data-theme="dark"] .reasoning-bubble {
+  background: rgba(30, 31, 48, 0.72);
+  border-color: rgba(255, 255, 255, 0.10);
+}
+.reasoning-bubble::-webkit-scrollbar {
+  width: 5px;
+}
+.reasoning-bubble::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.16);
+  border-radius: 3px;
+}
+[data-theme="dark"] .reasoning-bubble::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
 }
 
 /* SubagentPanel */
@@ -7318,3 +7420,96 @@ body[--resizing="1"] .result-panel-resize-handle::before {
 .danger-text:hover {
   border-color: #f87171 !important;
 }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   AgentRunMonitor — persistent chat-side status bar for background runs
+   ───────────────────────────────────────────────────────────────────────── */
+.agent-run-monitor {
+  margin: 8px 12px 4px;
+  border: 1px solid var(--border, #2a2f3a);
+  border-radius: 10px;
+  background: var(--bg-elevated, #1b1f29);
+  overflow: hidden;
+  font-size: 13px;
+}
+.agent-run-monitor.task-running { border-color: #3b82f6; }
+.agent-run-monitor.task-completed { border-color: #22c55e; }
+.agent-run-monitor.task-failed { border-color: #ef4444; }
+.agent-run-monitor.task-stopped { border-color: #6b7280; }
+
+.arm-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+  user-select: none;
+}
+.arm-status-icon { display: flex; align-items: center; }
+.arm-status-icon.task-running { color: #3b82f6; }
+.arm-status-icon.task-completed { color: #22c55e; }
+.arm-status-icon.task-failed { color: #ef4444; }
+.arm-status-icon.task-stopped { color: #6b7280; }
+.arm-status-icon.task-pending { color: #eab308; }
+
+.arm-title { display: flex; flex-direction: column; line-height: 1.2; min-width: 0; }
+.arm-name { font-weight: 600; color: var(--text, #e6e9ef); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 180px; }
+.arm-status { font-size: 11px; opacity: 0.8; }
+.arm-status.task-running { color: #60a5fa; }
+.arm-status.task-completed { color: #4ade80; }
+.arm-status.task-failed { color: #f87171; }
+.arm-status.task-stopped { color: #9ca3af; }
+.arm-status.task-pending { color: #fbbf24; }
+
+.arm-current { flex: 1; min-width: 0; padding: 0 6px; }
+.arm-generating { display: inline-flex; align-items: center; gap: 6px; color: #93c5fd; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.arm-done-info { color: var(--text-dim, #9aa3b2); font-size: 12.5px; }
+
+.arm-spinner {
+  width: 12px; height: 12px; border-radius: 50%;
+  border: 2px solid rgba(147, 197, 253, 0.35);
+  border-top-color: #93c5fd;
+  animation: arm-spin 0.8s linear infinite;
+  flex: 0 0 auto;
+}
+@keyframes arm-spin { to { transform: rotate(360deg); } }
+
+.arm-actions { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+.arm-btn {
+  display: inline-flex; align-items: center; gap: 3px;
+  background: transparent; color: var(--text-dim, #9aa3b2);
+  border: 1px solid var(--border, #2a2f3a); border-radius: 6px;
+  padding: 3px 7px; font-size: 11.5px; cursor: pointer;
+}
+.arm-btn:hover { color: var(--text, #e6e9ef); border-color: #3b82f6; }
+
+.arm-body { padding: 4px 12px 12px; border-top: 1px solid var(--border, #2a2f3a); max-height: 360px; overflow-y: auto; }
+.arm-body .workflow-timeline { margin-top: 4px; }
+
+.arm-artifacts { margin-top: 10px; }
+.arm-artifacts-label { font-size: 12px; color: var(--text-dim, #9aa3b2); margin-bottom: 6px; }
+.arm-artifacts-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 8px; }
+.arm-artifact-thumb { width: 100%; height: 84px; object-fit: cover; border-radius: 8px; background: #0f1117; border: 1px solid var(--border, #2a2f3a); }
+.arm-artifact-thumb.loading { display: flex; align-items: center; justify-content: center; font-size: 11px; color: var(--text-dim, #9aa3b2); }
+.arm-artifact-chip { display: inline-flex; align-items: center; padding: 4px 8px; font-size: 11px; background: #0f1117; border: 1px solid var(--border, #2a2f3a); border-radius: 6px; color: var(--text-dim, #9aa3b2); }
+
+/* ── WorkflowTimeline node graph (current node / 生成中) ── */
+.wf-nodes { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; }
+.wf-node { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 8px; }
+.wf-node.current { background: rgba(59, 130, 246, 0.12); }
+.wf-dot { width: 12px; height: 12px; border-radius: 50%; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; }
+.wf-dot.pending { background: #374151; border: 1px solid #4b5563; }
+.wf-dot.running { background: #3b82f6; box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2); }
+.wf-dot.done { background: #22c55e; }
+.wf-dot.error { background: #ef4444; }
+.wf-spinner { width: 9px; height: 9px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.4); border-top-color: #fff; animation: arm-spin 0.7s linear infinite; }
+.wf-node-body { display: flex; flex-direction: column; line-height: 1.25; min-width: 0; }
+.wf-node-label { color: var(--text, #e6e9ef); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wf-node.current .wf-node-label { font-weight: 600; }
+.wf-node-status { font-size: 11px; color: var(--text-dim, #9aa3b2); }
+.wf-generating { color: #93c5fd; font-weight: 500; }
+
+.wf-progress { display: flex; align-items: center; gap: 8px; margin: 6px 0 8px; }
+.wf-progress-bar { flex: 1; height: 6px; border-radius: 4px; background: #0f1117; overflow: hidden; border: 1px solid var(--border, #2a2f3a); }
+.wf-progress-fill { height: 100%; background: linear-gradient(90deg, #3b82f6, #22c55e); transition: width 0.3s ease; }
+.wf-progress-text { font-size: 11px; color: var(--text-dim, #9aa3b2); white-space: nowrap; }

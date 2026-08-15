@@ -260,17 +260,40 @@ function ChatShell({
   // Only fires ONCE per session (tracked via browserNotifiedRef) and only while
   // streaming — so switching sessions or re-rendering history does NOT re-open
   // a panel the user explicitly closed.
+  //
+  // We only react to browser tool messages that are NEWLY added this render
+  // (tracked via seenBrowserToolIdsRef). Scanning the whole history made the
+  // panel pop open on every message once ANY browser tool had ever appeared in
+  // the conversation — exactly the "every message opens the browser" bug.
   const browserNotifiedRef = useRef(new Set());
+  const seenBrowserToolIdsRef = useRef(new Set());
   useEffect(() => {
-    if (browserPanelOpen || !isStreaming) return;
     const msgs = visibleMessages || [];
+    // Always mark any browser tool messages as seen, even when not streaming.
+    // Otherwise history loaded while idle never gets recorded, and the next
+    // user message (isStreaming becomes true) treats all historical browser
+    // tools as "fresh", popping the panel open for every ordinary message.
+    msgs.forEach((m) => {
+      if (
+        typeof m.toolName === "string" &&
+        (m.toolName.startsWith("browser_") || m.toolName.startsWith("pw_browser_")) &&
+        m.id
+      ) {
+        seenBrowserToolIdsRef.current.add(m.id);
+      }
+    });
+    if (browserPanelOpen || !isStreaming) return;
     if (msgs.length === 0) return;
-    // Only look at the LAST message — if it's a fresh browser_* tool call
-    // that we haven't notified for this session yet, open once.
-    const last = msgs[msgs.length - 1];
-    if (!last || typeof last.toolName !== "string") return;
-    const isBrowser = last.toolName.startsWith("browser_") || last.toolName.startsWith("pw_browser_");
-    if (!isBrowser) return;
+    // Only consider browser tool messages we have NOT seen before.
+    const freshBrowserTools = msgs.filter(
+      (m) =>
+        typeof m.toolName === "string" &&
+        (m.toolName.startsWith("browser_") || m.toolName.startsWith("pw_browser_")) &&
+        m.id &&
+        !seenBrowserToolIdsRef.current.has(m.id)
+    );
+    if (freshBrowserTools.length === 0) return;
+    freshBrowserTools.forEach((m) => seenBrowserToolIdsRef.current.add(m.id));
     const sid = selectedSessionId || "";
     if (browserNotifiedRef.current.has(sid)) return;
     browserNotifiedRef.current.add(sid);
@@ -448,6 +471,27 @@ function ChatShell({
     () => { handleStop(); }
   );
 
+  // Sidebar tab is owned by App so the chat-side AgentRunMonitor can switch to
+  // the "tasks" tab on demand. (Falls back to Sidebar's internal state if null.)
+  const [sidebarTab, setSidebarTab] = useState(() => {
+    try { return localStorage.getItem("abcyesno:sidebarTab") || "chat"; } catch (_) { return "chat"; }
+  });
+  // A dismissed terminal run (so the monitor strip can be closed once done).
+  const [dismissedRunId, setDismissedRunId] = useState("");
+
+  // The live background langgraph_agent run for the foreground chat session.
+  // Chat-invoked runs are auto-created in the task manager (useTaskManager
+  // subscribes to workflow.graph), so this surfaces them persistently.
+  const liveTask = useMemo(
+    () => taskManager.tasks.find((t) => t.runId === selectedSessionId) || null,
+    [taskManager.tasks, selectedSessionId]
+  );
+  const visibleLiveTask = liveTask
+    ? !(liveTask.status !== "running" && liveTask.status !== "pending" && dismissedRunId === liveTask.runId)
+      ? liveTask
+      : null
+    : null;
+
   // Flush the queue FIFO once the current run finishes.
   useEffect(() => {
     if (!isStreaming && queuedMessages.length > 0 && selectedSessionId) {
@@ -577,6 +621,8 @@ function ChatShell({
         onOpenSettings={() => setShowSettings(true)}
         backendStatus={backendStatus}
         taskManager={taskManager}
+        sidebarTab={sidebarTab}
+        onTabChange={setSidebarTab}
       />
       <ChatLayout
         assistant={assistant}
@@ -637,6 +683,10 @@ function ChatShell({
         editingMessageId={editingMessageId}
         onSaveEdit={handleSaveEdit}
         onCancelEdit={handleCancelEdit}
+        liveTask={visibleLiveTask}
+        onStopLiveTask={taskManager.stopTask}
+        onOpenLiveTaskDetail={(id) => { setSidebarTab("tasks"); taskManager.onSelectTask(id); }}
+        onDismissLiveTask={() => liveTask && setDismissedRunId(liveTask.runId)}
       />
       {/* ResultPanel wrapped in own ErrorBoundary so a sidebar crash never kills the main chat */}
       <ResultPanelErrorBoundary>
@@ -740,6 +790,7 @@ export default function App({ aguiPort }) {
   const [showMarket, setShowMarket] = useState(false);
   const [version, setVersion] = useState("");
   const [approval, setApproval] = useState(null);
+  const lastApprovalKeyRef = useRef("");
   // P0 阻塞请求队列：sudo / secret / terminal.read 三类 _block() 请求。
   // 后端每条请求带 request_id，前端必须回执才能解除挂起。用队列支持连续多个。
   const [blockQueue, setBlockQueue] = useState([]);
@@ -1016,7 +1067,7 @@ export default function App({ aguiPort }) {
     };
     hermes.on("approval-request", onApproval);
 
-    // ── P0 阻塞请求：sudo / secret / terminal.read ──
+    // ── P0 阻塞请求：sudo / secret / terminal.read / clarify ──
     // 后端 _block() 触发，必须弹窗回执才能解除线程挂起，否则 agent 死等。
     const onSudoRequest = (payload) => {
       setBlockQueue((q) => [...q, { type: "sudo.request", ...(payload || {}) }]);
@@ -1027,9 +1078,13 @@ export default function App({ aguiPort }) {
     const onTerminalReadRequest = (payload) => {
       setBlockQueue((q) => [...q, { type: "terminal.read.request", ...(payload || {}) }]);
     };
+    const onClarifyRequest = (payload) => {
+      setBlockQueue((q) => [...q, { type: "clarify.request", ...(payload || {}) }]);
+    };
     hermes.on("sudo-request", onSudoRequest);
     hermes.on("secret-request", onSecretRequest);
     hermes.on("terminal-read-request", onTerminalReadRequest);
+    hermes.on("clarify-request", onClarifyRequest);
 
     const onGatewayStatus = (status) => {
       setBackendStatus((prev) => ({ ...prev, gatewayConnected: !!status.connected }));
@@ -1048,13 +1103,20 @@ export default function App({ aguiPort }) {
     // Pull contract manifests from the adapter (falls back to bundled set).
     initContract(aguiPort).then(setManifests);
 
-    // L4: a workflow.approval event carries a gate context for the existing
-    // ApprovalDialog. Reuse the dialog; the workflow brake routes through the
-    // file-based control channel instead of the Hermes tool-approval gateway.
+    // L4: a workflow.approval event carries a gate context for the inline
+    // ApprovalBubble. Deduplicate by (workflowRunId, gate_id) so repeated
+    // events (e.g. the LLM calling langgraph_agent multiple times) do not
+    // cause the bubble/dialog to flash or reset its UI state.
     const onContractEvent = (runId, ev) => {
       const type = ev && (ev.type || ev.name) || "";
       if (type.endsWith("approval")) {
         const p = ev.payload || {};
+        const key = `${p.workflowRunId || runId || ""}::${p.gate_id || ""}`;
+        if (key && key !== "::" && lastApprovalKeyRef.current === key) {
+          // Same gate already surfaced; ignore duplicate.
+          return;
+        }
+        lastApprovalKeyRef.current = key || lastApprovalKeyRef.current;
         if (p.workflowRunId) {
           setApproval({
             id: p.gate_id || "workflow-approval",
@@ -1085,6 +1147,7 @@ export default function App({ aguiPort }) {
       hermes.off("sudo-request", onSudoRequest);
       hermes.off("secret-request", onSecretRequest);
       hermes.off("terminal-read-request", onTerminalReadRequest);
+      hermes.off("clarify-request", onClarifyRequest);
       hermes.off("gateway-status", onGatewayStatus);
       unsubContract && unsubContract();
     };
@@ -1269,6 +1332,7 @@ export default function App({ aguiPort }) {
       console.error("approval response failed", err);
     }
     setApproval(null);
+    lastApprovalKeyRef.current = "";
   }
 
   // P0 阻塞请求应答：组装 request_id + 用户输入，经既有 gatewayRequest 通道回执后端，
@@ -1285,6 +1349,8 @@ export default function App({ aguiPort }) {
           await hermes.gatewayRequest("secret.respond", { request_id, value: value || "" }, 30000);
         } else if (type === "terminal.read.request") {
           await hermes.gatewayRequest("terminal.read.respond", { request_id, text: value || "" }, 30000);
+        } else if (type === "clarify.request") {
+          await hermes.gatewayRequest("clarify.respond", { request_id, answer: value || "" }, 30000);
         }
       } catch (err) {
         console.error("block request respond failed", err);
