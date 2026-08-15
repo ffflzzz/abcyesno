@@ -55,6 +55,11 @@ to poll.
   across episodes). Reads the Agnes API key from `AGNES_API_KEY` or the active
   Hermes config.
 
+For a credit-free smoke test, set `MANJUCRAFT_AGENT_MOCK=1` before invoking the
+agent — the LLM / image / video / TTS / ffmpeg service layers fall back to local
+stubs, so the full graph (incl. HITL gates and the series loop) runs offline.
+See `scripts/smoke_manjucraft.py` for a ready-made series smoke test.
+
 ## Agent manifest contract (L1)
 
 Each agent package lives at `agents/<id>/` and ships two files:
