@@ -459,7 +459,10 @@ function ChatShell({
       // immediately sees the langgraph_agent tool card and the SubagentPanel
       // (workflow trace + loop animation) inside the chat — otherwise the
       // workflow runs in an invisible session and the user has nothing to watch.
-      setSelectedSessionId(wfSession.id);
+      // NOTE: this closure lives inside ChatShell (not App), so it must go
+      // through the `onSelectSession` prop — `setSelectedSessionId` is App's
+      // useState setter and is NOT in scope here (would throw ReferenceError).
+      onSelectSession?.(wfSession.id);
       return wfSession.id;
     } catch (err) {
       console.error("[workflow run] failed", err);
