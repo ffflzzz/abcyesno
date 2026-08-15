@@ -512,6 +512,48 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
         // subscribe via useContractEvents(session.id).
         emitContractEvent(sess.id, { type: name, payload: value });
 
+        // 镜像进 sess.subagents：langgraph_agent 发的是 workflow.* 而非
+        // subagent.*，所以对话里的 SubagentPanel（子智能体实时镜像）默认看不到
+        // 它。这里把后台 workflow 的启动/进度/完成映射成一条 subagents 记录，
+        // 让用户在不离开对话的情况下实时观察 subagent 的运行状态。
+        const _wfKey = "__langgraph__";
+        const _upsertWf = (patch) => {
+          const _i = sess.subagents.findIndex((s) => s.key === _wfKey);
+          if (_i >= 0) {
+            sess.subagents = sess.subagents.map((s, idx) => (idx === _i ? { ...s, ...patch } : s));
+          } else {
+            sess.subagents = [...sess.subagents, { key: _wfKey, ...patch }];
+          }
+          publish(sess.id);
+        };
+        if (name === "workflow.started" || name === "workflow.graph") {
+          _upsertWf({
+            goal: value?.agent || value?.workflowId || "后台工作流",
+            status: "start",
+            tool_name: value?.agent,
+            event: "subagent.start",
+          });
+        } else if (name === "workflow.progress" || name === "workflow.trace") {
+          const _tn = value?.stage || value?.step_id || value?.node;
+          _upsertWf({
+            status: "thinking",
+            ...(_tn ? { tool_name: _tn } : {}),
+            ...(value?.message ? { goal: value.message } : {}),
+            event: "subagent.thinking",
+          });
+        } else if (name === "workflow.done") {
+          _upsertWf({
+            status: (!value?.status || value.status === "done") ? "complete" : value.status,
+            event: "subagent.complete",
+          });
+        } else if (name === "workflow.error") {
+          _upsertWf({
+            status: "error",
+            ...(value?.message ? { goal: value.message } : {}),
+            event: "subagent.error",
+          });
+        }
+
         // B 方案：后台长任务已开始/结束，切换 reader 静默超时放宽开关。
         if (name === "workflow.started") {
           sess.backgroundRun = true;
