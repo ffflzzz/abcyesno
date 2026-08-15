@@ -455,6 +455,11 @@ function ChatShell({
       const text = `请调用 langgraph_agent 工具完成任务：\n${JSON.stringify(envelope)}`;
       // Send to the dedicated workflow session — not selectedSessionId.
       await doSend(text, undefined, wfSession.id);
+      // Auto-switch the active chat tab to the workflow session so the user
+      // immediately sees the langgraph_agent tool card and the SubagentPanel
+      // (workflow trace + loop animation) inside the chat — otherwise the
+      // workflow runs in an invisible session and the user has nothing to watch.
+      setSelectedSessionId(wfSession.id);
       return wfSession.id;
     } catch (err) {
       console.error("[workflow run] failed", err);
