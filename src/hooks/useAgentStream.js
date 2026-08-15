@@ -515,7 +515,8 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
         // 镜像进 sess.subagents：langgraph_agent 发的是 workflow.* 而非
         // subagent.*，所以对话里的 SubagentPanel（子智能体实时镜像）默认看不到
         // 它。这里把后台 workflow 的启动/进度/完成映射成一条 subagents 记录，
-        // 让用户在不离开对话的情况下实时观察 subagent 的运行状态。
+        // 并额外累积 topology + trace，让 SubagentPanel 展开后能渲染节点级 loop
+        // 动画（复用 WorkflowGraphPanel），让用户不离开对话即可观察工作过程。
         const _wfKey = "__langgraph__";
         const _upsertWf = (patch) => {
           const _i = sess.subagents.findIndex((s) => s.key === _wfKey);
@@ -526,15 +527,40 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
           }
           publish(sess.id);
         };
-        if (name === "workflow.started" || name === "workflow.graph") {
+        if (name === "workflow.started") {
           _upsertWf({
             goal: value?.agent || value?.workflowId || "后台工作流",
             status: "start",
             tool_name: value?.agent,
             event: "subagent.start",
           });
-        } else if (name === "workflow.progress" || name === "workflow.trace") {
-          const _tn = value?.stage || value?.step_id || value?.node;
+        } else if (name === "workflow.graph") {
+          // 拓扑 + 总集数，供 WorkflowGraphPanel 渲染节点 DAG。
+          _upsertWf({
+            goal: value?.agent || value?.workflowId || "后台工作流",
+            status: "start",
+            tool_name: value?.agent,
+            topology: { nodes: value?.nodes || [], edges: value?.edges || [] },
+            total: value?.totalEpisodes || 1,
+            event: "subagent.start",
+          });
+        } else if (name === "workflow.trace") {
+          // 累积 node -> status 映射（running/done/pending/error），供
+          // WorkflowGraphPanel 高亮当前节点与 loop 边。
+          const _node = value?.node;
+          if (_node) {
+            const _prev = sess.subagents.find((s) => s.key === _wfKey);
+            const _trace = { ...((_prev && _prev.trace) || {}), [_node]: value?.status };
+            _upsertWf({
+              status: "thinking",
+              tool_name: value?.stage || value?.step_id || _node,
+              trace: _trace,
+              ...(typeof value?.episode === "number" ? { episode: value.episode } : {}),
+              event: "subagent.thinking",
+            });
+          }
+        } else if (name === "workflow.progress") {
+          const _tn = value?.stage || value?.step_id;
           _upsertWf({
             status: "thinking",
             ...(_tn ? { tool_name: _tn } : {}),

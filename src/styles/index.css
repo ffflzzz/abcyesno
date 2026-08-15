@@ -7200,11 +7200,22 @@ body[--resizing="1"] .result-panel-resize-handle::before {
 .subagent-row {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   font-size: 12px;
   padding: 4px 6px;
   border-radius: 6px;
   background: rgba(0, 0, 0, 0.03);
+}
+/* 节点级 loop 动画（WorkflowGraphPanel）嵌在子智能体条目里 */
+.subagent-graph {
+  flex-basis: 100%;
+  width: 100%;
+  height: 260px;
+  margin-top: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
 }
 .subagent-status {
   font-size: 10px;

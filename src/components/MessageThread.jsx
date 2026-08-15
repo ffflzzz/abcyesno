@@ -4,6 +4,7 @@ import { Virtuoso } from "react-virtuoso";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import AgentVerboseTimeline from "./AgentVerboseTimeline.jsx";
+import WorkflowGraphPanel from "./WorkflowGraphPanel.jsx";
 import ThinkingIndicator from "./ThinkingIndicator.jsx";
 import ArtifactPreview from "./ArtifactPreview.jsx";
 import ToolCard from "./ToolCard.jsx";
@@ -1478,8 +1479,9 @@ function ReasoningBlock({ text }) {
 }
 
 /**
- * SubagentPanel — 子 agent 实时镜像列表（subagent.* 事件驱动）。
- * 每个子 agent 一行：目标 / 状态 / 当前动作 / token 与 cost。
+ * SubagentPanel — 子 agent 实时镜像列表（subagent.* / 镜像的 workflow.* 驱动）。
+ * 每个子 agent 一行：目标 / 状态 / 当前动作 / token 与 cost；带拓扑的 workflow
+ * 条目展开时渲染节点级 loop 动画（WorkflowGraphPanel）。
  */
 function SubagentPanel({ subagents }) {
   const [open, setOpen] = useState(true);
@@ -1496,6 +1498,7 @@ function SubagentPanel({ subagents }) {
           {subagents.map((s) => {
             const status = s.status || (s.event || "").replace("subagent.", "");
             const tokens = (s.input_tokens || 0) + (s.output_tokens || 0);
+            const hasGraph = s.topology && Array.isArray(s.topology.nodes) && s.topology.nodes.length > 0;
             return (
               <div className="subagent-row" key={s.key}>
                 <span className={`subagent-status subagent-status-${status}`}>{status}</span>
@@ -1503,6 +1506,17 @@ function SubagentPanel({ subagents }) {
                 {s.tool_name && <span className="subagent-tool">🔧 {s.tool_name}</span>}
                 {tokens > 0 && <span className="subagent-tokens">{tokens} tok</span>}
                 {s.cost_usd != null && <span className="subagent-cost">${Number(s.cost_usd).toFixed(4)}</span>}
+                {hasGraph && (
+                  <div className="subagent-graph">
+                    <WorkflowGraphPanel
+                      topology={s.topology}
+                      trace={s.trace || {}}
+                      runState={status}
+                      episode={s.episode || 0}
+                      total={s.total || 1}
+                    />
+                  </div>
+                )}
               </div>
             );
           })}
