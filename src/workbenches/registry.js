@@ -17,7 +17,7 @@ import TimelineWorkbench from "./TimelineWorkbench.jsx";
 // edit/export a Jianying draft). Frontend authoring workbench; opened in the
 // sidebar when its manifest is selected from the SkillPanel. This is the
 // unified video-production front-end for the manjucraft_agent LangGraph
-// pipeline — all manju_craft/manjucraft functionality converges here.
+// pipeline — all short-drama production converges here.
 import StudioWorkbench from "./StudioWorkbench.jsx";
 
 const WORKBENCHES = {

@@ -4,7 +4,7 @@ import React, { useState, useMemo } from "react";
  * ArtifactPreview — 实时产物预览
  *
  * 当工具调用结果包含图片数据（base64 或 URL）时，立即展示预览卡片。
- * 用于 manju_craft 等工作流的风格确认、图片生成结果等 human-in-the-loop 场景。
+ * 用于 manjucraft_agent 等工作流的风格确认、图片生成结果等 human-in-the-loop 场景。
  *
  * Props:
  *   - toolMessages: tool role 消息数组（从中提取含图片的结果）

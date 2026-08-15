@@ -44,8 +44,8 @@ DEFAULT_BASE_URL = "https://apihub.agnes-ai.com/v1"
 class WorkflowRejected(Exception):
     """Raised inside a LangGraph approval gate when the user rejects.
 
-    Imported by agent gate nodes (e.g. manju_craft) so the runtime can catch
-    it uniformly and abort the workflow with a clean ``workflow.done``.
+    Imported by agent gate nodes (e.g. manjucraft_agent) so the runtime can
+    catch it uniformly and abort the workflow with a clean ``workflow.done``.
     """
 
     gate_id: Optional[str] = None
@@ -191,9 +191,9 @@ def discover_agents() -> List[str]:
     """Return sorted list of agent package names found on disk.
 
     Agents whose ``manifest.json`` carries ``"hidden": true`` are excluded so
-    test/demo/legacy packages (manju_craft, hello_agent, image_gen, …) are never
-    invocable via the ``langgraph_agent`` tool, matching the manifest-driven
-    exposure contract on the Node/frontend side.
+    test/demo/legacy packages are never invocable via the ``langgraph_agent``
+    tool, matching the manifest-driven exposure contract on the Node/frontend
+    side.
     """
     seen: set = set()
     agents: List[str] = []
@@ -817,12 +817,13 @@ def run_agent(
         config = {"configurable": {"thread_id": effective_thread_id}}
 
         # Per-agent summary override (contract L3). Defaults to the structured
-        # manju-craft-aware summarizer defined above.
+        # short-drama-aware summarizer defined above.
         summarize = getattr(mod, "summarize_state", _summarize_state)
         stage_map = getattr(mod, "WORKFLOW_STAGES", [])
 
-        # Some agents (e.g. manju_craft) define a custom state schema and expose
-        # build_initial_state() / build_initial_state_obj() so the runtime can map
+        # Some agents (e.g. manjucraft_agent) define a custom state schema and
+        # expose build_initial_state() / build_initial_state_obj() so the
+        # runtime can map
         # the input (free text or a structured object) into the required fields.
         # Otherwise fall back to the standard MessagesState.
         if hasattr(mod, "build_initial_state_obj") and input_obj is not None:

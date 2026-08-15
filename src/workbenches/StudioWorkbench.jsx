@@ -12,8 +12,8 @@ import "./StudioWorkbench.css";
 // calling onRun(input), then consumes workflow.* contract events to update the
 // 4-phase UI, the asset library, the shot list, and the export timeline.
 //
-// The legacy manju_craft stand-alone form is removed from the manifest
-// whitelist; this workbench is the only video-production entry point.
+// The legacy manju_craft / manju_studio agents have been removed entirely;
+// this workbench is the only video-production entry point.
 
 const PHASES = [
   { id: "script", label: "剧本" },

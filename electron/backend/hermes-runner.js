@@ -268,7 +268,6 @@ class HermesRunner {
       HERMES_DASHBOARD_SESSION_TOKEN: this.sessionToken,
       AGNES_API_KEY: this.apiKey || process.env.AGNES_API_KEY || '',
       AGNES_BASE_URL: process.env.AGNES_BASE_URL || 'https://apihub.agnes-ai.com/v1',
-      MANJU_CRAFT_MOCK: process.env.MANJU_CRAFT_MOCK || '',
       // Port the agui-server bridge listens on. The Python langgraph runtime
       // POSTs HITL workflow events here so they can reach the frontend SSE.
       AGUI_PORT: process.env.AGUI_PORT || '9121',
@@ -291,9 +290,10 @@ class HermesRunner {
       // In dev (no such dir) this path is harmless: _chromium_installed() falls back
       // to the default cache and ~/.hermes_portable_data/playwright-browsers.
       PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH || path.join(process.resourcesPath || '', 'playwright-browsers'),
-      // Preload skills for the agent. `langgraph-agents` carries manju_craft /
-      // hello_agent; `browser-pw` injects the strong "use pw_browser_* for web
-      // tasks, NOT computer_use" guidance into the system prompt.
+      // Preload skills for the agent. `langgraph-agents` carries the
+      // manjucraft_agent workflow; `browser-pw` injects the strong "use
+      // pw_browser_* for web tasks, NOT computer_use" guidance into the system
+      // prompt.
       HERMES_TUI_SKILLS: process.env.HERMES_TUI_SKILLS || 'langgraph-agents,browser-pw',
       PYTHONPATH: HERMES_FORK + (process.env.PYTHONPATH ? path.delimiter + process.env.PYTHONPATH : ''),
     };

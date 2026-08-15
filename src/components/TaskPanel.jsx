@@ -34,7 +34,7 @@ function statusInfo(status) {
   return STATUS_MAP[status] || STATUS_MAP.pending;
 }
 
-// Turn an agent id like "manju_craft" into a friendly display name "Manju Craft".
+// Turn an agent id like "manjucraft_agent" into a friendly display name "Manjucraft Agent".
 function friendlyName(agent) {
   if (!agent) return "后台任务";
   return String(agent)

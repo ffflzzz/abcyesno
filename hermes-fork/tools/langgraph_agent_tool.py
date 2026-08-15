@@ -301,7 +301,7 @@ LANGGRAPH_AGENT_SCHEMA = {
         "same request will be ignored with a 'running' response.\n\n"
         "Available agents: " + _available_agents_text() + "\n\n"
         "Example (free text):\n"
-        '{"agent_name": "hello_agent", "input": "world", "thread_id": "demo-1"}\n'
+        '{"agent_name": "manjucraft_agent", "input": "一只小猫在草地上玩耍", "thread_id": "demo-1"}\n'
         "Example (structured object):\n"
         '{"agent_name": "manjucraft_agent", "input": {"mode":"single","script":"...","style":"写实"}, "thread_id": "demo-2"}'
     ),

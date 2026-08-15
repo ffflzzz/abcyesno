@@ -55,10 +55,6 @@ to poll.
   across episodes). Reads the Agnes API key from `AGNES_API_KEY` or the active
   Hermes config.
 
-For a credit-free smoke test, set `MANJU_CRAFT_MOCK=1` before invoking the
-agent — media generation is replaced with local stubs and the full graph
-structure (incl. HITL gates) is exercised without image/video/TTS calls.
-
 ## Agent manifest contract (L1)
 
 Each agent package lives at `agents/<id>/` and ships two files:
