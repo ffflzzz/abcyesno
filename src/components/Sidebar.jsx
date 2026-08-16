@@ -51,7 +51,16 @@ function formatRelativeTime(ts) {
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const startOfDay = new Date(d.getFullYear(), d.getMonth(), d.getDate());
   const diffDays = Math.floor((startOfToday - startOfDay) / (1000 * 60 * 60 * 24));
-  if (diffDays === 0) return "今天";
+  if (diffDays === 0) {
+    // Same-day: show how recent it is so the user can tell "still warm" apart
+    // from "上午打开后一直没动". <1h → minutes; <24h → hours.
+    const diffMs = now - d;
+    const minutes = Math.floor(diffMs / (1000 * 60));
+    if (minutes < 1) return "刚刚";
+    if (minutes < 60) return `${minutes}分钟前`;
+    const hours = Math.floor(diffMs / (1000 * 60 * 60));
+    return `${hours}小时前`;
+  }
   if (diffDays === 1) return "昨天";
   if (diffDays === 2) return "前天";
   if (diffDays >= 3 && diffDays <= 7) return `${diffDays}天前`;
