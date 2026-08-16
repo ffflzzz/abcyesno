@@ -140,7 +140,14 @@ useEffect(() => {
     if (!drag.current) return;
     const dx = e.clientX - drag.current.x;
     const dy = e.clientY - drag.current.y;
-    setView((v) => ({ ...v, x: drag.current.vx + dx, y: drag.current.vy + dy }));
+    // Snapshot vx/vy into locals BEFORE enqueueing setState. React invokes
+    // the updater function at render time, which may be many microtasks after
+    // mousemove returned — by then onMouseUp/onMouseLeave may already have
+    // nulled `drag.current`, so reading it inside the updater throws
+    // "Cannot read properties of null (reading 'vx')".
+    const startVx = drag.current.vx;
+    const startVy = drag.current.vy;
+    setView((v) => ({ ...v, x: startVx + dx, y: startVy + dy }));
   }, []);
 
   const onMouseUp = useCallback((e) => {
