@@ -101,10 +101,20 @@ export default function WorkflowGraphPanel({ topology, trace, runState, episode,
     return () => ro.disconnect();
   }, [fit]);
 
-  const onWheel = useCallback((e) => {
+  // Mouse-wheel zoom.
+//
+// IMPORTANT: React 17+ installs passive listeners on the root for `wheel`
+// (and `touchmove`/`touchstart`), so any synthetic `onWheel` handler that
+// calls `e.preventDefault()` triggers Chrome's "Unable to preventDefault
+// inside passive event listener invocation" warning — and that fires on
+// every single wheel event, which (when DevTools is open) degrades to a
+// visible freeze. Register a native listener with `{ passive: false }` so
+// `preventDefault()` actually sticks and the warning never appears.
+useEffect(() => {
+  const el = wrapRef.current;
+  if (!el) return;
+  const handler = (e) => {
     e.preventDefault();
-    const el = wrapRef.current;
-    if (!el) return;
     const rect = el.getBoundingClientRect();
     const mx = e.clientX - rect.left;
     const my = e.clientY - rect.top;
@@ -116,7 +126,10 @@ export default function WorkflowGraphPanel({ topology, trace, runState, episode,
       const ny = my - ((my - v.y) * k) / v.k;
       return { x: nx, y: ny, k };
     });
-  }, []);
+  };
+  el.addEventListener("wheel", handler, { passive: false });
+  return () => el.removeEventListener("wheel", handler);
+}, []);
 
   const onMouseDown = useCallback((e) => {
     drag.current = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y };
@@ -171,7 +184,6 @@ export default function WorkflowGraphPanel({ topology, trace, runState, episode,
       <div
         className="wf-canvas"
         ref={wrapRef}
-        onWheel={onWheel}
         onMouseDown={onMouseDown}
         onMouseMove={onMouseMove}
         onMouseUp={onMouseUp}
