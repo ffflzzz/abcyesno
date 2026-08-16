@@ -27,6 +27,27 @@ function _writeCache(key, patch) {
   _studioCache[key] = { ...(_studioCache[key] || {}), ...patch };
 }
 
+// Standard prompt templates for the smart-input "🎲 随机生成" button. These
+// cover a range of styles (皮克斯/吉卜力/写实/二次元) and genres (日常/末世/
+// 科幻/治愈/校园/赛博) so the user can hit "generate" with no idea and
+// still get a coherent 30s single-episode baseline. Each template is tuned
+// to trigger the smart-fill path correctly: scene description + style hint +
+// explicit "固定角色" so the parser extracts a Character entry.
+const RANDOM_PROMPT_TEMPLATES = [
+  "帮我生成一集漫剧，30 秒。皮克斯风格。一只小狗在后花园漫步时突然被异度漩涡卷入，最后在混沌中觉醒为神威犬。重点突出中间的混沌过程。固定角色：神威狗-皮克斯风格小狗，蓝眼睛，体型娇小，尾端带光。",
+  "生成一集赛博朋克漫剧，30 秒。霓虹废墟里一名少年在雨水倒灌的巷子里觉醒异能，瞳孔由暗转蓝。固定角色：觉醒者-日系动漫少年，蓝色霓虹瞳孔，左臂纹路发光。",
+  "一集治愈系漫剧，30 秒。吉卜力风格。太空船上一只孤独的小狐狸在舷窗看地球，遇见发光的小鲸鱼，结伴穿过星云。固定角色：小狐狸-吉卜力风格橘色狐狸，大尾巴，眼神温柔。",
+  "末世废土写实风格漫剧，30 秒。一名拾荒者在荒漠里发现发光的孩子，激起求生意志，两人向远方灯塔走去。固定角色：拾荒者-写实风格中年男性，满脸风霜但眼神坚定，背金属背包。",
+  "日系甜美校园漫剧，30 秒。樱花校园里女生表白失败，却意外收获一段友谊。重点刻画失落与微笑转折。固定角色：小樱-日系动漫高中女生，粉色樱花服装，扎双马尾，眼神含泪到弯笑。",
+  "硬科幻深海探险漫剧，30 秒。深海潜水器遭遇发光的巨型水母，紧张对峙后化险为夷。固定角色：探险员-写实风格，黄黑潜水服，背光剪影。",
+  "一集温馨宠物漫剧，30 秒，皮克斯风格。一只橘猫在城市屋顶追逐飘动的纸飞机，最后与放纸飞机的小女孩相遇。固定角色：橘猫-皮克斯风格橘色虎斑猫，圆眼睛，机灵。",
+  "古风水墨意境漫剧，30 秒。青绿山水间一把古琴自鸣，山中少年循声而至。固定角色：琴师-水墨写意风格少年，白衣束发，眉眼清淡。",
+];
+
+function pickRandomPrompt() {
+  return RANDOM_PROMPT_TEMPLATES[Math.floor(Math.random() * RANDOM_PROMPT_TEMPLATES.length)];
+}
+
 // Short-drama production studio workbench — unified video production front-end.
 //
 // This workbench is the single UI entry for the manjucraft_agent LangGraph
@@ -492,6 +513,17 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
   useEffect(() => {
     return () => timersRef.current.forEach((t) => clearInterval(t));
   }, []);
+
+  // 🎲 Random-fill button: when the user has no idea what to make, this fills
+  // the smart-input textarea with a curated standard template (one of several
+  // styles/genres tuned to be parser-friendly). The user can then either edit
+  // it, hit "✨ 智能解析填表" to LLM-parse it, or click "一键生成全部资产 →"
+  // directly. Keeps the click-count low: 1 click gets a usable prompt.
+  function handleRandomPrompt() {
+    if (nlParsing) return;
+    setNlText(pickRandomPrompt());
+    setNlError("");
+  }
 
   // ── Persistence: save/restore workbench state across page switches ────────
   const storageKey = useMemo(() => {
@@ -1150,6 +1182,14 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
                 />
                 {nlError && <div className="st-smart-error">{nlError}</div>}
                 <div className="st-form-actions" style={{ marginTop: 8 }}>
+                  <button
+                    className="st-secondary"
+                    onClick={handleRandomPrompt}
+                    disabled={nlParsing}
+                    title="从 8 个标准模板中随机抽一条填入，方便没想法时快速试"
+                  >
+                    🎲 随机生成
+                  </button>
                   <button
                     className="st-primary"
                     onClick={handleSmartFill}
