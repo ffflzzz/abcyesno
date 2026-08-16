@@ -435,29 +435,29 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
   // Wrapped setters: each one writes the new value to the module-level cache
   // immediately so that if the component is unmounted before its cleanup runs
   // (e.g. fast tab switching during heavy state churn) nothing is lost.
-  const setPhase = (v) => { const prev = phaseRef.current; const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { phase: n }); setPhaseRaw(n); };
-  const setDone = (v) => { const prev = doneRef.current; const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { done: n }); setDoneRaw(n); };
-  const setTasks = (v) => { const prev = tasksRef.current; const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { tasks: n }); setTasksRaw(n); };
-  const setAssetsReady = (v) => { const prev = assetsReadyRef.current; const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { assetsReady: n }); setAssetsReadyRaw(n); };
-  const setAssetImgs = (v) => { const prev = assetImgsRef.current; const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { assetImgs: n }); setAssetImgsRaw(n); };
-  const setCurTab = (v) => { const prev = curTabRef.current; const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { curTab: n }); setCurTabRaw(n); };
-  const setShotState = (v) => { const prev = shotStateRef.current; const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { shotState: n }); setShotStateRaw(n); };
-  const setShotCfg = (v) => { const prev = shotCfgRef.current; const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { shotCfg: n }); setShotCfgRaw(n); };
-  const setTimeline = (v) => { const prev = timelineRef.current; const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { timeline: n }); setTimelineRaw(n); };
-  const setSelectedClip = (v) => { const prev = selectedClipRef.current; const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { selectedClip: n }); setSelectedClipRaw(n); };
-  const setExportJson = (v) => { const prev = exportJsonRef.current; const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { exportJson: n }); setExportJsonRaw(n); };
-  const setExporting = (v) => { const prev = exportingRef.current; const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { exporting: n }); setExportingRaw(n); };
-  const setRunState = (v) => { const prev = runStateRef.current; const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { runState: n }); setRunStateRaw(n); };
-  const setRunId = (v) => { const prev = runIdRef.current; const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { runId: n }); setRunIdRaw(n); };
-  const setApproval = (v) => { const prev = approvalRef.current; const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { approval: n }); setApprovalRaw(n); };
-  const setTopology = (v) => { const prev = topologyRef.current; const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { topology: n }); setTopologyRaw(n); };
-  const setTrace = (v) => { const prev = traceRef.current; const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { trace: n }); setTraceRaw(n); };
-  const setTraceEpisode = (v) => { const prev = traceEpisodeRef.current; const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { traceEpisode: n }); setTraceEpisodeRaw(n); };
-  const setTraceTotal = (v) => { const prev = traceTotalRef.current; const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { traceTotal: n }); setTraceTotalRaw(n); };
-  const setProject = (v) => { const prev = projectRef.current; const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { project: n }); setProjectRaw(n); };
-  const setNlText = (v) => { const prev = nlTextRef.current; const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { nlText: n }); setNlTextRaw(n); };
-  const setNlParsing = (v) => { const prev = nlParsingRef.current; const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { nlParsing: n }); setNlParsingRaw(n); };
-  const setNlError = (v) => { const prev = nlErrorRef.current; const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { nlError: n }); setNlErrorRaw(n); };
+  const setPhase = (v) => setPhaseRaw((prev) => { const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { phase: n }); return n; });
+  const setDone = (v) => setDoneRaw((prev) => { const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { done: n }); return n; });
+  const setTasks = (v) => setTasksRaw((prev) => { const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { tasks: n }); return n; });
+  const setAssetsReady = (v) => setAssetsReadyRaw((prev) => { const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { assetsReady: n }); return n; });
+  const setAssetImgs = (v) => setAssetImgsRaw((prev) => { const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { assetImgs: n }); return n; });
+  const setCurTab = (v) => setCurTabRaw((prev) => { const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { curTab: n }); return n; });
+  const setShotState = (v) => setShotStateRaw((prev) => { const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { shotState: n }); return n; });
+  const setShotCfg = (v) => setShotCfgRaw((prev) => { const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { shotCfg: n }); return n; });
+  const setTimeline = (v) => setTimelineRaw((prev) => { const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { timeline: n }); return n; });
+  const setSelectedClip = (v) => setSelectedClipRaw((prev) => { const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { selectedClip: n }); return n; });
+  const setExportJson = (v) => setExportJsonRaw((prev) => { const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { exportJson: n }); return n; });
+  const setExporting = (v) => setExportingRaw((prev) => { const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { exporting: n }); return n; });
+  const setRunState = (v) => setRunStateRaw((prev) => { const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { runState: n }); return n; });
+  const setRunId = (v) => setRunIdRaw((prev) => { const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { runId: n }); return n; });
+  const setApproval = (v) => setApprovalRaw((prev) => { const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { approval: n }); return n; });
+  const setTopology = (v) => setTopologyRaw((prev) => { const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { topology: n }); return n; });
+  const setTrace = (v) => setTraceRaw((prev) => { const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { trace: n }); return n; });
+  const setTraceEpisode = (v) => setTraceEpisodeRaw((prev) => { const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { traceEpisode: n }); return n; });
+  const setTraceTotal = (v) => setTraceTotalRaw((prev) => { const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { traceTotal: n }); return n; });
+  const setProject = (v) => setProjectRaw((prev) => { const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { project: n }); return n; });
+  const setNlText = (v) => setNlTextRaw((prev) => { const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { nlText: n }); return n; });
+  const setNlParsing = (v) => setNlParsingRaw((prev) => { const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { nlParsing: n }); return n; });
+  const setNlError = (v) => setNlErrorRaw((prev) => { const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { nlError: n }); return n; });
 
   async function handleSmartFill() {
     if (!nlText.trim() || nlParsing) return;
