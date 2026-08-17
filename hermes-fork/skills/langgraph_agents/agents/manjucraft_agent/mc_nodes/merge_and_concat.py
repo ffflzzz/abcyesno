@@ -37,12 +37,23 @@ async def merge_and_concat(state: AgentState) -> dict:
         total = len(shot_results)
         idx_list = ",".join(str(i) for i in skipped[:8]) if skipped else "(none)"
         more = "" if len(skipped) <= 8 else f" (+{len(skipped) - 8} more)"
+        upstream_errors = [
+            f"shot {r.get('index', -1)}: {r.get('error')}"
+            for r in shot_results
+            if r.get("error")
+        ][:8]
+        upstream_hint = (
+            "上游错误：" + "; ".join(upstream_errors) + "。"
+            if upstream_errors
+            else ""
+        )
         return {
             "final_video_path": None,
             "status": "merge_failed",
             "merge_error": (
                 f"全部 {total} 个 shot 都缺少视频，无法合成。缺失 shot index: [{idx_list}{more}]。"
-                "通常是因为上游 keyframe 生成失败后 batch_generate_video/fix_drift 静默跳过。"
+                f"{upstream_hint}"
+                "通常是因为上游 keyframe/视频生成失败，batch_generate_video/fix_drift 静默跳过。"
                 "请回到分镜 phase 单独重生成出问题的镜。"
             ),
             "missing_videos": len(skipped),

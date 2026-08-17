@@ -112,12 +112,30 @@ async function generateVideo(
 // ── Media download (for exporting real assets into a local Jianying draft) ──
 async function downloadMedia(url, destDir, name) {
   fs.mkdirSync(destDir, { recursive: true });
+  const m = url.match(/\.(mp4|png|jpe?g|webp|gif|mp3|wav|m4a)(?:\?|$)/i);
+  const ext = (m && m[1]) || 'bin';
+  const dest = path.join(destDir, `${name}.${ext}`);
+
+  // Local workspace files are passed through as paths; Node fetch cannot read
+  // file://, so copy directly.
+  const localPath = (() => {
+    if (/^file:\/\//i.test(url)) {
+      let fp = url.replace(/^file:\/\//i, '');
+      if (/^\/[A-Za-z]:/.test(fp)) fp = fp.slice(1);
+      return fp;
+    }
+    if (/^(https?:|data:)/i.test(url)) return null;
+    return url;
+  })();
+
+  if (localPath && fs.existsSync(localPath) && fs.statSync(localPath).isFile()) {
+    fs.copyFileSync(localPath, dest);
+    return dest;
+  }
+
   const res = await fetch(url);
   if (!res.ok) throw new Error(`DOWNLOAD HTTP ${res.status} for ${url}`);
   const buf = Buffer.from(await res.arrayBuffer());
-  const m = url.match(/\.(mp4|png|jpe?g|webp|gif)(?:\?|$)/i);
-  const ext = (m && m[1]) || 'bin';
-  const dest = path.join(destDir, `${name}.${ext}`);
   fs.writeFileSync(dest, buf);
   return dest;
 }

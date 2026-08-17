@@ -773,7 +773,7 @@ async def _run_graph_with_hitl(
     soft_err = (last_state or {}).get("merge_error") or (last_state or {}).get("error")
     soft_status = (last_state or {}).get("status")
     if soft_err and soft_status and "fail" in str(soft_status):
-        on_event("workflow.error", {"message": soft_err})
+        on_event("workflow.error", {"message": soft_err, "node": "merge_and_concat"})
         on_event(
             "workflow.done",
             {"status": "failed", "artifacts": _collect_artifacts(last_state)},

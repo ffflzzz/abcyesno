@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, ipcMain, shell, dialog, webContents, globalShortcut } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, shell, dialog, webContents, globalShortcut, protocol } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -42,6 +42,13 @@ const BROWSER_PW_MARKER =
   );
 const PW_CDP_PORT = parseInt(process.env.PW_CDP_PORT || '18922', 10) || 18922;
 app.commandLine.appendSwitch('remote-debugging-port', String(PW_CDP_PORT));
+
+// Register a privileged custom protocol so the renderer can load local
+// workspace media (images/videos) without direct file:// access. The scheme
+// must be registered before app ready.
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'abcyesno-local', privileges: { standard: true, secure: true, supportFetchAPI: true } },
+]);
 process.env.PW_CDP_URL = `http://127.0.0.1:${PW_CDP_PORT}`;
 process.env.PW_WEBVIEW_MARKER = BROWSER_PW_MARKER;
 
@@ -512,6 +519,22 @@ app.whenReady().then(async () => {
   // data directory, about, quit) now live inside the in-app Settings panel,
   // so the window chrome is just a clean title bar (no 文件/编辑/帮助 bar).
   Menu.setApplicationMenu(null);
+
+  // Custom file protocol for local workspace media. The renderer cannot load
+  // file:// subresources across directories, so we expose workspace files via
+  // abcyesno-local://<encoded-path>. Registered before the window is created
+  // so the first document can use it.
+  protocol.registerFileProtocol('abcyesno-local', (request, callback) => {
+    try {
+      let fp = decodeURIComponent(request.url.replace(/^abcyesno-local:\/\//, ''));
+      // Accept both C:/... and /C:/... encodings.
+      if (/^\/[A-Za-z]:\//.test(fp)) fp = fp.slice(1);
+      callback({ path: fp });
+    } catch (err) {
+      log('main', `abcyesno-local protocol error: ${err && err.message ? err.message : String(err)}`);
+      callback({ error: -2 }); // net::FAILED
+    }
+  });
 
   // Show the window immediately so the user sees a loading surface while
   // Hermes starts in the background. The frontend Bootstrap renders a

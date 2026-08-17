@@ -119,6 +119,33 @@ function eventType(ev) {
   return ev?.type || ev?.name || "";
 }
 
+// The renderer is sandboxed and cannot load file:// media across directories.
+// Backend artifacts come back as local filesystem paths. Convert those to the
+// privileged custom protocol; leave remote http/data URLs untouched.
+function isRemoteMediaUrl(src) {
+  if (!src || typeof src !== "string") return false;
+  return /^(https?:|data:|abcyesno-local:)/i.test(src);
+}
+
+function toLoadableSrc(src) {
+  if (!src || typeof src !== "string") return src;
+  if (isRemoteMediaUrl(src)) return src;
+  const normalized = src.replace(/\\/g, "/");
+  return `abcyesno-local://${encodeURIComponent(normalized)}`;
+}
+
+function originalPathOf(src) {
+  if (!src || typeof src !== "string") return src;
+  if (src.startsWith("abcyesno-local://")) {
+    try {
+      return decodeURIComponent(src.replace("abcyesno-local://", ""));
+    } catch (_) {
+      return src;
+    }
+  }
+  return src;
+}
+
 function phaseForStep(stepId) {
   if (!stepId) return "script";
   if (["parse_script", "plan_episodes"].includes(stepId)) return "script";
@@ -900,12 +927,18 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
           for (const k in next) if (next[k] === "running") next[k] = "error";
           return next;
         });
+        const errNode = ev.payload?.node;
         setTasks((prev) =>
-          prev.map((t) =>
-            t.status === "run"
-              ? { ...t, status: "err", error: errMsg, prog: 100 }
-              : t
-          )
+          prev.map((t) => {
+            if (t.status !== "run") return t;
+            // Attribute the error to the specific node when the backend tells us.
+            const matchesNode = errNode && t.step === errNode;
+            const isGeneric = !errNode;
+            if (matchesNode || isGeneric) {
+              return { ...t, status: "err", error: errMsg, prog: 100 };
+            }
+            return t;
+          })
         );
         // Stash the full error payload for the banner render in <TaskErrorBanner/>.
         // We keep it on the approval slot so it's cheap to read from a sibling
@@ -1024,9 +1057,10 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
   }, [runId]);
 
   function ingestArtifact(a) {
-    const { id, type, path, label, url, episode } = a;
-    const src = url || path;
-    if (!src) return;
+    const { id, type, path: aPath, label, url, episode } = a;
+    const rawSrc = url || aPath;
+    if (!rawSrc) return;
+    const src = toLoadableSrc(rawSrc);
 
     // Character reference images from the locked bible.
     if (type === "image" && (label || "").includes("角色")) {
@@ -1047,7 +1081,7 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
       const key = `${ep}-${idx + 1}`;
       setShotState((prev) => ({
         ...prev,
-        [key]: { ...(prev[key] || {}), status: "img", imgUrl: src, ep, n: idx + 1 },
+        [key]: { ...(prev[key] || {}), status: "img", imgUrl: src, imgPath: rawSrc, ep, n: idx + 1 },
       }));
       return;
     }
@@ -1060,7 +1094,7 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
       const key = `${ep}-${idx + 1}`;
       setShotState((prev) => ({
         ...prev,
-        [key]: { ...(prev[key] || {}), status: "done", videoUrl: src, ep, n: idx + 1 },
+        [key]: { ...(prev[key] || {}), status: "done", videoUrl: src, videoPath: rawSrc, ep, n: idx + 1 },
       }));
       return;
     }
@@ -1073,20 +1107,20 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
       const key = `${ep}-${idx + 1}`;
       setShotState((prev) => ({
         ...prev,
-        [key]: { ...(prev[key] || {}), audioUrl: src, ep, n: idx + 1 },
+        [key]: { ...(prev[key] || {}), audioUrl: src, audioPath: rawSrc, ep, n: idx + 1 },
       }));
       return;
     }
 
     // Final video.
     if (id === "final_video") {
-      setExportJson((prev) => ({ ...(prev || {}), finalVideo: src }));
+      setExportJson((prev) => ({ ...(prev || {}), finalVideo: src, finalVideoPath: rawSrc }));
       return;
     }
 
     // Jianying draft.
     if (id === "jianying_draft") {
-      setExportJson((prev) => ({ ...(prev || {}), draftPath: src }));
+      setExportJson((prev) => ({ ...(prev || {}), draftPath: src, draftPathRaw: rawSrc }));
     }
   }
 
@@ -1277,7 +1311,13 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
     const shotsPayload = timeline.map((k) => {
       const s = shots.find((x) => shotKey(x) === k);
       const st = shotState[k] || {};
-      return { key: k, ep: s?.ep, n: s?.n, videoUrl: st.videoUrl || null, imgUrl: st.imgUrl || null };
+      return {
+        key: k,
+        ep: s?.ep,
+        n: s?.n,
+        videoUrl: st.videoPath || st.videoUrl || null,
+        imgUrl: st.imgPath || st.imgUrl || null,
+      };
     });
     setExporting(true);
     const t = { id: Date.now() + Math.random(), name: "导出剪映工程（下载素材 + 生成草稿）", status: "run", prog: 0 };
