@@ -285,18 +285,49 @@ function StoryboardEditor({ shots, shotState, onGenShot, onGenVideo, onScriptCha
   );
 }
 
-function EditConsole({ timeline, shotCfg, shots, selectedClip, totalDur, onSelect, onReorder, onCfgChange, onDelete }) {
+function fmtTime(t) {
+  if (!t || t < 0) t = 0;
+  const m = Math.floor(t / 60);
+  const s = Math.floor(t % 60);
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+function EditConsole({ timeline, shotCfg, shots, shotState, selectedClip, totalDur, onSelect, onReorder, onCfgChange, onDelete }) {
   const trackRef = useRef(null);
+  const videoRef = useRef(null);
   const [dragKey, setDragKey] = useState(null);
+  const [zoom, setZoom] = useState(1);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [previewTime, setPreviewTime] = useState(0);
+  const [previewDur, setPreviewDur] = useState(0);
+
+  const PX = PX_PER_SEC * zoom;
   const byKey = useMemo(() => {
     const m = {};
     shots.forEach((s) => (m[shotKey(s)] = s));
     return m;
   }, [shots]);
 
+  // Cumulative start offsets so the playhead / seek / drop math share one source.
+  const layout = useMemo(() => {
+    let acc = 0;
+    const out = [];
+    for (const k of timeline) {
+      const dur = shotCfg[k]?.dur || 4;
+      out.push({ key: k, start: acc, dur });
+      acc += dur;
+    }
+    return out;
+  }, [timeline, shotCfg]);
+
   const total = Math.max(1, Math.ceil(totalDur));
+  const step = zoom < 0.75 ? 5 : zoom < 1.5 ? 2 : 1;
   const rulerTicks = [];
-  for (let s = 0; s <= total; s++) rulerTicks.push(s);
+  for (let s = 0; s <= total; s += step) rulerTicks.push(s);
+
+  const previewKey = selectedClip || timeline[0] || null;
+  const previewState = previewKey ? (shotState[previewKey] || {}) : {};
+  const previewShot = previewKey ? byKey[previewKey] : null;
 
   function handleDrop(e) {
     e.preventDefault();
@@ -306,11 +337,11 @@ function EditConsole({ timeline, shotCfg, shots, selectedClip, totalDur, onSelec
     const track = trackRef.current;
     if (!track) return;
     const rect = track.getBoundingClientRect();
-    const x = e.clientX - rect.left + track.scrollLeft - 100;
+    const x = e.clientX - rect.left + track.scrollLeft;
     let acc = 0;
     let toIdx = timeline.length;
     for (let i = 0; i < timeline.length; i++) {
-      const w = Math.max(30, (shotCfg[timeline[i]]?.dur || 4) * PX_PER_SEC);
+      const w = Math.max(34, (shotCfg[timeline[i]]?.dur || 4) * PX);
       if (x < acc + w / 2) {
         toIdx = i;
         break;
@@ -325,58 +356,146 @@ function EditConsole({ timeline, shotCfg, shots, selectedClip, totalDur, onSelec
     onReorder(next);
   }
 
+  // Click on empty track: seek (move playhead) and select the clip under cursor.
+  function handleTrackSeek(e) {
+    const track = trackRef.current;
+    if (!track) return;
+    const rect = track.getBoundingClientRect();
+    const x = e.clientX - rect.left + track.scrollLeft;
+    const t = Math.max(0, Math.min(totalDur, x / PX));
+    const hit = layout.find((l) => t >= l.start && t < l.start + l.dur);
+    if (hit) onSelect(hit.key);
+  }
+
+  function togglePlay() {
+    const v = videoRef.current;
+    if (!v) return;
+    if (v.paused) {
+      v.play();
+      setIsPlaying(true);
+    } else {
+      v.pause();
+      setIsPlaying(false);
+    }
+  }
+
+  function seekPreview(t) {
+    const v = videoRef.current;
+    if (!v) return;
+    const target = Math.max(0, Math.min(v.duration || 0, t));
+    v.currentTime = target;
+    setPreviewTime(target);
+  }
+
   if (!timeline.length) {
     return (
-      <div className="st-tl-wrap">
-        <div className="st-empty" style={{ padding: 20 }}>
-          先到「分镜」页生成镜头，这里会出现可拖拽编排的时间轴
+      <div className="st-edit">
+        <div className="st-empty" style={{ padding: 24 }}>
+          先到「分镜」页生成镜头，这里会出现可预览、可拖拽编排的时间轴
         </div>
       </div>
     );
   }
 
+  const selCfg = selectedClip ? (shotCfg[selectedClip] || { dur: 4, trans: "none", volume: 100 }) : null;
+
   return (
-    <div className="st-tl-wrap">
-      <div className="st-tl-ruler">
-        {rulerTicks.map((s) => (
-          <span key={s} className={`st-tick ${s % 5 === 0 ? "maj" : ""}`} style={{ left: 100 + s * PX_PER_SEC }}>
-            {s}s
-          </span>
-        ))}
-      </div>
-      <div style={{ position: "relative" }}>
-        <div className="st-track-labels">视频轨道</div>
-        <div className="st-tl-track" ref={trackRef} onDragOver={(e) => e.preventDefault()} onDrop={handleDrop}>
-          {timeline.map((k) => {
-            const s = byKey[k];
-            const c = shotCfg[k] || { dur: 4, trans: "none" };
-            const w = Math.max(30, c.dur * PX_PER_SEC);
-            return (
-              <div
-                key={k}
-                className={`st-clip ${selectedClip === k ? "sel" : ""} ${dragKey === k ? "dragging" : ""}`}
-                style={{ width: w }}
-                draggable
-                onDragStart={() => setDragKey(k)}
-                onDragEnd={() => setDragKey(null)}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onSelect(k);
-                }}
-              >
-                <span className="st-clabel">{s ? `第${s.ep}集·镜${s.n}` : k}</span>
-                <span className="st-cdur">{c.dur}s</span>
-              </div>
-            );
-          })}
+    <div className="st-edit">
+      {/* ── Preview pane ── */}
+      <div className="st-edit-preview">
+        <div className="st-edit-canvas">
+          {previewState.videoUrl ? (
+            <video
+              ref={videoRef}
+              src={previewState.videoUrl}
+              playsInline
+              onTimeUpdate={() => { const v = videoRef.current; if (v) setPreviewTime(v.currentTime); }}
+              onLoadedMetadata={() => { const v = videoRef.current; if (v) setPreviewDur(v.duration || 0); }}
+              onPlay={() => setIsPlaying(true)}
+              onPause={() => setIsPlaying(false)}
+            />
+          ) : previewState.imgUrl ? (
+            <img src={previewState.imgUrl} alt="预览" />
+          ) : (
+            <div className="st-edit-canvas-empty">点击时间轴上的镜头预览</div>
+          )}
+        </div>
+        <div className="st-edit-controls">
+          <button className="st-edit-btn" title="回到开头" onClick={() => seekPreview(0)}>⏮</button>
+          <button className="st-edit-btn st-edit-play" title="播放/暂停" onClick={togglePlay}>{isPlaying ? "⏸" : "▶"}</button>
+          <button className="st-edit-btn" title="跳到结尾" onClick={() => seekPreview(previewDur)}>⏭</button>
+          <span className="st-edit-time">{fmtTime(previewTime)} / {fmtTime(previewDur)}</span>
+          <input
+            className="st-edit-seek"
+            type="range"
+            min="0"
+            max={previewDur || 0}
+            step="0.1"
+            value={Math.min(previewTime, previewDur || 0)}
+            onChange={(e) => seekPreview(Number(e.target.value))}
+          />
+          <span className="st-edit-tag">{previewShot ? `第${previewShot.ep}集 · 镜${previewShot.n}` : "—"}</span>
         </div>
       </div>
 
-      {selectedClip && byKey[selectedClip] && (
+      {/* ── Toolbar ── */}
+      <div className="st-edit-toolbar">
+        <button className="st-edit-btn" onClick={togglePlay}>{isPlaying ? "⏸ 暂停" : "▶ 播放"}</button>
+        <span className="st-edit-spacer" />
+        <span className="st-edit-hint">缩放</span>
+        <button className="st-edit-btn" onClick={() => setZoom((z) => Math.max(0.5, z - 0.25))}>−</button>
+        <span className="st-edit-zoom-label">{Math.round(zoom * 100)}%</span>
+        <button className="st-edit-btn" onClick={() => setZoom((z) => Math.min(2, z + 0.25))}>＋</button>
+        <button className="st-edit-btn" onClick={() => setZoom(1)}>适配</button>
+        <span className="st-edit-spacer" />
+        <span className="st-edit-hint">总时长 {fmtTime(totalDur)}</span>
+      </div>
+
+      {/* ── Timeline ── */}
+      <div className="st-edit-timeline">
+        <div className="st-edit-track-scroll">
+          <div className="st-tl-ruler">
+            {rulerTicks.map((s) => (
+              <span key={s} className={`st-tick ${s % 5 === 0 ? "maj" : ""}`} style={{ left: s * PX }}>{s}s</span>
+            ))}
+          </div>
+          <div className="st-track-labels">视频轨道</div>
+          <div className="st-tl-track" ref={trackRef} onDragOver={(e) => e.preventDefault()} onDrop={handleDrop} onClick={handleTrackSeek}>
+            {layout.map((l) => {
+              const s = byKey[l.key];
+              const c = shotCfg[l.key] || { dur: 4, trans: "none" };
+              const st = shotState[l.key] || {};
+              const w = Math.max(34, l.dur * PX);
+              return (
+                <div
+                  key={l.key}
+                  className={`st-clip ${selectedClip === l.key ? "sel" : ""} ${dragKey === l.key ? "dragging" : ""}`}
+                  style={{ width: w }}
+                  draggable
+                  onDragStart={() => setDragKey(l.key)}
+                  onDragEnd={() => setDragKey(null)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onSelect(l.key);
+                  }}
+                >
+                  {st.imgUrl && <span className="st-clip-thumb" style={{ backgroundImage: `url(${st.imgUrl})` }} />}
+                  <span className="st-clabel">{s ? `第${s.ep}集·镜${s.n}` : l.key}</span>
+                  <span className="st-cdur">{c.dur}s</span>
+                  {c.trans && c.trans !== "none" && <span className="st-ctrans">{c.trans === "fade" ? "叠化" : c.trans}</span>}
+                </div>
+              );
+            })}
+          </div>
+          <div className="st-playhead" style={{ left: 98 + (layout.find((l) => l.key === previewKey)?.start || 0) * PX }} />
+        </div>
+      </div>
+
+      {/* ── Inspector ── */}
+      {selectedClip && byKey[selectedClip] && selCfg && (
         <div className="st-shot-detail active">
           <h4>
-            第{byKey[selectedClip].ep}集 · 镜{byKey[selectedClip].n} —{" "}
-            {byKey[selectedClip].script.slice(0, 24)}…
+            第{byKey[selectedClip].ep}集 · 镜{byKey[selectedClip].n} — {byKey[selectedClip].script.slice(0, 24)}…
           </h4>
           <div className="st-sd-row">
             <label>
@@ -385,24 +504,34 @@ function EditConsole({ timeline, shotCfg, shots, selectedClip, totalDur, onSelec
                 type="number"
                 min="1"
                 max="20"
-                defaultValue={shotCfg[selectedClip]?.dur || 4}
+                defaultValue={selCfg.dur}
                 onChange={(e) =>
-                  onCfgChange(selectedClip, {
-                    dur: Math.max(1, parseInt(e.target.value, 10) || 4),
-                  })
+                  onCfgChange(selectedClip, { dur: Math.max(1, parseInt(e.target.value, 10) || 4) })
                 }
               />
             </label>
             <label>
               转场
-              <select
-                defaultValue={shotCfg[selectedClip]?.trans || "none"}
-                onChange={(e) => onCfgChange(selectedClip, { trans: e.target.value })}
-              >
+              <select defaultValue={selCfg.trans} onChange={(e) => onCfgChange(selectedClip, { trans: e.target.value })}>
                 <option value="none">无</option>
+                <option value="fade">叠化</option>
                 <option value="fadein">淡入</option>
                 <option value="fadeout">淡出</option>
+                <option value="slide_left">左滑</option>
+                <option value="slide_right">右滑</option>
+                <option value="black">黑场</option>
               </select>
+            </label>
+            <label>
+              音量
+              <input
+                type="range"
+                min="0"
+                max="200"
+                defaultValue={selCfg.volume ?? 100}
+                onChange={(e) => onCfgChange(selectedClip, { volume: Number(e.target.value) })}
+              />
+              <span style={{ fontSize: 11, color: "var(--muted)" }}>{selCfg.volume ?? 100}%</span>
             </label>
             <label className="st-sd-del-wrap">
               <button
@@ -1544,6 +1673,7 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
                 timeline={timeline}
                 shotCfg={shotCfg}
                 shots={shots}
+                shotState={shotState}
                 selectedClip={selectedClip}
                 totalDur={totalDur}
                 onSelect={onSelect}

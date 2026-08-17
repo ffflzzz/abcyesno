@@ -354,3 +354,35 @@
   color: var(--muted, #8b949e);
   line-height: 1.5;
 }
+
+/* ── Edit console (preview + toolbar + timeline + inspector) ── */
+.st-edit { display: flex; flex-direction: column; gap: 10px; }
+.st-edit-preview { background: var(--panel, #161b22); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.st-edit-canvas { position: relative; width: 100%; height: 300px; background: #000; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.st-edit-canvas video, .st-edit-canvas img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.st-edit-canvas-empty { color: var(--muted); font-size: 13px; }
+.st-edit-controls { display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: #111620; border-top: 1px solid var(--border); }
+.st-edit-btn { background: transparent; border: 1px solid var(--border); color: var(--text); border-radius: 8px; min-width: 34px; height: 32px; padding: 0 10px; cursor: pointer; font-size: 14px; display: inline-flex; align-items: center; justify-content: center; transition: all .15s; }
+.st-edit-btn:hover { border-color: var(--accent); background: rgba(110,168,254,.08); }
+.st-edit-play { min-width: 40px; font-size: 16px; }
+.st-edit-time { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 88px; text-align: center; }
+.st-edit-seek { flex: 1; min-width: 120px; }
+.st-edit-tag { font-size: 12px; color: var(--muted); margin-left: auto; white-space: nowrap; }
+
+.st-edit-toolbar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--panel, #161b22); border: 1px solid var(--border); border-radius: 10px; }
+.st-edit-spacer { flex: 1; }
+.st-edit-hint { font-size: 11px; color: var(--muted); }
+.st-edit-zoom-label { font-size: 12px; color: var(--text); min-width: 40px; text-align: center; font-variant-numeric: tabular-nums; }
+
+.st-edit-timeline { background: var(--panel, #161b22); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.st-edit-track-scroll { position: relative; overflow-x: auto; }
+.st-edit-track-scroll .st-tl-ruler { margin-left: 98px; }
+.st-playhead { position: absolute; top: 28px; width: 2px; height: 64px; background: #ff5b5b; box-shadow: 0 0 8px rgba(255,91,91,.6); pointer-events: none; z-index: 2; }
+
+.st-clip-thumb { position: absolute; inset: 0; background-size: cover; background-position: center; opacity: .55; border-radius: 5px; pointer-events: none; }
+.st-clip .st-clabel { position: relative; z-index: 1; text-shadow: 0 1px 2px rgba(0,0,0,.8); }
+.st-clip .st-cdur { position: relative; z-index: 1; }
+.st-ctrans { position: absolute; bottom: 2px; right: 4px; font-size: 9px; color: #ffd166; background: rgba(0,0,0,.5); padding: 0 4px; border-radius: 3px; pointer-events: none; z-index: 1; }
+
+/* range input */
+input[type="range"].st-edit-seek, .st-sd-row input[type="range"] { accent-color: var(--accent, #6ea8fe); }
