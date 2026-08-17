@@ -48,6 +48,52 @@ function pickRandomPrompt() {
   return RANDOM_PROMPT_TEMPLATES[Math.floor(Math.random() * RANDOM_PROMPT_TEMPLATES.length)];
 }
 
+// Detect multi-episode intent directly from the user's free-text prompt. The
+// server LLM fallback (parsed.mode === 'series' ? 'series' : 'single') often
+// defaults to single even when the user clearly asks for a series ("帮我做
+// 一个 5 集的漫剧系列"), so we override that with our own keyword + episode
+// count parse from the original text. Returns { mode, eps } where each is
+// `null` when not detected — caller merges into project state.
+function detectEpisodeIntent(text) {
+  if (!text) return { mode: null, eps: null };
+  // Multi-episode indicators (Chinese + English).
+  const seriesKw = /(系列|连载|多集|连续剧|saga|多季|分季|三集|四集|五集|六集|七集|八集|九集|十集|若干集|很多集|集\s*数|episode)/i;
+  // More specific: "X 集" where X is a number (1-24), or "第N集".
+  const arabicMatch = text.match(/(\d{1,2})\s*集/);
+  const ordinalMatch = text.match(/第\s*([一二三四五六七八九十\d]{1,3})\s*集/);
+  // "想做几集"/"做几集" etc. → ambiguous, not series signal alone.
+  const looksLikeSeries = seriesKw.test(text) || !!arabicMatch || !!ordinalMatch;
+  if (!looksLikeSeries) return { mode: null, eps: null };
+  let eps = null;
+  if (arabicMatch) {
+    const n = parseInt(arabicMatch[1], 10);
+    if (n >= 2 && n <= 24) eps = n;
+  } else if (ordinalMatch) {
+    const n = chineseToInt(ordinalMatch[1]);
+    if (n >= 2 && n <= 24) eps = n;
+  }
+  return { mode: "series", eps };
+}
+
+function chineseToInt(s) {
+  const map = { 一: 1, 两: 2, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 };
+  if (map[s] !== undefined) return map[s];
+  // Handle "十二" etc. by adding 十 + ones.
+  if (/^\d+$/.test(s)) return parseInt(s, 10);
+  const tens = s.match(/^十([一二三四五六七八九]?)$/);
+  if (tens) {
+    const ones = tens[1];
+    return 10 + (map[ones] || 0);
+  }
+  const compound = s.match(/^([一二三四五六七八九])十([一二三四五六七八九]?)$/);
+  if (compound) {
+    const tens = map[compound[1]] || 1;
+    const ones = map[compound[2] || ""] || 0;
+    return tens * 10 + ones;
+  }
+  return NaN;
+}
+
 // Short-drama production studio workbench — unified video production front-end.
 //
 // This workbench is the single UI entry for the manjucraft_agent LangGraph
@@ -492,12 +538,20 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
       const fixedChars = Array.isArray(v.characters) && v.characters.length > 0
         ? v.characters.map((c) => `${c.name}=${c.prompt}`).join("\n")
         : "";
+      // Frontend overrides: detect multi-episode intent from the original text
+      // and let it win over the server LLM's `single` fallback. This is the
+      // single common failure mode — user types "做一个 5 集的漫剧系列" but
+      // LLM returns mode="single", wiping the user's clear intent.
+      const intent = detectEpisodeIntent(nlText);
+      const resolvedMode = intent.mode || (v.mode === "series" ? "series" : (v.mode === "single" ? "single" : p.mode));
+      const resolvedEps = intent.eps
+        || (Number(v.total_episodes) >= 2 && Number(v.total_episodes) <= 24 ? Number(v.total_episodes) : p.eps);
       setProject((p) => ({
         ...p,
         name: v.project_name || p.name,
         script: v.script || p.script,
-        mode: v.mode || p.mode,
-        eps: Number(v.total_episodes) > 0 ? Number(v.total_episodes) : p.eps,
+        mode: resolvedMode,
+        eps: resolvedMode === "series" ? resolvedEps : (resolvedMode === "single" ? 1 : p.eps),
         style: v.style || p.style,
         fixedChars: fixedChars || p.fixedChars,
       }));
