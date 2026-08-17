@@ -765,6 +765,19 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
         if (p.node) {
           setTrace((prev) => ({ ...prev, [p.node]: p.status }));
           if (typeof p.episode === "number") setTraceEpisode(p.episode);
+          // The Python runtime never sends a workflow.progress with
+          // status="done" — node completion is signalled only via
+          // workflow.trace { node, status: "done" }. Without syncing the
+          // tasks list here, the TaskCenter would leave every step stuck
+          // on "运行中" (status="run", prog capped at 95) even after the
+          // step finished, and the progress bar never reached 100%.
+          if (p.status === "done") {
+            setTasks((prev) =>
+              prev.map((t) =>
+                t.step === p.node ? { ...t, status: "ok", prog: 100 } : t
+              )
+            );
+          }
         }
         return;
       }
