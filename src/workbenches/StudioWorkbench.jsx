@@ -925,9 +925,13 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
   }
 
   // Build shot list and timeline from incoming artifacts.
+  // NOTE: episode is 0-indexed on the backend (Python `state.current_episode`
+  // starts at 0 and is bumped by `finalize_episode` AFTER the episode is
+  // rendered). Using `st.ep && st.n` would silently drop episode 0 (truthy
+  // check fails on 0). Check both fields are non-null finite numbers instead.
   const shots = useMemo(() => {
     const list = Object.entries(shotState)
-      .filter(([, st]) => st.ep && st.n)
+      .filter(([, st]) => Number.isFinite(st.ep) && Number.isFinite(st.n))
       .map(([key, st]) => ({ key, ep: st.ep, n: st.n, script: st.script || "", prompt: st.prompt || "", cam: "特写", model: "agnes-2.5-flash" }));
     list.sort((a, b) => (a.ep === b.ep ? a.n - b.n : a.ep - b.ep));
     return list;
