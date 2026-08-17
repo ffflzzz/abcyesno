@@ -752,6 +752,39 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
         return;
       }
 
+      if (type === "workflow.error") {
+        // Surface backend workflow errors (Python `langgraph_runtime` reports
+        // failures via on_event("workflow.error", ...); `useAgentStream`
+        // forwards it through the contract eventBus). Without this branch
+        // the workbench kept the runState stuck on "running" while the
+        // chat panel reported a generic "工作流运行出错" with no detail.
+        const errMsg = ev.payload?.message || ev.message || "工作流运行出错";
+        setRunState("error");
+        setApproval(null);
+        // Stop any active gate (don't let stale approval UI linger).
+        if (typeof ev.payload?.gate_id === "string") {
+          // Future: map gate_id to specific task to mark as failed.
+        }
+        // Mark the in-flight node as errored in the trace for the loop panel.
+        setTrace((prev) => {
+          const next = { ...prev };
+          for (const k in next) if (next[k] === "running") next[k] = "error";
+          return next;
+        });
+        setTasks((prev) =>
+          prev.map((t) =>
+            t.status === "run"
+              ? { ...t, status: "err", error: errMsg, prog: 100 }
+              : t
+          )
+        );
+        // Stash the full error payload for the banner render in <TaskErrorBanner/>.
+        // We keep it on the approval slot so it's cheap to read from a sibling
+        // component without lifting state into App.
+        setApproval({ id: "workflow-error", label: "工作流错误", message: errMsg, source: "workflow" });
+        return;
+      }
+
       if (type === "workflow.graph") {
         const p = ev.payload || {};
         setTopology({ nodes: p.nodes || [], edges: p.edges || [] });
@@ -1247,6 +1280,33 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
         />
 
         <div className="st-center">
+          {runState === "error" && (
+            <div className="st-card st-runerror">
+              <div className="st-section">
+                <div className="st-section-title st-runerror-title">
+                  ❌ 工作流运行出错
+                </div>
+                <div className="st-runerror-msg">
+                  {approval?.source === "workflow" ? approval.message : "请查看右侧任务中心或 chat 流的错误详情。"}
+                </div>
+                <div className="st-runerror-hint">
+                  常见原因：Agnes API 超时（生成图片/视频的服务等不到响应）、网络代理 127.0.0.1:7897 不通、key 过期、prompt 触发内容审核。
+                  可重试，或调整文案后重跑。
+                </div>
+                <div style={{ marginTop: 12 }}>
+                  <button
+                    className="st-primary"
+                    onClick={() => {
+                      setRunState("idle");
+                      setApproval(null);
+                    }}
+                  >
+                    我知道了
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
           {phase === "script" && (
             <div className="st-card st-form-card">
               <div className="st-section st-smart-input">
