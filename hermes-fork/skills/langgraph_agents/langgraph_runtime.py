@@ -765,7 +765,24 @@ async def _run_graph_with_hitl(
     if st is not None:
         last_state = st
     emit_artifacts(last_state, None)
-    on_event("workflow.done", {"status": "done", "artifacts": _collect_artifacts(last_state)})
+    # If a node soft-failed (e.g. merge_and_concat recorded `status:
+    # merge_failed` instead of raising so the workflow could finish and
+    # generate_jianying_draft could still emit a draft), surface it as a
+    # workflow.error event so the frontend run-error banner shows the actual
+    # reason instead of pretending success.
+    soft_err = (last_state or {}).get("merge_error") or (last_state or {}).get("error")
+    soft_status = (last_state or {}).get("status")
+    if soft_err and soft_status and "fail" in str(soft_status):
+        on_event("workflow.error", {"message": soft_err})
+        on_event(
+            "workflow.done",
+            {"status": "failed", "artifacts": _collect_artifacts(last_state)},
+        )
+    else:
+        on_event(
+            "workflow.done",
+            {"status": "done", "artifacts": _collect_artifacts(last_state)},
+        )
     return last_state
 
 
