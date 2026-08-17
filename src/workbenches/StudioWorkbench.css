@@ -80,10 +80,40 @@
 
 .st-row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 
-.st-form-actions { padding: 0 20px 20px; }
+.st-form-actions { padding: 0 20px 20px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .st-primary { background: linear-gradient(90deg, var(--accent, #6ea8fe), #a371f7); color: #06101f; border: none; padding: 12px 22px; border-radius: 10px; font-weight: 700; cursor: pointer; font-size: 14px; transition: filter .15s, transform .15s, box-shadow .15s; box-shadow: 0 4px 14px rgba(163,113,247,.20); }
 .st-primary:hover:not(:disabled) { filter: brightness(1.08); transform: translateY(-1px); box-shadow: 0 6px 18px rgba(163,113,247,.28); }
 .st-primary:disabled { opacity: .55; cursor: not-allowed; transform: none; box-shadow: none; }
+
+/* Ghost button — used by "🎲 随机生成" and "清空". Same height/typography
+   as .st-primary so the three sit on the same baseline, just with a neutral
+   surface so they don't compete with the primary call-to-action. */
+.st-secondary {
+  background: transparent;
+  color: var(--text, #e6edf3);
+  border: 1px solid var(--border, #2a313c);
+  padding: 11px 18px;
+  border-radius: 10px;
+  font-weight: 500;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1.2;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: background .15s, border-color .15s, color .15s, transform .15s;
+}
+.st-secondary:hover:not(:disabled) {
+  background: rgba(110,168,254,.08);
+  border-color: var(--accent, #6ea8fe);
+  color: var(--text);
+  transform: translateY(-1px);
+}
+.st-secondary:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+  transform: none;
+}
 .st-block { width: 100%; }
 .st-hint { color: var(--muted); font-size: 12px; margin-top: 10px; line-height: 1.5; }
 
