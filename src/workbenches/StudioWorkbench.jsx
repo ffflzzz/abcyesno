@@ -550,6 +550,7 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
         ...p,
         name: v.project_name || p.name,
         script: v.script || p.script,
+        seriesScript: v.series_script || p.seriesScript,
         mode: resolvedMode,
         eps: resolvedMode === "series" ? resolvedEps : (resolvedMode === "single" ? 1 : p.eps),
         style: v.style || p.style,

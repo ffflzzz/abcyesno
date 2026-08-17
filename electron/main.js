@@ -878,12 +878,18 @@ ipcMain.handle('parse-workflow-intent', async (_e, nlText, _manifestId) => {
 
 {
   "project_name": "string, 项目名（从描述推断或取首句关键词）",
-  "script": "string, 完整的漫剧脚本/剧情描述（保留用户原话的关键剧情，可适当润色）",
+  "script": "string, 单集（single mode）漫剧脚本/剧情描述（保留用户原话的关键剧情，可适当润色）",
+  "series_script": "string, 系列（series mode）整体大纲/剧情（覆盖多集走向、主要角色弧线、每集关键节拍）。single 模式下留空字符串。",
   "mode": "'single' 或 'series'",
   "total_episodes": "int, 多集时填整数，single 时填 1",
   "style": "'写实'/'二次元'/'3D' 之一",
   "characters": [{"name": "角色名", "prompt": "角色外观描述"}]
 }
+
+规则：
+- mode=series → series_script 必须填，覆盖整部剧情大纲（用户原文如果是粗描述，扩写为多集走向大纲；如果是详细脚本，原样保留）
+- mode=single → script 必须填；series_script 留空
+- 识别"多集/系列/X集/连载"关键词时倾向 series
 
 用户描述：${text}
 
@@ -915,6 +921,7 @@ ipcMain.handle('parse-workflow-intent', async (_e, nlText, _manifestId) => {
     const inputObj = {
       project_name: parsed.project_name || '',
       script: parsed.script || text,
+      series_script: typeof parsed.series_script === 'string' ? parsed.series_script : '',
       mode: parsed.mode === 'series' ? 'series' : 'single',
       total_episodes: Number(parsed.total_episodes) > 0 ? Math.min(24, Number(parsed.total_episodes)) : 1,
       style: ['写实', '二次元', '3D'].includes(parsed.style) ? parsed.style : '二次元',
