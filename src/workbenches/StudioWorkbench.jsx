@@ -1263,7 +1263,7 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
       setShotState((prev) => ({ ...prev, [k]: { ...st, status: "busy" } }));
       const j = await api("generate-video", {
         prompt: `${st.prompt || ""}，${project.style}风格，自然运动，电影级镜头`,
-        image: st.imgUrl || undefined,
+        image: st.imgPath || st.imgUrl || undefined,
         width: 1152,
         height: 768,
         num_frames: 81,

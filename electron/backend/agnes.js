@@ -26,6 +26,35 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+// Convert file:// / abcyesno-local:// / raw Windows paths to a normalised
+// local filesystem path that fs.* can consume.
+function toLocalPath(src) {
+  if (!src || typeof src !== 'string') return null;
+  let fp = src;
+  if (/^file:\/\//i.test(fp)) {
+    fp = fp.replace(/^file:\/\//i, '');
+    if (/^\/[A-Za-z]:/.test(fp)) fp = fp.slice(1);
+    return fp;
+  }
+  if (/^abcyesno-local:\/\//i.test(fp)) {
+    fp = decodeURIComponent(fp.replace(/^abcyesno-local:\/\//i, ''));
+    if (/^\/[A-Za-z]:/.test(fp)) fp = fp.slice(1);
+    return fp;
+  }
+  if (/^(https?:|data:)/i.test(fp)) return null;
+  return fp;
+}
+
+function fileToDataUri(src) {
+  const fp = toLocalPath(src);
+  if (!fp) throw new Error(`无法把 ${src.slice(0, 120)} 转为本地路径`);
+  if (!fs.existsSync(fp)) throw new Error(`文件不存在: ${fp}`);
+  const buf = fs.readFileSync(fp);
+  const ext = path.extname(fp).toLowerCase();
+  const mime = ext === '.png' ? 'image/png' : ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' : 'image/png';
+  return `data:${mime};base64,${buf.toString('base64')}`;
+}
+
 // ── Image 2.1 Flash ──────────────────────────────────────────────────────
 // POST {IMAGE_BASE}/images/generations
 //   body: { model, prompt, size, ratio, extra_body:{ response_format:"url" } }
@@ -65,6 +94,12 @@ async function generateVideo(
   const apiKey = key || readAgnesApiKey();
   if (!apiKey) throw new Error('AGNES_API_KEY 未配置');
   if (!prompt) throw new Error('prompt 必填');
+  // Agnes video API only accepts http(s) URLs or base64 image data. Convert
+  // local workspace paths / file:// / abcyesno-local:// before sending.
+  let resolvedImage = image;
+  if (resolvedImage && !/^https?:/i.test(resolvedImage) && !/^data:/i.test(resolvedImage)) {
+    resolvedImage = fileToDataUri(resolvedImage);
+  }
   const res = await fetch(`${IMAGE_BASE}/videos`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
@@ -75,7 +110,7 @@ async function generateVideo(
       height,
       num_frames,
       frame_rate,
-      ...(image ? { image } : {}),
+      ...(resolvedImage ? { image: resolvedImage } : {}),
     }),
   });
   const data = await res.json().catch(() => ({}));
@@ -117,16 +152,8 @@ async function downloadMedia(url, destDir, name) {
   const dest = path.join(destDir, `${name}.${ext}`);
 
   // Local workspace files are passed through as paths; Node fetch cannot read
-  // file://, so copy directly.
-  const localPath = (() => {
-    if (/^file:\/\//i.test(url)) {
-      let fp = url.replace(/^file:\/\//i, '');
-      if (/^\/[A-Za-z]:/.test(fp)) fp = fp.slice(1);
-      return fp;
-    }
-    if (/^(https?:|data:)/i.test(url)) return null;
-    return url;
-  })();
+  // file:// or abcyesno-local://, so copy directly.
+  const localPath = toLocalPath(url);
 
   if (localPath && fs.existsSync(localPath) && fs.statSync(localPath).isFile()) {
     fs.copyFileSync(localPath, dest);
