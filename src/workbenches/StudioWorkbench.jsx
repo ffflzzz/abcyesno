@@ -543,19 +543,30 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
       // single common failure mode — user types "做一个 5 集的漫剧系列" but
       // LLM returns mode="single", wiping the user's clear intent.
       const intent = detectEpisodeIntent(nlText);
-      const resolvedMode = intent.mode || (v.mode === "series" ? "series" : (v.mode === "single" ? "single" : p.mode));
-      const resolvedEps = intent.eps
-        || (Number(v.total_episodes) >= 2 && Number(v.total_episodes) <= 24 ? Number(v.total_episodes) : p.eps);
-      setProject((p) => ({
-        ...p,
-        name: v.project_name || p.name,
-        script: v.script || p.script,
-        seriesScript: v.series_script || p.seriesScript,
-        mode: resolvedMode,
-        eps: resolvedMode === "series" ? resolvedEps : (resolvedMode === "single" ? 1 : p.eps),
-        style: v.style || p.style,
-        fixedChars: fixedChars || p.fixedChars,
-      }));
+      // NB: resolvedMode/resolvedEps MUST be computed inside the setProject
+      // updater so we close over `prev` (the real current project state) and
+      // not over a free `p` that doesn't exist in this scope — that bug
+      // crashed every smart-fill attempt with "p is not defined". The
+      // detectEpisodeIntent call itself is pure (only reads nlText), so it's
+      // safe to hoist outside the updater.
+      setProject((prev) => {
+        const resolvedMode = intent.mode
+          || (v.mode === "series" ? "series"
+              : (v.mode === "single" ? "single" : prev.mode));
+        const llmEps = Number(v.total_episodes);
+        const resolvedEps = intent.eps
+          || (Number.isFinite(llmEps) && llmEps >= 2 && llmEps <= 24 ? llmEps : prev.eps);
+        return {
+          ...prev,
+          name: v.project_name || prev.name,
+          script: v.script || prev.script,
+          seriesScript: v.series_script || prev.seriesScript,
+          mode: resolvedMode,
+          eps: resolvedMode === "series" ? resolvedEps : (resolvedMode === "single" ? 1 : prev.eps),
+          style: v.style || prev.style,
+          fixedChars: fixedChars || prev.fixedChars,
+        };
+      });
       setNlText("");
     } catch (e) {
       setNlError("解析失败：" + (e?.message || String(e)));
