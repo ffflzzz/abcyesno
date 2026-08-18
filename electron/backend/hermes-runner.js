@@ -331,10 +331,17 @@ class HermesRunner {
 
   async _waitForReady() {
     const start = Date.now();
-    while (Date.now() - start < MAX_WAIT_MS) {
-      // If the backend process died on its own, don't keep polling — surface
-      // the crash immediately (with the exit code) instead of waiting out the
-      // full timeout on a corpse.
+    // Wait as long as the backend process is ALIVE. A freshly-unpacked build
+    // can take 100s+ on the first launch while Windows Defender scans the
+    // 70k-file venv; that is NOT a failure — we must keep polling until the
+    // process actually answers /api/status. Only a genuine crash (process
+    // exited) is a real error and is surfaced immediately.
+    // SAFETY_MS is an absolute ceiling that only catches a true hang where the
+    // process is alive but never becomes ready (e.g. deadlock) — it should
+    // essentially never be hit in normal operation.
+    const SAFETY_MS = 600000;
+    while (true) {
+      // A crashed backend is a real failure — surface it immediately.
       if (this._exitCode !== null) {
         throw new Error(`Hermes backend process exited early (code ${this._exitCode}) before becoming ready`);
       }
@@ -350,9 +357,11 @@ class HermesRunner {
         req.on('timeout', () => { req.destroy(); resolve(false); });
       });
       if (ok) return;
+      if (Date.now() - start > SAFETY_MS) {
+        throw new Error(`Hermes backend did not become ready on port ${this.port} within ${SAFETY_MS}ms (process still alive — possible deadlock)`);
+      }
       await new Promise((r) => setTimeout(r, POLL_MS));
     }
-    throw new Error(`Hermes backend did not become ready on port ${this.port} within ${MAX_WAIT_MS}ms`);
   }
 
   async start() {
