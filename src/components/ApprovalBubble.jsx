@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import Icon from "./Icon.jsx";
+import { toLoadableSrc } from "../utils/mediaSrc.js";
 
 function formatValue(value) {
   if (value === undefined || value === null) return "";
@@ -109,20 +110,14 @@ export default function ApprovalBubble({ approval, onRespond, toolMessages = [] 
     }
   }
 
-  // Convert local file paths to file:// URLs so <img> can render them
+  // Convert local file paths to abcyesno-local:// URLs so the sandboxed
+  // renderer can display them (file:// cross-directory is blocked).
   function toImageUrl(a) {
-    if (a.url) return a.url;
-    if (a.src && (a.src.startsWith("http") || a.src.startsWith("data:") || a.src.startsWith("file:"))) return a.src;
-    const p = a.path || a.src || "";
+    if (a.url) return toLoadableSrc(a.url);
+    if (a.src) return toLoadableSrc(a.src);
+    const p = a.path || "";
     if (!p) return null;
-    // Already a URL or data URI
-    if (/^(https?:|data:|file:)/i.test(p)) return p;
-    // Local filesystem path → file:// URL (normalize backslashes)
-    const normalized = p.replace(/\\/g, "/");
-    if (/^[A-Za-z]:/.test(normalized)) {
-      return "file:///" + normalized;
-    }
-    return "file://" + normalized;
+    return toLoadableSrc(p);
   }
 
   // Image-type artifacts for inline preview

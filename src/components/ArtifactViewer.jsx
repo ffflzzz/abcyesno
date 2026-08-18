@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { toLoadableSrc } from "../utils/mediaSrc.js";
 
 // ArtifactViewer — §4.3 type dispatcher for the ResultPanel.
 // Renders a single contract artifact by type. Read-only previews only
@@ -13,7 +14,7 @@ import remarkGfm from "remark-gfm";
 function srcFor(artifact) {
   const p = artifact || {};
   if (p.source === "url") return p.url;
-  if (p.path) return "file://" + p.path.replace(/\\/g, "/");
+  if (p.path) return toLoadableSrc(p.path);
   return p.inline || null;
 }
 

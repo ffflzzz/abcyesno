@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from "react";
+import { toLoadableSrc } from "../utils/mediaSrc.js";
 
 /**
  * ArtifactPreview — 实时产物预览
@@ -22,17 +23,10 @@ function looksLikeImageUrl(str) {
   return false;
 }
 
-/** 把本地文件路径转为可渲染 URL */
+/** 把本地文件路径转为可渲染 URL（沙箱 renderer 用 abcyesno-local:// 而非 file://） */
 function normalizeImageUrl(str) {
   if (!str) return null;
-  const trimmed = str.trim();
-  if (/^data:image\//i.test(trimmed)) return trimmed;
-  if (/^https?:\/\//i.test(trimmed)) return trimmed;
-  // Windows / Unix absolute path → file://
-  if (/^[A-Za-z]:\\/.test(trimmed) || /^\//.test(trimmed)) {
-    return "file://" + trimmed.replace(/\\/g, "/");
-  }
-  return trimmed;
+  return toLoadableSrc(str.trim());
 }
 
 /** 递归从任意 result 结构中提取所有图片 URL */

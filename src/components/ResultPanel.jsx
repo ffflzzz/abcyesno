@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import Icon from "./Icon.jsx";
+import { toLoadableSrc } from "../utils/mediaSrc.js";
 import { useContractEvents } from "../hooks/useContractEvents.js";
 import { getManifest } from "../contract/registry.js";
 import { getWorkbench } from "../workbenches/registry.js";
@@ -32,7 +33,7 @@ const TEXT_EXTS = new Set([
 function artifactSrc(a) {
   if (!a) return null;
   if (a.source === "url") return a.url;
-  if (a.path) return "file://" + a.path.replace(/\\/g, "/");
+  if (a.path) return toLoadableSrc(a.path);
   return a.inline || null;
 }
 
@@ -67,11 +68,7 @@ function collectToolArtifacts(messages) {
   }
   function normalizeImageUrl(str) {
     if (!str) return null;
-    const t = str.trim();
-    if (/^data:image\//i.test(t)) return t;
-    if (/^https?:\/\//i.test(t)) return t;
-    if (/^[A-Za-z]:\\/.test(t) || /^\//.test(t)) return "file://" + t.replace(/\\/g, "/");
-    return t;
+    return toLoadableSrc(str.trim());
   }
   function extractImages(value, found) {
     if (typeof value === "string") {

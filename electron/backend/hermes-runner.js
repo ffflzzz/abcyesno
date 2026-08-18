@@ -12,7 +12,13 @@ const HERMES_PYTHON = path.join(HERMES_VENV, 'Scripts', 'python.exe');
 const HERMES_EXE = path.join(HERMES_VENV, 'Scripts', 'hermes.exe');
 const PORT = 9120;
 const HOST = '127.0.0.1';
-const MAX_WAIT_MS = 120000;
+// Cold first launch of a freshly-unpacked build triggers a full Windows
+// Defender real-time scan of the bundled Python venv (~70k .py/.dll/.pyc
+// files) + an Agnes connection-retry window, which can push backend startup
+// past 110s. 120s was too tight and caused a false "backend 有问题" failure.
+// Bump to 300s and, more importantly, bail early only on a real crash (the
+// process exited), not on a slow-but-alive startup.
+const MAX_WAIT_MS = 300000;
 const POLL_MS = 600;
 
 class HermesRunner {
@@ -24,6 +30,7 @@ class HermesRunner {
     this.sessionToken = crypto.randomBytes(32).toString('base64url');
     this.hermesHome = '';
     this.apiKey = '';
+    this._exitCode = null; // set by the 'exit' handler; signals a crash during startup
     this._computePaths();
   }
 
@@ -325,6 +332,15 @@ class HermesRunner {
   async _waitForReady() {
     const start = Date.now();
     while (Date.now() - start < MAX_WAIT_MS) {
+      // If the backend process died on its own, don't keep polling — surface
+      // the crash immediately (with the exit code) instead of waiting out the
+      // full timeout on a corpse.
+      if (this._exitCode !== null) {
+        throw new Error(`Hermes backend process exited early (code ${this._exitCode}) before becoming ready`);
+      }
+      if (this.process === null) {
+        throw new Error('Hermes backend process is no longer running before becoming ready');
+      }
       const ok = await new Promise((resolve) => {
         const req = http.get(this._statusUrl(), { timeout: 2500 }, (res) => {
           resolve(res.statusCode === 200);
@@ -488,6 +504,7 @@ class HermesRunner {
     });
     this.process.on('exit', (code) => {
       log('hermes-runner', `Hermes process exited with code ${code}`);
+      this._exitCode = code;
       if (hermesLogStream) {
         try { hermesLogStream.end(); } catch (_) {}
       }

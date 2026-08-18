@@ -29,13 +29,19 @@
           ]
         },
         {
-          "target": "portable",
+          "target": "nsis",
           "arch": [
             "x64"
           ]
         }
       ],
       "verifyUpdateCodeSignature": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "Abcyesno-Setup-${version}.${ext}"
     },
     "asarUnpack": [],
     "asar": false,

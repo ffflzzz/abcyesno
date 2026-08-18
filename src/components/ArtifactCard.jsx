@@ -1,15 +1,18 @@
 import React from "react";
 import Icon from "./Icon.jsx";
 import { useResolvedArtifacts, localPathOf } from "../contract/useResolvedArtifacts.js";
+import { toLoadableSrc } from "../utils/mediaSrc.js";
 
 // Generic artifact renderer (L3). Switches on artifact.type only - no
 // per-workflow branch. Local paths are resolved to data URLs via the main
 // process (readLocalImage IPC) so the sandboxed renderer can display images
 // written by the LangGraph workflow - the renderer cannot load file:// directly.
+// The IPC data-URL path handles images; for video (too large for base64) we
+// fall back to abcyesno-local:// which the sandboxed renderer can stream.
 function fileUrlFor(artifact) {
   const p = artifact || {};
   if (p.source === "url") return p.url;
-  if (p.path) return "file://" + p.path.replace(/\\/g, "/");
+  if (p.path) return toLoadableSrc(p.path);
   return p.inline || "";
 }
 
