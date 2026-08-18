@@ -248,9 +248,18 @@ function StoryboardEditor({ shots, shotState, onGenShot, onGenVideo, onScriptCha
   return (
     <div className="st-center-inner">
       <div className="st-sb-head">
-        <div>剧本文本（可编辑）</div>
-        <div>拍摄法 + 模型参数</div>
-        <div>视频预览 + 生成</div>
+        <div>
+          <div>剧本文本（可编辑）</div>
+          <div className="st-col-hint">分镜叙事，可改写。留空则沿用工作流解析结果</div>
+        </div>
+        <div>
+          <div>拍摄法 + 模型参数</div>
+          <div className="st-col-hint">改完立即用于「生成此镜 / 生成视频」</div>
+        </div>
+        <div>
+          <div>视频预览 + 生成</div>
+          <div className="st-col-hint">点击按钮调用本地模型生成</div>
+        </div>
       </div>
       {shots.map((s) => {
         const k = shotKey(s);
@@ -259,22 +268,32 @@ function StoryboardEditor({ shots, shotState, onGenShot, onGenVideo, onScriptCha
           <div className="st-shot" key={k}>
             <div className="st-shot-col">
               <div className="st-ep-tag">第{s.ep}集 · 镜{s.n}</div>
-              <textarea defaultValue={st.script || s.script || ""} onChange={(e) => onScriptChange(k, e.target.value)} />
+              <textarea
+                defaultValue={st.script || s.script || ""}
+                placeholder="分镜叙事文本。可改写该镜的台词/画面描述，留空则沿用工作流解析结果"
+                onChange={(e) => onScriptChange(k, e.target.value)}
+              />
             </div>
             <div className="st-shot-col">
               <textarea
                 defaultValue={st.prompt || s.prompt || ""}
-                placeholder="拍摄法 / 提示词"
+                placeholder="改写该镜生图/生视频提示词，留空则由系统按风格自动生成"
                 onChange={(e) => onScriptChange(k, e.target.value, "prompt")}
               />
               <div className="st-row2">
-                <select defaultValue={st.cam || s.cam || "特写"}>
+                <select
+                  defaultValue={st.cam || s.cam || "特写"}
+                  title="镜头景别（拍摄法）：决定该镜画面的构图远近。特写=人物/物体细节；中景=半身到全身；全景=环境全貌；俯拍=从上方俯视。"
+                >
                   <option>特写</option>
                   <option>中景</option>
                   <option>全景</option>
                   <option>俯拍</option>
                 </select>
-                <select defaultValue={st.model || s.model || "agnes-2.5-flash"}>
+                <select
+                  defaultValue={st.model || s.model || "agnes-2.5-flash"}
+                  title="生图模型：agnes-2.5-flash=快速出图（默认）；agnes-2.5-pro=更高质量但更慢。"
+                >
                   <option>agnes-2.5-flash</option>
                   <option>agnes-2.5-pro</option>
                 </select>

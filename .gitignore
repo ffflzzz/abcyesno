@@ -7,6 +7,11 @@ build/dist/
 # via `playwright install chromium` → copied into build/playwright-browsers).
 # Never commit these ~700MB binaries.
 build/playwright-browsers/
+# Portable Python bundled for venv portability (copied from the managed runtime
+# into build/runtime/python by scripts/bundle-python.mjs; ~350MB). The venv's
+# pyvenv.cfg is rewritten at runtime to point here, so the app runs on machines
+# without the dev machine's Python path. Never commit.
+build/runtime/python/
 
 # --- python ---
 hermes-fork/.venv/

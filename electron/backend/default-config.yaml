@@ -32,9 +32,11 @@ agent:
   image_input_mode: native
 toolsets:
   - hermes-cli
-# Network: optional proxy for reaching apihub.agnes-ai.com. Some networks DNS-
-# poison that domain (direct lookup returns a fake IP), so a proxy that resolves
-# DNS via its own tunnel is required there. On a clean network, delete this block
-# and the backend connects directly with no proxy.
+# Network: optional proxy for reaching apihub.agnes-ai.com.
+#
+# 默认直连（留空）。Agnes 本身不强制代理；仅在 DNS 被污染的网络才需要填代理。
+# 这里故意留空，避免把本机开发机的代理地址写死、随分发传染到新机器导致出站失败。
+# 需要代理时，把下行取消注释并填真实地址：
+#   proxy_url: http://127.0.0.1:7897/
 network:
-  proxy_url: http://127.0.0.1:7897/
+  proxy_url: ""

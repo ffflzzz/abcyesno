@@ -34,7 +34,8 @@
     "asarUnpack": [],
     "asar": false,
     "extraResources": [
-      { "from": "build/playwright-browsers", "to": "playwright-browsers" }
+      { "from": "build/playwright-browsers", "to": "playwright-browsers" },
+      { "from": "build/runtime/python", "to": "runtime/python" }
     ],
     "files": [
       "dist/**/*",

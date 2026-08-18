@@ -116,6 +116,118 @@ class HermesRunner {
     return updated;
   }
 
+  // ── Portable Python: strip machine-specific absolute paths ──────────────
+  // The venv was built on the dev machine, so two things are baked with
+  // absolute paths that DON'T exist on a fresh target machine:
+  //   1. pyvenv.cfg `home` / `executable` → the dev Python
+  //      (C:\Users\Administrator\.workbuddy\...). The venv launcher can't
+  //      find its base interpreter → Hermes never starts (port 9120 error).
+  //   2. hermes_agent is `pip install -e`'d, so the generated
+  //      __editable__*_finder.py hardcodes the dev source dir. Imports fail.
+  // Both are rewritten at first run to point at (a) the portable Python we
+  // bundle inside the app and (b) the app's actual hermes-fork location.
+  // Idempotent + safe to run on every cold start.
+  _resolveBasePython() {
+    const candidates = [
+      // 1) Portable Python shipped with the app (resources/runtime/python).
+      path.join(process.resourcesPath || '', 'runtime', 'python', 'python.exe'),
+      // 2) The base Python the venv currently records (works on the build
+      //    machine / any machine that happens to have that path).
+      (() => {
+        try {
+          const cfg = fs.readFileSync(path.join(HERMES_VENV, 'pyvenv.cfg'), 'utf-8');
+          const m = cfg.match(/^\s*home\s*=\s*(.+?)\s*$/m);
+          const home = m ? m[1].trim() : '';
+          const exe = path.join(home, 'python.exe');
+          return fs.existsSync(exe) ? exe : '';
+        } catch (_) {
+          return '';
+        }
+      })(),
+      // 3) System Python on PATH (last resort).
+      'python.exe',
+    ];
+    for (const c of candidates) {
+      if (c && fs.existsSync(c)) return c;
+    }
+    return '';
+  }
+
+  _longestCommonPrefix(strs) {
+    if (!strs.length) return '';
+    let prefix = strs[0];
+    for (const s of strs) {
+      let i = 0;
+      const max = Math.min(prefix.length, s.length);
+      while (i < max && prefix[i] === s[i]) i++;
+      prefix = prefix.slice(0, i);
+      if (!prefix) break;
+    }
+    // Trim trailing separators so the prefix is a clean directory name and the
+    // remaining suffix keeps its own leading separator (avoids a missing or
+    // doubled separator in the replacement result).
+    while (prefix.length && /[\\/]/.test(prefix[prefix.length - 1])) prefix = prefix.slice(0, -1);
+    return prefix;
+  }
+
+  _portablizeVenv() {
+    // (1) pyvenv.cfg → point at the resolved base Python.
+    const baseExe = this._resolveBasePython();
+    const cfgPath = path.join(HERMES_VENV, 'pyvenv.cfg');
+    if (baseExe && fs.existsSync(cfgPath)) {
+      try {
+        const baseDir = path.dirname(baseExe);
+        let txt = fs.readFileSync(cfgPath, 'utf-8');
+        const wantHome = `home = ${baseDir}`;
+        const wantExe = `executable = ${baseExe}`;
+        let changed = false;
+        txt = txt.replace(/^home\s*=\s*.+$/m, (line) => {
+          if (line.trim() !== wantHome) { changed = true; return wantHome; }
+          return line;
+        });
+        txt = txt.replace(/^executable\s*=\s*.+$/m, (line) => {
+          if (line.trim() !== wantExe) { changed = true; return wantExe; }
+          return line;
+        });
+        if (changed) {
+          fs.writeFileSync(cfgPath, txt, 'utf-8');
+          log('hermes-runner', `portablized venv: home -> ${baseDir}`);
+        }
+      } catch (err) {
+        log('hermes-runner', `failed to rewrite pyvenv.cfg: ${err.message}`);
+      }
+    }
+
+    // (2) editable-install finder → rewrite absolute source prefix to HERMES_FORK.
+    const sp = path.join(HERMES_VENV, 'Lib', 'site-packages');
+    if (!fs.existsSync(sp)) return;
+    const finderFiles = fs.readdirSync(sp).filter((f) => f.startsWith('__editable__') && f.endsWith('_finder.py'));
+    // The finder .py stores paths with escaped backslashes (Python string
+    // literals), whereas HERMES_FORK (from path.join) uses single backslashes.
+    // Match the escaped form so the replacement keeps a consistent separator
+    // style in the generated file.
+    const HERMES_FORK_ESCAPED = HERMES_FORK.replace(/\\/g, '\\\\');
+    for (const f of finderFiles) {
+      const fp = path.join(sp, f);
+      try {
+        let txt = fs.readFileSync(fp, 'utf-8');
+        const paths = [...txt.matchAll(/'([^']+)'/g)].map((m) => m[1]).filter((p) => /^[A-Za-z]:[\\/]/.test(p));
+        if (!paths.length) continue;
+        const prefix = this._longestCommonPrefix(paths);
+        // Only rewrite when the shared root is our hermes-fork source tree — a
+        // stray path on another drive would yield a tiny prefix we must not use.
+        if (!prefix || !/hermes-fork$/i.test(prefix) || prefix === HERMES_FORK_ESCAPED) continue;
+        if (txt.includes(prefix)) {
+          txt = txt.split(prefix).join(HERMES_FORK_ESCAPED);
+          fs.writeFileSync(fp, txt, 'utf-8');
+          log('hermes-runner', `portablized editable finder ${f}: ${prefix} -> ${HERMES_FORK_ESCAPED}`);
+        }
+      } catch (err) {
+        log('hermes-runner', `failed to rewrite ${f}: ${err.message}`);
+      }
+    }
+  }
+
   _updateConfigApiKey(key) {
     const configFile = this._configFile();
     let text = '';
@@ -239,6 +351,9 @@ class HermesRunner {
 
   async _doStart() {
     if (this.process) return;
+    // Neutralize machine-specific absolute paths in the venv + editable
+    // install BEFORE we try to launch Python (new-machine portability).
+    this._portablizeVenv();
     this.port = await this._findAvailablePort();
     if (this.port !== PORT) {
       log('hermes-runner', `port ${PORT} busy, using ${this.port}`);
@@ -319,8 +434,12 @@ class HermesRunner {
     let proxyFromConfig = '';
     try {
       const cfgText = fs.readFileSync(path.join(this.hermesHome, 'config.yaml'), 'utf-8');
-      const m = cfgText.match(/^\s*proxy_url:\s*(\S+)\s*$/m);
-      if (m) proxyFromConfig = m[1];
+      const m = cfgText.match(/^\s*proxy_url:\s*(.+?)\s*$/m);
+      if (m) {
+        const v = m[1].trim().replace(/^["']|["']$/g, '');
+        // Empty / "direct" / unset → no proxy. Only a real http(s):// URL is used.
+        if (v && v !== 'direct' && /^https?:\/\//i.test(v)) proxyFromConfig = v;
+      }
     } catch (_) {}
     const proxyUrl = proxyEnv || proxyFromConfig;
     if (proxyUrl) {
