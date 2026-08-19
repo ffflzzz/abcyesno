@@ -21,15 +21,31 @@ export function isRemoteMediaUrl(src) {
 export function toLoadableSrc(src) {
   if (!src || typeof src !== 'string') return src;
   if (isRemoteMediaUrl(src)) return src;
-  const normalized = src.replace(/\\/g, '/');
-  return `abcyesno-local://${encodeURIComponent(normalized)}`;
+  // Normalize: backslashes → forward slashes, drop the colon after the drive
+  // letter (e.g. "C:\Users\foo" → "C/Users/foo"). The colon MUST be stripped —
+  // if we encodeURIComponent it as %3A, Chromium's URL parser decodes it back
+  // to ":" and treats it as the authority/path separator, mangling the URL
+  // (`abcyesno-local://c/Users/...` → handler sees no drive). Keep the rest
+  // encoded so non-ASCII (Chinese filenames) survives.
+  const normalized = src.replace(/\\/g, '/').replace(/^([A-Za-z]):/, '$1');
+  // Encode each path segment so that spaces / Chinese / `#?%&` survive, but
+  // leave the drive letter (`C`) untouched.
+  const segments = normalized.split('/').map((seg, i) => (i === 0 ? seg : encodeURIComponent(seg))).join('/');
+  return `abcyesno-local:///${segments}`;
 }
 
 export function originalPathOf(src) {
   if (!src || typeof src !== 'string') return src;
   if (src.startsWith('abcyesno-local://')) {
     try {
-      return decodeURIComponent(src.replace('abcyesno-local://', ''));
+      // Strip both 2- and 3-slash prefixes uniformly.
+      let body = src.replace(/^abcyesno-local:\/+\/?/, '');
+      // Restore the drive-letter colon ("C/foo" → "C:/foo").
+      body = body.replace(/^([A-Za-z])\//, '$1:/');
+      // Decode the remaining encoded path segments (skip drive letter).
+      const parts = body.split('/');
+      const decoded = parts.map((seg, i) => (i === 0 ? seg : decodeURIComponent(seg))).join('/');
+      return decoded;
     } catch (_) {
       return src;
     }

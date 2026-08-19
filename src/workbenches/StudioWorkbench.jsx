@@ -130,15 +130,23 @@ function isRemoteMediaUrl(src) {
 function toLoadableSrc(src) {
   if (!src || typeof src !== "string") return src;
   if (isRemoteMediaUrl(src)) return src;
-  const normalized = src.replace(/\\/g, "/");
-  return `abcyesno-local://${encodeURIComponent(normalized)}`;
+  // Strip drive-letter colon (so Chromium's URL parser doesn't see `:` and
+  // chop it as the authority separator). Keep the rest of the segments
+  // encoded for non-ASCII filenames. See src/utils/mediaSrc.js for the
+  // canonical implementation + rationale.
+  const normalized = src.replace(/\\/g, "/").replace(/^([A-Za-z]):/, "$1");
+  const segments = normalized.split("/").map((seg, i) => (i === 0 ? seg : encodeURIComponent(seg))).join("/");
+  return `abcyesno-local:///${segments}`;
 }
 
 function originalPathOf(src) {
   if (!src || typeof src !== "string") return src;
   if (src.startsWith("abcyesno-local://")) {
     try {
-      return decodeURIComponent(src.replace("abcyesno-local://", ""));
+      let body = src.replace(/^abcyesno-local:\/+\/?/, "");
+      body = body.replace(/^([A-Za-z])\//, "$1:/");
+      const parts = body.split("/");
+      return parts.map((seg, i) => (i === 0 ? seg : decodeURIComponent(seg))).join("/");
     } catch (_) {
       return src;
     }

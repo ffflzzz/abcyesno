@@ -47,7 +47,7 @@ app.commandLine.appendSwitch('remote-debugging-port', String(PW_CDP_PORT));
 // workspace media (images/videos) without direct file:// access. The scheme
 // must be registered before app ready.
 protocol.registerSchemesAsPrivileged([
-  { scheme: 'abcyesno-local', privileges: { standard: true, secure: true, supportFetchAPI: true } },
+  { scheme: 'abcyesno-local', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, bypassCSP: true } },
 ]);
 process.env.PW_CDP_URL = `http://127.0.0.1:${PW_CDP_PORT}`;
 process.env.PW_WEBVIEW_MARKER = BROWSER_PW_MARKER;
@@ -524,15 +524,43 @@ app.whenReady().then(async () => {
   // file:// subresources across directories, so we expose workspace files via
   // abcyesno-local://<encoded-path>. Registered before the window is created
   // so the first document can use it.
-  protocol.registerFileProtocol('abcyesno-local', (request, callback) => {
+  protocol.handle('abcyesno-local', async (request) => {
     try {
-      let fp = decodeURIComponent(request.url.replace(/^abcyesno-local:\/\//, ''));
-      // Accept both C:/... and /C:/... encodings.
-      if (/^\/[A-Za-z]:\//.test(fp)) fp = fp.slice(1);
-      callback({ path: fp });
+      // Renderer encodes paths as `abcyesno-local:///<drive>/<encoded-segs>`,
+      // e.g. `abcyesno-local:///C/Users/foo/%E7%A5%9E%E5%A8%81%E7%8B%97.png`.
+      // NOTE: with protocol.handle the request.url is still percent-encoded
+      // (Chromium does NOT pre-decode it for custom scheme handlers), so we
+      // must decodeURIComponent to recover Chinese/space segments before
+      // touching the filesystem. Then strip the scheme prefix, restore the
+      // drive-letter colon, upper-case the drive, convert to backslashes
+      // (Windows fs).
+      let fp = request.url.replace(/^abcyesno-local:\/+\/?/, '');
+      try { fp = decodeURIComponent(fp); } catch (_) {}
+      fp = fp.replace(/^([A-Za-z])\//, '$1:/');
+      fp = fp.replace(/^([A-Za-z]):/, (m) => m.toUpperCase());
+      fp = fp.replace(/\//g, '\\');
+      let exists = null;
+      try { exists = fs.existsSync(fp); } catch (_) {}
+      log('main', `[abcyesno-local] request url=${request.url} -> path=${fp} exists=${exists}`);
+      if (!exists) {
+        return new Response('not found: ' + fp, { status: 404 });
+      }
+      const data = await fs.promises.readFile(fp);
+      // Sniff MIME from extension (Electron's registerFileProtocol used to do
+      // this; protocol.handle needs us to set it explicitly).
+      const ext = (fp.match(/\.([a-zA-Z0-9]+)$/) || [, ''])[1].toLowerCase();
+      const mime = ({
+        png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
+        gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp',
+        svg: 'image/svg+xml', ico: 'image/x-icon',
+        mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime',
+        mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg',
+        pdf: 'application/pdf', json: 'application/json',
+      })[ext] || 'application/octet-stream';
+      return new Response(data, { status: 200, headers: { 'Content-Type': mime } });
     } catch (err) {
       log('main', `abcyesno-local protocol error: ${err && err.message ? err.message : String(err)}`);
-      callback({ error: -2 }); // net::FAILED
+      return new Response('error: ' + (err && err.message ? err.message : String(err)), { status: 500 });
     }
   });
 
