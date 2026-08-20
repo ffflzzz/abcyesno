@@ -400,7 +400,18 @@ function createAgUIServer(getGatewayClient, storage, options) {
       return { kind: 'prefill', output: dispatch.notice || dispatch.message || '' };
     }
     if (type === 'send' || type === 'skill') {
-      return { kind: 'send', message: dispatch.message || '', notice: dispatch.notice || '' };
+      // `/goal <text>` (and only that — pause/clear/status/resume are `exec`)
+      // kicks off an autonomous cross-turn loop in the gateway, so the bridge
+      // must keep the SSE open across multiple message.start/complete cycles
+      // (Phase 2). Other 'send' commands (/retry, /steer, /queue, /learn,
+      // /moa, alias resolution) are one-shot — no flag needed.
+      const goalMode = name === '/goal' && !!(dispatch.message);
+      return {
+        kind: 'send',
+        message: dispatch.message || '',
+        notice: dispatch.notice || '',
+        ...(goalMode ? { goalMode: true } : {}),
+      };
     }
     if (type === 'alias') {
       // Resolve the alias target as a follow-up user turn.
@@ -418,9 +429,16 @@ function createAgUIServer(getGatewayClient, storage, options) {
     }
   }
 
-  function createTurnTranslator(res, encoder, ctx) {
-    const messageId = `msg-${ctx.runId || uuidv4()}`;
+  function createTurnTranslator(res, encoder, ctx, opts = {}) {
+    // Phase 2: when `multiRound` is true (set by waitForHermesTurn for /goal
+    // runs), every gateway message.start/complete cycle mints a fresh AG-UI
+    // messageId so the frontend renders each goal iteration as its own
+    // assistant bubble instead of merging them into a single rolling message.
+    const { multiRound = false } = opts;
+    let messageId = `msg-${ctx.runId || uuidv4()}`;
+    let round = 0;
     let messageStarted = false;
+    let currentRoundClosed = true; // true ⇒ next message.start can begin a new round
     let hasTextDelta = false;
     let hasRunError = false;
     let emittedText = '';
@@ -439,9 +457,31 @@ function createAgUIServer(getGatewayClient, storage, options) {
       send({ type: 'CUSTOM', name: 'stream.phase', value: { phase, runId: ctx.runId } });
     }
 
+    function nextMessageId() {
+      if (!multiRound) return `msg-${ctx.runId || uuidv4()}`;
+      return `msg-${ctx.runId || uuidv4()}-r${round}`;
+    }
+
+    function rotateToNewRound() {
+      // End any in-flight round cleanly, then mint the next messageId and
+      // reset per-round accumulators. Safe to call when nothing is open.
+      if (messageStarted) {
+        send({ type: 'TEXT_MESSAGE_END', messageId });
+        messageStarted = false;
+      }
+      round += 1;
+      messageId = nextMessageId();
+      emittedText = '';
+      emittedPlain = '';
+      hasTextDelta = false;
+      activeToolCalls.clear();
+      currentRoundClosed = false;
+    }
+
     function ensureMessageStarted(role = 'assistant') {
       if (!messageStarted) {
         messageStarted = true;
+        currentRoundClosed = false;
         send({ type: 'TEXT_MESSAGE_START', messageId, role });
       }
     }
@@ -560,6 +600,19 @@ function createAgUIServer(getGatewayClient, storage, options) {
       }
       ensureMessageStarted();
       send({ type: 'TEXT_MESSAGE_END', messageId });
+      // Phase 2: in multiRound (goal) mode, the next message.start should
+      // mint a fresh messageId so each iteration is a new assistant bubble.
+      // Close out the per-round accumulators and pre-rotate here.
+      if (multiRound) {
+        round += 1;
+        messageId = nextMessageId();
+        emittedText = '';
+        emittedPlain = '';
+        hasTextDelta = false;
+        activeToolCalls.clear();
+        messageStarted = false;
+        currentRoundClosed = true;
+      }
     }
 
     function handleEvent(type, params) {
@@ -574,6 +627,20 @@ function createAgUIServer(getGatewayClient, storage, options) {
 
       switch (type) {
         case 'message.start':
+          // Phase 2: in multiRound mode each gateway round should arrive with
+          // a preceding message.complete (which rotates the messageId). If a
+          // message.start arrives while the previous round is still open,
+          // defensively close the old message before starting the new one so
+          // the SSE stream stays well-formed.
+          if (multiRound && messageStarted) {
+            send({ type: 'TEXT_MESSAGE_END', messageId });
+            round += 1;
+            messageId = nextMessageId();
+            emittedText = '';
+            emittedPlain = '';
+            hasTextDelta = false;
+            activeToolCalls.clear();
+          }
           ensureMessageStarted('assistant');
           break;
 
@@ -842,8 +909,9 @@ function createAgUIServer(getGatewayClient, storage, options) {
     return { handleEvent, finalize, hasError: () => hasRunError };
   }
 
-  function waitForHermesTurn(client, hermesSessionId, ctx, res, encoder, timeoutMs = 120000) {
-    const translator = createTurnTranslator(res, encoder, { ...ctx, hermesSessionId });
+  function waitForHermesTurn(client, hermesSessionId, ctx, res, encoder, timeoutMs = 120000, opts = {}) {
+    const { goalMode = false, idleMs = 5000 } = opts;
+    const translator = createTurnTranslator(res, encoder, { ...ctx, hermesSessionId }, { multiRound: goalMode });
 
     const promise = new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -853,10 +921,28 @@ function createAgUIServer(getGatewayClient, storage, options) {
       }, timeoutMs);
 
       let settled = false;
+      // Phase 2: in goal mode the gateway emits multiple message.start/complete
+      // cycles back-to-back. We can't resolve on the first complete — instead
+      // arm an idle timer that resets on every event; when no new events
+      // arrive for `idleMs`, the Ralph-style loop has ended.
+      let idleTimer = null;
+      const armIdleTimer = () => {
+        if (!goalMode) return;
+        if (idleTimer) clearTimeout(idleTimer);
+        idleTimer = setTimeout(() => {
+          if (settled) return;
+          log('agui-server', `goal-mode idle ${idleMs}ms reached, ending turn`);
+          cleanup();
+          translator.finalize('');
+          resolve();
+        }, idleMs);
+      };
+
       const cleanup = () => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
         client.off('event', handler);
         // Also remove disconnect listeners
         if (typeof client.off === 'function') {
@@ -872,13 +958,16 @@ function createAgUIServer(getGatewayClient, storage, options) {
       };
 
       const handler = (type, params) => {
+        // Reset idle timer on every event so a stream of events keeps the
+        // SSE open. (Non-goal runs ignore the timer — first complete resolves.)
+        armIdleTimer();
         try {
           translator.handleEvent(type, params);
         } catch (err) {
           log('agui-server', `event translation error: ${err.message}`);
         }
 
-        if (type === 'message.complete' || type === 'message.end') {
+        if (!goalMode && (type === 'message.complete' || type === 'message.end')) {
           cleanup();
           resolve();
           return;
@@ -906,6 +995,9 @@ function createAgUIServer(getGatewayClient, storage, options) {
         client.on('close', onDisconnect);
         client.on('disconnect', onDisconnect);
       }
+      // Arm the idle timer eagerly so a goal that emits nothing (e.g. budget
+      // exhausted before first round) still terminates.
+      armIdleTimer();
     });
 
     return { promise, translator };
@@ -1001,6 +1093,11 @@ function createAgUIServer(getGatewayClient, storage, options) {
     const mentionTarget = resolveMentionDelegation(text, ctx.forwardedProps.mentions);
     let delegatedAgent = mentionTarget ? mentionTarget.id : null;
 
+    // Phase 2: set to true by the /goal kickoff branch below; flows through
+    // runOnce → waitForHermesTurn → createTurnTranslator so SSE stays open
+    // across the goal's multi-round Ralph-style loop.
+    let goalMode = false;
+
     // ── Slash command pre-dispatch (B 方案) ────────────────────────────
     // If the last user message is a slash command the 9120 gateway knows how
     // to handle, dispatch it directly. exec/prefill replies skip the LLM
@@ -1035,6 +1132,10 @@ function createAgUIServer(getGatewayClient, storage, options) {
         text = slash.message;
         delegatedAgent = null; // slash already resolves its own target
       }
+      // Phase 2 plumbing: carry the /goal kickoff flag down to runOnce /
+      // waitForHermesTurn / createTurnTranslator so the bridge keeps SSE
+      // open across multiple Ralph-style goal iterations.
+      goalMode = !!(slash.goalMode);
     }
 
     // A structured ContractForm / Workbench invoke carries agent_name explicitly
@@ -1160,12 +1261,22 @@ function createAgUIServer(getGatewayClient, storage, options) {
       }
     }
 
-    async function runOnce(hermesSessionId) {
+    async function runOnce(hermesSessionId, goalMode = false) {
       // The turn can stay open for a long time when a workflow pauses at a
       // human-in-the-loop approval gate (the graph waits on the control-file
       // channel until the user decides). Default to 30 min; override via env.
       const turnTimeoutMs = Number(process.env.ABC_AGUI_TURN_TIMEOUT || 1800000);
-      const { promise: turnPromise, translator } = waitForHermesTurn(client, hermesSessionId, ctx, res, encoder, turnTimeoutMs);
+      // Phase 2: when a /goal kickoff is in flight, the gateway recurses into
+      // multiple message.start/complete cycles (Ralph-style loop). The
+      // translator must mint a fresh messageId each round and the turn waiter
+      // must NOT resolve on the first `message.complete` — use an idle timer
+      // instead so subsequent rounds keep flowing into SSE.
+      const waitOpts = goalMode
+        ? { goalMode: true, idleMs: Number(process.env.ABC_AGUI_GOAL_IDLE_MS || 5000) }
+        : undefined;
+      const { promise: turnPromise, translator } = waitForHermesTurn(
+        client, hermesSessionId, ctx, res, encoder, turnTimeoutMs, waitOpts
+      );
       await attachTurnImages(hermesSessionId);
       await client.request('prompt.submit', { session_id: hermesSessionId, text }, 120000);
       await turnPromise;
@@ -1176,7 +1287,7 @@ function createAgUIServer(getGatewayClient, storage, options) {
       let hermesSessionId = await getReadyHermesSession();
       let translator;
       try {
-        translator = await runOnce(hermesSessionId);
+        translator = await runOnce(hermesSessionId, goalMode);
       } catch (firstErr) {
         const msg = firstErr && firstErr.message ? firstErr.message : String(firstErr);
         log('agui-server', `prompt.submit error: ${msg}`);
@@ -1186,7 +1297,7 @@ function createAgUIServer(getGatewayClient, storage, options) {
           log('agui-server', `clearing stale thread mapping ${ctx.threadId} -> ${hermesSessionId}`);
           await storage.setThreadMapping(ctx.threadId, null);
           hermesSessionId = await getReadyHermesSession();
-          translator = await runOnce(hermesSessionId);
+          translator = await runOnce(hermesSessionId, goalMode);
         } else {
           throw firstErr;
         }
