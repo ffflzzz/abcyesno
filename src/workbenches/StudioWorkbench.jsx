@@ -378,6 +378,28 @@ function EditConsole({ timeline, shotCfg, shots, shotState, selectedClip, totalD
   const previewState = previewKey ? (shotState[previewKey] || {}) : {};
   const previewShot = previewKey ? byKey[previewKey] : null;
 
+  // Sequence-play: when the current clip ends and there's another clip with
+  // a video on the timeline after it, mark this so the next <video> mount
+  // (driven by the `previewKey` change below) auto-plays. We cannot call
+  // .play() synchronously after onSelect because src changes trigger a fresh
+  // load — .play() before loadeddata is rejected. The effect below runs after
+  // React commits the new <video src=…> and lets us await readyState.
+  const expectAutoPlayRef = useRef(false);
+  useEffect(() => {
+    if (!expectAutoPlayRef.current) return;
+    const v = videoRef.current;
+    if (!v) return;
+    const tryPlay = () => {
+      expectAutoPlayRef.current = false;
+      v.play().catch(() => { /* user-gesture restriction; ignore */ });
+    };
+    if (v.readyState >= 2) {
+      tryPlay();
+    } else {
+      v.addEventListener('loadeddata', tryPlay, { once: true });
+    }
+  }, [previewKey]);
+
   function handleDrop(e) {
     e.preventDefault();
     const fromKey = dragKey;
@@ -436,6 +458,28 @@ function EditConsole({ timeline, shotCfg, shots, shotState, selectedClip, totalD
     setPreviewTime(target);
   }
 
+  // Sequence play: when the current clip finishes, advance to the next clip
+  // that has a generated videoUrl and auto-play it. Stops cleanly when the
+  // last clip ends (no wrap-around).
+  function handleEnded() {
+    const curIdx = timeline.indexOf(previewKey);
+    if (curIdx === -1) {
+      setIsPlaying(false);
+      return;
+    }
+    for (let i = curIdx + 1; i < timeline.length; i++) {
+      const k = timeline[i];
+      const st = shotState[k] || {};
+      if (st.videoUrl) {
+        expectAutoPlayRef.current = true;
+        onSelect(k);
+        return;
+      }
+    }
+    // No further playable clip — natural stop.
+    setIsPlaying(false);
+  }
+
   if (!timeline.length) {
     return (
       <div className="st-edit">
@@ -462,6 +506,7 @@ function EditConsole({ timeline, shotCfg, shots, shotState, selectedClip, totalD
               onLoadedMetadata={() => { const v = videoRef.current; if (v) setPreviewDur(v.duration || 0); }}
               onPlay={() => setIsPlaying(true)}
               onPause={() => setIsPlaying(false)}
+              onEnded={handleEnded}
             />
           ) : previewState.imgUrl ? (
             <img src={toLoadableSrc(previewState.imgUrl)} alt="预览" />
