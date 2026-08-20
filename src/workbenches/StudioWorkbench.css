@@ -73,11 +73,7 @@
 .st-left { border-right: 1px solid var(--st-line); background: var(--st-surface); }
 .st-right { border-left: 1px solid var(--st-line); background: var(--st-surface); display: flex; flex-direction: column; }
 .st-center { overflow: auto; padding: 24px; min-height: 0; background: var(--bg); }
-/* Horizontal centering of the form card is handled inside .st-center by
-   .st-center--solo's flex column + .st-form-card's `margin: 8px auto 0`; the
-   grid container only constrains the cell (so .st-center fills the row and
-   `overflow: auto` can actually scroll). */
-.st-center--solo { display: flex; flex-direction: column; align-items: center; }
+/* Horizontal centering of the solo column is handled by .st-form-card's\n   own `margin: 8px auto 0`. We deliberately do NOT set .st-center--solo\n   to `display: flex; flex-direction: column` — flex column makes every\n   direct child a flex item with `flex-shrink: 1` by default, so when the\n   form cards' total height exceeds the cell, Chromium compresses them\n   silently instead of overflowing. `overflow: auto` then never produces a\n   scrollbar and the bottom "Generate" button gets clipped offscreen. */
 
 /* ── Right aside: header + collapsible body + rail ── */
 .st-right-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; border-bottom: 1px solid var(--st-line); position: sticky; top: 0; background: var(--st-surface); z-index: 3; }
