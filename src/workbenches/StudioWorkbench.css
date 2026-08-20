@@ -96,6 +96,8 @@
 .st-asset-list { padding: 14px; display: flex; flex-direction: column; gap: 12px; }
 .st-empty { color: var(--st-muted); font-size: 12px; padding: 36px 16px; text-align: center; line-height: 1.6; }
 .st-empty::before { content: "🖼"; display: block; font-size: 28px; margin-bottom: 10px; opacity: .35; }
+.st-empty-soft { color: var(--st-muted); font-size: 13px; padding: 22px 18px; text-align: center; line-height: 1.7; background: var(--st-surface-2); border: 1px dashed var(--st-line); border-radius: var(--st-radius-sm); margin: 8px 0; }
+.st-assets-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 14px; padding: 8px 0 16px; }
 .st-asset-card { background: var(--st-surface-2); border: 1px solid var(--st-line); border-radius: var(--st-radius-sm); overflow: hidden; transition: border-color .15s, box-shadow .15s; }
 .st-asset-card:hover { border-color: var(--st-accent); box-shadow: var(--st-shadow-sm); }
 .st-asset-name { padding: 10px 12px; font-weight: 600; display: flex; justify-content: space-between; align-items: center; gap: 6px; font-size: 13px; }

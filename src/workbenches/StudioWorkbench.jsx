@@ -223,7 +223,7 @@ function AssetLibrary({ curTab, setCurTab, assetsReady, assetImgs, onGenOne, onG
               </div>
               {a.url ? (
                 <div className="st-asset-img">
-                  <img src={a.url} alt={a.name} />
+                  <img src={toLoadableSrc(a.url)} alt={a.name} />
                 </div>
               ) : (
                 <div className="st-views">
@@ -242,11 +242,6 @@ function AssetLibrary({ curTab, setCurTab, assetsReady, assetImgs, onGenOne, onG
             ↻ 重新生成角色
           </button>
         )}
-        <div style={{ marginTop: 14 }}>
-          <button className="st-primary st-block" onClick={onGenAll} disabled={disabled}>
-            一键生成全部资产 →
-          </button>
-        </div>
       </div>
     </div>
   );
@@ -310,9 +305,9 @@ function StoryboardEditor({ shots, shotState, onGenShot, onGenVideo, onScriptCha
             <div className="st-shot-col">
               <div className={`st-preview ${st.status === "busy" ? "busy" : ""}`}>
                 {st.videoUrl ? (
-                  <video src={st.videoUrl} controls muted loop playsInline />
+                  <video src={toLoadableSrc(st.videoUrl)} controls muted loop playsInline />
                 ) : st.imgUrl ? (
-                  <img className="st-media-img" src={st.imgUrl} alt={k} />
+                  <img className="st-media-img" src={toLoadableSrc(st.imgUrl)} alt={k} />
                 ) : st.status === "done" ? (
                   <div className="st-meta">▶ 00:0{s.n}</div>
                 ) : null}
@@ -461,7 +456,7 @@ function EditConsole({ timeline, shotCfg, shots, shotState, selectedClip, totalD
           {previewState.videoUrl ? (
             <video
               ref={videoRef}
-              src={previewState.videoUrl}
+              src={toLoadableSrc(previewState.videoUrl)}
               playsInline
               onTimeUpdate={() => { const v = videoRef.current; if (v) setPreviewTime(v.currentTime); }}
               onLoadedMetadata={() => { const v = videoRef.current; if (v) setPreviewDur(v.duration || 0); }}
@@ -469,7 +464,7 @@ function EditConsole({ timeline, shotCfg, shots, shotState, selectedClip, totalD
               onPause={() => setIsPlaying(false)}
             />
           ) : previewState.imgUrl ? (
-            <img src={previewState.imgUrl} alt="预览" />
+            <img src={toLoadableSrc(previewState.imgUrl)} alt="预览" />
           ) : (
             <div className="st-edit-canvas-empty">点击时间轴上的镜头预览</div>
           )}
@@ -533,7 +528,7 @@ function EditConsole({ timeline, shotCfg, shots, shotState, selectedClip, totalD
                     onSelect(l.key);
                   }}
                 >
-                  {st.imgUrl && <span className="st-clip-thumb" style={{ backgroundImage: `url(${st.imgUrl})` }} />}
+                  {st.imgUrl && <span className="st-clip-thumb" style={{ backgroundImage: `url(${toLoadableSrc(st.imgUrl)})` }} />}
                   <span className="st-clabel">{s ? `第${s.ep}集·镜${s.n}` : l.key}</span>
                   <span className="st-cdur">{c.dur}s</span>
                   {c.trans && c.trans !== "none" && <span className="st-ctrans">{c.trans === "fade" ? "叠化" : c.trans}</span>}
@@ -1698,17 +1693,49 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
           )}
 
           {phase === "assets" && (
-            <div className="st-card st-form-card">
-              <div className="st-section">
-                <div className="st-section-title">角色资产</div>
-                <div className="st-hint">角色参考图由工作流生成并锁定到角色圣经（series 模式下首集批准后即锁定）。确认无误后进入分镜编排。</div>
-              </div>
-              <div className="st-form-actions">
-                <button className="st-primary" onClick={genAll} disabled={running}>
-                  下一步：分镜 →
-                </button>
-              </div>
-            </div>
+            (() => {
+              const charEntries = Object.entries(assetImgs.character || {});
+              const hasCharacters = charEntries.length > 0;
+              return (
+                <div className="st-card st-form-card">
+                  <div className="st-section">
+                    <div className="st-section-title">角色资产</div>
+                    <div className="st-hint">角色参考图由工作流生成并锁定到角色圣经（series 模式下首集批准后即锁定）。确认无误后进入分镜编排。</div>
+                  </div>
+
+                  {hasCharacters ? (
+                    <div className="st-assets-grid">
+                      {charEntries.map(([name, rawUrl]) => (
+                        <div className="st-asset-card" key={name}>
+                          <div className="st-asset-name">
+                            {name}
+                            <span className="st-asset-tag">角色</span>
+                          </div>
+                          <div className="st-asset-img">
+                            <img src={toLoadableSrc(rawUrl)} alt={name} />
+                          </div>
+                          <div className="st-asset-views-label">正面</div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="st-empty st-empty-soft">
+                      尚未生成角色。返回「剧本」阶段点击「▶ 运行」即可触发工作流生成角色参考图。
+                    </div>
+                  )}
+
+                  <div className="st-form-actions">
+                    <button
+                      className="st-primary"
+                      onClick={() => setPhase("storyboard")}
+                      disabled={!hasCharacters || running}
+                    >
+                      下一步：分镜 →
+                    </button>
+                  </div>
+                </div>
+              );
+            })()
           )}
 
           {phase === "storyboard" && (
