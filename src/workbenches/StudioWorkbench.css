@@ -156,8 +156,8 @@
 
 /* ── storyboard ── */
 .st-center-inner { display: flex; flex-direction: column; gap: 14px; }
-.st-sb-head { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; padding: 0 4px 12px; color: var(--st-muted); font-size: 12px; position: sticky; top: 0; background: var(--bg); z-index: 2; }
-.st-sb-head > div { display: flex; flex-direction: column; gap: 3px; }
+.st-sb-head { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 2fr) minmax(0, 1.3fr); gap: 14px; padding: 4px 14px 10px; color: var(--st-muted); font-size: 12px; background: var(--bg); border-bottom: 1px solid var(--st-line); margin: 0 0 14px; }
+.st-sb-head > div { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .st-col-hint { font-size: 11px; color: var(--st-muted); opacity: .72; line-height: 1.35; }
 .st-shot { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 2fr) minmax(0, 1.3fr); gap: 14px; padding: 14px; background: var(--st-surface); border: 1px solid var(--st-line); border-radius: var(--st-radius-sm); align-items: start; box-shadow: var(--st-shadow-sm); }
 .st-shot-col { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
