@@ -67,12 +67,16 @@
 .st-step.done + .st-step-sep { background: var(--success); opacity: .5; }
 
 /* ── Layout grid (columns set inline by phase) ── */
-.st-grid { flex: 1; min-height: 0; display: grid; }
-.st-grid--solo { place-items: start center; }
+.st-grid { flex: 1; min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr); }
+.st-grid--solo { justify-items: stretch; }
 .st-col { min-height: 0; overflow: auto; }
 .st-left { border-right: 1px solid var(--st-line); background: var(--st-surface); }
 .st-right { border-left: 1px solid var(--st-line); background: var(--st-surface); display: flex; flex-direction: column; }
 .st-center { overflow: auto; padding: 24px; min-height: 0; background: var(--bg); }
+/* Horizontal centering of the form card is handled inside .st-center by
+   .st-center--solo's flex column + .st-form-card's `margin: 8px auto 0`; the
+   grid container only constrains the cell (so .st-center fills the row and
+   `overflow: auto` can actually scroll). */
 .st-center--solo { display: flex; flex-direction: column; align-items: center; }
 
 /* ── Right aside: header + collapsible body + rail ── */
