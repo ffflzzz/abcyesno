@@ -1,0 +1,136 @@
+{
+  "ok": true,
+  "agent": "manjucraft_agent",
+  "mode": "series",
+  "thread_id": "manju-run-7308-mode-series",
+  "project_name": "series-橘猫听雨",
+  "events": [
+    "plan_episodes",
+    "parse_script",
+    "generate_characters",
+    "auto-approve:first_frame",
+    "gate_first_frame",
+    "batch_generate_keyframes",
+    "consistency_check",
+    "auto-approve:each_scene",
+    "gate_each_scene",
+    "fix_drift",
+    "batch_generate_video",
+    "generate_tts",
+    "merge_and_concat",
+    "generate_jianying_draft",
+    "auto-approve:end",
+    "gate_end",
+    "finalize_episode",
+    "parse_script",
+    "generate_characters",
+    "auto-approve:episode_ready",
+    "gate_first_frame",
+    "batch_generate_keyframes",
+    "consistency_check",
+    "gate_each_scene",
+    "fix_drift",
+    "batch_generate_video",
+    "generate_tts",
+    "merge_and_concat",
+    "generate_jianying_draft",
+    "gate_end",
+    "finalize_episode",
+    "parse_script",
+    "generate_characters",
+    "auto-approve:episode_ready",
+    "gate_first_frame",
+    "batch_generate_keyframes",
+    "consistency_check",
+    "gate_each_scene",
+    "fix_drift",
+    "batch_generate_video",
+    "generate_tts",
+    "merge_and_concat",
+    "generate_jianying_draft",
+    "gate_end",
+    "finalize_episode",
+    "finalize_series"
+  ],
+  "gates_auto_approved": [
+    "first_frame",
+    "each_scene",
+    "end",
+    "episode_ready",
+    "episode_ready"
+  ],
+  "summary": {
+    "summary": "status=done; episodes=3/3",
+    "artifacts": [
+      {
+        "id": "ep0_video",
+        "type": "video",
+        "source": "path",
+        "path": "C:\\Users\\Administrator/.hermes_portable_data\\manjucraft_agent\\projects\\series-橘猫听雨\\ep000\\final.mp4",
+        "label": "第0集成片"
+      },
+      {
+        "id": "ep0_jianying",
+        "type": "file",
+        "mime": "application/json",
+        "source": "path",
+        "path": "C:\\Users\\Administrator/.hermes_portable_data\\manjucraft_agent\\projects\\series-橘猫听雨\\ep000\\draft_content.json",
+        "label": "第0集剪映草稿"
+      },
+      {
+        "id": "ep0_assets",
+        "type": "file",
+        "mime": "application/zip",
+        "source": "path",
+        "path": "C:\\Users\\Administrator/.hermes_portable_data\\manjucraft_agent\\projects\\series-橘猫听雨\\ep000\\assets.zip",
+        "label": "第0集素材包"
+      },
+      {
+        "id": "ep1_video",
+        "type": "video",
+        "source": "path",
+        "path": "C:\\Users\\Administrator/.hermes_portable_data\\manjucraft_agent\\projects\\series-橘猫听雨\\ep001\\final.mp4",
+        "label": "第1集成片"
+      },
+      {
+        "id": "ep1_jianying",
+        "type": "file",
+        "mime": "application/json",
+        "source": "path",
+        "path": "C:\\Users\\Administrator/.hermes_portable_data\\manjucraft_agent\\projects\\series-橘猫听雨\\ep001\\draft_content.json",
+        "label": "第1集剪映草稿"
+      },
+      {
+        "id": "ep1_assets",
+        "type": "file",
+        "mime": "application/zip",
+        "source": "path",
+        "path": "C:\\Users\\Administrator/.hermes_portable_data\\manjucraft_agent\\projects\\series-橘猫听雨\\ep001\\assets.zip",
+        "label": "第1集素材包"
+      },
+      {
+        "id": "ep2_video",
+        "type": "video",
+        "source": "path",
+        "path": "C:\\Users\\Administrator/.hermes_portable_data\\manjucraft_agent\\projects\\series-橘猫听雨\\ep002\\final.mp4",
+        "label": "第2集成片"
+      },
+      {
+        "id": "ep2_jianying",
+        "type": "file",
+        "mime": "application/json",
+        "source": "path",
+        "path": "C:\\Users\\Administrator/.hermes_portable_data\\manjucraft_agent\\projects\\series-橘猫听雨\\ep002\\draft_content.json",
+        "label": "第2集剪映草稿"
+      },
+      {
+        "id": "ep2_assets",
+        "type": "file",
+        "mime": "application/zip",
+        "source": "path",
+        "path": "C:\\Users\\Administrator/.hermes_portable_data\\manjucraft_agent\\projects\\series-橘猫听雨\\ep002\\assets.zip",
+        "label": "第2集素材包"
+      }
+    ]
+  }
+}
