@@ -346,6 +346,70 @@ function createAgUIServer(getGatewayClient, storage, options) {
     return { id: hermesSessionId, created: true };
   }
 
+  // ── Slash command pre-dispatch (B 方案) ──────────────────────────────
+  // Mirror Hermes CLI's `_looks_like_slash_command`: a slash command is
+  // "/word" where word (after the leading slash) contains no further slash —
+  // this excludes filesystem paths like "/Users/foo/bar.md". We then route the
+  // command through the 9120 gateway's existing `command.dispatch` JSON-RPC
+  // method, which already implements /goal (+ status/pause/resume/clear),
+  // /undo, /retry, /steer, /queue, /learn, /moa, /snapshot and quick/plugin/
+  // skill commands. Commands the gateway doesn't recognize (e.g. /model,
+  // /status, /fast — which are TUI-only and have no headless handler) fall
+  // through safely to the normal LLM path instead of blocking the user.
+  async function trySlashDispatch(rawText, client, ctx) {
+    if (!rawText || typeof rawText !== 'string') return null;
+    const m = /^\s*\/([^\s/]+)(?:\s+([\s\S]*))?$/.exec(rawText.trim());
+    if (!m) return null; // not a slash command — or a path like /Users/foo
+    const name = '/' + m[1];
+    const arg = (m[2] || '').trim();
+
+    // command.dispatch needs a live Hermes session to resolve goals/undo.
+    let hermesSessionId;
+    try {
+      const r = await ensureHermesSession(client, ctx);
+      hermesSessionId = r && r.id;
+    } catch (e) {
+      log('agui-server', `slash: ensureHermesSession failed: ${(e && e.message) || e}`);
+      return null; // fall back to LLM
+    }
+    if (!hermesSessionId) return null;
+
+    let dispatch;
+    try {
+      dispatch = await client.request(
+        'command.dispatch',
+        { name, arg, session_id: hermesSessionId },
+        30000
+      );
+    } catch (e) {
+      // Gateway rejected it (e.g. "_err(4018) not a quick/plugin/skill
+      // command") or was unreachable — treat as an unknown command and let
+      // the normal LLM path handle the text rather than blocking the user.
+      log('agui-server', `slash: command.dispatch rejected ${name}: ${(e && e.message) || e}`);
+      return null;
+    }
+    if (!dispatch || typeof dispatch !== 'object') return null;
+
+    const type = dispatch.type;
+    if (type === 'exec' || type === 'plugin') {
+      return { kind: 'exec', output: dispatch.output || '' };
+    }
+    if (type === 'prefill') {
+      // TUI semantics: prefill composer + notice. In chat we surface the
+      // notice as a message and do NOT auto-submit the prefilled text.
+      return { kind: 'prefill', output: dispatch.notice || dispatch.message || '' };
+    }
+    if (type === 'send' || type === 'skill') {
+      return { kind: 'send', message: dispatch.message || '', notice: dispatch.notice || '' };
+    }
+    if (type === 'alias') {
+      // Resolve the alias target as a follow-up user turn.
+      return { kind: 'send', message: dispatch.target || '', notice: '' };
+    }
+    // Unknown structured type — fall back to LLM with the raw text.
+    return null;
+  }
+
   function sendSSE(res, encoder, event) {
     try {
       res.write(encoder.encode(event));
@@ -936,6 +1000,42 @@ function createAgUIServer(getGatewayClient, storage, options) {
     // manifest-driven — no keyword sniffing, no per-workflow mapping.
     const mentionTarget = resolveMentionDelegation(text, ctx.forwardedProps.mentions);
     let delegatedAgent = mentionTarget ? mentionTarget.id : null;
+
+    // ── Slash command pre-dispatch (B 方案) ────────────────────────────
+    // If the last user message is a slash command the 9120 gateway knows how
+    // to handle, dispatch it directly. exec/prefill replies skip the LLM
+    // entirely; send/skill/alias (e.g. /goal <text>, /retry, /steer, /queue,
+    // /learn, /moa, alias) resolve to a follow-up `message` we submit as a
+    // normal agent turn so goals get set and the loop begins. Unknown
+    // commands already returned null above → fall through to the LLM.
+    const slash = await trySlashDispatch(text, client, ctx);
+    if (slash && (slash.kind === 'exec' || slash.kind === 'prefill')) {
+      sendSSE(res, encoder, { type: 'RUN_STARTED', threadId: ctx.threadId, runId: ctx.runId });
+      if (slash.output && slash.output.trim()) {
+        const mid = 'slash-' + ctx.runId;
+        sendSSE(res, encoder, { type: 'TEXT_MESSAGE_START', messageId: mid, role: 'assistant' });
+        sendSSE(res, encoder, { type: 'TEXT_MESSAGE_CONTENT', messageId: mid, delta: slash.output });
+        sendSSE(res, encoder, { type: 'TEXT_MESSAGE_END', messageId: mid });
+      }
+      sendSSE(res, encoder, { type: 'RUN_FINISHED', threadId: ctx.threadId, runId: ctx.runId });
+      return res.end();
+    }
+    if (slash && slash.kind === 'send') {
+      // Kickoff commands: surface the notice (if any) as a message, then
+      // submit the resolved `message` as a normal agent turn. NOTE: the
+      // multi-turn goal auto-loop visibility past the first turn is Phase 2
+      // (needs a goal-complete event from the gateway + SSE keep-alive).
+      if (slash.notice && slash.notice.trim()) {
+        const nid = 'slash-notice-' + ctx.runId;
+        sendSSE(res, encoder, { type: 'TEXT_MESSAGE_START', messageId: nid, role: 'assistant' });
+        sendSSE(res, encoder, { type: 'TEXT_MESSAGE_CONTENT', messageId: nid, delta: slash.notice });
+        sendSSE(res, encoder, { type: 'TEXT_MESSAGE_END', messageId: nid });
+      }
+      if (slash.message) {
+        text = slash.message;
+        delegatedAgent = null; // slash already resolves its own target
+      }
+    }
 
     // A structured ContractForm / Workbench invoke carries agent_name explicitly
     // (built by the frontend from the manifest's input_schema). Resolve it so

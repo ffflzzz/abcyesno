@@ -15,6 +15,26 @@ const PERMISSION_MODES = [
   { id: "yolo", name: "完全自动", desc: "本会话不再询问，直接执行" },
 ];
 
+// Slash commands surfaced by the `/` command palette. This list mirrors what
+// the 9120 gateway's `command.dispatch` actually implements (see
+// tui_gateway/server.py). Commands that are TUI-only on the backend
+// (/model, /status, /fast, /clear, /new, …) are intentionally omitted — typing
+// them still sends the text to the LLM, but they are not advertised here.
+const SLASH_COMMANDS = [
+  { cmd: "/goal", desc: "设一个长期目标，Agent 自动多轮循环直到完成（后接目标描述）" },
+  { cmd: "/goal status", desc: "查看当前目标状态" },
+  { cmd: "/goal pause", desc: "暂停当前目标" },
+  { cmd: "/goal resume", desc: "恢复暂停的目标" },
+  { cmd: "/goal clear", desc: "清除当前目标" },
+  { cmd: "/undo", desc: "回退最近 N 轮对话（可加数字，如 /undo 3）" },
+  { cmd: "/retry", desc: "重试上一轮" },
+  { cmd: "/steer", desc: "运行中转向（后接新指令）" },
+  { cmd: "/queue", desc: "排队一条消息（后接内容）" },
+  { cmd: "/learn", desc: "学习任务并写成技能（后接主题）" },
+  { cmd: "/moa", desc: "单次多模型聚合（后接提示）" },
+  { cmd: "/snapshot", desc: "快照（TUI 受限，桌面端仅提示）" },
+];
+
 function readFileAsDataURL(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -154,6 +174,10 @@ export default function Composer({
   const [mentionOpen, setMentionOpen] = useState(false);
   const [mentionQuery, setMentionQuery] = useState("");
   const mentionListRef = useRef(null);
+  // @ mention protocol (spec §2): typing `@` opens an entity picker; the
+  const [slashOpen, setSlashOpen] = useState(false);
+  const [slashQuery, setSlashQuery] = useState("");
+  const slashListRef = useRef(null);
 
   // Recompute emptiness (drives placeholder) from the live DOM.
   const recomputeEmpty = () => {
@@ -180,7 +204,7 @@ export default function Composer({
 
   // Close all popovers on outside click
   useEffect(() => {
-    if (!showModelMenu && !showPermissionMenu && !showPlusMenu && !showCustomModel && !mentionOpen) return;
+    if (!showModelMenu && !showPermissionMenu && !showPlusMenu && !showCustomModel && !mentionOpen && !slashOpen) return;
     const handleClick = (e) => {
       if (rootRef.current && !rootRef.current.contains(e.target)) {
         setShowModelMenu(false);
@@ -188,6 +212,7 @@ export default function Composer({
         setShowPlusMenu(false);
         setShowCustomModel(false);
         setMentionOpen(false);
+        setSlashOpen(false);
       }
     };
     document.addEventListener("mousedown", handleClick);
@@ -222,6 +247,66 @@ export default function Composer({
     } else {
       setMentionOpen(false);
     }
+  }
+
+  // ── / command palette ───────────────────────────────────────────────
+  // Inspect the text immediately before the caret; if it ends with `/word`
+  // (no spaces yet → still typing the command name, and word has no slash so
+  // it isn't a path like /Users/foo), open the command palette filtered by
+  // `word`. Once a space is typed (entering args) the palette closes.
+  function detectSlashTrigger() {
+    const el = editableRef.current;
+    if (!el) return;
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0);
+    if (!el.contains(range.commonAncestorContainer)) return;
+    let textBefore = "";
+    const node = range.startContainer;
+    const offset = range.startOffset;
+    if (node.nodeType === Node.TEXT_NODE) {
+      textBefore = node.nodeValue.slice(0, offset);
+    } else {
+      const r = document.createRange();
+      r.selectNodeContents(el);
+      r.setEnd(range.startContainer, range.startOffset);
+      textBefore = r.toString();
+    }
+    const m = textBefore.match(/(?:^|\s)\/([^\s/]*)$/);
+    if (m) {
+      setSlashQuery(m[1]);
+      setSlashOpen(true);
+    } else {
+      setSlashOpen(false);
+    }
+  }
+
+  // Replace the trailing `/query` at the caret with the chosen `/command `.
+  function applySlash(item) {
+    const el = editableRef.current;
+    const sel = window.getSelection();
+    if (!el || !sel || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0);
+    const node = range.startContainer;
+    const offset = range.startOffset;
+    if (node.nodeType === Node.TEXT_NODE) {
+      const before = node.nodeValue.slice(0, offset);
+      const after = node.nodeValue.slice(offset);
+      const mm = before.match(/(?:^|\s)\/([^\s/]*)$/);
+      if (mm) {
+        const insertText = item.cmd + " ";
+        const newBefore = before.slice(0, mm.index) + insertText;
+        node.nodeValue = newBefore + after;
+        const newRange = document.createRange();
+        newRange.setStart(node, newBefore.length);
+        newRange.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(newRange);
+      }
+    }
+    setSlashOpen(false);
+    recomputeEmpty();
+    el.focus();
   }
 
   // Replace the trailing `@query` at the caret with `@name ` and record it.
@@ -261,6 +346,12 @@ export default function Composer({
     );
   });
 
+  const slashMatches = SLASH_COMMANDS.filter((c) => {
+    const q = slashQuery.trim().toLowerCase();
+    if (!q) return true;
+    return c.cmd.toLowerCase().includes(q);
+  });
+
   // Derive the mention id list from the final text by matching `@name`/`@id`
   // tokens against the known entity directory.
   function deriveMentions(text) {
@@ -281,6 +372,7 @@ export default function Composer({
   const handleInput = () => {
     recomputeEmpty();
     detectMentionTrigger();
+    detectSlashTrigger();
   };
 
   const submit = () => {
@@ -526,7 +618,7 @@ export default function Composer({
       <div className="composer-editable-wrap">
         {empty && (
           <div className="composer-placeholder">
-            {placeholder || "今天帮你做些什么？ @ 引用对话文件，/ 调用技能与指令"}
+            {placeholder || "今天帮你做些什么？ 输入 / 调用命令（/goal、/undo…），@ 引用对话/工作流"}
           </div>
         )}
         <div
@@ -552,6 +644,23 @@ export default function Composer({
                 <span className={`mention-kind ${m.kind}`}>{m.kind === "workflow" ? <Icon name="settings" size={14} /> : <Icon name="chat" size={14} />}</span>
                 <span className="mention-name">{m.name}</span>
                 <span className="mention-id">{m.id}</span>
+              </button>
+            ))}
+          </div>
+        )}
+        {slashOpen && slashMatches.length > 0 && (
+          <div className="mention-popover" ref={slashListRef}>
+            <div className="mention-popover-head">命令</div>
+            {slashMatches.map((c) => (
+              <button
+                key={c.cmd}
+                className="mention-item"
+                onClick={() => applySlash(c)}
+                title={c.desc}
+              >
+                <span className="mention-kind"><Icon name="zap" size={14} /></span>
+                <span className="mention-name">{c.cmd}</span>
+                <span className="mention-id">{c.desc}</span>
               </button>
             ))}
           </div>
