@@ -633,6 +633,10 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
   const [trace, setTraceRaw] = useState(_readCache(cacheKey + ":trace", {}));
   const [traceEpisode, setTraceEpisodeRaw] = useState(_readCache(cacheKey + ":traceEpisode", 0));
   const [traceTotal, setTraceTotalRaw] = useState(_readCache(cacheKey + ":traceTotal", 1));
+  // Right aside (task panel) collapse — default EXPANDED. Persisted so a page
+  // switch keeps the user's choice. Collapsed → a 44px rail with an expand
+  // button instead of the full 300px panel.
+  const [asideCollapsed, setAsideCollapsedRaw] = useState(_readCache(cacheKey + ":asideCollapsed", false));
 
   const [project, setProjectRaw] = useState(_readCache(cacheKey + ":project", {
     name: "",
@@ -677,6 +681,7 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
   const traceRef = useRef(trace); traceRef.current = trace;
   const traceEpisodeRef = useRef(traceEpisode); traceEpisodeRef.current = traceEpisode;
   const traceTotalRef = useRef(traceTotal); traceTotalRef.current = traceTotal;
+  const asideCollapsedRef = useRef(asideCollapsed); asideCollapsedRef.current = asideCollapsed;
   const projectRef = useRef(project); projectRef.current = project;
   const nlTextRef = useRef(nlText); nlTextRef.current = nlText;
   const nlParsingRef = useRef(nlParsing); nlParsingRef.current = nlParsing;
@@ -704,6 +709,7 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
   const setTrace = (v) => setTraceRaw((prev) => { const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { trace: n }); return n; });
   const setTraceEpisode = (v) => setTraceEpisodeRaw((prev) => { const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { traceEpisode: n }); return n; });
   const setTraceTotal = (v) => setTraceTotalRaw((prev) => { const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { traceTotal: n }); return n; });
+  const setAsideCollapsed = (v) => setAsideCollapsedRaw((prev) => { const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { asideCollapsed: n }); return n; });
   const setProject = (v) => setProjectRaw((prev) => { const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { project: n }); return n; });
   const setNlText = (v) => setNlTextRaw((prev) => { const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { nlText: n }); return n; });
   const setNlParsing = (v) => setNlParsingRaw((prev) => { const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { nlParsing: n }); return n; });
@@ -821,6 +827,7 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
     if (saved.exportJson) setExportJson(saved.exportJson);
     if (saved.runState) setRunState(saved.runState);
     if (saved.runId) setRunId(saved.runId);
+    if (typeof saved.asideCollapsed === "boolean") setAsideCollapsed(saved.asideCollapsed);
   }, [loadPersistedState]); // only run when key changes (mount)
 
   // Debounced save whenever meaningful state changes.
@@ -842,6 +849,7 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
           exportJson,
           runState,
           runId,
+          asideCollapsed,
         };
         localStorage.setItem(storageKey, JSON.stringify(payload));
       } catch (err) {
@@ -1408,6 +1416,21 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
 
   const running = runState === "running";
 
+  // ── Phase-aware layout ────────────────────────────────────────────────
+  // script / assets: fully solo, hide both side panels (per spec).
+  // storyboard: show left asset library + right task panel.
+  // export: show right task panel only (no asset library needed).
+  // Running override: always surface the right panel so the user sees live
+  // progress even while the phase is still script/assets.
+  const showAssetLib = phase === "storyboard";
+  const showTaskPanel = phase === "storyboard" || phase === "export" || running;
+  const centerSolo = !showAssetLib && !showTaskPanel;
+
+  let gridCols = "1fr";
+  if (showAssetLib && showTaskPanel) gridCols = asideCollapsed ? "210px 1fr 46px" : "210px 1fr 300px";
+  else if (!showAssetLib && showTaskPanel) gridCols = asideCollapsed ? "1fr 46px" : "1fr 300px";
+  else if (showAssetLib && !showTaskPanel) gridCols = "210px 1fr";
+
   return (
     <div className="st-workbench" onClick={() => selectedClip && setSelectedClip(null)}>
       <div className="st-topbar">
@@ -1436,6 +1459,7 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
               setTrace({});
               setTraceEpisode(0);
               setTraceTotal(1);
+              setAsideCollapsed(false);
               setProject({
                 name: "",
                 script: "",
@@ -1464,18 +1488,24 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
 
       <PhaseStepper phase={phase} done={done} onGo={goPhase} />
 
-      <div className="st-grid" onClick={(e) => e.stopPropagation()}>
-        <AssetLibrary
-          curTab={curTab}
-          setCurTab={setCurTab}
-          assetsReady={assetsReady}
-          assetImgs={assetImgs}
-          onGenOne={genOne}
-          onGenAll={genAll}
-          disabled={running}
-        />
+      <div
+        className={`st-grid ${centerSolo ? "st-grid--solo" : ""}`}
+        style={{ gridTemplateColumns: gridCols }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {showAssetLib && (
+          <AssetLibrary
+            curTab={curTab}
+            setCurTab={setCurTab}
+            assetsReady={assetsReady}
+            assetImgs={assetImgs}
+            onGenOne={genOne}
+            onGenAll={genAll}
+            disabled={running}
+          />
+        )}
 
-        <div className="st-center">
+        <div className={`st-center ${centerSolo ? "st-center--solo" : ""}`}>
           {runState === "error" && (
             <div className="st-card st-runerror">
               <div className="st-section">
@@ -1772,46 +1802,65 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
           )}
         </div>
 
-        <div className="st-col st-right">
-          {topology && (
-            <WorkflowGraphPanel
-              topology={topology}
-              trace={trace}
-              runState={runState}
-              episode={traceEpisode}
-              total={traceTotal}
-            />
-          )}
-          {running && !topology && (
-            <div className="wf-panel wf-panel-skeleton">
-              <div className="wf-head">
-                <span className="wf-title">运行追踪</span>
-                <span className="wf-live">● LIVE</span>
-              </div>
-              <div className="wf-canvas">
-                <div className="wf-empty">等待图结构…</div>
-              </div>
-            </div>
-          )}
-          <div style={{ padding: 14 }}>
-            <h3 className="st-sec-title">任务中心</h3>
-            {tasks.length === 0 && !topology && <div className="st-empty">暂无任务</div>}
-            {tasks.map((t) => (
-              <div className={`st-task${t.status === "err" ? " st-task-err" : ""}`} key={t.id}>
-                <div className="st-task-t">
-                  <span>{t.name}</span>
-                  <span className={`st-task-st ${t.status}`}>
-                    {t.status === "ok" ? "完成" : t.status === "err" ? "失败" : "运行中"}
-                  </span>
+        {showTaskPanel && (
+          <div className={`st-col st-right ${asideCollapsed ? "st-right--collapsed" : ""}`}>
+            {asideCollapsed ? (
+              <button className="st-aside-rail" onClick={() => setAsideCollapsed(false)} title="展开任务面板">
+                <span className="st-aside-rail-icon">›</span>
+                <span className="st-aside-rail-label">任务</span>
+              </button>
+            ) : (
+              <>
+                <div className="st-right-head">
+                  <span className="st-right-title">运行与任务</span>
+                  <button className="st-aside-toggle" onClick={() => setAsideCollapsed(true)} title="收起任务面板">
+                    ‹
+                  </button>
                 </div>
-                <div className="st-bar">
-                  <i style={{ width: t.prog + "%" }} />
+                <div className="st-right-body">
+                  {topology && (
+                    <WorkflowGraphPanel
+                      topology={topology}
+                      trace={trace}
+                      runState={runState}
+                      episode={traceEpisode}
+                      total={traceTotal}
+                    />
+                  )}
+                  {running && !topology && (
+                    <div className="wf-panel wf-panel-skeleton">
+                      <div className="wf-head">
+                        <span className="wf-title">运行追踪</span>
+                        <span className="wf-live">● LIVE</span>
+                      </div>
+                      <div className="wf-canvas">
+                        <div className="wf-empty">等待图结构…</div>
+                      </div>
+                    </div>
+                  )}
+                  <div className="st-task-list">
+                    <h3 className="st-sec-title">任务中心</h3>
+                    {tasks.length === 0 && !topology && <div className="st-empty">暂无任务</div>}
+                    {tasks.map((t) => (
+                      <div className={`st-task${t.status === "err" ? " st-task-err" : ""}`} key={t.id}>
+                        <div className="st-task-t">
+                          <span>{t.name}</span>
+                          <span className={`st-task-st ${t.status}`}>
+                            {t.status === "ok" ? "完成" : t.status === "err" ? "失败" : "运行中"}
+                          </span>
+                        </div>
+                        <div className="st-bar">
+                          <i style={{ width: t.prog + "%" }} />
+                        </div>
+                        {t.error && <div className="st-task-err-msg">{t.error}</div>}
+                      </div>
+                    ))}
+                  </div>
                 </div>
-                {t.error && <div className="st-task-err-msg">{t.error}</div>}
-              </div>
-            ))}
+              </>
+            )}
           </div>
-        </div>
+        )}
       </div>
 
       {/* HITL approval gate overlay — renders the returned image(s) and the
