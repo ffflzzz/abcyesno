@@ -37,6 +37,7 @@ class Shot(TypedDict):
     duration: float
     prompt: str
     video_prompt: str
+    motion: NotRequired[str]  # camera movement hint (中文): 固定/推进/后退/左摇/右摇/上移/下移/旋转
 
 
 class Character(TypedDict):

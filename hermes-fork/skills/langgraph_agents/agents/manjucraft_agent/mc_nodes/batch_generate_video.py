@@ -20,6 +20,19 @@ def _duration_to_frames(duration: float) -> int:
     return 8 * n + 1
 
 
+# Camera-movement hints: 中文 → English phrase (see batch_generate_keyframes).
+MOTION_EN = {
+    "固定": "static shot, locked camera, no camera movement",
+    "推进": "slow push in, camera dollies forward toward the subject",
+    "后退": "slow pull out, camera dollies backward away from the subject",
+    "左摇": "camera pans left across the scene",
+    "右摇": "camera pans right across the scene",
+    "上移": "camera tilts up",
+    "下移": "camera tilts down",
+    "旋转": "camera slowly orbits around the subject",
+}
+
+
 def _video_dims(res: str) -> tuple[int, int]:
     """Map the agent "WxH" resolution to video width/height (capped for the API)."""
     m = re.search(r"(\d{3,5})\s*[x×]\s*(\d{3,5})", str(res))
@@ -55,9 +68,13 @@ async def batch_generate_video(state: AgentState) -> dict:
         duration = shot["duration"] if shot else 5.0
         num_frames = _duration_to_frames(duration)
         out_path = os.path.join(project_dir, "videos", f"shot_{idx:03d}.mp4")
+        video_prompt = shot["video_prompt"] if shot else "subtle cinematic motion"
+        motion = shot.get("motion") if shot else None
+        if motion and motion != "固定":
+            video_prompt = f"{video_prompt}, {MOTION_EN.get(motion, '')}"
         try:
             await generate_video_to_file(
-                shot["video_prompt"] if shot else "subtle cinematic motion",
+                video_prompt,
                 output_path=out_path,
                 image=result["keyframe_path"],
                 width=vw, height=vh,

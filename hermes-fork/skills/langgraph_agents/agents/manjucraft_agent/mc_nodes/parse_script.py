@@ -6,6 +6,12 @@ from mc_services.llm import parse_script_to_shots
 from mc_state import AgentState
 
 
+# Default camera-movement rotation so workflow-generated shots get varied
+# cinematography instead of every shot being a static lock-off. The user can
+# still override per-shot motion from the Studio storyboard editor (debt #7).
+DEFAULT_MOTION_CYCLE = ["固定", "推进", "右摇", "左摇", "后退", "上移", "下移", "旋转"]
+
+
 async def parse_script(state: AgentState) -> dict:
     """Parse episode_scripts[current_episode] into shots + characters.
 
@@ -56,6 +62,7 @@ async def parse_script(state: AgentState) -> dict:
             "duration": dur,
             "prompt": raw.get("prompt", ""),
             "video_prompt": raw.get("video_prompt", ""),
+            "motion": raw.get("motion") or DEFAULT_MOTION_CYCLE[i % len(DEFAULT_MOTION_CYCLE)],
         })
 
     characters = []

@@ -10,6 +10,20 @@ from mc_services.agnes_media import generate_image
 from mc_state import AgentState, ShotResult, episode_project_dir
 
 
+# Camera-movement hints: 中文 → English phrase appended to the generation
+# prompt so the model composes/animates the shot with the intended camera work.
+MOTION_EN = {
+    "固定": "static shot, locked camera, no camera movement",
+    "推进": "slow push in, camera dollies forward toward the subject",
+    "后退": "slow pull out, camera dollies backward away from the subject",
+    "左摇": "camera pans left across the scene",
+    "右摇": "camera pans right across the scene",
+    "上移": "camera tilts up",
+    "下移": "camera tilts down",
+    "旋转": "camera slowly orbits around the subject",
+}
+
+
 def _size_for_resolution(res: str) -> str:
     """Map the agent's "WxH" resolution to a keyframe size string.
 
@@ -56,6 +70,9 @@ async def batch_generate_keyframes(state: AgentState) -> dict:
         prompt = shot["prompt"]
         if steer:
             prompt = f"{prompt}, 用户修改：{steer}"
+        motion = shot.get("motion")
+        if motion and motion != "固定":
+            prompt = f"{prompt}, {MOTION_EN.get(motion, '')}"
         out_path = os.path.join(project_dir, "keyframes", f"shot_{shot['index']:03d}.png")
         try:
             await generate_image(

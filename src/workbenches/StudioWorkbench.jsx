@@ -115,6 +115,52 @@ const PX_PER_SEC = 48;
 const US = 1_000_000; // Jianying timerange unit = microseconds
 const shotKey = (s) => `${s.ep}-${s.n}`;
 
+// ── Shot enhancement option tables (debt #7: make the storyboard editor less
+// bare-bones — duration, camera movement, scene binding, first/last frames) ──
+const DUR_OPTIONS = [3, 4, 5, 6, 8];
+const MOTION_OPTIONS = ["固定", "推进", "后退", "左摇", "右摇", "上移", "下移", "旋转"];
+// 中文运镜 → English phrase injected into the per-shot generation prompt.
+const MOTION_EN = {
+  "固定": "static shot, locked camera, no camera movement",
+  "推进": "slow push in, camera dollies forward toward the subject",
+  "后退": "slow pull out, camera dollies backward away from the subject",
+  "左摇": "camera pans left across the scene",
+  "右摇": "camera pans right across the scene",
+  "上移": "camera tilts up",
+  "下移": "camera tilts down",
+  "旋转": "camera slowly orbits around the subject",
+};
+const CAM_OPTIONS = ["特写", "中景", "全景", "俯拍"];
+const CAM_EN = {
+  "特写": "close-up shot",
+  "中景": "medium shot",
+  "全景": "wide shot",
+  "俯拍": "high angle shot",
+};
+
+// Heuristic: split a script into scene blocks for the lightweight scene roster.
+// Looks for explicit scene/location markers; otherwise treats each non-empty
+// paragraph as a scene. Caps at 12 to keep the editor usable.
+function autoSplitScenes(text) {
+  if (!text || !text.trim()) return [];
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const marker = /^(场景|地点|内景|外景|场|景|镜头\d|第.+?场|\[|【)/;
+  const scenes = [];
+  let cur = null;
+  for (const line of lines) {
+    if (marker.test(line)) {
+      if (cur) scenes.push(cur);
+      const name = line.replace(/^[【\[]/, "").replace(/[】\]]$/, "").slice(0, 20).trim() || `场景${scenes.length + 1}`;
+      cur = { name, desc: "" };
+    } else {
+      if (!cur) cur = { name: `场景${scenes.length + 1}`, desc: "" };
+      cur.desc += (cur.desc ? " " : "") + line;
+    }
+  }
+  if (cur) scenes.push(cur);
+  return scenes.slice(0, 12).map((s) => ({ name: s.name.slice(0, 20), desc: (s.desc || "").slice(0, 160).trim() }));
+}
+
 function eventType(ev) {
   return ev?.type || ev?.name || "";
 }
@@ -186,7 +232,7 @@ function PhaseStepper({ phase, done, onGo }) {
   );
 }
 
-function AssetLibrary({ curTab, setCurTab, assetsReady, assetImgs, onGenOne, onGenAll, disabled }) {
+function AssetLibrary({ curTab, setCurTab, assetsReady, assetImgs, scenes, onScenesChange, onAutoScenes, onGenOne, onGenAll, disabled }) {
   const hasAny = Object.keys(assetImgs.character || {}).length > 0;
   const list = hasAny ? Object.entries(assetImgs.character || {}).map(([name, url]) => ({ name, tag: "角色", views: ["正面"], url })) : null;
   return (
@@ -203,8 +249,11 @@ function AssetLibrary({ curTab, setCurTab, assetsReady, assetImgs, onGenOne, onG
         ))}
       </div>
       <div className="st-asset-list">
-        {curTab !== "character" && (
-          <div className="st-empty">{curTab === "scene" ? "场景参考由分镜图直接承载" : "道具参考由分镜图直接承载"}</div>
+        {curTab === "scene" && (
+          <SceneRoster scenes={scenes} onChange={onScenesChange} onAuto={onAutoScenes} />
+        )}
+        {curTab === "prop" && (
+          <div className="st-empty">道具参考由分镜图直接承载，本轮暂未单独成库。</div>
         )}
         {curTab === "character" && !list && (
           <div className="st-empty">
@@ -247,17 +296,64 @@ function AssetLibrary({ curTab, setCurTab, assetsReady, assetImgs, onGenOne, onG
   );
 }
 
-function StoryboardEditor({ shots, shotState, onGenShot, onGenVideo, onScriptChange }) {
+function SceneRoster({ scenes, onChange, onAuto }) {
+  const list = scenes || [];
+  function update(i, patch) {
+    const next = list.slice();
+    next[i] = { ...next[i], ...patch };
+    onChange(next);
+  }
+  function add() {
+    onChange([...list, { name: `场景${list.length + 1}`, desc: "" }]);
+  }
+  function remove(i) {
+    onChange(list.filter((_, j) => j !== i));
+  }
+  return (
+    <div className="st-scene-editor">
+      <div className="st-scene-toolbar">
+        <button className="st-gen-btn" onClick={add}>+ 添加场景</button>
+        <button className="st-gen-btn st-gen-btn-ghost" onClick={onAuto}>▶ 从剧本自动拆分场景</button>
+      </div>
+      {list.length === 0 && (
+        <div className="st-empty st-empty-soft">
+          还没有场景。可手动添加，或点「从剧本自动拆分场景」按段落 / 场景标记（场景 / 内景 / 外景 / 【】）自动提取。
+        </div>
+      )}
+      {list.map((sc, i) => (
+        <div className="st-scene-card" key={i}>
+          <div className="st-scene-card-head">
+            <input
+              className="st-scene-name"
+              value={sc.name || ""}
+              placeholder="场景名"
+              onChange={(e) => update(i, { name: e.target.value })}
+            />
+            <button className="st-scene-del" onClick={() => remove(i)} title="删除场景">✕</button>
+          </div>
+          <textarea
+            className="st-scene-desc"
+            value={sc.desc || ""}
+            placeholder="场景描述（会注入到该镜生图 / 生视频提示词）"
+            onChange={(e) => update(i, { desc: e.target.value })}
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function StoryboardEditor({ shots, shotState, shotCfg, projectSec, scenes, onGenShot, onGenVideo, onScriptChange, onCfgChange, onFrameChain }) {
   return (
     <div className="st-center-inner">
       <div className="st-sb-head">
         <div>
-          <div>剧本文本（可编辑）</div>
-          <div className="st-col-hint">分镜叙事，可改写。留空则沿用工作流解析结果</div>
+          <div>剧本文本 / 镜头参数（可编辑）</div>
+          <div className="st-col-hint">分镜叙事、时长、运镜、场景、景别均可改写。留空则沿用工作流解析结果。</div>
         </div>
         <div>
-          <div>拍摄法 + 模型参数</div>
-          <div className="st-col-hint">改完立即用于「生成此镜 / 生成视频」</div>
+          <div>生图提示词 + 首/尾帧</div>
+          <div className="st-col-hint">改完立即用于「生成此镜 / 生成视频」。首/尾帧用于镜头衔接过渡。</div>
         </div>
         <div>
           <div>视频预览 + 生成</div>
@@ -267,6 +363,10 @@ function StoryboardEditor({ shots, shotState, onGenShot, onGenVideo, onScriptCha
       {shots.map((s) => {
         const k = shotKey(s);
         const st = shotState[k] || { status: "idle" };
+        const cfg = shotCfg[k] || {};
+        const effDur = cfg.dur || projectSec || 4;
+        const durOpts = DUR_OPTIONS.includes(effDur) ? DUR_OPTIONS : [effDur, ...DUR_OPTIONS];
+        const sceneBound = (scenes || []).some((x) => x.name === (st.scene || ""));
         return (
           <div className="st-shot" key={k}>
             <div className="st-shot-col">
@@ -276,7 +376,55 @@ function StoryboardEditor({ shots, shotState, onGenShot, onGenVideo, onScriptCha
                 placeholder="分镜叙事文本。可改写该镜的台词/画面描述，留空则沿用工作流解析结果"
                 onChange={(e) => onScriptChange(k, e.target.value)}
               />
+              <div className="st-row2">
+                <label className="st-mini-fld">
+                  <span>时长</span>
+                  <select
+                    value={effDur}
+                    onChange={(e) => onCfgChange(k, { dur: Math.max(1, parseInt(e.target.value, 10) || 4) })}
+                    title="该镜时长（秒）。影响成片时间轴与视频生成长度。"
+                  >
+                    {durOpts.map((d) => (
+                      <option key={d} value={d}>{d}s</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="st-mini-fld">
+                  <span>运镜</span>
+                  <select
+                    value={st.motion || "固定"}
+                    onChange={(e) => onScriptChange(k, e.target.value, "motion")}
+                    title="镜头运动：固定/推进/后退/左摇/右摇/上移/下移/旋转。注入到生图与生视频提示词。"
+                  >
+                    {MOTION_OPTIONS.map((m) => (
+                      <option key={m} value={m}>{m}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <div className="st-row2">
+                <label className="st-mini-fld st-mini-fld-wide">
+                  <span>使用场景</span>
+                  <select
+                    value={st.scene || ""}
+                    onChange={(e) => onScriptChange(k, e.target.value, "scene")}
+                    title="指定该镜所属场景，场景设定会注入提示词。场景在左侧「场景」库编辑。"
+                  >
+                    <option value="">（无）</option>
+                    {(scenes || []).map((sc) => (
+                      <option key={sc.name} value={sc.name}>{sc.name}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              {!sceneBound && (scenes || []).length > 0 && (
+                <div className="st-mini-hint">该镜未绑定场景（场景名可能已改动）。</div>
+              )}
+              {(scenes || []).length === 0 && (
+                <div className="st-mini-hint">提示：在左侧「场景」库添加场景后，可在此指定该镜场景。</div>
+              )}
             </div>
+
             <div className="st-shot-col">
               <textarea
                 defaultValue={st.prompt || s.prompt || ""}
@@ -285,23 +433,45 @@ function StoryboardEditor({ shots, shotState, onGenShot, onGenVideo, onScriptCha
               />
               <div className="st-row2">
                 <select
-                  defaultValue={st.cam || s.cam || "特写"}
-                  title="镜头景别（拍摄法）：决定该镜画面的构图远近。特写=人物/物体细节；中景=半身到全身；全景=环境全貌；俯拍=从上方俯视。"
+                  value={st.cam || "特写"}
+                  title="镜头景别（拍摄法）：特写=人物/物体细节；中景=半身到全身；全景=环境全貌；俯拍=从上方俯视。"
+                  onChange={(e) => onScriptChange(k, e.target.value, "cam")}
                 >
-                  <option>特写</option>
-                  <option>中景</option>
-                  <option>全景</option>
-                  <option>俯拍</option>
+                  {CAM_OPTIONS.map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
                 </select>
                 <select
-                  defaultValue={st.model || s.model || "agnes-2.5-flash"}
-                  title="生图模型：agnes-2.5-flash=快速出图（默认）；agnes-2.5-pro=更高质量但更慢。"
+                  value={st.model || "agnes-2.5-flash"}
+                  title="生图模型提示：agnes-2.5-flash=快速出图（默认）；agnes-2.5-pro=更高质量但更慢。"
+                  onChange={(e) => onScriptChange(k, e.target.value, "model")}
                 >
                   <option>agnes-2.5-flash</option>
                   <option>agnes-2.5-pro</option>
                 </select>
               </div>
+
+              <div className="st-frames">
+                <FrameSlot
+                  label="首帧"
+                  url={st.firstFrameUrl}
+                  onPick={(p) => onScriptChange(k, p || "", "firstFrameUrl")}
+                  onClear={() => onScriptChange(k, "", "firstFrameUrl")}
+                />
+                <FrameSlot
+                  label="尾帧"
+                  url={st.lastFrameUrl}
+                  onPick={(p) => onScriptChange(k, p || "", "lastFrameUrl")}
+                  onClear={() => onScriptChange(k, "", "lastFrameUrl")}
+                />
+                {st.lastFrameUrl && (
+                  <button className="st-chain-btn" onClick={() => onFrameChain(k)} title="把本镜尾帧设为下一镜首帧，用于镜头衔接过渡">
+                    ↳ 衔接下一镜首帧
+                  </button>
+                )}
+              </div>
             </div>
+
             <div className="st-shot-col">
               <div className={`st-preview ${st.status === "busy" ? "busy" : ""}`}>
                 {st.videoUrl ? (
@@ -330,6 +500,38 @@ function StoryboardEditor({ shots, shotState, onGenShot, onGenVideo, onScriptCha
           </div>
         );
       })}
+    </div>
+  );
+}
+
+function FrameSlot({ label, url, onPick, onClear }) {
+  const inputRef = useRef(null);
+  const [busy, setBusy] = useState(false);
+  async function pick() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const api = typeof window !== "undefined" && window.hermes;
+      const p = api && api.selectFile ? await api.selectFile({ filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "webp", "gif"] }] }) : null;
+      if (p) onPick(p);
+    } catch (_) {
+      /* dialog cancelled or unavailable */
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="st-frame-slot">
+      <div className="st-frame-label">{label}</div>
+      <div className="st-frame-thumb">
+        {url ? <img src={toLoadableSrc(url)} alt={label} /> : <span className="st-frame-none">无</span>}
+      </div>
+      <div className="st-frame-actions">
+        <button className="st-frame-btn" onClick={pick} disabled={busy}>{url ? "更换" : "上传"}</button>
+        {url && (
+          <button className="st-frame-btn st-frame-clear" onClick={onClear}>清除</button>
+        )}
+      </div>
     </div>
   );
 }
@@ -690,6 +892,7 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
     fps: 30,
     consistency: "lock_bible",
     fixedChars: "",
+    scenes: [],
   }));
 
   // 智能输入：自然语言 → 自动填表
@@ -1314,8 +1517,17 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
       const s = shots.find((x) => shotKey(x) === k);
       const st = shotState[k] || {};
       setShotState((prev) => ({ ...prev, [k]: { ...st, status: "busy" } }));
+      const motionEn = MOTION_EN[st.motion || "固定"];
+      const camEn = CAM_EN[st.cam || "特写"];
+      const sceneObj = (project.scenes || []).find((x) => x.name === (st.scene || ""));
+      let prompt = `${st.prompt || s?.prompt || ""}，${project.style}风格`;
+      if (camEn) prompt += `，${camEn}`;
+      prompt += `，电影级镜头，高细节`;
+      if (motionEn && st.motion && st.motion !== "固定") prompt += `，${motionEn}`;
+      if (sceneObj) prompt += `，场景设定：${sceneObj.name}——${sceneObj.desc}`;
       const j = await api("generate-image", {
-        prompt: `${st.prompt || s?.prompt || ""}，${project.style}风格，电影级镜头，高细节`,
+        prompt,
+        model: st.model || "agnes-2.5-flash",
         size: "2K",
         ratio: "9:16",
       });
@@ -1329,15 +1541,20 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
         },
       }));
     },
-    [api, shots, shotState, project.style]
+    [api, shots, shotState, project.style, project.scenes]
   );
 
   const genVideoShot = useCallback(
     async (k) => {
       const st = shotState[k] || {};
       setShotState((prev) => ({ ...prev, [k]: { ...st, status: "busy" } }));
+      const motionEn = MOTION_EN[st.motion || "固定"];
+      const sceneObj = (project.scenes || []).find((x) => x.name === (st.scene || ""));
+      let prompt = `${st.prompt || ""}，${project.style}风格，自然运动，电影级镜头`;
+      if (motionEn && st.motion && st.motion !== "固定") prompt += `，${motionEn}`;
+      if (sceneObj) prompt += `，场景设定：${sceneObj.name}`;
       const j = await api("generate-video", {
-        prompt: `${st.prompt || ""}，${project.style}风格，自然运动，电影级镜头`,
+        prompt,
         image: st.imgPath || st.imgUrl || undefined,
         width: 1152,
         height: 768,
@@ -1354,7 +1571,7 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
         },
       }));
     },
-    [api, shotState, project.style]
+    [api, shotState, project.style, project.scenes]
   );
 
   const onScriptChange = useCallback((k, val, field = "script") => {
@@ -1365,6 +1582,28 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
   const onCfgChange = useCallback((k, patch) => {
     setShotCfg((prev) => ({ ...prev, [k]: { ...(prev[k] || { dur: 4, trans: "none" }), ...patch } }));
   }, []);
+
+  // Smart chaining: copy this shot's last frame onto the next shot's first
+  // frame so adjacent shots transition smoothly (debt #7).
+  const onFrameChain = useCallback((k) => {
+    const sorted = [...shots].sort((a, b) => (a.ep === b.ep ? a.n - b.n : a.ep - b.ep));
+    const i = sorted.findIndex((s) => shotKey(s) === k);
+    if (i < 0 || i >= sorted.length - 1) return;
+    const cur = shotState[k] || {};
+    if (!cur.lastFrameUrl) return;
+    const nextK = shotKey(sorted[i + 1]);
+    onScriptChange(nextK, cur.lastFrameUrl, "firstFrameUrl");
+  }, [shots, shotState, onScriptChange]);
+
+  const handleAutoScenes = useCallback(() => {
+    const text = project.mode === "series" ? project.seriesScript : project.script;
+    const split = autoSplitScenes(text);
+    if (!split.length) {
+      alert("未能从剧本识别场景段落，请手动添加场景。");
+      return;
+    }
+    setProject((p) => ({ ...p, scenes: split }));
+  }, [project.mode, project.seriesScript, project.script]);
   const onDelete = useCallback((k) => {
     setShotState((prev) => {
       const n = { ...prev };
@@ -1512,6 +1751,7 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
                 fps: 30,
                 consistency: "lock_bible",
                 fixedChars: "",
+                scenes: [],
               });
             }}
             title="重置工作台"
@@ -1539,6 +1779,9 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
             setCurTab={setCurTab}
             assetsReady={assetsReady}
             assetImgs={assetImgs}
+            scenes={project.scenes || []}
+            onScenesChange={(next) => setProject((p) => ({ ...p, scenes: next }))}
+            onAutoScenes={handleAutoScenes}
             onGenOne={genOne}
             onGenAll={genAll}
             disabled={running}
@@ -1787,9 +2030,14 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
             <StoryboardEditor
               shots={shots}
               shotState={shotState}
+              shotCfg={shotCfg}
+              projectSec={project.sec}
+              scenes={project.scenes || []}
               onGenShot={genShot}
               onGenVideo={genVideoShot}
               onScriptChange={onScriptChange}
+              onCfgChange={onCfgChange}
+              onFrameChain={onFrameChain}
             />
           )}
 

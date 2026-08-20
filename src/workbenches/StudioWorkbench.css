@@ -406,3 +406,40 @@
 
 /* range input */
 input[type="range"].st-edit-seek, .st-sd-row input[type="range"] { accent-color: var(--st-accent); }
+
+/* ── Storyboard editor: shot enhancement controls (debt #7) ── */
+.st-mini-fld { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.st-mini-fld > span { font-size: 11px; color: var(--st-muted); font-weight: 500; }
+.st-mini-fld select { width: 100%; background: var(--bg); border: 1px solid var(--st-line); color: var(--st-text); border-radius: var(--st-radius-xs); padding: 7px 9px; font: inherit; font-size: 13px; transition: border-color .15s, box-shadow .15s; }
+.st-mini-fld select:focus { outline: none; border-color: var(--st-accent); box-shadow: 0 0 0 3px var(--st-soft); }
+.st-mini-fld-wide { grid-column: 1 / -1; }
+
+.st-mini-hint { font-size: 11px; color: var(--st-muted); line-height: 1.5; background: var(--st-surface-2); border: 1px dashed var(--st-line); border-radius: var(--st-radius-xs); padding: 6px 8px; }
+
+.st-frames { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; margin-top: 8px; }
+.st-frame-slot { display: flex; flex-direction: column; gap: 4px; }
+.st-frame-label { font-size: 11px; color: var(--st-muted); font-weight: 500; }
+.st-frame-thumb { width: 64px; height: 64px; border: 1px solid var(--st-line); border-radius: var(--st-radius-xs); background: var(--st-preview-bg); overflow: hidden; display: flex; align-items: center; justify-content: center; }
+.st-frame-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.st-frame-none { font-size: 11px; color: var(--st-muted); }
+.st-frame-actions { display: flex; gap: 4px; }
+.st-frame-btn { font-size: 11px; padding: 3px 8px; border: 1px solid var(--st-line); background: var(--st-surface-2); color: var(--st-text); border-radius: var(--st-radius-xs); cursor: pointer; transition: border-color .15s, background .15s; }
+.st-frame-btn:hover:not(:disabled) { border-color: var(--st-accent); }
+.st-frame-btn:disabled { opacity: .55; cursor: not-allowed; }
+.st-frame-clear { color: var(--st-error); border-color: color-mix(in srgb, var(--st-error) 40%, var(--st-line)); }
+.st-chain-btn { font-size: 11px; padding: 4px 10px; border: 1px dashed var(--st-accent); background: var(--st-soft); color: var(--st-accent); border-radius: var(--st-radius-xs); cursor: pointer; align-self: center; transition: background .15s; }
+.st-chain-btn:hover { background: color-mix(in srgb, var(--st-accent) 18%, transparent); }
+
+/* ── Asset library: scene roster editor (debt #7) ── */
+.st-scene-editor { display: flex; flex-direction: column; gap: 12px; }
+.st-scene-toolbar { display: flex; gap: 8px; flex-wrap: wrap; }
+.st-gen-btn-ghost { background: var(--st-surface-2); border: 1px dashed var(--st-line); }
+.st-gen-btn-ghost:hover:not(:disabled) { border-color: var(--st-accent); color: var(--st-accent); }
+.st-scene-card { background: var(--st-surface-2); border: 1px solid var(--st-line); border-radius: var(--st-radius-sm); padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.st-scene-card-head { display: flex; gap: 8px; align-items: center; }
+.st-scene-name { flex: 1; min-width: 0; background: var(--bg); border: 1px solid var(--st-line); color: var(--st-text); border-radius: var(--st-radius-xs); padding: 7px 9px; font: inherit; font-size: 13px; font-weight: 600; }
+.st-scene-name:focus { outline: none; border-color: var(--st-accent); box-shadow: 0 0 0 3px var(--st-soft); }
+.st-scene-del { flex: none; width: 28px; height: 28px; border: 1px solid var(--st-line); background: transparent; color: var(--st-muted); border-radius: var(--st-radius-xs); cursor: pointer; font-size: 13px; transition: color .15s, border-color .15s; }
+.st-scene-del:hover { color: var(--st-error); border-color: color-mix(in srgb, var(--st-error) 40%, var(--st-line)); }
+.st-scene-desc { width: 100%; background: var(--bg); border: 1px solid var(--st-line); color: var(--st-text); border-radius: var(--st-radius-xs); padding: 8px 9px; font: inherit; font-size: 12px; resize: vertical; min-height: 54px; line-height: 1.5; }
+.st-scene-desc:focus { outline: none; border-color: var(--st-accent); box-shadow: 0 0 0 3px var(--st-soft); }
