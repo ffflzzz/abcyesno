@@ -328,19 +328,31 @@ function ChatShell({
     setQueuedMessages([]);
   }, [selectedSessionId]);
 
-  // Load persisted messages when the session changes.
+  // Load persisted messages when the session or sessions list changes.
   //
   // Per-session streams (2026-08-01): switching sessions no longer stops or
   // resets anything. Each session owns its own AbortController and message
   // buffer inside useAgentStream, so a background run keeps streaming while
   // the user reads another thread. hydrateSession() only fills in the stored
-  // history when that session has no live in-memory state — coming back to a
-  // still-running session must NOT overwrite its accumulated deltas with the
-  // stale on-disk snapshot.
+  // history when the snapshot differs from what's in memory — coming back to
+  // a still-running session must NOT overwrite its accumulated deltas with
+  // the stale on-disk snapshot, AND the effect must not be silently gated
+  // when the very first call lands before sessions has been populated.
+  //
+  // Deps use the `sessions` array (not the per-session derived `session`
+  // memo) so that the effect still fires when a tab switch lands on a
+  // session that wasn't yet in memory — otherwise the bucket would stay
+  // empty until the next unrelated setSessions wipes in. A sessionsRef
+  // mirror keeps reads stable without forcing a re-fire on every render.
+  // effect already has the same `sessions` dependency, so a sessionsRef mirror
+  // higher up in the component keeps reads stable without forcing a re-fire.
   useEffect(() => {
     if (!selectedSessionId) return;
-    hydrateSession(selectedSessionId, session?.messages || []);
-  }, [selectedSessionId, session, hydrateSession]);
+    const sid = selectedSessionId;
+    const live = (sessionsListRef.current || []).find((s) => s.id === sid);
+    hydrateSession(sid, live?.messages || []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedSessionId, sessions, hydrateSession]);
 
   async function doSend(text, mentions, explicitThreadId) {
     if (!text.trim()) return;

@@ -1048,21 +1048,48 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
   );
 
   /**
-   * 从存储装载会话历史。**若该会话正在流式运行或已装载过，则不覆盖**——
-   * 这是多会话并发的关键：切回一个后台仍在跑的会话时，必须保留内存中
-   * 已累积的增量，而不是用磁盘上的旧快照把它冲掉。
-   * @returns true 表示实际写入了历史
+   * 从存储装载会话历史。
+   *
+   * **不再"一次性封 bucket"**：早期版本在首次成功后即设置 `sess.hydrated=true`，
+   * 任何后续相同的 hydrate 调用都被硬跳过。但 tab 切换的 race 下，effect 第一次
+   * 跑时 stored 可能是空数组（session 还没进内存里的 sessions 列表），bucket 被
+   * 用空数据"封死"；等 sessions 异步补齐、effect 再跑、stored 是真实消息时，
+   * 已被锁掉，UI 一直空白直到下一次 setHistory 才恢复。
+   *
+   * 现在改成基于内容 signature 的幂等：已 hydrate 但内容完全一致 → 跳过；
+   * 已 hydrate 但内容不一致 → 用真数据重新填充；未 hydrate → 正常装载。
+   * 仍然守 `phase !== "idle"`：避免把正在流的 bucket 用 on-disk 快照冲掉。
    */
   const hydrateSession = useCallback(
     (sessionId, stored) => {
+      if (!sessionId) return false;
       const sess = getSession(sessionId);
-      if (sess.hydrated || sess.phase !== "idle" || sess.messages.length > 0) {
-        // Already live (or already loaded). Do NOT re-publish — this effect
-        // re-runs whenever the sessions array identity changes, and an extra
-        // snapshot would cause a pointless re-render on every list refresh.
+      // Don't overwrite a live/streaming bucket — the stream has already
+      // accumulated deltas that supersede anything on disk.
+      if (sess.phase !== "idle") return false;
+      const incoming = Array.isArray(stored) ? stored.map((m) => ({ ...m })) : [];
+      // Cheap content fingerprint: id of the last message + total content length.
+      // Cheap enough to run on every effect re-fire; unique enough to distinguish
+      // empty vs real sessions and "stored snapshot changed" from "same snapshot".
+      const sig = (arr) => {
+        if (!arr || arr.length === 0) return "0";
+        const last = arr[arr.length - 1];
+        let len = 0;
+        for (const m of arr) len += (m && m.content ? String(m.content).length : 0);
+        return `${arr.length}:${last && last.id ? last.id : ""}:${len}`;
+      };
+      if (sess.hydrated && sig(sess.messages) === sig(incoming)) {
+        // Snapshot unchanged — avoid the pointless republish that was making
+        // every sessions refresh flicker the UI.
         return false;
       }
-      sess.messages = Array.isArray(stored) ? stored.map((m) => ({ ...m })) : [];
+      // Accept empty incoming only if the in-memory bucket is also empty;
+      // never replace a non-empty live bucket with empty (protects against
+      // late "session not found yet" effect runs that race with the real load).
+      if (incoming.length === 0 && sess.messages.length > 0 && sess.hydrated) {
+        return false;
+      }
+      sess.messages = incoming;
       sess.hydrated = true;
       publishNow(sess.id);
       return true;
