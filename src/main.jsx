@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App.jsx';
 import DetachedApp from './DetachedApp.jsx';
+import bachAvatar from './assets/bach-avatar.png';
 import './styles/index.css';
 
 // URLSearchParams drives the dispatch — main.jsx is the entry point for
@@ -79,7 +80,7 @@ function Bootstrap() {
         <div className="welcome bootstrap-loading">
           <div className="bootstrap-spinner">
             <div className="spinner-ring" />
-            <div className="spinner-logo">∞</div>
+            <img className="spinner-logo spinner-logo-img" src={bachAvatar} alt="" draggable="false" />
           </div>
           <h2>Abcyesno</h2>
           <p className="bootstrap-status">{stageText[stage]}</p>

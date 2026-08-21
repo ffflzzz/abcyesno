@@ -839,6 +839,15 @@ body {
   line-height: 1;
 }
 
+.spinner-logo-img {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  object-fit: cover;
+  display: block;
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.06), 0 4px 16px rgba(0,0,0,0.35);
+}
+
 @keyframes spin {
   to { transform: rotate(360deg); }
 }

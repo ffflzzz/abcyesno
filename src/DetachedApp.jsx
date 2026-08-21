@@ -3,6 +3,7 @@ import ResultPanel from "./components/ResultPanel.jsx";
 import { ErrorBoundary } from "./ErrorBoundary.jsx";
 import { initContract, listManifests } from "./contract/registry.js";
 import { subscribeContractEvents } from "./contract/eventBus.js";
+import bachAvatar from "./assets/bach-avatar.png";
 
 // ──────────────────────────────────────────────────────────────────────────
 // DetachedApp — standalone window for "move tab to new window" gesture.
@@ -94,7 +95,7 @@ export default function DetachedApp() {
         <div className="welcome bootstrap-loading">
           <div className="bootstrap-spinner">
             <div className="spinner-ring" />
-            <div className="spinner-logo">∞</div>
+            <img className="spinner-logo spinner-logo-img" src={bachAvatar} alt="" draggable="false" />
           </div>
           <h2>结果面板</h2>
           <p className="bootstrap-status">
