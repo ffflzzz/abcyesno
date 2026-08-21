@@ -88,7 +88,7 @@ async function generateImage({ prompt, size = '2K', ratio = '1:1' }, key) {
 // Poll GET {VIDEO_STATUS_BASE}/agnesapi?video_id=<ID> until status:"completed"
 //   resp: { status, metadata:{ url } }
 async function generateVideo(
-  { prompt, image, width = 1152, height = 768, num_frames = 81, frame_rate = 24 },
+  { prompt, image, keyframes, width = 1152, height = 768, num_frames = 81, frame_rate = 24 },
   key
 ) {
   const apiKey = key || readAgnesApiKey();
@@ -100,18 +100,32 @@ async function generateVideo(
   if (resolvedImage && !/^https?:/i.test(resolvedImage) && !/^data:/i.test(resolvedImage)) {
     resolvedImage = fileToDataUri(resolvedImage);
   }
+  // Keyframes (multi-frame) mode: mirror the Python create_video contract --
+  // when both first+last frames are supplied, send them as extra_body image
+  // list with mode:"keyframes" (the top-level `image` is then ignored).
+  let resolvedKeyframes = null;
+  if (Array.isArray(keyframes) && keyframes.length) {
+    resolvedKeyframes = keyframes.map((p) =>
+      /^https?:/i.test(p) || /^data:/i.test(p) ? p : fileToDataUri(p)
+    );
+  }
+  const body = {
+    model: 'agnes-video-v2.0',
+    prompt,
+    width,
+    height,
+    num_frames,
+    frame_rate,
+  };
+  if (resolvedKeyframes) {
+    body.extra_body = { image: resolvedKeyframes, mode: 'keyframes' };
+  } else if (resolvedImage) {
+    body.image = resolvedImage;
+  }
   const res = await fetch(`${IMAGE_BASE}/videos`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({
-      model: 'agnes-video-v2.0',
-      prompt,
-      width,
-      height,
-      num_frames,
-      frame_rate,
-      ...(resolvedImage ? { image: resolvedImage } : {}),
-    }),
+    body: JSON.stringify(body),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(`VIDEO HTTP ${res.status}: ${JSON.stringify(data).slice(0, 300)}`);

@@ -1621,6 +1621,7 @@ function createAgUIServer(getGatewayClient, storage, options) {
       const url = await agnes.generateVideo({
         prompt,
         image: body.image || undefined,
+        keyframes: body.keyframes || undefined,
         width: body.width || 1152,
         height: body.height || 768,
         num_frames: body.num_frames || 81,

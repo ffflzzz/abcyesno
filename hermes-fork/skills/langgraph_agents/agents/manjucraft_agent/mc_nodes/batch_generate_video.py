@@ -72,11 +72,20 @@ async def batch_generate_video(state: AgentState) -> dict:
         motion = shot.get("motion") if shot else None
         if motion and motion != "固定":
             video_prompt = f"{video_prompt}, {MOTION_EN.get(motion, '')}"
+        # Frame bridge (debt #7): prefer a user-uploaded first frame over the
+        # auto-generated keyframe; when both first+last frames are supplied,
+        # drive the model in keyframes mode so the clip spans the intended
+        # transition. Forward-compatible: Agnes ignores these when unsupported.
+        first_url = shot.get("first_frame_url") if shot else None
+        last_url = shot.get("last_frame_url") if shot else None
+        image = first_url or result.get("keyframe_path")
+        keyframes = [first_url, last_url] if (first_url and last_url) else None
         try:
             await generate_video_to_file(
                 video_prompt,
                 output_path=out_path,
-                image=result["keyframe_path"],
+                image=image,
+                keyframes=keyframes,
                 width=vw, height=vh,
                 num_frames=num_frames, frame_rate=24,
             )

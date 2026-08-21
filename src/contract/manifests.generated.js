@@ -126,6 +126,10 @@ const manifests = [
             "control": "repeat",
             "label": "固定角色（可选，用于一致性）"
           }
+        },
+        "shot_frame_overrides": {
+          "type": "object",
+          "description": "前端 per-shot 首/尾帧覆盖，键为镜头 index(0-based)，值为 {first_frame_url,last_frame_url}。由 StudioWorkbench 重跑时自动注入，前端无表单。"
         }
       },
       "required": []

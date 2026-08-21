@@ -65,6 +65,19 @@ async def parse_script(state: AgentState) -> dict:
             "motion": raw.get("motion") or DEFAULT_MOTION_CYCLE[i % len(DEFAULT_MOTION_CYCLE)],
         })
 
+    # Merge user-uploaded first/last frames (set in the Studio storyboard)
+    # so batch_generate_video can honour them. Keyed by shot index (0-based)
+    # to match the frontend's n-1 mapping (debt #7 / frame-bridge).
+    frame_overrides = state.get("shot_frame_overrides") or {}
+    if frame_overrides:
+        for shot in shots:
+            ov = frame_overrides.get(str(shot.get("index"))) or frame_overrides.get(shot.get("index"))
+            if isinstance(ov, dict):
+                if ov.get("first_frame_url"):
+                    shot["first_frame_url"] = ov["first_frame_url"]
+                if ov.get("last_frame_url"):
+                    shot["last_frame_url"] = ov["last_frame_url"]
+
     characters = []
     seen_names = set()
     if fixed:

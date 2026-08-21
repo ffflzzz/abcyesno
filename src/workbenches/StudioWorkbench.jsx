@@ -1587,7 +1587,8 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
       if (sceneObj) prompt += `，场景设定：${sceneObj.name}`;
       const j = await api("generate-video", {
         prompt,
-        image: st.imgPath || st.imgUrl || undefined,
+        image: st.firstFrameUrl || st.imgPath || st.imgUrl || undefined,
+        keyframes: st.lastFrameUrl || undefined,
         width: 1152,
         height: 768,
         num_frames: 81,
@@ -1694,6 +1695,20 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
       alert(project.mode === "series" ? "请填写系列脚本" : "请填写剧本");
       return;
     }
+    // Capture any user-set first/last frames so a re-run honours them
+    // (batch_generate_video consumes Shot.first_frame_url/last_frame_url).
+    // Keyed by shot index (0-based) = frontend n-1 to match the backend.
+    const frameOverrides = {};
+    for (const s of shots) {
+      const st = shotState[s.key] || {};
+      if (st.firstFrameUrl || st.lastFrameUrl) {
+        frameOverrides[String(s.n - 1)] = {
+          first_frame_url: st.firstFrameUrl || undefined,
+          last_frame_url: st.lastFrameUrl || undefined,
+        };
+      }
+    }
+
     // Reset state for a fresh run.
     setRunState("running");
     setRunId(null);
@@ -1721,6 +1736,7 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
       resolution: project.res,
       sec_per_shot: Number(project.sec),
       characters: parseFixedCharacters(project.fixedChars),
+      shot_frame_overrides: frameOverrides,
     };
     onRun(manifest, input);
   }

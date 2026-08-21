@@ -218,16 +218,22 @@ def build_initial_state_obj(obj: Dict[str, Any]) -> Dict[str, Any]:
             "max_retries": DEFAULT_MAX_RETRIES,
             "steer_notes": "",
             "consistency_warnings": [],
+            # Frame bridge (debt #7): frontend per-shot first/last frames.
+            "shot_frame_overrides": obj.get("shot_frame_overrides") or {},
         }
 
     # single mode
     script = (obj.get("script") or "").strip()
     if not script:
         raise RuntimeError("manjucraft_agent single mode requires a non-empty 'script'")
-    return build_initial_state(
+    state = build_initial_state(
         script, project_name=project_name, style=style,
         resolution=resolution, sec_per_shot=sec_per_shot, fixed_characters=fixed_characters,
     )
+    # Frame bridge (debt #7): carry frontend per-shot first/last frames into
+    # the run so a re-run can honour them in batch_generate_video.
+    state["shot_frame_overrides"] = obj.get("shot_frame_overrides") or {}
+    return state
 
 
 def _normalize_fixed_characters(value) -> list:

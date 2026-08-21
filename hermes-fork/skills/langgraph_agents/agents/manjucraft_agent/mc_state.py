@@ -38,6 +38,8 @@ class Shot(TypedDict):
     prompt: str
     video_prompt: str
     motion: NotRequired[str]  # camera movement hint (中文): 固定/推进/后退/左摇/右摇/上移/下移/旋转
+    first_frame_url: NotRequired[str]   # user-uploaded first frame (manual transition assist; consumed by batch_generate_video when set)
+    last_frame_url: NotRequired[str]    # user-uploaded last frame
 
 
 class Character(TypedDict):
@@ -111,6 +113,7 @@ class AgentState(TypedDict):
     assets_zip_path: NotRequired[str]
 
     # --- control / HITL ---
+    shot_frame_overrides: NotRequired[dict]  # frontend per-shot first/last frame map, keyed by shot index (0-based)
     steer_notes: NotRequired[str]           # consumed by generation nodes (debt #5)
     consistency_warnings: NotRequired[list[str]]  # surfaced when drift stays low (debt #9)
     series_playlist_path: NotRequired[str]  # written by finalize_series
