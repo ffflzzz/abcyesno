@@ -32,11 +32,11 @@
 }
 
 /* ── Topbar ── */
-.st-topbar { display: flex; align-items: center; gap: 14px; padding: 13px 20px; border-bottom: 1px solid var(--st-line); background: var(--st-surface); }
-.st-brand { font-weight: 700; letter-spacing: .3px; font-size: 15px; display: flex; align-items: baseline; gap: 10px; }
+.st-topbar { display: flex; align-items: center; gap: 14px; padding: 8px 14px; border-bottom: 1px solid var(--st-line); background: var(--st-surface); }
+.st-brand { font-weight: 700; letter-spacing: .3px; font-size: 14px; display: flex; align-items: baseline; gap: 8px; flex-shrink: 0; }
 .st-brand small { color: var(--st-muted); font-weight: 400; font-size: 11px; }
-.st-topbar-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
-.st-icon-btn { background: transparent; border: 1px solid var(--st-line); color: var(--st-muted); border-radius: var(--st-radius-xs); width: 32px; height: 32px; display: grid; place-items: center; cursor: pointer; transition: all .15s; }
+.st-topbar-actions { margin-left: auto; display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.st-icon-btn { background: transparent; border: 1px solid var(--st-line); color: var(--st-muted); border-radius: var(--st-radius-xs); width: 28px; height: 28px; display: grid; place-items: center; cursor: pointer; transition: all .15s; }
 .st-icon-btn:hover { border-color: var(--st-accent); color: var(--st-text); background: var(--st-soft); }
 
 /* ── HITL approval gate overlay ── */
@@ -55,15 +55,15 @@
 .st-approval-overlay .message-row.assistant { margin-bottom: 0; }
 
 /* ── Stepper ── */
-.st-stepper { display: flex; align-items: center; justify-content: center; gap: 0; padding: 16px; background: var(--st-surface); border-bottom: 1px solid var(--st-line); }
-.st-step { display: flex; align-items: center; gap: 8px; padding: 0; background: transparent; border: none; color: var(--st-muted); cursor: pointer; user-select: none; font-size: 13px; font-weight: 500; transition: color .15s; }
-.st-step .st-dot { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; background: var(--st-surface-2); color: var(--st-muted); border: 2px solid var(--st-line); transition: all .15s; flex-shrink: 0; }
+.st-stepper { display: flex; align-items: center; justify-content: center; gap: 0; flex: 1; min-width: 0; }
+.st-step { display: flex; align-items: center; gap: 6px; padding: 0; background: transparent; border: none; color: var(--st-muted); cursor: pointer; user-select: none; font-size: 12px; font-weight: 500; transition: color .15s; }
+.st-step .st-dot { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; background: var(--st-surface-2); color: var(--st-muted); border: 1.5px solid var(--st-line); transition: all .15s; flex-shrink: 0; }
 .st-step:hover { color: var(--st-text); }
 .st-step.active { color: var(--st-text); }
-.st-step.active .st-dot { background: var(--st-accent); color: #fff; border-color: var(--st-accent); box-shadow: 0 0 0 4px var(--st-soft); }
+.st-step.active .st-dot { background: var(--st-accent); color: #fff; border-color: var(--st-accent); box-shadow: 0 0 0 3px var(--st-soft); }
 .st-step.done { color: var(--success); }
 .st-step.done .st-dot { background: var(--success); color: #fff; border-color: var(--success); }
-.st-step-sep { width: 44px; height: 2px; background: var(--st-line); margin: 0 10px; border-radius: 1px; transition: background .15s; }
+.st-step-sep { width: 22px; height: 1.5px; background: var(--st-line); margin: 0 6px; border-radius: 1px; transition: background .15s; }
 .st-step.done + .st-step-sep { background: var(--success); opacity: .5; }
 
 /* ── Layout grid (columns set inline by phase) ── */

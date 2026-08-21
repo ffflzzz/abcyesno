@@ -1836,6 +1836,7 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
           {manifest?.name || "短剧制片工作台"}
           <small>前端编排台 · 导出剪映工程</small>
         </div>
+        <PhaseStepper phase={phase} done={done} onGo={goPhase} />
         <div className="st-topbar-actions">
           <button
             className="st-icon-btn"
@@ -1884,8 +1885,6 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
           )}
         </div>
       </div>
-
-      <PhaseStepper phase={phase} done={done} onGo={goPhase} />
 
       <div
         className={`st-grid ${centerSolo ? "st-grid--solo" : ""}`}
