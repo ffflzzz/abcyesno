@@ -224,7 +224,7 @@ function PhaseStepper({ phase, done, onGo }) {
               <span className="st-dot">{isDone ? "✓" : i + 1}</span>
               {p.label}
             </div>
-            {i < PHASES.length - 1 && <span className="st-step-sep">—</span>}
+            {i < PHASES.length - 1 && null}
           </React.Fragment>
         );
       })}
