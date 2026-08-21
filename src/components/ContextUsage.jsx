@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import Icon from "./Icon";
 
 /**
@@ -158,13 +158,27 @@ export default function ContextUsage({ messages = [], model = "agnes-2.5-flash",
     if (e.target === e.currentTarget) onClose();
   }, [onClose]);
 
+  // Stop mousedown from bubbling to the backdrop so a click that lands on
+  // the modal itself never trips the close-on-outside-click guard.
+  const stopMouseDown = useCallback((e) => e.stopPropagation(), []);
+
+  // Esc closes the modal.
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKey = (e) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
   if (!open) return null;
 
   const { total, used, percentage, buckets, cost, isReal } = data;
 
   return (
     <div className="context-usage-backdrop" onClick={handleBackdropClick}>
-      <div className="context-usage-modal">
+      <div className="context-usage-modal" onMouseDown={stopMouseDown}>
         {/* Header */}
         <div className="context-usage-header">
           <span className="context-usage-title">上下文用量</span>

@@ -217,7 +217,7 @@ export default function Composer({
     };
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
-  }, [showModelMenu, showPermissionMenu, showPlusMenu, showCustomModel, mentionOpen]);
+  }, [showModelMenu, showPermissionMenu, showPlusMenu, showCustomModel, mentionOpen, slashOpen]);
 
   // ── @ mention protocol (spec §2) ──────────────────────────────────────
   // Inspect the text immediately before the caret; if it ends with `@word`

@@ -14,6 +14,13 @@
   --error-text: #ff7b72;
   --success: #238636;
   --warning: #d29922;
+  /* Surface tokens — solid, opaque backgrounds for modals/popovers. Used by
+     .context-usage-modal, .mention-popover and similar floating layers so
+     they never render as transparent over the chat background. */
+  --surface: #1f262e;
+  --surface-1: #1c2128;
+  --surface-2: #262d36;
+  --surface-3: #2e353e;
 }
 
 /* Light theme tokens (Primer-aligned). Components only ever read the
@@ -35,6 +42,10 @@
   --error-text: #d1242f;
   --success: #1a7f37;
   --warning: #9a6700;
+  --surface: #ffffff;
+  --surface-1: #f6f8fa;
+  --surface-2: #eaeef2;
+  --surface-3: #d8dee4;
 }
 
 [data-theme="dark"] {
