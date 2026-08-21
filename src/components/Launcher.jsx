@@ -12,8 +12,22 @@ export default function Launcher({ apps = [] }) {
         <div className="launcher-grid">
           {apps.map((app) => (
             <button key={app.key} className="launcher-app" onClick={app.onClick}>
-              <span className="launcher-app-icon" style={{ background: app.color }}>
-                <Icon name={app.icon} size={24} />
+              <span
+                className="launcher-app-icon"
+                style={app.iconSrc ? undefined : { background: app.color }}
+              >
+                {app.iconSrc ? (
+                  <img
+                    src={app.iconSrc}
+                    alt={app.title}
+                    width={28}
+                    height={28}
+                    style={{ borderRadius: 8, display: "block" }}
+                    draggable={false}
+                  />
+                ) : (
+                  <Icon name={app.icon} size={24} />
+                )}
               </span>
               <span className="launcher-app-name">{app.title}</span>
             </button>

@@ -15,6 +15,7 @@ import BlockRequestDialog from "./components/BlockRequestDialog.jsx";
 import { initContract, listManifests } from "./contract/registry.js";
 import { launcherApps } from "./contract/manifests.generated.js";
 import { subscribeContractEvents } from "./contract/eventBus.js";
+import excalidrawIcon from "./assets/excalidraw.ico";
 import { sanitizeMessageContent } from "./components/MessageThread.jsx";
 import { useAgentStream } from "./hooks/useAgentStream.js";
 import { useTaskManager } from "./components/TaskPanel.jsx";
@@ -1081,6 +1082,20 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
         onClick,
       };
     }),
+    // Excalidraw online whiteboard — opens in the system default browser via
+    // the `open-external` IPC (zero black-screen risk, no extra Electron window).
+    {
+      key: "excalidraw",
+      title: "Excalidraw",
+      icon: "default",
+      iconSrc: excalidrawIcon,
+      color: "#6965db",
+      onClick: () => {
+        if (window.hermes?.openExternal) {
+          window.hermes.openExternal("https://excalidraw.com/");
+        }
+      },
+    },
   ], [openApp, openAppAsNewTab, selectedAssistantId]);
 
   // ── Detach: owns the IPC + clears in-window workflow state ──
