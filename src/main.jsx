@@ -20,6 +20,26 @@ function isDetachedPanel() {
   }
 }
 
+// Boot mode router — main.jsx is the entry point for three surfaces:
+//   1. main   : primary window (`index.html`)
+//   2. studio : standalone app window (`index.html?panel=studio&workflow=...`)
+//   3. result : legacy detached result panel (`index.html?panel=result`)
+// Keeping dispatch here (not in App.jsx) lets the secondary windows avoid
+// loading the heavy App bootstrap any sooner than needed.
+function parseBootMode() {
+  try {
+    const p = new URLSearchParams(window.location.search);
+    const panel = p.get('panel');
+    if (panel === 'studio') {
+      return { mode: 'studio', workflowId: p.get('workflow') || '' };
+    }
+    if (panel === 'result') {
+      return { mode: 'result', workflowId: '' };
+    }
+  } catch (_) {}
+  return { mode: 'main', workflowId: '' };
+}
+
 function Bootstrap() {
   const [aguiPort, setAguiPort] = useState(null);
   const [waitSeconds, setWaitSeconds] = useState(0);
@@ -103,10 +123,16 @@ function Bootstrap() {
   return <App aguiPort={aguiPort} />;
 }
 
-// Standalone "detached panel" window — its own Bootstrap is in DetachedApp.jsx
-// because it has entirely different loading-state messaging (the main window
+// Standalone windows — each has its own Bootstrap in DetachedApp.jsx because
+// they have entirely different loading-state messaging (the main window
 // already owns the backend, so we just wait for it to come up).
-const Root = isDetachedPanel() ? <DetachedApp /> : <Bootstrap />;
+const boot = parseBootMode();
+const Root =
+  boot.mode === 'studio'
+    ? <DetachedApp mode="studio" workflowId={boot.workflowId} />
+    : boot.mode === 'result'
+    ? <DetachedApp mode="result" />
+    : <Bootstrap />;
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     {Root}

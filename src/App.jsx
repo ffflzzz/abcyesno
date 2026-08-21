@@ -164,6 +164,7 @@ function ChatShell({
   onToggleBrowserPanel = () => {},
   onOpenBrowserPanel = () => {},
   onDetachResultPanel,
+  studioEntry = false,
 }) {
   // Keep a live ref to the session list so the settle callback (which is
   // identity-stable by design) can look up titles without going stale.
@@ -504,6 +505,22 @@ function ChatShell({
     () => { handleStop(); }
   );
 
+  // Studio entry (openMode:"window"): auto-focus the first RUNNING task that
+  // belongs to the launched workflow so the user lands on the live run instead
+  // of an empty form. Fires once tasks have loaded; re-fires if a new running
+  // task appears later (e.g. user starts a run from the form while this window
+  // is open). Only steers when nothing is manually selected yet.
+  useEffect(() => {
+    if (!studioEntry) return;
+    if (!selectedWorkflowId) return;
+    const running = taskManager.tasks.find(
+      (t) => t.workflowId === selectedWorkflowId && t.status === "running"
+    );
+    if (running && !taskManager.selectedTaskId) {
+      taskManager.onSelectTask(running.id);
+    }
+  }, [studioEntry, selectedWorkflowId, taskManager.tasks, taskManager.selectedTaskId, taskManager]);
+
   // Sidebar tab is owned by App so the chat-side AgentRunMonitor can switch to
   // the "tasks" tab on demand. (Falls back to Sidebar's internal state if null.)
   const [sidebarTab, setSidebarTab] = useState(() => {
@@ -808,7 +825,7 @@ function ChatShell({
   );
 }
 
-export default function App({ aguiPort }) {
+export default function App({ aguiPort, initialWorkflowId = "", studioEntry = false }) {
   const [assistants, setAssistants] = useState([]);
   const [sessions, setSessions] = useState([]);
   const [selectedAssistantId, setSelectedAssistantId] = useState("");
@@ -828,8 +845,12 @@ export default function App({ aguiPort }) {
   // 后端每条请求带 request_id，前端必须回执才能解除挂起。用队列支持连续多个。
   const [blockQueue, setBlockQueue] = useState([]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [resultPanelOpen, setResultPanelOpen] = useState(false);
-  const [resultPanelCollapsed, setResultPanelCollapsed] = useState(false);
+  // studioEntry: standalone app window (openMode:"window") — the ResultPanel
+  // must be open + un-collapsed and the launched workflow pre-selected so the
+  // StudioWorkbench fills the window. The main window keeps its own independent
+  // state (this App instance is a separate React tree in a separate window).
+  const [resultPanelOpen, setResultPanelOpen] = useState(studioEntry ? true : false);
+  const [resultPanelCollapsed, setResultPanelCollapsed] = useState(studioEntry ? false : false);
   const [resultPanelWidth, setResultPanelWidth] = useState(() => {
     try { return Number(localStorage.getItem('abc:resultPanelWidth')) || 380; } catch { return 380; }
   });
@@ -908,7 +929,7 @@ export default function App({ aguiPort }) {
   // selectedWorkflowId remembers which contract workflow (if any) is active in
   // the composer. Adding a workflow never touches this file beyond the data.
   const [manifests, setManifests] = useState(() => listManifests());
-  const [selectedWorkflowId, setSelectedWorkflowId] = useState("");
+  const [selectedWorkflowId, setSelectedWorkflowId] = useState(studioEntry ? initialWorkflowId || "" : "");
 
   // ── Browser-style tabs ──────────────────────────────────────────────
   // Each tab owns a snapshot of the per-surface state (assistant / session /
@@ -917,10 +938,20 @@ export default function App({ aguiPort }) {
   // when you switch tabs. Switching a tab saves the current surface state into
   // the leaving tab and restores the target tab's saved state into the global
   // variables ChatShell reads — effectively each tab is an independent surface.
-  const [tabs, setTabs] = useState(() => [
-    { id: "tab-home", type: "homepage", title: "启动台", icon: "home", assistantId: "", sessionId: "", workflowId: "", resultOpen: false, resultCollapsed: false },
-  ]);
-  const [activeTabId, setActiveTabId] = useState("tab-home");
+  const [tabs, setTabs] = useState(() => {
+    if (studioEntry && initialWorkflowId) {
+      // Standalone app window (openMode:"window"): open directly into the chat
+      // surface with the workflow pre-selected + ResultPanel open, so the
+      // ChatLayout + StudioWorkbench fill the window (no homepage grid).
+      return [
+        { id: "tab-studio", type: "chat", title: "漫剧go", icon: "film", assistantId: "", sessionId: "", workflowId: initialWorkflowId, resultOpen: true, resultCollapsed: false },
+      ];
+    }
+    return [
+      { id: "tab-home", type: "homepage", title: "启动台", icon: "home", assistantId: "", sessionId: "", workflowId: "", resultOpen: false, resultCollapsed: false },
+    ];
+  });
+  const [activeTabId, setActiveTabId] = useState(studioEntry && initialWorkflowId ? "tab-studio" : "tab-home");
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
 
@@ -1014,13 +1045,22 @@ export default function App({ aguiPort }) {
       key: "chat", title: "对话", icon: "chat", color: "#111827",
       onClick: () => openApp({ type: "chat", title: "对话", icon: "chat", assistantId: selectedAssistantId || "" }),
     },
-    ...launcherApps.map((app) => ({
-      key: app.key,
-      title: app.title,
-      icon: app.icon,
-      color: app.color,
-      onClick: () => openApp({ type: "studio", title: app.title, icon: app.icon, workflowId: app.workflowId, resultOpen: true, resultCollapsed: false, assistantId: selectedAssistantId || "" }),
-    })),
+    ...launcherApps.map((app) => {
+      // openMode is data-driven (manifest `launcher.openMode`). "window" pops
+      // a standalone Electron window via IPC; "tab" (default) replaces the
+      // current Launcher tab in-place.
+      const onClick =
+        app.openMode === "window"
+          ? () => window.hermes?.openAppWindow?.({ workflowId: app.workflowId })
+          : () => openApp({ type: "studio", title: app.title, icon: app.icon, workflowId: app.workflowId, resultOpen: true, resultCollapsed: false, assistantId: selectedAssistantId || "" });
+      return {
+        key: app.key,
+        title: app.title,
+        icon: app.icon,
+        color: app.color,
+        onClick,
+      };
+    }),
   ], [openApp, selectedAssistantId]);
 
   // ── Detach: owns the IPC + clears in-window workflow state ──
@@ -1544,6 +1584,7 @@ export default function App({ aguiPort }) {
           onToggleBrowserPanel={toggleBrowserPanel}
           onOpenBrowserPanel={openBrowserPanel}
           onDetachResultPanel={handleDetachResultPanel}
+          studioEntry={studioEntry}
         />
               </div>
               {activeTab.type === "homepage" && (

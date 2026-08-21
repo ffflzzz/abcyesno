@@ -220,7 +220,8 @@ const manifests = [
     "launcher": {
       "title": "漫剧go",
       "icon": "film",
-      "color": "linear-gradient(135deg, #0d9488, #14b8a6)"
+      "color": "linear-gradient(135deg, #0d9488, #14b8a6)",
+      "openMode": "window"
     },
     "notes": "series 模式：首集走 first_frame/each_scene/end 三个完整门（首帧门批准即锁定 character_bible）；续集仅走轻量 episode_ready 门。"
   }
@@ -234,7 +235,8 @@ const launcherApps = [
     "title": "漫剧go",
     "icon": "film",
     "color": "linear-gradient(135deg, #0d9488, #14b8a6)",
-    "workflowId": "manjucraft_agent"
+    "workflowId": "manjucraft_agent",
+    "openMode": "window"
   }
 ];
 

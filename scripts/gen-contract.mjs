@@ -59,12 +59,18 @@ function buildLauncherApps(manifests) {
   const apps = [];
   for (const m of manifests) {
     if (!m.launcher) continue;
+    // openMode is data-driven (manifest field `launcher.openMode`). Defaults
+    // to "tab" (replace current Launcher tab). "window" pops a standalone
+    // Electron window via the open-app-window IPC. Future agents opt in by
+    // declaring `launcher.openMode: "window"`.
+    const openMode = m.launcher.openMode === "window" ? "window" : "tab";
     apps.push({
       key: m.id,
       title: m.launcher.title || m.name,
       icon: m.launcher.icon || m.icon || "film",
       color: m.launcher.color || "#111827",
       workflowId: m.id,
+      openMode,
     });
   }
   return apps;
