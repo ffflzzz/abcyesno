@@ -14,7 +14,7 @@ function formatValue(value) {
  * without leaving the conversation flow. Replaces the modal ApprovalDialog
  * for workflow HITL gates.
  */
-export default function ApprovalBubble({ approval, onRespond, toolMessages = [] }) {
+export default function ApprovalBubble({ approval, onRespond, toolMessages = [], fallbackImages = [] }) {
   const [lightboxSrc, setLightboxSrc] = useState(null);
   const {
     operation,
@@ -173,6 +173,21 @@ export default function ApprovalBubble({ approval, onRespond, toolMessages = [] 
     if (fallbackImages.length > 0) {
       imageArtifacts = fallbackImages;
     }
+  }
+
+  // Last resort: the caller (typically the workbench) may inject pre-collected
+  // images that were emitted via workflow.artifact and already ingested on
+  // the client side — even if the backend failed to attach them to the
+  // approval payload (common when an upstream generator like Agnes 503'd).
+  if (imageArtifacts.length === 0 && Array.isArray(fallbackImages) && fallbackImages.length > 0) {
+    imageArtifacts = fallbackImages.map((a, i) => ({
+      id: a.id || `fallback-${i}`,
+      type: "image",
+      url: a.url || a.src || a.path,
+      path: a.path,
+      src: a.src,
+      label: a.label || "已收集的产物",
+    }));
   }
 
   return (

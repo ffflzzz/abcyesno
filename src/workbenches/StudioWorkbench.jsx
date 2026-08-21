@@ -2323,10 +2323,22 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
       </div>
 
       {/* HITL approval gate overlay — renders the returned image(s) and the
-          approve / reject / steer controls when the backend pauses at a gate. */}
+          approve / reject / steer controls when the backend pauses at a gate.
+          `fallbackImages` is fed from the asset library because the backend
+          approval payload's `artifacts` list can be empty when an upstream
+          generator 503'd — the workbench still has the most recent
+          client-side ingest (via workflow.artifact) and can surface it. */}
       {approval && (
         <div className="st-approval-overlay">
-          <ApprovalBubble approval={approval} onRespond={handleWorkbenchApprove} />
+          <ApprovalBubble
+            approval={approval}
+            onRespond={handleWorkbenchApprove}
+            fallbackImages={Object.entries(assetImgs?.character || {}).map(([name, url]) => ({
+              id: `character-${name}`,
+              url,
+              label: `角色·${name}`,
+            }))}
+          />
         </div>
       )}
     </div>

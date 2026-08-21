@@ -306,15 +306,17 @@
 
 .wf-canvas {
   position: relative;
-  height: 280px;
-  overflow: hidden;
+  min-height: 360px;
+  height: auto;
+  max-height: 520px;
+  overflow: auto;
   cursor: grab;
   background:
     radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--st-text) 6%, transparent) 1px, transparent 0) 0 0 / 22px 22px,
     var(--st-surface-2);
   touch-action: none;
 }
-.wf-svg { display: block; }
+.wf-svg { display: block; min-width: 100%; }
 .wf-empty {
   position: absolute;
   inset: 0;
@@ -333,7 +335,10 @@
 
 /* nodes */
 .wf-node-box { fill: var(--st-surface); stroke: var(--st-line); stroke-width: 1.4; transition: fill .3s, stroke .3s; }
-.wf-node-label { fill: var(--st-text); font-size: 12px; font-weight: 600; text-anchor: middle; pointer-events: none; }
+/* SVG <text> doesn't scale with `transform="scale()"`, so the font-size must
+   be set in *content* units (px) without relying on the group transform to
+   shrink it — otherwise the text gets clipped by its own box at low zoom. */
+.wf-node-label { fill: var(--st-text); font-size: 13px; font-weight: 600; text-anchor: middle; pointer-events: none; dominant-baseline: middle; }
 .wf-node-accent { pointer-events: none; opacity: .9; }
 .wf-node-check { fill: var(--success); font-size: 13px; font-weight: 700; text-anchor: middle; }
 .wf-node-dot { fill: var(--st-accent); }

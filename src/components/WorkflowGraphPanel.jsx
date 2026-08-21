@@ -14,10 +14,10 @@ import React, { useRef, useState, useMemo, useCallback, useEffect } from "react"
 // Pure SVG, no external graph libs. Honors prefers-reduced-motion by disabling
 // the pulse (the active node still gets a static accent ring).
 
-const NODE_W = 132;
-const NODE_H = 38;
-const GAP_Y = 30; // vertical gap between node boxes
-const PAD = 24; // content padding
+const NODE_W = 156;
+const NODE_H = 44;
+const GAP_Y = 36; // vertical gap between node boxes
+const PAD = 28; // content padding
 
 // Which phase a node belongs to — drives the left accent color.
 function phaseOf(id) {
@@ -77,16 +77,20 @@ export default function WorkflowGraphPanel({ topology, trace, runState, episode,
     return active;
   }, [trace]);
 
-  // Fit-to-view whenever the topology or container size changes.
+  // Fit-to-view whenever the topology or container size changes. The fit
+  // ratio is clamped so the SVG never shrinks below 0.7× (else node text
+  // becomes unreadable) and grows past 1.6× when there are only a handful
+  // of nodes. Surplus topology scrolls in the canvas (overflow:auto).
   const fit = useCallback(() => {
     const el = wrapRef.current;
     if (!el || !layout.count) return;
     const cw = el.clientWidth;
     const ch = el.clientHeight;
-    const k = Math.min(cw / layout.width, ch / layout.height, 1.4);
+    const kRaw = Math.min(cw / layout.width, ch / layout.height, 1.6);
+    const k = Math.max(0.7, kRaw);
     const x = (cw - layout.width * k) / 2;
-    const y = (ch - layout.height * k) / 2;
-    setView({ x: Math.max(x, 4), y: Math.max(y, 4), k });
+    const y = Math.max(8, (ch - layout.height * k) / 2);
+    setView({ x, y, k });
   }, [layout]);
 
   useEffect(() => {
@@ -253,12 +257,12 @@ useEffect(() => {
                     {n.label || n.id}
                   </text>
                   {status === "done" && (
-                    <text className="wf-node-check" x={NODE_W - 12} y={NODE_H / 2} dominantBaseline="central">
+                    <text className="wf-node-check" x={NODE_W - 14} y={NODE_H / 2} dominantBaseline="central">
                       ✓
                     </text>
                   )}
                   {status === "running" && (
-                    <circle className="wf-node-dot" cx={NODE_W - 12} cy={NODE_H / 2} r={4} />
+                    <circle className="wf-node-dot" cx={NODE_W - 14} cy={NODE_H / 2} r={4} />
                   )}
                 </g>
               );
