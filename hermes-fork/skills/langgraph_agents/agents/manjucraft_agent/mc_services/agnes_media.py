@@ -68,6 +68,48 @@ def _mock_video_file(path: str) -> str:
     return path
 
 
+def _is_retryable_http_error(exc: Exception) -> bool:
+    """Classify an httpx error as transient (worth retrying) or fatal.
+
+    Retry: connection/timeout/transport failures + 5xx server errors (the
+    503 in the bug report). Do NOT retry 4xx (bad request / auth / param
+    errors) — those are caller bugs and will never succeed on retry.
+    """
+    if isinstance(exc, (httpx.TransportError, httpx.TimeoutException)):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        try:
+            return exc.response.status_code >= 500
+        except Exception:
+            return True
+    return False
+
+
+async def _post_json_with_retry(url: str, *, headers: dict, json: dict, timeout: float, max_attempts: int = 3) -> "httpx.Response":
+    """POST JSON with bounded exponential backoff on transient failures.
+
+    Surfaces 4xx immediately (no retry); retries 5xx / transport / timeout up
+    to ``max_attempts`` times with ``2 ** attempt`` second gaps.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.post(url, headers=headers, json=json)
+            # Raise only after the transport layer succeeded, so 4xx (no retry)
+            # is distinguished from a transient 5xx (retry).
+            resp.raise_for_status()
+            return resp
+        except Exception as exc:  # noqa: BLE001 - we re-raise deliberately
+            last_exc = exc
+            if not _is_retryable_http_error(exc):
+                raise
+            if attempt < max_attempts:
+                await asyncio.sleep(2 ** attempt)
+    assert last_exc is not None
+    raise last_exc
+
+
 async def generate_image(
     prompt: str,
     size: str = "1024x768",
@@ -92,14 +134,13 @@ async def generate_image(
         else:
             body["extra_body"] = {"response_format": response_format}
 
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        resp = await client.post(
-            f"{BASE_URL}/images/generations",
-            headers={"Authorization": f"Bearer {_api_key()}", "Content-Type": "application/json"},
-            json=body,
-        )
-        resp.raise_for_status()
-        data = resp.json()["data"][0]
+    resp = await _post_json_with_retry(
+        f"{BASE_URL}/images/generations",
+        headers={"Authorization": f"Bearer {_api_key()}", "Content-Type": "application/json"},
+        json=body,
+        timeout=timeout,
+    )
+    data = resp.json()["data"][0]
 
     if response_format == "b64_json" and data.get("b64_json"):
         raw = base64.b64decode(data["b64_json"])
@@ -111,11 +152,24 @@ async def generate_image(
 
     url = data.get("url")
     if output_path and url:
-        async with httpx.AsyncClient(timeout=60) as client:
-            raw = (await client.get(url)).content
-        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        Path(output_path).write_bytes(raw)
-        return output_path
+        # Download the result image; retry transient fetch failures too.
+        last_dl_err: Exception | None = None
+        for attempt in range(1, 4):
+            try:
+                async with httpx.AsyncClient(timeout=60) as client:
+                    dl = await client.get(url)
+                dl.raise_for_status()
+                Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+                Path(output_path).write_bytes(dl.content)
+                return output_path
+            except Exception as exc:  # noqa: BLE001
+                last_dl_err = exc
+                if not _is_retryable_http_error(exc):
+                    raise
+                if attempt < 3:
+                    await asyncio.sleep(2 ** attempt)
+        assert last_dl_err is not None
+        raise last_dl_err
     return url or ""
 
 

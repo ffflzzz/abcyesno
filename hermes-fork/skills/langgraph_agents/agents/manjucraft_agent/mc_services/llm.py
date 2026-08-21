@@ -22,6 +22,18 @@ def _api_key() -> str:
     return key
 
 
+def _is_retryable_http_error(exc: Exception) -> bool:
+    """Transient errors worth retrying (5xx / transport / timeout), not 4xx."""
+    if isinstance(exc, (httpx.TransportError, httpx.TimeoutException)):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        try:
+            return exc.response.status_code >= 500
+        except Exception:
+            return True
+    return False
+
+
 async def chat_completion(
     messages: list[dict[str, str]],
     *,
@@ -30,7 +42,11 @@ async def chat_completion(
     response_format: dict[str, str] | None = None,
     timeout: float = 120.0,
 ) -> str:
-    """Call the chat completions endpoint and return the assistant's content."""
+    """Call the chat completions endpoint and return the assistant's content.
+
+    Retries transient failures (5xx / connection / timeout) up to 3 times with
+    exponential backoff. 4xx (bad request / auth) is surfaced immediately.
+    """
     if MOCK:
         # Minimal offline stub: echo a request-flavored placeholder. Real
         # callers below provide structured fallbacks, so this is only a guard.
@@ -44,17 +60,28 @@ async def chat_completion(
     if response_format:
         body["response_format"] = response_format
 
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        resp = await client.post(
-            f"{BASE_URL}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {_api_key()}",
-                "Content-Type": "application/json",
-            },
-            json=body,
-        )
-        resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"]
+    last_exc: Exception | None = None
+    for attempt in range(1, 4):
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.post(
+                    f"{BASE_URL}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {_api_key()}",
+                        "Content-Type": "application/json",
+                    },
+                    json=body,
+                )
+            resp.raise_for_status()
+            return resp.json()["choices"][0]["message"]["content"]
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            if not _is_retryable_http_error(exc):
+                raise
+            if attempt < 3:
+                await asyncio.sleep(2 ** attempt)
+    assert last_exc is not None
+    raise last_exc
 
 
 _SCRIPT_PARSE_SYSTEM_PROMPT = """你是一位专业的漫剧（短剧/短视频）分镜师。

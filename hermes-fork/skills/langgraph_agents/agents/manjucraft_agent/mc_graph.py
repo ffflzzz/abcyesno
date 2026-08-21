@@ -15,7 +15,10 @@ resume) without modifying the runtime.
 
 from __future__ import annotations
 
+import httpx
+
 from langgraph.graph import END, START, StateGraph
+from langgraph.types import RetryPolicy
 
 from mc_nodes.approval_gate import gate_each_scene, gate_end, gate_first_frame
 from mc_nodes.batch_generate_keyframes import batch_generate_keyframes
@@ -33,21 +36,40 @@ from mc_nodes.plan_episodes import plan_episodes
 from mc_state import AgentState
 
 
+def _retry_on_transient(exc: Exception) -> bool:
+    """Graph-level retry predicate: only transient infra failures.
+
+    Connection / timeout / transport errors are worth re-running the node for.
+    4xx/5xx HTTP errors are NOT retried here — 4xx is a caller bug and 5xx is
+    already retried 3x at the tool level (``_post_json_with_retry`` /
+    ``chat_completion``), so by the time it reaches the graph it is a genuine
+    hard failure. Retrying those would just burn time on a doomed request.
+    """
+    return isinstance(exc, (httpx.TransportError, httpx.TimeoutException))
+
+
+# Every node that touches the network (LLM parse, image gen, video gen, tts,
+# draft) gets a graph-level retry shim for connection/timeout blips. The HITL
+# gates and pure-local finalizers are intentionally excluded — interrupting /
+# re-running them would corrupt the approval flow or duplicate outputs.
+_NODE_RETRY = RetryPolicy(max_attempts=3, retry_on=_retry_on_transient)
+
+
 def build_graph():
     builder = StateGraph(AgentState)
 
-    builder.add_node("plan_episodes", plan_episodes)
-    builder.add_node("parse_script", parse_script)
-    builder.add_node("generate_characters", generate_characters)
+    builder.add_node("plan_episodes", plan_episodes, retry_policy=_NODE_RETRY)
+    builder.add_node("parse_script", parse_script, retry_policy=_NODE_RETRY)
+    builder.add_node("generate_characters", generate_characters, retry_policy=_NODE_RETRY)
     builder.add_node("gate_first_frame", gate_first_frame)
-    builder.add_node("batch_generate_keyframes", batch_generate_keyframes)
+    builder.add_node("batch_generate_keyframes", batch_generate_keyframes, retry_policy=_NODE_RETRY)
     builder.add_node("consistency_check", consistency_check)
     builder.add_node("gate_each_scene", gate_each_scene)
-    builder.add_node("fix_drift", fix_drift)
-    builder.add_node("batch_generate_video", batch_generate_video)
-    builder.add_node("generate_tts", generate_tts_node)
+    builder.add_node("fix_drift", fix_drift, retry_policy=_NODE_RETRY)
+    builder.add_node("batch_generate_video", batch_generate_video, retry_policy=_NODE_RETRY)
+    builder.add_node("generate_tts", generate_tts_node, retry_policy=_NODE_RETRY)
     builder.add_node("merge_and_concat", merge_and_concat)
-    builder.add_node("generate_jianying_draft", generate_jianying_draft)
+    builder.add_node("generate_jianying_draft", generate_jianying_draft, retry_policy=_NODE_RETRY)
     builder.add_node("gate_end", gate_end)
     builder.add_node("finalize_episode", finalize_episode)
     builder.add_node("finalize_series", finalize_series)

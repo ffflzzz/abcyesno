@@ -721,8 +721,19 @@ async def _run_graph_with_hitl(
             return last_state
         except Exception as exc:
             logger.exception("langgraph run failed")
-            on_event("workflow.error", {"message": str(exc)})
-            on_event("workflow.done", {"status": "error", "error": str(exc)})
+            # Classify the failure so the UI can distinguish a network outage
+            # (already retried 3x at the tool + graph level) from a real logic
+            # bug. Transient infra errors that exhausted retries are reported as
+            # network failures; everything else is a hard error.
+            import httpx as _httpx
+
+            is_network = isinstance(exc, (_httpx.TransportError, _httpx.TimeoutException))
+            if isinstance(exc, _httpx.HTTPStatusError):
+                is_network = getattr(exc.response, "status_code", 0) >= 500
+            kind = "network" if is_network else "error"
+            note = "（网络错误：已自动重试，仍失败）" if is_network else ""
+            on_event("workflow.error", {"message": f"{str(exc)}{note}", "kind": kind})
+            on_event("workflow.done", {"status": kind, "error": str(exc)})
             return last_state
 
         if not interrupted:
