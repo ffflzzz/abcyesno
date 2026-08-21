@@ -427,6 +427,51 @@ check(
   "App.jsx 必须按 openMode 派发 onClick（window→openAppWindow），并接收 studioEntry/initialWorkflowId"
 );
 
+// ── H1-H6: global character library ──────────────────────────────────────
+const builtInPath = path.join(detachRoot, "hermes-fork", "skills", "langgraph_agents", "agents", "manjucraft_agent", "seed", "built_in.json");
+let builtIn = [];
+try { builtIn = JSON.parse(fs.readFileSync(builtInPath, "utf8")); } catch (_) {}
+const charLibModalSrc = fs.readFileSync(path.join(detachRoot, "src", "components", "CharacterLibraryModal.jsx"), "utf8");
+const swSrc = fs.readFileSync(path.join(detachRoot, "src", "workbenches", "StudioWorkbench.jsx"), "utf8");
+const charLibBackendSrc = fs.readFileSync(path.join(detachRoot, "electron", "backend", "character_library.js"), "utf8");
+
+check(
+  "H1 seed/built_in.json 存在且 ≥10 条内置角色",
+  Array.isArray(builtIn) && builtIn.length >= 10,
+  `built_in.json 条数=${builtIn.length}`
+);
+check(
+  "H2 CharacterLibraryModal 存在且导出 default",
+  /export default function CharacterLibraryModal/.test(charLibModalSrc),
+  "CharacterLibraryModal.jsx 必须导出 default 组件"
+);
+check(
+  "H3 StudioWorkbench 含「📚 角色库」按钮 + 打开 modal 逻辑",
+  /📚 角色库/.test(swSrc) && /setCharLibOpen\(true\)/.test(swSrc) && /CharacterLibraryModal/.test(swSrc),
+  "角色 tab 顶栏按钮必须打开角色库 modal"
+);
+check(
+  "H4 ingestArtifact 角色分支自动归档调用 character_library.upsert",
+  /character_library\.upsert/.test(swSrc) && /function ingestArtifact/.test(swSrc),
+  "ingestArtifact 角色分支末尾必须 upsert 到全局角色库"
+);
+check(
+  "H5 genOne 角色重新生成成功后调用同一 upsert",
+  /const genOne = useCallback/.test(swSrc) && /character_library\.upsert/.test(swSrc),
+  "genOne('character') 成功后必须 upsert 到全局角色库"
+);
+check(
+  "H6 后端 character_library 模块导出 list/upsert/touchUsed + main 路由接入",
+  /module\.exports/.test(charLibBackendSrc) &&
+    /listCards/.test(charLibBackendSrc) &&
+    /upsertCard/.test(charLibBackendSrc) &&
+    /touchUsed/.test(charLibBackendSrc) &&
+    /character_library\.list/.test(mainJsSrc) &&
+    /character_library\.upsert/.test(mainJsSrc) &&
+    /character_library\.touch_used/.test(mainJsSrc),
+  "Node 模块 + main.js studio-call 路由必须齐备"
+);
+
 const failed = results.filter((r) => !r.pass);
 console.log(`\n${results.length - failed.length}/${results.length} passed`);
 mini.unmount();

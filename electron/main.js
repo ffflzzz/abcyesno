@@ -801,8 +801,20 @@ ipcMain.handle('get-agui-port', () => {
 
 // Studio workbench: proxy Agnes calls through IPC (avoids renderer fetch/CSP issues)
 const agnes = require('./backend/agnes');
+const characterLibrary = require('./backend/character_library');
 ipcMain.handle('studio-call', async (event, { action, params }) => {
   try {
+    if (action === 'character_library.list') {
+      return { ok: true, cards: characterLibrary.listCards() };
+    }
+    if (action === 'character_library.upsert') {
+      const card = characterLibrary.upsertCard(params || {});
+      return { ok: true, card };
+    }
+    if (action === 'character_library.touch_used') {
+      const card = characterLibrary.touchUsed((params && params.id) || "");
+      return { ok: true, card: card || null };
+    }
     if (action === 'generate-image') {
       const url = await agnes.generateImage(params);
       return { ok: true, url };

@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect, useMemo, useCallback } from "react"
 import Icon from "../components/Icon.jsx";
 import ApprovalBubble from "../components/ApprovalBubble.jsx";
 import WorkflowGraphPanel from "../components/WorkflowGraphPanel.jsx";
+import CharacterLibraryModal from "../components/CharacterLibraryModal.jsx";
 import { subscribeContractEvents } from "../contract/eventBus.js";
 import "./StudioWorkbench.css";
 
@@ -232,7 +233,7 @@ function PhaseStepper({ phase, done, onGo }) {
   );
 }
 
-function AssetLibrary({ curTab, setCurTab, assetsReady, assetImgs, scenes, onScenesChange, onAutoScenes, onGenOne, onGenAll, disabled }) {
+function AssetLibrary({ curTab, setCurTab, assetsReady, assetImgs, scenes, onScenesChange, onAutoScenes, onGenOne, onGenAll, onOpenCharLibrary, disabled }) {
   const charViews = assetImgs.characterViews || {};
   const hasAny = Object.keys(assetImgs.character || {}).length > 0;
   const list = hasAny
@@ -270,6 +271,11 @@ function AssetLibrary({ curTab, setCurTab, assetsReady, assetImgs, scenes, onSce
         )}
         {curTab === "prop" && (
           <div className="st-empty">道具参考由分镜图直接承载，本轮暂未单独成库。</div>
+        )}
+        {curTab === "character" && (
+          <button className="st-charlib-btn" onClick={onOpenCharLibrary} disabled={disabled}>
+            📚 角色库
+          </button>
         )}
         {curTab === "character" && !list && (
           <div className="st-empty">
@@ -930,6 +936,9 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
   // button instead of the full 300px panel.
   const [asideCollapsed, setAsideCollapsedRaw] = useState(_readCache(cacheKey + ":asideCollapsed", false));
 
+  // Global character library modal visibility.
+  const [charLibOpen, setCharLibOpen] = useState(false);
+
   const [project, setProjectRaw] = useState(_readCache(cacheKey + ":project", {
     name: "",
     script: "",
@@ -1422,6 +1431,19 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
         return { ...prev, character, characterViews };
       });
       setAssetsReady((prev) => ({ ...prev, character: true }));
+      // Auto-archive to the global character library (fire-and-forget).
+      try {
+        api("character_library.upsert", {
+          name,
+          tags: [],
+          prompt: `${name}，角色设定图，${project.style || ""}风格`,
+          frontUrl: rawSrc,
+          views: { [viewLabel]: rawSrc },
+          source: `generated:${project.name || "unknown"}`,
+        });
+      } catch (_) {
+        /* non-fatal: archiving must never break the ingest pipeline */
+      }
       return;
     }
 
@@ -1574,6 +1596,19 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
             characterViews[name] = { 正面: j.url };
             return { ...prev, character, characterViews };
           });
+          // Auto-archive to the global character library (fire-and-forget).
+          try {
+            api("character_library.upsert", {
+              name,
+              tags: [],
+              prompt: `${name}，角色设定图，${project.style || ""}风格`,
+              frontUrl: j.url,
+              views: { 正面: j.url },
+              source: `generated:${project.name || "unknown"}`,
+            });
+          } catch (_) {
+            /* non-fatal */
+          }
         }
         setTasks((prev) => prev.map((x) => (x.id === task.id ? { ...x, status: j?.ok ? "ok" : "err", error: j?.error, prog: 100 } : x)));
       }
@@ -1829,6 +1864,23 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
   else if (!showAssetLib && showTaskPanel) gridCols = asideCollapsed ? "1fr 46px" : "1fr 300px";
   else if (showAssetLib && !showTaskPanel) gridCols = "210px 1fr";
 
+  // Apply a character-library card to the current project canvas. The card's
+  // front image becomes the project's canonical character ref; its views map
+  // is merged into characterViews so the multi-view reference set is preserved.
+  function handleApplyChar(card) {
+    if (!card) return;
+    const front = card.frontUrl || "";
+    const viewsSrc = card.views && Object.keys(card.views).length ? card.views : { 正面: front };
+    setAssetImgs((prev) => {
+      const character = { ...(prev.character || {}), [card.name]: front };
+      const characterViews = { ...(prev.characterViews || {}) };
+      characterViews[card.name] = { ...(characterViews[card.name] || {}), ...viewsSrc };
+      return { ...prev, character, characterViews };
+    });
+    setAssetsReady((prev) => ({ ...prev, character: true }));
+    setCharLibOpen(false);
+  }
+
   return (
     <div className="st-workbench" onClick={() => selectedClip && setSelectedClip(null)}>
       <div className="st-topbar">
@@ -1902,6 +1954,7 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
             onAutoScenes={handleAutoScenes}
             onGenOne={genOne}
             onGenAll={genAll}
+            onOpenCharLibrary={() => setCharLibOpen(true)}
             disabled={running}
           />
         )}
@@ -2341,6 +2394,12 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
           />
         </div>
       )}
+      <CharacterLibraryModal
+        open={charLibOpen}
+        onClose={() => setCharLibOpen(false)}
+        onApply={handleApplyChar}
+        api={api}
+      />
     </div>
   );
 }
