@@ -1366,6 +1366,18 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
     return unsub;
   }, [runId]);
 
+  // Mirror of the user frame overrides captured at the last run start, keyed
+  // by shotKey, so ingestArtifact can re-apply them to the per-shot entries as
+  // the post-run artifact rebuilds shotState. The backend already consumed the
+  // frames, but the UI slots should still display them (B-plan limitation #2).
+  const frameBackfillRef = useRef({});
+
+  function mergeFrameBackfill(entry, key) {
+    const fb = frameBackfillRef.current[key];
+    if (!fb) return entry;
+    return { ...entry, firstFrameUrl: fb.firstFrameUrl, lastFrameUrl: fb.lastFrameUrl };
+  }
+
   function ingestArtifact(a) {
     const { id, type, path: aPath, label, url, episode } = a;
     const rawSrc = url || aPath;
@@ -1391,7 +1403,7 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
       const key = `${ep}-${idx + 1}`;
       setShotState((prev) => ({
         ...prev,
-        [key]: { ...(prev[key] || {}), status: "img", imgUrl: src, imgPath: rawSrc, ep, n: idx + 1 },
+        [key]: mergeFrameBackfill({ ...(prev[key] || {}), status: "img", imgUrl: src, imgPath: rawSrc, ep, n: idx + 1 }, key),
       }));
       return;
     }
@@ -1404,7 +1416,7 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
       const key = `${ep}-${idx + 1}`;
       setShotState((prev) => ({
         ...prev,
-        [key]: { ...(prev[key] || {}), status: "done", videoUrl: src, videoPath: rawSrc, ep, n: idx + 1 },
+        [key]: mergeFrameBackfill({ ...(prev[key] || {}), status: "done", videoUrl: src, videoPath: rawSrc, ep, n: idx + 1 }, key),
       }));
       return;
     }
@@ -1417,7 +1429,7 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
       const key = `${ep}-${idx + 1}`;
       setShotState((prev) => ({
         ...prev,
-        [key]: { ...(prev[key] || {}), audioUrl: src, audioPath: rawSrc, ep, n: idx + 1 },
+        [key]: mergeFrameBackfill({ ...(prev[key] || {}), audioUrl: src, audioPath: rawSrc, ep, n: idx + 1 }, key),
       }));
       return;
     }
@@ -1699,12 +1711,21 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
     // (batch_generate_video consumes Shot.first_frame_url/last_frame_url).
     // Keyed by shot index (0-based) = frontend n-1 to match the backend.
     const frameOverrides = {};
+    // Reset the shotKey-keyed mirror; only shots that still carry frames get
+    // re-populated below (prevents stale frames from a prior run leaking in).
+    frameBackfillRef.current = {};
     for (const s of shots) {
       const st = shotState[s.key] || {};
       if (st.firstFrameUrl || st.lastFrameUrl) {
         frameOverrides[String(s.n - 1)] = {
           first_frame_url: st.firstFrameUrl || undefined,
           last_frame_url: st.lastFrameUrl || undefined,
+        };
+        // shotKey-keyed mirror so the slots re-show after the re-run rebuilds
+        // shotState from the new artifact (backend already consumed them).
+        frameBackfillRef.current[s.key] = {
+          firstFrameUrl: st.firstFrameUrl || undefined,
+          lastFrameUrl: st.lastFrameUrl || undefined,
         };
       }
     }
