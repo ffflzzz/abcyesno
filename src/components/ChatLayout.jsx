@@ -323,7 +323,6 @@ export default function ChatLayout({
           onClose={onToggleSkills}
         />
       )}
-      <div className="version-tag">Abcyesno {version ? `v${version}` : ""}</div>
 
       <ContextUsage
         messages={messages}
