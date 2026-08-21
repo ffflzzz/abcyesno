@@ -473,16 +473,16 @@ function StoryboardEditor({ shots, shotState, shotCfg, projectSec, scenes, onGen
             </div>
 
             <div className="st-shot-col">
-              <div className={`st-preview ${st.status === "busy" ? "busy" : ""}`}>
-                {st.videoUrl ? (
-                  <video src={toLoadableSrc(st.videoUrl)} controls muted loop playsInline />
-                ) : st.imgUrl ? (
-                  <img className="st-media-img" src={toLoadableSrc(st.imgUrl)} alt={k} />
-                ) : st.status === "done" ? (
-                  <div className="st-meta">▶ 00:0{s.n}</div>
-                ) : null}
-                {!st.videoUrl && !st.imgUrl && <div className="st-play" />}
-              </div>
+              {st.videoUrl ? (
+                <MediaPreview kind="video" url={st.videoUrl} busy={st.status === "busy"} />
+              ) : st.imgUrl ? (
+                <MediaPreview kind="image" url={st.imgUrl} alt={k} busy={st.status === "busy"} />
+              ) : (
+                <div className={`st-preview ${st.status === "busy" ? "busy" : ""}`}>
+                  {st.status === "done" ? <div className="st-meta">▶ 00:0{s.n}</div> : null}
+                  {(!st.status || st.status === "idle") ? <div className="st-play" /> : null}
+                </div>
+              )}
               {st.status === "busy" && (
                 <div className="st-mini-prog">
                   <i />
@@ -532,6 +532,38 @@ function FrameSlot({ label, url, onPick, onClear }) {
           <button className="st-frame-btn st-frame-clear" onClick={onClear}>清除</button>
         )}
       </div>
+    </div>
+  );
+}
+
+// Adaptive media preview: container aspect-ratio follows the actual
+// image/video natural dimensions so a landscape 16:9 shot shows a wide
+// box (no letterbox whitespace) and a portrait 9:16 shows a tall box.
+// CSS .st-preview keeps `aspect-ratio: 9 / 16; max-height: 420px` as the
+// empty/loading fallback. Inline style overrides once media is measured.
+function MediaPreview({ kind, url, alt, busy }) {
+  const [ratio, setRatio] = useState(null);
+  // Reset when url changes (regenerate) so the fallback shows during load.
+  useEffect(() => {
+    setRatio(null);
+  }, [url]);
+  const measure = (e) => {
+    const t = e.currentTarget;
+    const w = kind === "image" ? t.naturalWidth : t.videoWidth;
+    const h = kind === "image" ? t.naturalHeight : t.videoHeight;
+    if (w > 0 && h > 0) setRatio(`${w} / ${h}`);
+  };
+  const style = ratio ? { aspectRatio: ratio } : undefined;
+  if (kind === "video") {
+    return (
+      <div className={`st-preview ${busy ? "busy" : ""}`} style={style}>
+        <video src={toLoadableSrc(url)} onLoadedMetadata={measure} controls muted loop playsInline />
+      </div>
+    );
+  }
+  return (
+    <div className={`st-preview ${busy ? "busy" : ""}`} style={style}>
+      <img className="st-media-img" src={toLoadableSrc(url)} alt={alt} onLoad={measure} />
     </div>
   );
 }

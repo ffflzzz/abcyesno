@@ -166,7 +166,7 @@
 .st-ep-tag { font-size: 11px; color: var(--st-accent); margin-bottom: 2px; font-weight: 600; }
 .st-shot textarea { width: 100%; background: var(--bg); border: 1px solid var(--st-line); color: var(--st-text); border-radius: var(--st-radius-xs); padding: 9px 11px; font: inherit; resize: vertical; min-height: 72px; }
 .st-shot textarea:focus { outline: none; border-color: var(--st-accent); box-shadow: 0 0 0 3px var(--st-soft); }
-.st-preview { position: relative; flex: 0 1 auto; border-radius: var(--st-radius-xs); background: var(--st-preview-bg); aspect-ratio: 9 / 16; max-height: 300px; width: 100%; display: grid; place-items: center; overflow: hidden; border: 1px solid var(--st-line); }
+.st-preview { position: relative; flex: 0 1 auto; border-radius: var(--st-radius-xs); background: var(--st-preview-bg); aspect-ratio: 9 / 16; max-height: 420px; min-height: 110px; width: 100%; display: grid; place-items: center; overflow: hidden; border: 1px solid var(--st-line); }
 .st-preview img, .st-preview video { width: 100%; height: 100%; object-fit: contain; }
 .st-preview .st-play { width: 42px; height: 42px; border-radius: 50%; background: color-mix(in srgb, var(--st-text) 14%, transparent); display: grid; place-items: center; }
 .st-preview .st-play::before { content: ""; border-left: 14px solid var(--st-text); border-top: 9px solid transparent; border-bottom: 9px solid transparent; margin-left: 4px; }
