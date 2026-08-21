@@ -1937,164 +1937,170 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
           )}
           {phase === "script" && (
             <div className="st-card st-form-card">
-              <div className="st-section st-smart-input">
-                <div className="st-section-title">
-                  ✨ 智能输入
-                  <small className="st-sub" style={{ marginLeft: 8 }}>
-                    用自然语言描述漫剧需求，自动填表（项目名/脚本/模式/集数/风格/角色）
-                  </small>
-                </div>
-                <textarea
-                  rows={3}
-                  value={nlText}
-                  onChange={(e) => setNlText(e.target.value)}
-                  placeholder={"例如：帮我生成一集漫剧，不少于 30 秒。皮克斯风格。一只小狗在后花园漫步，然后堕落了异度空间，最后变成神威狗。重点突出中间的混沌过程。"}
-                  disabled={nlParsing}
-                />
-                {nlError && <div className="st-smart-error">{nlError}</div>}
-                <div className="st-form-actions" style={{ marginTop: 8 }}>
-                  <button
-                    className="st-secondary"
-                    onClick={handleRandomPrompt}
-                    disabled={nlParsing}
-                    title="从 8 个标准模板中随机抽一条填入，方便没想法时快速试"
-                  >
-                    🎲 随机生成
-                  </button>
-                  <button
-                    className="st-primary"
-                    onClick={handleSmartFill}
-                    disabled={!nlText.trim() || nlParsing}
-                  >
-                    {nlParsing ? "解析中…" : "✨ 智能解析填表"}
-                  </button>
-                  {nlText && (
-                    <button
-                      className="st-secondary"
-                      onClick={() => { setNlText(""); setNlError(""); }}
+              <div className="st-form-grid">
+                {/* LEFT — creative content */}
+                <div className="st-form-col">
+                  <div className="st-section st-smart-input">
+                    <div className="st-section-title">
+                      ✨ 智能输入
+                      <small className="st-sub" style={{ marginLeft: 8 }}>
+                        用自然语言描述漫剧需求，自动填表（项目名/脚本/模式/集数/风格/角色）
+                      </small>
+                    </div>
+                    <textarea
+                      rows={3}
+                      value={nlText}
+                      onChange={(e) => setNlText(e.target.value)}
+                      placeholder={"例如：帮我生成一集漫剧，不少于 30 秒。皮克斯风格。一只小狗在后花园漫步，然后堕落了异度空间，最后变成神威狗。重点突出中间的混沌过程。"}
                       disabled={nlParsing}
-                    >
-                      清空
+                    />
+                    {nlError && <div className="st-smart-error">{nlError}</div>}
+                    <div className="st-form-actions" style={{ marginTop: 8 }}>
+                      <button
+                        className="st-secondary"
+                        onClick={handleRandomPrompt}
+                        disabled={nlParsing}
+                        title="从 8 个标准模板中随机抽一条填入，方便没想法时快速试"
+                      >
+                        🎲 随机生成
+                      </button>
+                      <button
+                        className="st-primary"
+                        onClick={handleSmartFill}
+                        disabled={!nlText.trim() || nlParsing}
+                      >
+                        {nlParsing ? "解析中…" : "✨ 智能解析填表"}
+                      </button>
+                      {nlText && (
+                        <button
+                          className="st-secondary"
+                          onClick={() => { setNlText(""); setNlError(""); }}
+                          disabled={nlParsing}
+                        >
+                          清空
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="st-section">
+                    <div className="st-section-title">内容设定</div>
+                    <label className="st-fld">
+                      <span>{project.mode === "series" ? "系列脚本 / 大纲" : "剧本 / 大纲"}</span>
+                      <textarea
+                        value={project.mode === "series" ? project.seriesScript : project.script}
+                        onChange={(e) =>
+                          setProject((p) =>
+                            p.mode === "series" ? { ...p, seriesScript: e.target.value } : { ...p, script: e.target.value }
+                          )
+                        }
+                        placeholder={
+                          project.mode === "series"
+                            ? "整部连载的大纲/剧情，将按集数拆分…"
+                            : "描述你要的漫剧情节…"
+                        }
+                      />
+                    </label>
+
+                    <div className="st-row2">
+                      <label className="st-fld">
+                        <span>风格</span>
+                        <select value={project.style} onChange={(e) => setProject((p) => ({ ...p, style: e.target.value }))}>
+                          <option>二次元</option>
+                          <option>写实</option>
+                          <option>3D</option>
+                        </select>
+                      </label>
+                      <label className="st-fld">
+                        <span>集数</span>
+                        <input
+                          type="number"
+                          min="1"
+                          max="24"
+                          value={project.eps}
+                          disabled={project.mode !== "series"}
+                          onChange={(e) => setProject((p) => ({ ...p, eps: Math.max(1, parseInt(e.target.value, 10) || 1) }))}
+                        />
+                      </label>
+                    </div>
+                  </div>
+
+                  <div className="st-section">
+                    <div className="st-section-title">角色设定</div>
+                    <label className="st-fld st-fld-col">
+                      <span>固定角色（可选，用于一致性）</span>
+                      <textarea
+                        rows={3}
+                        value={project.fixedChars}
+                        placeholder={"每行一个，如：\n糯糯=白色长毛猫，女，温柔但毒舌\n老周=60岁男人，沉默寡言，左手有旧伤疤"}
+                        onChange={(e) => setProject((p) => ({ ...p, fixedChars: e.target.value }))}
+                      />
+                      <small className="st-sub">格式：名称=描述 或 名称：描述。这些角色不会由 AI 重新生成设定，直接锁定进角色圣经。</small>
+                    </label>
+                  </div>
+                </div>
+
+                {/* RIGHT — config + submit */}
+                <div className="st-form-col">
+                  <div className="st-section">
+                    <div className="st-section-title">项目信息</div>
+                    <label className="st-fld">
+                      <span>项目名</span>
+                      <input value={project.name} onChange={(e) => setProject((p) => ({ ...p, name: e.target.value }))} placeholder="倒数三秒说爱你" />
+                    </label>
+                    <label className="st-fld">
+                      <span>模式</span>
+                      <select value={project.mode} onChange={(e) => setProject((p) => ({ ...p, mode: e.target.value }))}>
+                        <option value="single">单条视频</option>
+                        <option value="series">多集连载</option>
+                      </select>
+                    </label>
+                  </div>
+
+                  <div className="st-section">
+                    <div className="st-section-title">生成参数</div>
+                    <div className="st-row2">
+                      <label className="st-fld">
+                        <span>分辨率</span>
+                        <select value={project.res} onChange={(e) => setProject((p) => ({ ...p, res: e.target.value }))}>
+                          <option value="1080x1920">1080×1920（竖屏）</option>
+                          <option value="1920x1080">1920×1080（横屏）</option>
+                          <option value="2560x1440">2560×1440（2K 横屏）</option>
+                          <option value="3840x2160">3840×2160（4K 横屏）</option>
+                        </select>
+                      </label>
+                      <label className="st-fld">
+                        <span>每镜秒数</span>
+                        <input
+                          type="number"
+                          min="2"
+                          max="12"
+                          value={project.sec}
+                          onChange={(e) => setProject((p) => ({ ...p, sec: parseInt(e.target.value, 10) || 4 }))}
+                        />
+                      </label>
+                    </div>
+                    {project.mode === "series" && (
+                      <label className="st-fld">
+                        <span>跨集一致性</span>
+                        <select
+                          value={project.consistency}
+                          onChange={(e) => setProject((p) => ({ ...p, consistency: e.target.value }))}
+                        >
+                          <option value="lock_bible">锁定角色圣经</option>
+                          <option value="per_episode">每集独立</option>
+                        </select>
+                      </label>
+                    )}
+                  </div>
+
+                  <div className="st-form-actions st-form-actions--end">
+                    <button className="st-primary" onClick={handleStart} disabled={running || !onRun}>
+                      {running ? "工作流运行中…" : "生成资产与分镜 →"}
                     </button>
-                  )}
+                    <div className="st-hint">点击后调用 manjucraft_agent：拆分剧本 → 生成角色 → 首帧/分镜审批 → 视频/配音 → 导出剪映草稿。</div>
+                  </div>
                 </div>
-              </div>
-
-              <div className="st-section">
-                <div className="st-section-title">项目信息</div>
-                <label className="st-fld">
-                  <span>项目名</span>
-                  <input value={project.name} onChange={(e) => setProject((p) => ({ ...p, name: e.target.value }))} placeholder="倒数三秒说爱你" />
-                </label>
-
-                <label className="st-fld">
-                  <span>模式</span>
-                  <select value={project.mode} onChange={(e) => setProject((p) => ({ ...p, mode: e.target.value }))}>
-                    <option value="single">单条视频</option>
-                    <option value="series">多集连载</option>
-                  </select>
-                </label>
-              </div>
-
-              <div className="st-section">
-                <div className="st-section-title">内容设定</div>
-                <label className="st-fld">
-                  <span>{project.mode === "series" ? "系列脚本 / 大纲" : "剧本 / 大纲"}</span>
-                  <textarea
-                    value={project.mode === "series" ? project.seriesScript : project.script}
-                    onChange={(e) =>
-                      setProject((p) =>
-                        p.mode === "series" ? { ...p, seriesScript: e.target.value } : { ...p, script: e.target.value }
-                      )
-                    }
-                    placeholder={
-                      project.mode === "series"
-                        ? "整部连载的大纲/剧情，将按集数拆分…"
-                        : "描述你要的漫剧情节…"
-                    }
-                  />
-                </label>
-
-                <div className="st-row2">
-                  <label className="st-fld">
-                    <span>风格</span>
-                    <select value={project.style} onChange={(e) => setProject((p) => ({ ...p, style: e.target.value }))}>
-                      <option>二次元</option>
-                      <option>写实</option>
-                      <option>3D</option>
-                    </select>
-                  </label>
-                  <label className="st-fld">
-                    <span>集数</span>
-                    <input
-                      type="number"
-                      min="1"
-                      max="24"
-                      value={project.eps}
-                      disabled={project.mode !== "series"}
-                      onChange={(e) => setProject((p) => ({ ...p, eps: Math.max(1, parseInt(e.target.value, 10) || 1) }))}
-                    />
-                  </label>
-                </div>
-
-                {project.mode === "series" && (
-                  <label className="st-fld">
-                    <span>跨集一致性</span>
-                    <select
-                      value={project.consistency}
-                      onChange={(e) => setProject((p) => ({ ...p, consistency: e.target.value }))}
-                    >
-                      <option value="lock_bible">锁定角色圣经</option>
-                      <option value="per_episode">每集独立</option>
-                    </select>
-                  </label>
-                )}
-              </div>
-
-              <div className="st-section">
-                <div className="st-section-title">生成参数</div>
-                <div className="st-row2">
-                  <label className="st-fld">
-                    <span>分辨率</span>
-                    <select value={project.res} onChange={(e) => setProject((p) => ({ ...p, res: e.target.value }))}>
-                      <option value="1080x1920">1080×1920（竖屏）</option>
-                      <option value="1920x1080">1920×1080（横屏）</option>
-                      <option value="2560x1440">2560×1440（2K 横屏）</option>
-                      <option value="3840x2160">3840×2160（4K 横屏）</option>
-                    </select>
-                  </label>
-                  <label className="st-fld">
-                    <span>每镜秒数</span>
-                    <input
-                      type="number"
-                      min="2"
-                      max="12"
-                      value={project.sec}
-                      onChange={(e) => setProject((p) => ({ ...p, sec: parseInt(e.target.value, 10) || 4 }))}
-                    />
-                  </label>
-                </div>
-              </div>
-
-              <div className="st-section">
-                <div className="st-section-title">角色设定</div>
-                <label className="st-fld st-fld-col">
-                  <span>固定角色（可选，用于一致性）</span>
-                  <textarea
-                    rows={3}
-                    value={project.fixedChars}
-                    placeholder={"每行一个，如：\n糯糯=白色长毛猫，女，温柔但毒舌\n老周=60岁男人，沉默寡言，左手有旧伤疤"}
-                    onChange={(e) => setProject((p) => ({ ...p, fixedChars: e.target.value }))}
-                  />
-                  <small className="st-sub">格式：名称=描述 或 名称：描述。这些角色不会由 AI 重新生成设定，直接锁定进角色圣经。</small>
-                </label>
-              </div>
-
-              <div className="st-form-actions">
-                <button className="st-primary" onClick={handleStart} disabled={running || !onRun}>
-                  {running ? "工作流运行中…" : "生成资产与分镜 →"}
-                </button>
-                <div className="st-hint">点击后调用 manjucraft_agent：拆分剧本 → 生成角色 → 首帧/分镜审批 → 视频/配音 → 导出剪映草稿。</div>
               </div>
             </div>
           )}
