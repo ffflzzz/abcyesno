@@ -6,21 +6,17 @@ import { subscribeContractEvents } from "./contract/eventBus.js";
 import bachAvatar from "./assets/bach-avatar.png";
 
 // ──────────────────────────────────────────────────────────────────────────
-// DetachedApp — standalone window entry point for two surfaces:
+// DetachedApp — standalone window entry point for the detached result panel:
 //
-//  mode="result" (legacy `index.html?panel=result`)
+//  mode="result" (`index.html?panel=result`)
 //    Renders ONLY the ResultPanel (no Sidebar / ChatLayout). Shares the same
 //    backend as the main window; just waits for it to come up.
 //
-//  mode="studio" (`index.html?panel=studio&workflow=...`)
-//    Renders the FULL App (ChatLayout + StudioWorkbench) for a single workflow,
-//    naturally filling the new window. The App receives `initialWorkflowId`
-//    + `studioEntry` so it auto-selects that workflow, keeps the ResultPanel
-//    un-collapsed, and auto-focuses the first running task. The main window's
-//    tab/result-panel state is untouched — this is a true second surface.
+// (The "studio" standalone-window mode was removed — 漫剧go now opens as a
+// normal in-app tab. This component now only serves the result panel.)
 //
-// Both modes re-use window.hermes preloaded by electron/preload.js and poll
-// the main window's backend (the main window already started Hermes).
+// Re-uses window.hermes preloaded by electron/preload.js and polls the main
+// window's backend (the main window already started Hermes).
 // ──────────────────────────────────────────────────────────────────────────
 
 export default function DetachedApp({ mode = "result", workflowId = "" }) {
@@ -93,7 +89,6 @@ export default function DetachedApp({ mode = "result", workflowId = "" }) {
 
   // Loading screen while the main window's backend is booting.
   if (!aguiPort) {
-    const isStudio = mode === "studio";
     return (
       <div className="app flex-center">
         <div className="welcome bootstrap-loading">
@@ -101,26 +96,12 @@ export default function DetachedApp({ mode = "result", workflowId = "" }) {
             <div className="spinner-ring" />
             <img className="spinner-logo spinner-logo-img" src={bachAvatar} alt="" draggable="false" />
           </div>
-          <h2>{isStudio ? (initialWorkflowId || "工作台") : "结果面板"}</h2>
+          <h2>结果面板</h2>
           <p className="bootstrap-status">
             {waitSeconds < 5 ? "等待主窗口启动后端…" : waitSeconds < 20 ? "正在连接到本地后端…" : "等待中 — 请确认主窗口已打开。"}
           </p>
         </div>
       </div>
-    );
-  }
-
-  // Studio mode: render the full App so the workflow (StudioWorkbench +
-  // WorkflowGraphPanel + timeline) fills the new window naturally.
-  if (mode === "studio") {
-    return (
-      <ErrorBoundary>
-        <App
-          aguiPort={aguiPort}
-          initialWorkflowId={initialWorkflowId}
-          studioEntry
-        />
-      </ErrorBoundary>
     );
   }
 

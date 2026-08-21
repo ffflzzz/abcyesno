@@ -1,13 +1,19 @@
-# 「漫剧go」启动台入口放大窗口 — 设计 spec
+# 「漫剧go」启动台入口 — 设计 spec（已废弃独立窗口方案）
 
 日期：2026-08-21
 作者：von（⚡）
 关联：MANJUCRAFT_AGENT_SPEC / RESULT_PANEL_SPEC
-状态：待用户拍板 → 进入实现
+
+> ⚠️ **本 spec 描述的「独立 Electron 窗口」方案已废弃。**
+> 实测 `panel=studio` 独立窗口黑屏不可用，用户明确反对弹独立窗口。
+> 现改为：**点「漫剧go」图标 → 在当前窗口标签栏「新增一个 tab」承载工作台**
+> （`launcher.openMode: "newTab"` + `App.openAppAsNewTab`）。
+> 独立窗口相关代码（`createAppWindow` / `open-app-window` IPC / `resolveManifestName` /
+> preload `openAppWindow` / main.jsx `panel=studio` / DetachedApp `mode="studio"`）已全部回退。
 
 ---
 
-## 1. 问题
+## 1. 问题（原始动机，保留备查）
 
 启动台（`src/components/Launcher.jsx`）目前是紧凑 app-grid，点 "漫剧go" 图标 →
 `homepageApps[].onClick` →

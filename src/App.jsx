@@ -505,11 +505,11 @@ function ChatShell({
     () => { handleStop(); }
   );
 
-  // Studio entry (openMode:"window"): auto-focus the first RUNNING task that
-  // belongs to the launched workflow so the user lands on the live run instead
-  // of an empty form. Fires once tasks have loaded; re-fires if a new running
-  // task appears later (e.g. user starts a run from the form while this window
-  // is open). Only steers when nothing is manually selected yet.
+  // Studio entry (launcher openMode:"newTab"): auto-focus the first RUNNING
+  // task that belongs to the launched workflow so the user lands on the live
+  // run instead of an empty form. Fires once tasks have loaded; re-fires if a
+  // new running task appears later. Only steers when nothing is manually
+  // selected yet.
   useEffect(() => {
     if (!studioEntry) return;
     if (!selectedWorkflowId) return;
@@ -845,10 +845,8 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
   // 后端每条请求带 request_id，前端必须回执才能解除挂起。用队列支持连续多个。
   const [blockQueue, setBlockQueue] = useState([]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  // studioEntry: standalone app window (openMode:"window") — the ResultPanel
-  // must be open + un-collapsed and the launched workflow pre-selected so the
-  // StudioWorkbench fills the window. The main window keeps its own independent
-  // state (this App instance is a separate React tree in a separate window).
+  // studioEntry: legacy standalone-window hint (no longer used — 漫剧go now
+  // opens as a normal in-app tab). Kept as a harmless no-op prop for now.
   const [resultPanelOpen, setResultPanelOpen] = useState(studioEntry ? true : false);
   const [resultPanelCollapsed, setResultPanelCollapsed] = useState(studioEntry ? false : false);
   const [resultPanelWidth, setResultPanelWidth] = useState(() => {
@@ -940,9 +938,8 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
   // variables ChatShell reads — effectively each tab is an independent surface.
   const [tabs, setTabs] = useState(() => {
     if (studioEntry && initialWorkflowId) {
-      // Standalone app window (openMode:"window"): open directly into the chat
-      // surface with the workflow pre-selected + ResultPanel open, so the
-      // ChatLayout + StudioWorkbench fill the window (no homepage grid).
+      // Legacy standalone app window path (no longer used — 漫剧go opens as a
+      // normal in-app tab). Kept for backward-compat if ever re-enabled.
       return [
         { id: "tab-studio", type: "chat", title: "漫剧go", icon: "film", assistantId: "", sessionId: "", workflowId: initialWorkflowId, resultOpen: true, resultCollapsed: false },
       ];
@@ -1035,6 +1032,28 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
     }
   }, [activeTabId, applyTabState]);
 
+  // Open a launcher app as a NEW tab (never replacing the Launcher tab, and
+  // never spawning a separate window). If a tab for this workflow already
+  // exists, just focus it instead of duplicating.
+  const openAppAsNewTab = useCallback((app) => {
+    const existing = tabsRef.current.find(
+      (t) => t.workflowId === app.workflowId && t.type === "studio"
+    );
+    if (existing) {
+      activateExisting(existing.id);
+      return;
+    }
+    createTab({
+      type: "studio",
+      title: app.title,
+      icon: app.icon,
+      workflowId: app.workflowId,
+      resultOpen: true,
+      resultCollapsed: false,
+      assistantId: selectedAssistantId || "",
+    });
+  }, [activateExisting, createTab, selectedAssistantId]);
+
   // Homepage app grid — data-driven from the build-time injected launcherApps
   // (generated from agent manifest.json). The "对话" entry is the base chat
   // surface, not a LangGraph workflow, so it stays hardcoded here; every other
@@ -1046,12 +1065,13 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
       onClick: () => openApp({ type: "chat", title: "对话", icon: "chat", assistantId: selectedAssistantId || "" }),
     },
     ...launcherApps.map((app) => {
-      // openMode is data-driven (manifest `launcher.openMode`). "window" pops
-      // a standalone Electron window via IPC; "tab" (default) replaces the
-      // current Launcher tab in-place.
+      // openMode is data-driven (manifest `launcher.openMode`). "newTab" opens
+      // the workbench in a fresh in-app tab (default behavior for 漫剧go);
+      // any other value falls back to the legacy in-place replacement of the
+      // current Launcher tab.
       const onClick =
-        app.openMode === "window"
-          ? () => window.hermes?.openAppWindow?.({ workflowId: app.workflowId })
+        app.openMode === "newTab"
+          ? () => openAppAsNewTab(app)
           : () => openApp({ type: "studio", title: app.title, icon: app.icon, workflowId: app.workflowId, resultOpen: true, resultCollapsed: false, assistantId: selectedAssistantId || "" });
       return {
         key: app.key,
@@ -1061,7 +1081,7 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
         onClick,
       };
     }),
-  ], [openApp, selectedAssistantId]);
+  ], [openApp, openAppAsNewTab, selectedAssistantId]);
 
   // ── Detach: owns the IPC + clears in-window workflow state ──
   // Lives in App (not ChatShell) because setSelectedWorkflowId /

@@ -20,19 +20,16 @@ function isDetachedPanel() {
   }
 }
 
-// Boot mode router — main.jsx is the entry point for three surfaces:
+// Boot mode router — main.jsx is the entry point for two surfaces:
 //   1. main   : primary window (`index.html`)
-//   2. studio : standalone app window (`index.html?panel=studio&workflow=...`)
-//   3. result : legacy detached result panel (`index.html?panel=result`)
-// Keeping dispatch here (not in App.jsx) lets the secondary windows avoid
-// loading the heavy App bootstrap any sooner than needed.
+//   2. result : detached result panel (`index.html?panel=result`)
+// (The "studio" standalone-window mode was removed — 漫剧go now opens as a
+// normal in-app tab, not a separate Electron window. Keeping dispatch here
+// lets the detached result window avoid loading the heavy App bootstrap.)
 function parseBootMode() {
   try {
     const p = new URLSearchParams(window.location.search);
     const panel = p.get('panel');
-    if (panel === 'studio') {
-      return { mode: 'studio', workflowId: p.get('workflow') || '' };
-    }
     if (panel === 'result') {
       return { mode: 'result', workflowId: '' };
     }
@@ -123,14 +120,11 @@ function Bootstrap() {
   return <App aguiPort={aguiPort} />;
 }
 
-// Standalone windows — each has its own Bootstrap in DetachedApp.jsx because
-// they have entirely different loading-state messaging (the main window
-// already owns the backend, so we just wait for it to come up).
+// Standalone windows — the detached result panel has its own Bootstrap in
+// DetachedApp.jsx (it waits for the main window's backend to come up).
 const boot = parseBootMode();
 const Root =
-  boot.mode === 'studio'
-    ? <DetachedApp mode="studio" workflowId={boot.workflowId} />
-    : boot.mode === 'result'
+  boot.mode === 'result'
     ? <DetachedApp mode="result" />
     : <Bootstrap />;
 ReactDOM.createRoot(document.getElementById('root')).render(

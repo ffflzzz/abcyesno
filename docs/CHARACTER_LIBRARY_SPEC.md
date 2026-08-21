@@ -150,7 +150,7 @@ def seed_if_empty(builtin_json_path: Path) -> None
 - H4 `ingestArtifact` 角色分支末尾调用了
   `character_library.upsert` 或类似名
 - H5 `genOne` 成功后调用了同一名
-- H6 manifest.json 保持 `openMode=window`，无回归
+- H6 manifest.json 保持 `openMode=newTab`（漫剧go 在标签栏新增 tab，不再弹独立窗口），无回归
 
 ## 问题
 

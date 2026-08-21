@@ -59,11 +59,12 @@ function buildLauncherApps(manifests) {
   const apps = [];
   for (const m of manifests) {
     if (!m.launcher) continue;
-    // openMode is data-driven (manifest field `launcher.openMode`). Defaults
-    // to "tab" (replace current Launcher tab). "window" pops a standalone
-    // Electron window via the open-app-window IPC. Future agents opt in by
-    // declaring `launcher.openMode: "window"`.
-    const openMode = m.launcher.openMode === "window" ? "window" : "tab";
+    // openMode is data-driven (manifest field `launcher.openMode`).
+    //   "newTab" → open the workbench in a fresh in-app tab (漫剧go default).
+    //   anything else (incl. omitted) → "tab": replace the current Launcher
+    //   tab in-place. (The old "window" standalone-window mode was removed;
+    //   ides are always in-app now.)
+    const openMode = m.launcher.openMode === "newTab" ? "newTab" : "tab";
     apps.push({
       key: m.id,
       title: m.launcher.title || m.name,

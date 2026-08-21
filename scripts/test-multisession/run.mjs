@@ -387,7 +387,8 @@ check(
   "ResultPanel.jsx 必须用 onDetachResultPanel prop（fallback 才直接 IPC）"
 );
 
-// ── Studio window (openMode:"window") regression guards ──
+// ── In-app tab launcher (openMode:"newTab") regression guards ──
+// 漫剧go 现在以「当前窗口内新增 tab」方式打开，不再弹独立窗口。
 const launcherAppsSrc = fs.readFileSync(
   path.join(detachRoot, "src", "contract", "manifests.generated.js"),
   "utf8"
@@ -397,34 +398,32 @@ const genContractSrc = fs.readFileSync(
   "utf8"
 );
 check(
-  "G9 preload 暴露 openAppWindow IPC",
-  /openAppWindow\s*:\s*\(opts\)\s*=>/.test(preloadSrc),
-  "preload.js 必须 export openAppWindow（漫剧go 独立窗口入口）"
+  "G9 独立窗口代码已彻底移除（preload 无 openAppWindow）",
+  !/openAppWindow\s*:\s*\(opts\)\s*=>/.test(preloadSrc),
+  "preload.js 不得再 export openAppWindow（漫剧go 不再走独立窗口）"
 );
 check(
-  "G10 main 处理 open-app-window IPC + studio 加载",
-  /ipcMain\.handle\(['"]open-app-window['"]/.test(mainJsSrc) &&
-    /panel:\s*['"]studio['"]/.test(mainJsSrc) &&
-    /__appWindowKey/.test(mainJsSrc),
-  "main.js 必须注册 open-app-window handler，并按 panel=studio 加载、用 __appWindowKey 去重"
+  "G10 独立窗口代码已彻底移除（main 无 open-app-window / panel=studio / __appWindowKey）",
+  !/ipcMain\.handle\(['"]open-app-window['"]/.test(mainJsSrc) &&
+    !/panel:\s*['"]studio['"]/.test(mainJsSrc) &&
+    !/__appWindowKey/.test(mainJsSrc),
+  "main.js 不得再注册 open-app-window handler 或按 panel=studio 加载"
 );
 check(
-  "G11 gen-contract 把 openMode 写入 launcherApps（默认 tab）",
-  /openMode\s*===?\s*['"]window['"]\s*\?\s*['"]window['"]\s*:\s*['"]tab['"]/.test(genContractSrc) &&
-    /openMode/.test(genContractSrc),
-  "gen-contract.mjs buildLauncherApps 必须按 launcher.openMode 决定 'window'|'tab'（默认 tab）"
+  "G11 gen-contract 把 openMode 写入 launcherApps（newTab|tab，去掉 window）",
+  /openMode\s*===?\s*['"]newTab['"]\s*\?\s*['"]newTab['"]\s*:\s*['"]tab['"]/.test(genContractSrc),
+  "gen-contract.mjs buildLauncherApps 必须按 launcher.openMode 决定 'newTab'|'tab'（默认 tab，已无 window）"
 );
 check(
-  "G12 生成的 launcherApps 含 openMode:window（漫剧go）",
-  /"openMode":\s*"window"/.test(launcherAppsSrc),
-  "manifests.generated.js 的 launcherApps 必须带 openMode:window（manjucraft_agent 声明了 launcher.openMode）"
+  "G12 生成的 launcherApps 含 openMode:newTab（漫剧go）",
+  /"openMode":\s*"newTab"/.test(launcherAppsSrc),
+  "manifests.generated.js 的 launcherApps 必须带 openMode:newTab（manjucraft_agent 声明了 launcher.openMode）"
 );
 check(
-  "G13 App 按 openMode 派发 + studioEntry 注入 workflowId",
-  /app\.openMode\s*===\s*['"]window['"]\s*\?\s*\(\)\s*=>\s*window\.hermes\?\.openAppWindow/.test(appSrc) &&
-    /studioEntry/.test(appSrc) &&
-    /initialWorkflowId/.test(appSrc),
-  "App.jsx 必须按 openMode 派发 onClick（window→openAppWindow），并接收 studioEntry/initialWorkflowId"
+  "G13 App 按 openMode 派发 + openAppAsNewTab 在 App.jsx 中定义",
+  /app\.openMode\s*===\s*['"]newTab['"]\s*\?\s*\(\)\s*=>\s*openAppAsNewTab/.test(appSrc) &&
+    /const openAppAsNewTab\s*=\s*useCallback/.test(appSrc),
+  "App.jsx 必须按 openMode 派发 onClick（newTab→openAppAsNewTab），且 openAppAsNewTab 已定义"
 );
 
 // ── H1-H6: global character library ──────────────────────────────────────

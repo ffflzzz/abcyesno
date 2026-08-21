@@ -103,13 +103,6 @@ contextBridge.exposeInMainWorld('hermes', {
   // window" gesture.
   detachResultPanel: (opts) => ipcRenderer.invoke('detach-result-panel', opts || {}),
 
-  // Open a launcher app (openMode:"window") in its own standalone Electron
-  // window — full App in studio mode. Currently used by 「漫剧go」. Reuses the
-  // same backend as the main window; de-duplicated by workflowId on the main
-  // side (re-click focuses the existing window). Never steals focus on its own;
-  // the user must click the launcher icon.
-  openAppWindow: (opts) => ipcRenderer.invoke('open-app-window', opts || {}),
-
   // Event subscriptions
   on,
   off,
