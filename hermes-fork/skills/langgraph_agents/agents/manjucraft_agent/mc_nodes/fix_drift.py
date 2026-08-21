@@ -21,7 +21,18 @@ async def fix_drift(state: AgentState) -> dict:
     shots = state["shots"]
     max_retries = state.get("max_retries", 3)
     characters = state.get("characters", [])
-    ref_images = [c["ref_image"] for c in characters if c.get("ref_image")]
+    # Collect every character angle (multi-view set), deduped, as the drift-fix
+    # regeneration identity anchor for consistency.
+    ref_images: list[str] = []
+    _seen = set()
+    for c in characters:
+        imgs = c.get("view_images") or []
+        if not imgs and c.get("ref_image"):
+            imgs = [c["ref_image"]]
+        for v in imgs:
+            if v and v not in _seen:
+                _seen.add(v)
+                ref_images.append(v)
     first_path = next((r.get("keyframe_path") for r in shot_results if r.get("keyframe_path")), None)
 
     warnings: list[str] = list(state.get("consistency_warnings") or [])

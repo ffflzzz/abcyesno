@@ -60,6 +60,21 @@ async def batch_generate_video(state: AgentState) -> dict:
     shots = state["shots"]
     vw, vh = _video_dims(state.get("resolution") or "1080x1920")
 
+    # Collect every character reference angle (multi-view set) once, deduped,
+    # so each shot's video generation can carry them as identity anchors.
+    # Forward-compatible: the Agnes video model currently ignores them
+    # (VIDEO_SUPPORTS_REFERENCE_IMAGES=False), but the plumbing is in place.
+    character_refs: list[str] = []
+    _seen = set()
+    for c in state.get("characters", []):
+        imgs = c.get("view_images") or []
+        if not imgs and c.get("ref_image"):
+            imgs = [c["ref_image"]]
+        for v in imgs:
+            if v and v not in _seen:
+                _seen.add(v)
+                character_refs.append(v)
+
     async def gen_one(result: dict) -> dict:
         if result.get("status") == "error" or not result.get("keyframe_path"):
             return result
@@ -86,6 +101,7 @@ async def batch_generate_video(state: AgentState) -> dict:
                 output_path=out_path,
                 image=image,
                 keyframes=keyframes,
+                reference_images=character_refs if character_refs else None,
                 width=vw, height=vh,
                 num_frames=num_frames, frame_rate=24,
             )

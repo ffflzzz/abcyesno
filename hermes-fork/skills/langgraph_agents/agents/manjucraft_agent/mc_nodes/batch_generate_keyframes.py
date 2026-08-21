@@ -51,7 +51,18 @@ async def batch_generate_keyframes(state: AgentState) -> dict:
     project_dir = episode_project_dir(state)
     shots = state["shots"]
     characters = state.get("characters", [])
-    ref_images = [c["ref_image"] for c in characters if c.get("ref_image")]
+    # Collect every character angle (multi-view set), deduped, as the keyframe
+    # generation identity anchor for consistency.
+    ref_images: list[str] = []
+    _seen = set()
+    for c in characters:
+        imgs = c.get("view_images") or []
+        if not imgs and c.get("ref_image"):
+            imgs = [c["ref_image"]]
+        for v in imgs:
+            if v and v not in _seen:
+                _seen.add(v)
+                ref_images.append(v)
     steer = (state.get("steer_notes") or "").strip()
     # Resolution drives the keyframe canvas size (debt #6: user-controllable).
     kf_size = _size_for_resolution(state.get("resolution") or "1080x1920")

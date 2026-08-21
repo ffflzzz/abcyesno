@@ -88,7 +88,7 @@ async function generateImage({ prompt, size = '2K', ratio = '1:1' }, key) {
 // Poll GET {VIDEO_STATUS_BASE}/agnesapi?video_id=<ID> until status:"completed"
 //   resp: { status, metadata:{ url } }
 async function generateVideo(
-  { prompt, image, keyframes, width = 1152, height = 768, num_frames = 81, frame_rate = 24 },
+  { prompt, image, keyframes, reference_images, width = 1152, height = 768, num_frames = 81, frame_rate = 24 },
   key
 ) {
   const apiKey = key || readAgnesApiKey();
@@ -121,6 +121,17 @@ async function generateVideo(
     body.extra_body = { image: resolvedKeyframes, mode: 'keyframes' };
   } else if (resolvedImage) {
     body.image = resolvedImage;
+  }
+  // Character/identity reference anchors for consistency. No-op while the Agnes
+  // video model does not accept them (VIDEO_SUPPORTS_REFERENCE_IMAGES=false);
+  // plumbed now so a future model can consume multi-view character refs
+  // without rewiring the call site.
+  const VIDEO_SUPPORTS_REFERENCE_IMAGES = false;
+  if (VIDEO_SUPPORTS_REFERENCE_IMAGES && Array.isArray(reference_images) && reference_images.length) {
+    body.extra_body = body.extra_body || {};
+    body.extra_body.reference_images = reference_images.map((p) =>
+      /^https?:/i.test(p) || /^data:/i.test(p) ? p : fileToDataUri(p)
+    );
   }
   const res = await fetch(`${IMAGE_BASE}/videos`, {
     method: 'POST',

@@ -1622,6 +1622,7 @@ function createAgUIServer(getGatewayClient, storage, options) {
         prompt,
         image: body.image || undefined,
         keyframes: body.keyframes || undefined,
+        reference_images: body.reference_images || undefined,
         width: body.width || 1152,
         height: body.height || 768,
         num_frames: body.num_frames || 81,

@@ -15,6 +15,12 @@ IMAGE_MODEL = "agnes-image-2.1-flash"
 VIDEO_MODEL = "agnes-video-v2.0"
 MOCK = bool(os.environ.get("MANJUCRAFT_AGENT_MOCK"))
 
+# Whether the Agnes video model accepts ``reference_images`` (character/identity
+# anchors). Currently FALSE — the model ignores them, so we plumb the param
+# through but do NOT send it. Flip to True once a video model supports it; no
+# other code change is then required for multi-view character consistency.
+VIDEO_SUPPORTS_REFERENCE_IMAGES = False
+
 
 def _api_key() -> str:
     key = os.environ.get("AGNES_API_KEY")
@@ -118,6 +124,7 @@ async def create_video(
     *,
     image: str | None = None,
     keyframes: list[str] | None = None,
+    reference_images: list[str] | None = None,
     width: int = 1152,
     height: int = 768,
     num_frames: int = 121,
@@ -140,6 +147,17 @@ async def create_video(
         }
     elif image:
         body["image"] = image if image.startswith("http") or image.startswith("data:") else _data_uri_from_file(image)
+
+    # Character/identity reference anchors for consistency. No-op while the
+    # Agnes video model does not accept them (VIDEO_SUPPORTS_REFERENCE_IMAGES).
+    # Plumbed now so a future model can consume multi-view character refs
+    # without rewiring the call sites.
+    if reference_images and VIDEO_SUPPORTS_REFERENCE_IMAGES:
+        body.setdefault("extra_body", {})
+        body["extra_body"]["reference_images"] = [
+            p if p.startswith("http") or p.startswith("data:") else _data_uri_from_file(p)
+            for p in reference_images
+        ]
 
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(
@@ -178,6 +196,7 @@ async def generate_video_to_file(
     *,
     image: str | None = None,
     keyframes: list[str] | None = None,
+    reference_images: list[str] | None = None,
     width: int = 1152,
     height: int = 768,
     num_frames: int = 121,
@@ -192,7 +211,8 @@ async def generate_video_to_file(
     for attempt in range(1, max_attempts + 1):
         try:
             video_id = await create_video(
-                prompt, image=image, keyframes=keyframes, width=width, height=height,
+                prompt, image=image, keyframes=keyframes,
+                reference_images=reference_images, width=width, height=height,
                 num_frames=num_frames, frame_rate=frame_rate, timeout=120,
             )
             result = await poll_video(video_id)

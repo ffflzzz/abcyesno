@@ -46,6 +46,21 @@ class Character(TypedDict):
     name: str
     ref_image: str
     prompt: str
+    # Multi-view reference set (front / three-quarter / side / back). Index 0
+    # is the canonical front view and equals ``ref_image``. Populated by
+    # ``generate_characters``; consumed by keyframe/video gen + artifact emit.
+    view_images: NotRequired[list[str]]
+
+
+# Canonical multi-view angle set. Order is significant: index 0 == front ==
+# ``Character.ref_image``. ``generate_characters`` and ``langgraph_runtime``
+# both mirror this tuple (kept here as the single source of truth).
+CHARACTER_VIEWS = (
+    ("front", "正面"),
+    ("three_quarter", "四分之三"),
+    ("side", "侧面"),
+    ("back", "背面"),
+)
 
 
 class ShotResult(TypedDict):

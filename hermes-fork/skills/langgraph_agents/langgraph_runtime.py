@@ -436,10 +436,27 @@ def _collect_artifacts(state: Any) -> List[Dict[str, Any]]:
         if not isinstance(ch, dict):
             continue
         ref = ch.get("ref_image")
+        name = ch.get("name") or "unknown"
+        safe = "".join(c if c.isalnum() or c in "_-" else "_" for c in str(name))
         if ref:
-            name = ch.get("name") or "unknown"
-            safe = "".join(c if c.isalnum() or c in "_-" else "_" for c in str(name))
             artifacts.append({"id": f"character_{safe}", "type": "image", "source": "path", "path": ref, "label": f"角色·{name}"})
+        # Multi-view reference set: expose each additional angle (index >= 1) as
+        # its own artifact. Index 0 is the canonical front (== ref_image) and is
+        # already emitted above, so it is skipped to avoid a duplicate artifact.
+        # Labels mirror mc_state.CHARACTER_VIEWS order; kept local to avoid a
+        # hard import on the agent module path.
+        _VIEW_LABELS = {1: "四分之三", 2: "侧面", 3: "背面"}
+        for vi, vpath in enumerate(ch.get("view_images") or []):
+            if vi == 0 or not vpath:
+                continue
+            vlabel = _VIEW_LABELS.get(vi, f"视角{vi}")
+            artifacts.append({
+                "id": f"character_{safe}_v{vi}",
+                "type": "image",
+                "source": "path",
+                "path": vpath,
+                "label": f"角色·{name}·{vlabel}",
+            })
     episode = state.get("current_episode", 0)
     for r in state.get("shot_results") or []:
         if not isinstance(r, dict):

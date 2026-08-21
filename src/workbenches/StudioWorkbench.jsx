@@ -233,8 +233,24 @@ function PhaseStepper({ phase, done, onGo }) {
 }
 
 function AssetLibrary({ curTab, setCurTab, assetsReady, assetImgs, scenes, onScenesChange, onAutoScenes, onGenOne, onGenAll, disabled }) {
+  const charViews = assetImgs.characterViews || {};
   const hasAny = Object.keys(assetImgs.character || {}).length > 0;
-  const list = hasAny ? Object.entries(assetImgs.character || {}).map(([name, url]) => ({ name, tag: "角色", views: ["正面"], url })) : null;
+  const list = hasAny
+    ? Object.entries(assetImgs.character || {}).map(([name, url]) => {
+        const vm = charViews[name] || {};
+        const viewLabels = Object.keys(vm);
+        // The big front image already covers the canonical 正面 view; the
+        // gallery shows the additional angles (四分之三 / 侧面 / 背面).
+        const gallery = Object.entries(vm).filter(([vlabel]) => vlabel !== "正面");
+        return {
+          name,
+          tag: "角色",
+          url,
+          views: viewLabels.length ? viewLabels : ["正面"],
+          gallery,
+        };
+      })
+    : null;
   return (
     <div className="st-col st-left">
       <div className="st-tabs">
@@ -274,11 +290,13 @@ function AssetLibrary({ curTab, setCurTab, assetsReady, assetImgs, scenes, onSce
                 <div className="st-asset-img">
                   <img src={toLoadableSrc(a.url)} alt={a.name} />
                 </div>
-              ) : (
+              ) : null}
+              {a.gallery.length > 0 && (
                 <div className="st-views">
-                  {a.views.map((v) => (
-                    <div className="st-view" key={v}>
-                      {v}
+                  {a.gallery.map(([vlabel, vsrc]) => (
+                    <div className="st-view" key={vlabel}>
+                      <img src={toLoadableSrc(vsrc)} alt={vlabel} />
+                      <span className="st-view-label">{vlabel}</span>
                     </div>
                   ))}
                 </div>
@@ -887,7 +905,7 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
   const [done, setDoneRaw] = useState(_readCache(cacheKey + ":done", {}));
   const [tasks, setTasksRaw] = useState(_readCache(cacheKey + ":tasks", []));
   const [assetsReady, setAssetsReadyRaw] = useState(_readCache(cacheKey + ":assetsReady", { character: false, scene: false, prop: false }));
-  const [assetImgs, setAssetImgsRaw] = useState(_readCache(cacheKey + ":assetImgs", { character: {}, scene: {}, prop: {} }));
+  const [assetImgs, setAssetImgsRaw] = useState(_readCache(cacheKey + ":assetImgs", { character: {}, scene: {}, prop: {}, characterViews: {} }));
   const [curTab, setCurTabRaw] = useState(_readCache(cacheKey + ":curTab", "character"));
   const [shotState, setShotStateRaw] = useState(_readCache(cacheKey + ":shotState", {}));
   const [shotCfg, setShotCfgRaw] = useState(_readCache(cacheKey + ":shotCfg", {}));
@@ -1384,13 +1402,25 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
     if (!rawSrc) return;
     const src = toLoadableSrc(rawSrc);
 
-    // Character reference images from the locked bible.
+    // Character reference images from the locked bible. Labels come in two
+    // shapes: "角色·NAME" (canonical front) and "角色·NAME·视角" (an additional
+    // multi-view angle). The front is kept as the primary thumbnail/ref, and
+    // every angle (including front) is also recorded in characterViews so the
+    // UI can show the full multi-view reference set.
     if (type === "image" && (label || "").includes("角色")) {
-      const name = (label || "").replace(/^角色·/, "").trim() || "角色";
-      setAssetImgs((prev) => ({
-        ...prev,
-        character: { ...(prev.character || {}), [name]: src },
-      }));
+      const body = (label || "").replace(/^角色·/, "").trim() || "角色";
+      const parts = body.split("·");
+      const name = parts[0] || "角色";
+      const viewLabel = parts[1] || "正面";
+      setAssetImgs((prev) => {
+        const character = { ...(prev.character || {}) };
+        if (!parts[1]) character[name] = src; // canonical front
+        const characterViews = { ...(prev.characterViews || {}) };
+        const entry = { ...(characterViews[name] || {}) };
+        entry[viewLabel] = src;
+        characterViews[name] = entry;
+        return { ...prev, character, characterViews };
+      });
       setAssetsReady((prev) => ({ ...prev, character: true }));
       return;
     }
@@ -1536,7 +1566,14 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
           ratio: "3:4",
         });
         if (j && j.ok && j.url) {
-          setAssetImgs((prev) => ({ ...prev, character: { ...(prev.character || {}), [name]: j.url } }));
+          setAssetImgs((prev) => {
+            const character = { ...(prev.character || {}), [name]: j.url };
+            // A standalone regenerate yields a single front image; collapse the
+            // multi-view map back to just the (new) front so stale angles clear.
+            const characterViews = { ...(prev.characterViews || {}) };
+            characterViews[name] = { 正面: j.url };
+            return { ...prev, character, characterViews };
+          });
         }
         setTasks((prev) => prev.map((x) => (x.id === task.id ? { ...x, status: j?.ok ? "ok" : "err", error: j?.error, prog: 100 } : x)));
       }
@@ -1597,10 +1634,23 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
       let prompt = `${st.prompt || ""}，${project.style}风格，自然运动，电影级镜头`;
       if (motionEn && st.motion && st.motion !== "固定") prompt += `，${motionEn}`;
       if (sceneObj) prompt += `，场景设定：${sceneObj.name}`;
+      // Multi-view character reference anchors (forward-compatible): the Agnes
+      // video model currently ignores them, but we pass every angle's raw path
+      // so a future model can reference the character accurately.
+      const charRefs = [];
+      const cv = assetImgs.characterViews || {};
+      for (const name of Object.keys(cv)) {
+        const vm = cv[name] || {};
+        for (const vlabel of Object.keys(vm)) {
+          const raw = originalPathOf(vm[vlabel]) || vm[vlabel];
+          if (raw) charRefs.push(raw);
+        }
+      }
       const j = await api("generate-video", {
         prompt,
         image: st.firstFrameUrl || st.imgPath || st.imgUrl || undefined,
         keyframes: st.lastFrameUrl || undefined,
+        reference_images: charRefs.length ? charRefs : undefined,
         width: 1152,
         height: 768,
         num_frames: 81,
@@ -1616,7 +1666,7 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
         },
       }));
     },
-    [api, shotState, project.style, project.scenes]
+    [api, shotState, project.style, project.scenes, assetImgs.characterViews]
   );
 
   const onScriptChange = useCallback((k, val, field = "script") => {
@@ -1740,7 +1790,7 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
     setTrace({});
     setTraceEpisode(0);
     setTraceTotal(1);
-    setAssetImgs({ character: {}, scene: {}, prop: {} });
+    setAssetImgs({ character: {}, scene: {}, prop: {}, characterViews: {} });
     setAssetsReady({ character: false, scene: false, prop: false });
     setShotState({});
     setTimeline([]);
@@ -1795,7 +1845,7 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
               setDone({});
               setTasks([]);
               setAssetsReady({ character: false, scene: false, prop: false });
-              setAssetImgs({ character: {}, scene: {}, prop: {} });
+              setAssetImgs({ character: {}, scene: {}, prop: {}, characterViews: {} });
               setShotState({});
               setShotCfg({});
               setTimeline([]);
@@ -2062,18 +2112,33 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
 
                   {hasCharacters ? (
                     <div className="st-assets-grid">
-                      {charEntries.map(([name, rawUrl]) => (
-                        <div className="st-asset-card" key={name}>
-                          <div className="st-asset-name">
-                            {name}
-                            <span className="st-asset-tag">角色</span>
+                      {charEntries.map(([name, rawUrl]) => {
+                        const vm = (assetImgs.characterViews || {})[name] || {};
+                        const gallery = Object.entries(vm).filter(([vlabel]) => vlabel !== "正面");
+                        const viewLabels = Object.keys(vm);
+                        return (
+                          <div className="st-asset-card" key={name}>
+                            <div className="st-asset-name">
+                              {name}
+                              <span className="st-asset-tag">角色</span>
+                            </div>
+                            <div className="st-asset-img">
+                              <img src={toLoadableSrc(rawUrl)} alt={name} />
+                            </div>
+                            {gallery.length > 0 && (
+                              <div className="st-views">
+                                {gallery.map(([vlabel, vsrc]) => (
+                                  <div className="st-view" key={vlabel}>
+                                    <img src={toLoadableSrc(vsrc)} alt={vlabel} />
+                                    <span className="st-view-label">{vlabel}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                            <div className="st-asset-views-label">{viewLabels.length ? viewLabels.join(" / ") : "正面"}</div>
                           </div>
-                          <div className="st-asset-img">
-                            <img src={toLoadableSrc(rawUrl)} alt={name} />
-                          </div>
-                          <div className="st-asset-views-label">正面</div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   ) : (
                     <div className="st-empty st-empty-soft">
