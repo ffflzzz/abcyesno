@@ -41,10 +41,18 @@
 
 /* ── HITL approval gate overlay ── */
 .st-approval-overlay {
+  /* NO `transform: translateX(-50%)` here — when this overlay rendered the
+     <ApprovalBubble>'s `.approval-lightbox` (position:fixed; inset:0), the
+     transform trick made the lightbox use the overlay's box as its
+     containing block, so the close-X ended up at top-right of the 560x82vh
+     overlay instead of top-right of the viewport. Users clicked an image
+     thumb to preview and then could not dismiss it. Center via the
+     left:0/right:0/margin:auto trio so no ancestor has `transform`. */
   position: fixed;
-  left: 50%;
+  left: 0;
+  right: 0;
   bottom: 24px;
-  transform: translateX(-50%);
+  margin: 0 auto;
   z-index: 1000;
   width: min(560px, 92vw);
   max-height: 82vh;
@@ -239,7 +247,9 @@
 .st-task-st.run { color: var(--st-accent); }
 .st-task-st.ok { color: var(--success); }
 .st-task-st.err { color: var(--error); }
+.st-task-st.interrupted { color: var(--warning); }
 .st-task-err { border-color: color-mix(in srgb, var(--error) 40%, var(--st-line)); }
+.st-task-interrupted { border-color: color-mix(in srgb, var(--warning) 40%, var(--st-line)); opacity: .85; }
 .st-task-err-msg { margin-top: 6px; font-size: 11px; color: var(--error); word-break: break-all; opacity: .9; }
 .st-bar { height: 6px; background: var(--st-track); border-radius: 4px; overflow: hidden; margin-top: 8px; }
 .st-bar > i { display: block; height: 100%; width: 0; background: var(--st-accent); transition: width .25s; }
@@ -401,6 +411,36 @@
   margin-bottom: 10px;
 }
 .st-runerror-hint {
+  font-size: 12px;
+  color: var(--st-muted);
+  line-height: 1.5;
+}
+
+/* ── Workflow run interruption banner (after app restart) ── */
+.st-runinterrupt {
+  border: 1px solid color-mix(in srgb, var(--warning) 40%, var(--st-line)) !important;
+  background: color-mix(in srgb, var(--warning) 8%, var(--st-surface)) !important;
+}
+.st-runinterrupt-title {
+  color: var(--warning) !important;
+  font-size: 14px !important;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  margin-bottom: 12px !important;
+}
+.st-runinterrupt-msg {
+  font-size: 13px;
+  color: var(--st-text);
+  background: var(--st-surface-2);
+  border: 1px solid var(--st-line);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  word-break: break-all;
+  white-space: pre-wrap;
+  margin-bottom: 10px;
+}
+.st-runinterrupt-hint {
   font-size: 12px;
   color: var(--st-muted);
   line-height: 1.5;

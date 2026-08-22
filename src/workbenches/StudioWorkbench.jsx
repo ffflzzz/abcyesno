@@ -1095,10 +1095,15 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
       if (!raw) return null;
       const parsed = JSON.parse(raw);
       if (!parsed || typeof parsed !== "object") return null;
-      // Do not restore an active run; it cannot be resumed from the frontend.
-      if (parsed.runState === "running") {
-        parsed.runState = "idle";
-      }
+      // We can NOT resume a workflow run from the frontend: the Hermes
+      // backend (langgraph-runtime) is a child of the Electron main process
+      // and dies with it on shutdown. So if we previously persisted
+      // runState="running", on the next launch there is nothing to listen
+      // to and nothing to drain — but we MUST preserve the runId and the
+      // in-flight task list so the user can see the interruption, not have
+      // it silently turned into a fake "idle" with hidden stuck tasks.
+      // The mount effect below flips runState="running" → "interrupted"
+      // and surfaces a recoverable banner (Bug 2 fix).
       return parsed;
     } catch {
       return null;
@@ -1111,8 +1116,10 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
     } catch {}
   }, [storageKey]);
 
-  // Restore once on mount.
-  useEffect(() => {
+  // Restore once on mount. If we previously persisted a "running" state,
+// flip it to "interrupted" so the user sees that the backend is gone and
+// tasks can be re-run — instead of being silently stuck on "运行中" (Bug 2).
+useEffect(() => {
     const saved = loadPersistedState();
     if (!saved) return;
     if (saved.project) setProject(saved.project);
@@ -1127,9 +1134,22 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
     if (saved.timeline) setTimeline(saved.timeline);
     if (saved.selectedClip !== undefined) setSelectedClip(saved.selectedClip);
     if (saved.exportJson) setExportJson(saved.exportJson);
-    if (saved.runState) setRunState(saved.runState);
-    if (saved.runId) setRunId(saved.runId);
     if (typeof saved.asideCollapsed === "boolean") setAsideCollapsed(saved.asideCollapsed);
+    // The backend died on app shutdown — whatever was "running" is dead.
+    // Show the user a clear interruption banner with a "重新跑同流程" button.
+    if (saved.runState === "running" && saved.runId) {
+      setRunState("interrupted");
+      // Mark every formerly-running task as interrupted so the TaskCenter
+      // does not pretend they are still in flight.
+      setTasks((prev) =>
+        prev.map((t) =>
+          t.status === "run" ? { ...t, status: "interrupted", prog: 0 } : t
+        )
+      );
+    } else if (saved.runId) {
+      setRunId(saved.runId);
+      if (saved.runState) setRunState(saved.runState);
+    }
   }, [loadPersistedState]); // only run when key changes (mount)
 
   // Debounced save whenever meaningful state changes.
@@ -1987,6 +2007,43 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
               </div>
             </div>
           )}
+          {runState === "interrupted" && (
+            <div className="st-card st-runinterrupt">
+              <div className="st-section">
+                <div className="st-section-title st-runinterrupt-title">
+                  ⏸ 上次运行已中断
+                </div>
+                <div className="st-runinterrupt-msg">
+                  {`检测到一次未完成的运行（runId=${runId || "?"}）。\n这是因为工作流后端与本应用在同一进程中，软件一关就会被一起结束，\n所以断电/关窗后无法自动续跑。当前右侧「任务中心」里标为「中断」的步骤都需要重新执行。`}
+                </div>
+                <div className="st-runinterrupt-hint">
+                  提示：脚本/资源/分镜/草稿都已保留，要继续推进可直接点「一键生成全部资产 →」从头重跑，
+                  或在「分镜」phase 针对单个镜手动重跑「重新生成分镜图」。
+                </div>
+                <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <button
+                    className="st-primary"
+                    onClick={genAll}
+                    disabled={running || phase === "script"}
+                    title="按当前剧本+资产库从头重跑工作流"
+                  >
+                    一键从头重跑
+                  </button>
+                  <button
+                    className="st-primary"
+                    style={{ background: "transparent", border: "1px solid var(--st-line)", color: "var(--st-text)" }}
+                    onClick={() => {
+                      setRunState("idle");
+                      setRunId(null);
+                      setApproval(null);
+                    }}
+                  >
+                    我知道了
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
           {phase === "script" && (
             <div className="st-card st-form-card">
               <div className="st-form-grid">
@@ -2354,11 +2411,21 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
                     <h3 className="st-sec-title">任务中心</h3>
                     {tasks.length === 0 && !topology && <div className="st-empty">暂无任务</div>}
                     {tasks.map((t) => (
-                      <div className={`st-task${t.status === "err" ? " st-task-err" : ""}`} key={t.id}>
+                      <div
+                        className={
+                          t.status === "err" ? "st-task st-task-err"
+                          : t.status === "interrupted" ? "st-task st-task-interrupted"
+                          : "st-task"
+                        }
+                        key={t.id}
+                      >
                         <div className="st-task-t">
                           <span>{t.name}</span>
                           <span className={`st-task-st ${t.status}`}>
-                            {t.status === "ok" ? "完成" : t.status === "err" ? "失败" : "运行中"}
+                            {t.status === "ok" ? "完成"
+                              : t.status === "err" ? "失败"
+                              : t.status === "interrupted" ? "中断"
+                              : "运行中"}
                           </span>
                         </div>
                         <div className="st-bar">
