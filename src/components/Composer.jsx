@@ -37,7 +37,7 @@ function loadRecentWorkspaces() {
   }
 }
 
-function rememberWorkspace(dir) {
+export function rememberWorkspace(dir) {
   if (!dir) return;
   const next = [dir, ...loadRecentWorkspaces().filter((d) => d !== dir)].slice(0, WS_RECENT_MAX);
   try {

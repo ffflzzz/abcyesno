@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Sidebar from "./components/Sidebar.jsx";
 import ChatLayout from "./components/ChatLayout.jsx";
+import { rememberWorkspace } from "./components/Composer.jsx";
 import ApiKeyModal from "./components/ApiKeyModal.jsx";
 import MarketPanel from "./components/MarketPanel.jsx";
 import CreateAssistantModal from "./components/CreateAssistantModal.jsx";
@@ -326,11 +327,18 @@ function ChatShell({
   }
 
   // ── Per-session workspace binding (docs/SESSION_WORKSPACE_SPEC.md) ──
-  // Source of truth is the session record's `workspaceDir` field; after a
-  // successful update we reload sessions so the prop refreshes.
-  const workspaceDir = session?.workspaceDir || null;
+  // Source of truth is the session record's `workspaceDir` field, but the
+  // pill reflects an optimistic local override immediately: waiting for
+  // updateSession + loadSessions round-trip left the pill stale for seconds
+  // (and empty-session cleanup could even swallow the session in between).
+  const [wsOverride, setWsOverride] = useState({});
+  const workspaceDir = wsOverride[selectedSessionId] !== undefined
+    ? wsOverride[selectedSessionId]
+    : (session?.workspaceDir || null);
   async function handleWorkspaceChange(dir) {
     if (!selectedSessionId || !hermesRef.current?.updateSession) return;
+    setWsOverride((m) => ({ ...m, [selectedSessionId]: dir || null }));
+    if (dir) rememberWorkspace(dir);
     try {
       await hermesRef.current.updateSession(selectedSessionId, { workspaceDir: dir || null });
       onSessionUpdatedRef.current && onSessionUpdatedRef.current();
@@ -1328,8 +1336,13 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
 
   async function loadSessions(assistantId) {
     let list = await hermes.listSessions(assistantId);
-    // Filter out empty sessions (never had any message) and clean them from storage.
-    const emptyIds = (list || []).filter((s) => !s.messages || s.messages.length === 0).map((s) => s.id);
+    // Filter out empty sessions (never had any message) and clean them from
+    // storage. Sessions with a workspace binding are kept — the user may bind
+    // a folder BEFORE sending the first message (that's the whole point), so
+    // an intentional binding must not look like an abandoned empty session.
+    const emptyIds = (list || [])
+      .filter((s) => (!s.messages || s.messages.length === 0) && !s.workspaceDir)
+      .map((s) => s.id);
     if (emptyIds.length > 0) {
       // Clean empty sessions in background (fire-and-forget)
       for (const id of emptyIds) {
