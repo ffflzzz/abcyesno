@@ -415,11 +415,14 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
         publish(sess.id);
       } else if (name === "reasoning.snapshot") {
         // Complete reasoning snapshot from the model_progress callback.
-        // Replaces the streamed text wholesale instead of appending — this is
-        // what guarantees the final ReasoningBlock doesn't double-render the
-        // same reasoning that streaming already pushed.
+        // Only use it as a FALLBACK when we haven't already streamed real
+        // reasoning.delta this turn — otherwise the gateway's _think_text
+        // scratchpad (often the answer body, not genuine thinking) would
+        // overwrite the real reasoning and get hidden downstream as a duplicate.
+        // See #thinking-visible.
         const text = value?.text || "";
         if (!text) return;
+        if (sess.reasoningText && sess.reasoningText.trim()) return;
         sess.phase = "thinking";
         sess.reasoningText = text;
         publish(sess.id);

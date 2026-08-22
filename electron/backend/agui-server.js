@@ -507,6 +507,7 @@ function createAgUIServer(getGatewayClient, storage, options) {
     let hasRunError = false;
     let emittedText = '';
     let emittedPlain = ''; // whitespace-normalized, for overlap checks
+    let reasoningDeltaSeen = false; // true once we've streamed real reasoning.delta this round
     const activeToolCalls = new Set();
     const toolStartTimes = new Map(); // toolCallId -> timestamp, for duration_ms
     let currentPhase = 'idle'; // idle | thinking | tool_executing | text_generating
@@ -537,6 +538,7 @@ function createAgUIServer(getGatewayClient, storage, options) {
       messageId = nextMessageId();
       emittedText = '';
       emittedPlain = '';
+      reasoningDeltaSeen = false;
       hasTextDelta = false;
       activeToolCalls.clear();
       currentRoundClosed = false;
@@ -751,6 +753,7 @@ function createAgUIServer(getGatewayClient, storage, options) {
           break;
 
         case 'reasoning.delta':
+          reasoningDeltaSeen = true;
           // Real model reasoning tokens (from chat_completion_helpers / _fire_reasoning_delta).
           // Forwarded as its OWN CUSTOM event so the frontend can render a dedicated
           // ReasoningBlock distinct from the shallow thinking indicator.
@@ -761,12 +764,12 @@ function createAgUIServer(getGatewayClient, storage, options) {
           break;
 
         case 'reasoning.available':
-          // Structured reasoning snapshot (non-streaming path, e.g. verbose=False
-          // models or model_progress callback). Distinct from `reasoning.delta`
-          // (streaming increments) so the frontend can replace reasoningText
-          // wholesale instead of appending — otherwise the same reasoning is
-          // streamed AND snapshotted and we'd render it twice.
-          if (payload && typeof payload.text === 'string' && payload.text.trim()) {
+          // Fallback for models that expose thinking only as a non-streaming
+          // scratchpad (_think_text in conversation_loop). If we already streamed
+          // real reasoning.delta this turn, SKIP — otherwise that scratchpad (often
+          // the answer body) would clobber the real reasoning and get hidden as a
+          // duplicate. See #thinking-visible.
+          if (!reasoningDeltaSeen && payload && typeof payload.text === 'string' && payload.text.trim()) {
             setPhase('thinking');
             send({ type: 'CUSTOM', name: 'reasoning.snapshot', value: { text: payload.text } });
           }

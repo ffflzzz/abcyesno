@@ -296,16 +296,18 @@ check(
 );
 await sleep(60);
 
-// ── Reasoning snapshot / delta dedup ───────────────────────────────────
-// 模拟 hermes 两条独立 emit 路径（streaming delta + model_progress snapshot）
-// 同时推同一段 reasoning。snapshot 必须覆盖而非累加，dedup 必须吃掉重复 suffix。
-function pReasoning() {
-  const mid = "F-msg";
+// ── Reasoning snapshot / delta fallback (#thinking-visible) ────────────
+// hermes 有两条独立 emit 路径：streaming reasoning.delta（真实思考流）
+// 与 model_progress 的 reasoning.available（后端 _think_text 草稿，常为答案正文）。
+// 修复后 reasoning.snapshot 仅作 fallback：仅当本轮无任何 reasoning.delta
+// 时才采用，否则会覆盖真实思考并被下游判重隐藏。
+function pReasoningDeltaFirst() {
+  const mid = "RX-msg";
   return [
-    { delay: 10, event: { type: "RUN_STARTED", runId: "F-run" } },
-    // streaming delta：先推一段
+    { delay: 10, event: { type: "RUN_STARTED", runId: "RX-run" } },
+    // streaming delta 先到
     { delay: 5, event: { type: "CUSTOM", name: "reasoning.delta", value: { text: "(•ㅅ•) formulating..." } } },
-    // snapshot 到达：覆盖整个 reasoningText（关键：不能追加）
+    // snapshot 后到：必须被跳过（fallback 语义，不能覆盖真实 delta）
     { delay: 5, event: { type: "CUSTOM", name: "reasoning.snapshot", value: { text: "完整思考：决定搜索一下" } } },
     // 又一段 delta 续在 snapshot 之后
     { delay: 5, event: { type: "CUSTOM", name: "reasoning.delta", value: { text: "...继续推理" } } },
@@ -317,13 +319,36 @@ function pReasoning() {
     { delay: 5, event: { type: "RUN_FINISHED" } },
   ];
 }
-scripts.set("F", pReasoning());
-setActive("F");
-api.sendMessage("test reasoning snapshot", { threadId: "F" });
+scripts.set("RX", pReasoningDeltaFirst());
+setActive("RX");
+api.sendMessage("test reasoning delta-first", { threadId: "RX" });
 await sleep(200);
 check(
-  "F1 reasoning.snapshot 覆盖而非累加（不重复 formulating/重复 deliberating 之类）",
-  api.reasoningText === "完整思考：决定搜索一下...继续推理",
+  "RX reasoning.snapshot 在 delta 之后必须被跳过（fallback 语义，不覆盖真实思考）",
+  api.reasoningText === "(•ㅅ•) formulating......继续推理",
+  `reasoningText="${api.reasoningText}"`
+);
+await sleep(60);
+
+// 场景二：只有 snapshot、没有 delta —— fallback 应当采用 snapshot
+function pReasoningSnapshotOnly() {
+  const mid = "RY-msg";
+  return [
+    { delay: 10, event: { type: "RUN_STARTED", runId: "RY-run" } },
+    { delay: 5, event: { type: "CUSTOM", name: "reasoning.snapshot", value: { text: "完整思考：决定搜索一下" } } },
+    { delay: 5, event: { type: "TEXT_MESSAGE_START", role: "assistant", messageId: mid } },
+    { delay: 5, event: { type: "TEXT_MESSAGE_CONTENT", messageId: mid, delta: "ok" } },
+    { delay: 5, event: { type: "TEXT_MESSAGE_END", messageId: mid } },
+    { delay: 5, event: { type: "RUN_FINISHED" } },
+  ];
+}
+scripts.set("RY", pReasoningSnapshotOnly());
+setActive("RY");
+api.sendMessage("test reasoning snapshot-only", { threadId: "RY" });
+await sleep(200);
+check(
+  "RY 无 delta 时 reasoning.snapshot 作为 fallback 被采用",
+  api.reasoningText === "完整思考：决定搜索一下",
   `reasoningText="${api.reasoningText}"`
 );
 await sleep(60);

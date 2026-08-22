@@ -239,10 +239,11 @@ function formatTime(ts) {
 
 /**
  * Some providers / reasoning models return reasoning_content that is identical
- * to the final assistant content (or a minor whitespace variant). Showing that
- * inside the "深度推理" block creates confusing duplication. We suppress the
- * block when reasoning is empty, equals content, or is contained verbatim in
- * content.
+ * to the final assistant content. We suppress the "深度推理" block only when the
+ * reasoning is EXACTLY equal to the answer — NOT when it's merely contained in
+ * it. Reasoning models routinely restate part of the answer inside their
+ * thinking; hiding every such case made the thinking block disappear entirely
+ * (the user reported "看不到模型的thinking 过程"). See #thinking-visible.
  */
 function isDuplicateReasoning(reasoning, content) {
   const r = String(reasoning || "").replace(/\s+/g, " ").trim();
@@ -250,7 +251,6 @@ function isDuplicateReasoning(reasoning, content) {
   if (!r) return true;
   if (!c) return false;
   if (r === c) return true;
-  if (c.includes(r)) return true;
   return false;
 }
 
