@@ -355,12 +355,19 @@ async def create_video(
         "frame_rate": frame_rate,
     }
     if keyframes:
-        body["extra_body"] = {
-            "image": [p if p.startswith("http") or p.startswith("data:") else _data_uri_from_file(p) for p in keyframes],
-            "mode": "keyframes",
-        }
+        # 关键帧动画：文档参数表声明顶层 `mode` 可取 "keyframes"，示例又把
+        # mode 与 image 数组放在 extra_body 里。两种写法都发出去，确保网关
+        # 无论读顶层还是 extra_body 都能识别。image 数组始终走 extra_body
+        # （文档示例如此；顶层 image 是单图图生视频字段）。
+        kf_images = [
+            p if p.startswith("http") or p.startswith("data:") else _data_uri_from_file(p)
+            for p in keyframes
+        ]
+        body["mode"] = "keyframes"
+        body["extra_body"] = {"image": kf_images, "mode": "keyframes"}
     elif image:
         body["image"] = image if image.startswith("http") or image.startswith("data:") else _data_uri_from_file(image)
+        body["mode"] = "ti2vid"
 
     # Character/identity reference anchors for consistency. No-op while the
     # Agnes video model does not accept them (VIDEO_SUPPORTS_REFERENCE_IMAGES).
