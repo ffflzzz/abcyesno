@@ -50,9 +50,9 @@ function realUsageBuckets(usage = {}) {
   }
 
   const buckets = [
-    { key: "input", label: "输入 tokens", tokens: input, color: "#06b6d4" },
-    { key: "output", label: "输出 tokens", tokens: output, color: "#8b5cf6" },
-    { key: "reasoning", label: "推理 tokens", tokens: reasoning, color: "#f59e0b" },
+    { key: "input", label: "输入 tokens", tokens: input, color: "#e6edf3" },
+    { key: "output", label: "输出 tokens", tokens: output, color: "#c0c8d4" },
+    { key: "reasoning", label: "推理 tokens", tokens: reasoning, color: "#8b949e" },
   ].filter((b) => b.tokens > 0);
 
   return {
@@ -131,11 +131,11 @@ function estimateUsageBuckets(messages = [], modelName = "default") {
     used: Math.min(totalUsed, windowSize),
     percentage: Math.min(pct, 100),
     buckets: [
-      { key: "system", label: "系统提示词", tokens: systemTokens, color: "#10b981" },
-      { key: "tools", label: "工具及子智能体", tokens: toolTokens, color: "#f59e0b" },
-      { key: "messages", label: "对话消息", tokens: messageTokens, color: "#8b5cf6" },
-      { key: "mcp", label: "连接器及MCP", tokens: mcpTokens, color: "#06b6d4" },
-      { key: "skills", label: "技能", tokens: skillTokens, color: "#3b82f6" },
+      { key: "system", label: "系统提示词", tokens: systemTokens, color: "#e6edf3" },
+      { key: "tools", label: "工具及子智能体", tokens: toolTokens, color: "#c0c8d4" },
+      { key: "messages", label: "对话消息", tokens: messageTokens, color: "#8b949e" },
+      { key: "mcp", label: "连接器及MCP", tokens: mcpTokens, color: "#6f7785" },
+      { key: "skills", label: "技能", tokens: skillTokens, color: "#4a525c" },
     ],
   };
 }
@@ -200,10 +200,10 @@ export default function ContextUsage({ messages = [], model = "agnes-2.5-flash",
             style={{
               width: `${Math.min(percentage, 100)}%`,
               background: percentage > 90
-                ? "linear-gradient(90deg, #ef4444, #f97316)"
+                ? "linear-gradient(90deg, #da3633, #f87171)"
                 : percentage > 70
-                  ? "linear-gradient(90deg, #f59e0b, #eab308)"
-                  : "linear-gradient(90deg, #10b981, #06b6d4, #8b5cf6)",
+                  ? "linear-gradient(90deg, #d29922, #eab308)"
+                  : "var(--accent)",
             }}
           />
         </div>

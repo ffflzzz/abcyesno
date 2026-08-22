@@ -9,7 +9,7 @@ export default function ThinkingIndicator({ text = "Thinking" }) {
     <div className="thinking-indicator">
       <span className="thinking-spinner" aria-hidden="true" />
       <span className="thinking-text" style={{
-        color: "#4f8cff",
+        color: "var(--accent)",
         fontWeight: 500,
         animation: "think-text-pulse 2s ease-in-out infinite",
       }}>{text}</span>

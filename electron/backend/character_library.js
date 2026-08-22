@@ -26,6 +26,53 @@ function indexPath() {
   return path.join(libraryDir(), "index.json");
 }
 
+// Generated (real) character images live here, one file per card id.
+function imagesDir() {
+  return path.join(libraryDir(), "images");
+}
+
+// True when the card has no real artwork yet: either nothing at all or one of
+// the legacy SVG gradient placeholders shipped in the original seed.
+function isPlaceholderUrl(url) {
+  if (!url || typeof url !== "string") return true;
+  return url.startsWith("data:image/svg");
+}
+
+// Detect the actual image format from magic bytes and rename the file to a
+// matching extension (downloadMedia falls back to `.bin` when the remote URL
+// carries none, and the sandboxed renderer's protocol handler relies on the
+// extension for its Content-Type).
+function normalizeImageExt(filePath) {
+  let fd;
+  try {
+    fd = fs.openSync(filePath, "r");
+    const buf = Buffer.alloc(12);
+    fs.readSync(fd, buf, 0, 12, 0);
+    let ext = null;
+    if (buf[0] === 0x89 && buf[1] === 0x50) ext = ".png";
+    else if (buf[0] === 0xff && buf[1] === 0xd8) ext = ".jpg";
+    else if (
+      buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46 &&
+      buf[8] === 0x57 && buf[9] === 0x45 && buf[10] === 0x42 && buf[11] === 0x50
+    ) ext = ".webp";
+    else if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46) ext = ".gif";
+    if (!ext) return filePath;
+    const cur = path.extname(filePath).toLowerCase();
+    if (cur === ext) return filePath;
+    const fixed = filePath.slice(0, filePath.length - cur.length) + ext;
+    fs.closeSync(fd);
+    fd = null;
+    fs.renameSync(filePath, fixed);
+    return fixed;
+  } catch (_) {
+    return filePath;
+  } finally {
+    if (fd !== null && fd !== undefined) {
+      try { fs.closeSync(fd); } catch (_) {}
+    }
+  }
+}
+
 function seedPath() {
   // Shipped with the app: <repo>/hermes-fork/.../manjucraft_agent/seed/built_in.json
   const rel = path.join(
@@ -165,12 +212,36 @@ function touchUsed(id) {
   return card;
 }
 
+function getCard(id) {
+  const list = loadIndex();
+  return list.find((c) => c.id === id) || null;
+}
+
+// Persist a freshly generated real artwork for a card. Also drops any legacy
+// SVG placeholder views so the UI never mixes generated + placeholder art.
+function setCardImage(id, localPath) {
+  const list = loadIndex();
+  const card = list.find((c) => c.id === id);
+  if (!card) return null;
+  card.frontUrl = localPath;
+  const views = card.views || {};
+  const kept = {};
+  for (const [k, v] of Object.entries(views)) {
+    if (!isPlaceholderUrl(v)) kept[k] = v;
+  }
+  card.views = kept;
+  card.imageGeneratedAt = Date.now();
+  saveIndex(list);
+  return card;
+}
+
 function listCards() {
   return seedIfEmpty();
 }
 
 module.exports = {
   libraryDir,
+  imagesDir,
   indexPath,
   loadIndex,
   saveIndex,
@@ -181,4 +252,8 @@ module.exports = {
   touchUsed,
   listCards,
   makeId,
+  isPlaceholderUrl,
+  normalizeImageExt,
+  getCard,
+  setCardImage,
 };

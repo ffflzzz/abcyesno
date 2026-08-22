@@ -110,7 +110,7 @@ export default function StructuredThinking({ text = "", phaseLabel = "" }) {
         <div className="think-phase-header">
           <span className="thinking-spinner" aria-hidden="true" />
           <span className="think-phase-label" style={{
-            color: "#4f8cff",
+            color: "var(--accent)",
             fontWeight: 500,
             animation: "think-text-pulse 2s ease-in-out infinite",
           }}>{phaseLabel || "正在思考…"}</span>
