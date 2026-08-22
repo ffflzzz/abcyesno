@@ -5,12 +5,23 @@ import React, { useEffect, useRef, useState, useCallback } from "react";
 // the pw_browser_* tools, so the user watches the agent operate the browser
 // live, inside the app. The user can ALSO manually browse by typing a URL in
 // the address bar. Width is user-resizable via a drag handle on the left edge.
-export default function BrowserPanel({ progress = [] } = {}) {
+//
+// `initialUrl` (optional): when provided, the panel loads this URL immediately
+// as a STATIC browser tab (e.g. Excalidraw opened from the Launcher). In this
+// mode the webview uses an isolated partition (NOT pw-browser, which the agent
+// drives) and the "return to blank / hand back to agent" button is hidden
+// because there is no agent controlling this tab.
+// `fullscreen` (optional): render edge-to-edge (no left resize handle, width
+// 100%) so it can fill a browser-type tab's content area.
+export default function BrowserPanel({ progress = [], initialUrl = "", fullscreen = false } = {}) {
   const [marker, setMarker] = useState("");
   const [cdpAvailable, setCdpAvailable] = useState(true);
   const [ready, setReady] = useState(false);
   const [navigated, setNavigated] = useState(false);
-  const [url, setUrl] = useState("");
+  const [url, setUrl] = useState(initialUrl || "");
+  // Static (initialUrl) tabs don't use the agent's pw-browser partition so the
+  // user's manual browsing never collides with an in-flight agent session.
+  const partition = initialUrl ? "static-browser" : "pw-browser";
   const [canGoBack, setCanGoBack] = useState(false);
   const [canGoForward, setCanGoForward] = useState(false);
   const [panelWidth, setPanelWidth] = useState(() => {
@@ -218,13 +229,15 @@ export default function BrowserPanel({ progress = [] } = {}) {
   const showCdpWarn = ready && !navigated && !cdpAvailable;
 
   return (
-    <div className="browser-panel" style={{ width: panelWidth }}>
-      {/* Left-edge drag handle for resizing */}
-      <div
-        className="bp-resize-handle"
-        onMouseDown={handleResizeMouseDown}
-        title="拖拽调整宽度"
-      />
+    <div className={`browser-panel${fullscreen ? " fullscreen" : ""}`} style={fullscreen ? undefined : { width: panelWidth }}>
+      {/* Left-edge drag handle for resizing (hidden in fullscreen mode) */}
+      {!fullscreen && (
+        <div
+          className="bp-resize-handle"
+          onMouseDown={handleResizeMouseDown}
+          title="拖拽调整宽度"
+        />
+      )}
       <div className="browser-toolbar">
         <button
           className={`bt-btn ${canGoBack ? "" : "disabled"}`}
@@ -260,18 +273,20 @@ export default function BrowserPanel({ progress = [] } = {}) {
         <button className="bt-btn go" title="前往" onClick={go}>
           →
         </button>
-        <button className="bt-btn" title="回到空白页（交还 Agent 控制）" onClick={resetToBlank}>
-          ⌂
-        </button>
+        {!initialUrl && (
+          <button className="bt-btn" title="回到空白页（交还 Agent 控制）" onClick={resetToBlank}>
+            ⌂
+          </button>
+        )}
       </div>
       <div className="browser-panel-body">
-        {marker ? (
+        {marker || initialUrl ? (
           <>
             <webview
               ref={bindWebview}
               className="browser-webview"
-              src={marker}
-              partition="pw-browser"
+              src={initialUrl || marker}
+              partition={partition}
               webpreferences="contextIsolation=true"
             />
             {showHint && (
@@ -279,7 +294,9 @@ export default function BrowserPanel({ progress = [] } = {}) {
                 <span className="bp-hint-icon">🌐</span>
                 <span>内置浏览器已就绪</span>
                 <span className="bp-hint-sub">
-                  可在上方输入网址手动浏览，或等 Agent 调用浏览器工具
+                  {initialUrl
+                    ? "可在上方输入网址手动浏览"
+                    : "可在上方输入网址手动浏览，或等 Agent 调用浏览器工具"}
                 </span>
                 {showCdpWarn && (
                   <div className="bp-cdp-warn">

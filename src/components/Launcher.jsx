@@ -20,13 +20,10 @@ export default function Launcher({ apps = [] }) {
                   <img
                     src={app.iconSrc}
                     alt={app.title}
-                    width={28}
-                    height={28}
-                    style={{ borderRadius: 8, display: "block" }}
                     draggable={false}
                   />
                 ) : (
-                  <Icon name={app.icon} size={24} />
+                  <Icon name={app.icon} size={28} />
                 )}
               </span>
               <span className="launcher-app-name">{app.title}</span>

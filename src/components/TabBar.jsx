@@ -30,7 +30,13 @@ export default function TabBar({ tabs, activeTabId, onActivate, onClose, onAdd }
               onClick={() => onActivate(tab.id)}
               title={base}
             >
-              <span className="tabbar-tab-icon"><Icon name={tab.icon || "home"} size={15} /></span>
+              <span className="tabbar-tab-icon">
+                {tab.iconSrc ? (
+                  <img src={tab.iconSrc} alt="" draggable={false} style={{ width: 15, height: 15, objectFit: "contain", borderRadius: 3 }} />
+                ) : (
+                  <Icon name={tab.icon || "home"} size={15} />
+                )}
+              </span>
               <span className="tabbar-tab-label">{label}</span>
               {tabs.length > 1 && (
                 <button

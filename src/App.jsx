@@ -1082,21 +1082,25 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
         onClick,
       };
     }),
-    // Excalidraw online whiteboard — opens in the system default browser via
-    // the `open-external` IPC (zero black-screen risk, no extra Electron window).
+    // Excalidraw online whiteboard — opens as a NEW in-app tab with the
+    // built-in browser (Electron <webview>), NOT the system browser. The
+    // browser-type tab renders a fullscreen BrowserPanel pinned to the URL.
     {
       key: "excalidraw",
       title: "Excalidraw",
       icon: "default",
       iconSrc: excalidrawIcon,
-      color: "#6965db",
+      color: "#8b949e",
       onClick: () => {
-        if (window.hermes?.openExternal) {
-          window.hermes.openExternal("https://excalidraw.com/");
-        }
+        createTab({
+          type: "browser",
+          title: "Excalidraw",
+          iconSrc: excalidrawIcon,
+          browserUrl: "https://excalidraw.com/",
+        });
       },
     },
-  ], [openApp, openAppAsNewTab, selectedAssistantId]);
+  ], [openApp, openAppAsNewTab, createTab, selectedAssistantId]);
 
   // ── Detach: owns the IPC + clears in-window workflow state ──
   // Lives in App (not ChatShell) because setSelectedWorkflowId /
@@ -1533,6 +1537,22 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
       )}
     </>
   );
+
+  if (activeTab.type === "browser") {
+    return (
+      <ErrorBoundary>
+        <div className="app">
+          {tabBar}
+          <div className="tab-content">
+            <div className="browser-tab-host">
+              <BrowserPanel fullscreen initialUrl={activeTab.browserUrl || ""} />
+            </div>
+          </div>
+        </div>
+        {overlayModals}
+      </ErrorBoundary>
+    );
+  }
 
   if (activeTab.type === "studio" && activeManifest) {
     return (
