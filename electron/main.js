@@ -721,6 +721,8 @@ ipcMain.handle('get-agui-port', () => {
 // Studio workbench: proxy Agnes calls through IPC (avoids renderer fetch/CSP issues)
 const agnes = require('./backend/agnes');
 const characterLibrary = require('./backend/character_library');
+// In-flight guard: card ids currently being generated (see character_library.generate).
+let characterLibGenerating = null;
 ipcMain.handle('studio-call', async (event, { action, params }) => {
   try {
     if (action === 'character_library.list') {
@@ -733,6 +735,28 @@ ipcMain.handle('studio-call', async (event, { action, params }) => {
     if (action === 'character_library.touch_used') {
       const card = characterLibrary.touchUsed((params && params.id) || "");
       return { ok: true, card: card || null };
+    }
+    if (action === 'character_library.generate') {
+      // Really generate a built-in character's reference sheet via Agnes
+      // (replaces the legacy SVG placeholder art). Results are cached on disk
+      // under the library images dir, so this is a one-time cost per card.
+      const id = (params && params.id) || '';
+      const card = characterLibrary.getCard(id);
+      if (!card) return { ok: false, error: '角色不存在' };
+      if (!card.prompt) return { ok: false, error: '该角色没有提示词，无法生成' };
+      if (!characterLibGenerating) characterLibGenerating = new Set();
+      if (characterLibGenerating.has(id)) return { ok: false, error: '该角色正在生成中' };
+      characterLibGenerating.add(id);
+      try {
+        const prompt = `${card.prompt}, 角色设定图, character reference sheet, 全身立绘, 干净纯色背景, 高细节, 统一风格`;
+        const url = await agnes.generateImage({ prompt, size: '2K', ratio: '3:4' });
+        let dest = await agnes.downloadMedia(url, characterLibrary.imagesDir(), id);
+        dest = characterLibrary.normalizeImageExt(dest);
+        const updated = characterLibrary.setCardImage(id, dest);
+        return { ok: true, card: updated };
+      } finally {
+        characterLibGenerating.delete(id);
+      }
     }
     if (action === 'generate-image') {
       const url = await agnes.generateImage(params);
@@ -1126,6 +1150,18 @@ ipcMain.handle('select-file', async (_event, options = {}) => {
       { name: '文本', extensions: ['txt', 'md', 'json', 'py', 'js'] },
       { name: '图片', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp'] },
     ],
+  });
+  if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
+    return null;
+  }
+  return result.filePaths[0];
+});
+
+// Folder picker for per-session workspace binding (see docs/SESSION_WORKSPACE_SPEC.md).
+ipcMain.handle('select-directory', async () => {
+  const focused = BrowserWindow.getFocusedWindow();
+  const result = await dialog.showOpenDialog(focused || undefined, {
+    properties: ['openDirectory', 'createDirectory'],
   });
   if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
     return null;

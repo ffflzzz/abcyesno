@@ -48,6 +48,9 @@ export default function ChatLayout({
   onModelChange,
   permission,
   onPermissionChange,
+  workspace = null,
+  onWorkspaceChange,
+  onPickWorkspace,
   queuedMessages = [],
   onRemoveQueued,
   backendStatus,
@@ -287,6 +290,9 @@ export default function ChatLayout({
           onModelChange={onModelChange}
           permission={permission}
           onPermissionChange={onPermissionChange}
+          workspace={workspace}
+          onWorkspaceChange={onWorkspaceChange}
+          onPickWorkspace={onPickWorkspace}
           onSend={handleSend}
           onStop={onStop}
           onNewSession={onNewSession}

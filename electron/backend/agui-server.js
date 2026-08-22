@@ -296,13 +296,51 @@ function createAgUIServer(getGatewayClient, storage, options) {
     const skillId = forwardedProps.skillId;
     const requestedModel = forwardedProps.model;
     const images = payload.images || body.images || [];
-    return { method, agentId, threadId, runId, messages, forwardedProps, assistantId, skillId, requestedModel, images };
+    // Per-session workspace binding (docs/SESSION_WORKSPACE_SPEC.md): the
+    // frontend stores workspaceDir on the session record and echoes it back
+    // in forwardedProps so every run carries its working folder.
+    const workspaceDir = typeof forwardedProps.workspaceDir === 'string' && forwardedProps.workspaceDir.trim()
+      ? forwardedProps.workspaceDir.trim()
+      : null;
+    return { method, agentId, threadId, runId, messages, forwardedProps, assistantId, skillId, requestedModel, images, workspaceDir };
   }
 
   // Cache recent session.status validations so we don't hit the gateway on
   // every message of an active thread (P2: reduce per-message round-trips).
   const sessionValidatedAt = new Map(); // threadId -> last validated timestamp
   const SESSION_TTL_MS = 60000;
+
+  // Last cwd we know was applied to each thread's Hermes session. In-memory
+  // only: after a bridge restart the first run re-issues session.cwd.set,
+  // which is idempotent on the gateway side.
+  const appliedWorkspace = new Map(); // threadId -> workspaceDir | null
+
+  function validWorkspaceDir(dir) {
+    if (!dir || typeof dir !== 'string') return null;
+    try {
+      if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return null;
+    } catch {
+      return null;
+    }
+    return dir;
+  }
+
+  // Push a new workspace onto an already-mapped Hermes session. Non-fatal:
+  // a busy/stale gateway must not break the run — the run simply keeps the
+  // previous cwd this turn.
+  async function applyWorkspaceToExisting(client, threadId, hermesSessionId, workspaceDir) {
+    const prev = appliedWorkspace.has(threadId) ? appliedWorkspace.get(threadId) : undefined;
+    if (prev === workspaceDir) return true;
+    try {
+      await client.request('session.cwd.set', { session_id: hermesSessionId, cwd: workspaceDir }, 10000);
+      appliedWorkspace.set(threadId, workspaceDir);
+      log('agui-server', `session.cwd.set -> ${workspaceDir} (${threadId})`);
+      return true;
+    } catch (err) {
+      log('agui-server', `session.cwd.set failed for ${threadId}: ${err.message}`);
+      return false;
+    }
+  }
 
   async function ensureHermesSession(client, ctx) {
     const existing = await storage.getThreadMapping(ctx.threadId);
@@ -317,6 +355,12 @@ function createAgUIServer(getGatewayClient, storage, options) {
         // been lost when Hermes restarted or was evicted from memory).
         await client.request('session.status', { session_id: existing }, 5000);
         sessionValidatedAt.set(ctx.threadId, Date.now());
+        // Re-apply workspace if it changed since the last run (or since the
+        // bridge restarted and our applied-map is empty).
+        const wsDir = validWorkspaceDir(ctx.workspaceDir);
+        if (wsDir) {
+          await applyWorkspaceToExisting(client, ctx.threadId, existing, wsDir);
+        }
         return { id: existing, created: false };
       } catch (err) {
         log('agui-server', `existing session ${existing} not found (${err.message}), recreating`);
@@ -336,13 +380,33 @@ function createAgUIServer(getGatewayClient, storage, options) {
     if (skillId && skillId !== 'default') {
       createParams.skill_id = skillId;
     }
+    // Workspace binding: create the Hermes session directly inside the user's
+    // folder so tools resolve relative paths against it from turn one.
+    const wsDir = validWorkspaceDir(ctx.workspaceDir);
+    if (wsDir) {
+      createParams.cwd = wsDir;
+    }
     log('agui-server', `session.create params: ${JSON.stringify(createParams)}`);
-    const created = await client.request('session.create', createParams, 30000);
+    let created;
+    try {
+      created = await client.request('session.create', createParams, 30000);
+    } catch (err) {
+      // A stale workspace path (folder deleted/moved) would fail the whole
+      // session.create — retry once without the binding so the run survives.
+      if (createParams.cwd) {
+        log('agui-server', `session.create with cwd failed (${err.message}); retrying without workspace`);
+        delete createParams.cwd;
+        created = await client.request('session.create', createParams, 30000);
+      } else {
+        throw err;
+      }
+    }
     const hermesSessionId = created?.session_id || created?.id;
     if (!hermesSessionId) {
       throw new Error('session.create did not return a session id');
     }
     await storage.setThreadMapping(ctx.threadId, hermesSessionId);
+    appliedWorkspace.set(ctx.threadId, createParams.cwd || null);
     return { id: hermesSessionId, created: true };
   }
 

@@ -85,6 +85,8 @@ contextBridge.exposeInMainWorld('hermes', {
 
   // File upload
   selectFile: (options) => ipcRenderer.invoke('select-file', options),
+  // Folder picker for per-session workspace binding.
+  selectDirectory: () => ipcRenderer.invoke('select-directory'),
   uploadFile: (sessionId, filePath) => ipcRenderer.invoke('upload-file', sessionId, filePath),
 
   // Result panel: workspace file tree + read-file + open external (spec §5/§7.1)

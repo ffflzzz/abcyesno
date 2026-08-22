@@ -15,6 +15,38 @@ const PERMISSION_MODES = [
   { id: "yolo", name: "完全自动", desc: "本会话不再询问，直接执行" },
 ];
 
+// ── Workspace (per-session working folder, docs/SESSION_WORKSPACE_SPEC.md) ──
+// Recent folders live in localStorage — pure UI convenience; the binding
+// itself is per-session state persisted by the caller via updateSession.
+const WS_RECENT_KEY = "composer-recent-workspaces";
+const WS_RECENT_MAX = 8;
+
+function wsBasename(dir) {
+  if (!dir) return "";
+  const norm = String(dir).replace(/[\\/]+$/, "");
+  const idx = Math.max(norm.lastIndexOf("\\"), norm.lastIndexOf("/"));
+  return idx >= 0 ? norm.slice(idx + 1) : norm;
+}
+
+function loadRecentWorkspaces() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(WS_RECENT_KEY) || "[]");
+    return Array.isArray(raw) ? raw.filter((d) => typeof d === "string" && d).slice(0, WS_RECENT_MAX) : [];
+  } catch {
+    return [];
+  }
+}
+
+function rememberWorkspace(dir) {
+  if (!dir) return;
+  const next = [dir, ...loadRecentWorkspaces().filter((d) => d !== dir)].slice(0, WS_RECENT_MAX);
+  try {
+    localStorage.setItem(WS_RECENT_KEY, JSON.stringify(next));
+  } catch {
+    /* quota/private mode — recents are best-effort */
+  }
+}
+
 // Slash commands surfaced by the `/` command palette. This list mirrors what
 // the 9120 gateway's `command.dispatch` actually implements (see
 // tui_gateway/server.py). Commands that are TUI-only on the backend
@@ -144,6 +176,9 @@ export default function Composer({
   onClearAttachment,
   permission,
   onPermissionChange,
+  workspace = null,
+  onWorkspaceChange,
+  onPickWorkspace,
   busy = false,
   queuedMessages = [],
   onRemoveQueued,
@@ -157,6 +192,8 @@ export default function Composer({
   const [showModelMenu, setShowModelMenu] = useState(false);
   const [showCustomModel, setShowCustomModel] = useState(false);
   const [showPermissionMenu, setShowPermissionMenu] = useState(false);
+  const [showWorkspaceMenu, setShowWorkspaceMenu] = useState(false);
+  const [recentWorkspaces, setRecentWorkspaces] = useState(loadRecentWorkspaces);
   const [showPlusMenu, setShowPlusMenu] = useState(false);
   const [recording, setRecording] = useState(false);
   const [recSeconds, setRecSeconds] = useState(0);
@@ -204,12 +241,13 @@ export default function Composer({
 
   // Close all popovers on outside click
   useEffect(() => {
-    if (!showModelMenu && !showPermissionMenu && !showPlusMenu && !showCustomModel && !mentionOpen && !slashOpen) return;
+    if (!showModelMenu && !showPermissionMenu && !showPlusMenu && !showWorkspaceMenu && !showCustomModel && !mentionOpen && !slashOpen) return;
     const handleClick = (e) => {
       if (rootRef.current && !rootRef.current.contains(e.target)) {
         setShowModelMenu(false);
         setShowPermissionMenu(false);
         setShowPlusMenu(false);
+        setShowWorkspaceMenu(false);
         setShowCustomModel(false);
         setMentionOpen(false);
         setSlashOpen(false);
@@ -217,7 +255,7 @@ export default function Composer({
     };
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
-  }, [showModelMenu, showPermissionMenu, showPlusMenu, showCustomModel, mentionOpen, slashOpen]);
+  }, [showModelMenu, showPermissionMenu, showPlusMenu, showWorkspaceMenu, showCustomModel, mentionOpen, slashOpen]);
 
   // ── @ mention protocol (spec §2) ──────────────────────────────────────
   // Inspect the text immediately before the caret; if it ends with `@word`
@@ -710,7 +748,7 @@ export default function Composer({
             <button
               className="composer-pill-btn"
               title="权限模式"
-              onClick={() => { setShowPermissionMenu(!showPermissionMenu); setShowPlusMenu(false); setShowModelMenu(false); }}
+              onClick={() => { setShowPermissionMenu(!showPermissionMenu); setShowPlusMenu(false); setShowModelMenu(false); setShowWorkspaceMenu(false); }}
             >
               <span className="pill-icon"><Icon name="shield" size={14} /></span>
               <span className="pill-label">{currentPermission.name}</span>
@@ -735,6 +773,57 @@ export default function Composer({
               </div>
             )}
           </div>
+
+          {/* Workspace selector: bind this session to a local folder so file
+              tools / terminal resolve relative paths inside it. */}
+          <div className="composer-menu-wrap">
+            <button
+              className={`composer-pill-btn ${workspace ? "ws-active" : ""}`}
+              title={workspace || "工作空间：绑定本会话的工作文件夹"}
+              onClick={() => { setShowWorkspaceMenu(!showWorkspaceMenu); setShowPlusMenu(false); setShowPermissionMenu(false); setShowModelMenu(false); setRecentWorkspaces(loadRecentWorkspaces()); }}
+            >
+              <span className="pill-icon"><Icon name="folder" size={14} /></span>
+              <span className="pill-label">{workspace ? wsBasename(workspace) : "工作空间"}</span>
+              <span className="pill-caret"><Icon name="chevron" size={12} /></span>
+            </button>
+            {showWorkspaceMenu && (
+              <div className="composer-popover composer-popover-up">
+                {recentWorkspaces.filter((d) => d !== workspace).map((dir) => (
+                  <button
+                    key={dir}
+                    className="composer-menu-item"
+                    title={dir}
+                    onClick={() => { setShowWorkspaceMenu(false); if (onWorkspaceChange) onWorkspaceChange(dir); }}
+                  >
+                    <span className="menu-icon"><Icon name="circle" size={12} /></span>
+                    <span>
+                      <div className="menu-item-title">{wsBasename(dir)}</div>
+                      <div className="menu-item-desc">{dir}</div>
+                    </span>
+                  </button>
+                ))}
+                <button
+                  className="composer-menu-item"
+                  onClick={() => { setShowWorkspaceMenu(false); onPickWorkspace && onPickWorkspace(); }}
+                >
+                  <span className="menu-icon"><Icon name="plus" size={14} /></span>
+                  <span className="menu-item-title">打开本地文件夹…</span>
+                </button>
+                {workspace && (
+                  <button
+                    className="composer-menu-item"
+                    onClick={() => { setShowWorkspaceMenu(false); if (onWorkspaceChange) onWorkspaceChange(null); }}
+                  >
+                    <span className="menu-icon"><Icon name="x" size={12} /></span>
+                    <span className="menu-item-title">不使用工作空间</span>
+                  </button>
+                )}
+                {workspace && (
+                  <div className="composer-ws-path" title={workspace}>{workspace}</div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Right group */}
@@ -744,7 +833,7 @@ export default function Composer({
             <button
               className="composer-pill-btn model"
               title="选择模型"
-              onClick={() => { setShowModelMenu(!showModelMenu); setShowPlusMenu(false); setShowPermissionMenu(false); }}
+              onClick={() => { setShowModelMenu(!showModelMenu); setShowPlusMenu(false); setShowPermissionMenu(false); setShowWorkspaceMenu(false); }}
               disabled={disabled}
             >
               <span className="pill-icon"><Icon name="plus" size={14} /></span>

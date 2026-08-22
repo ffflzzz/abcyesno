@@ -325,6 +325,29 @@ function ChatShell({
     }
   }
 
+  // ── Per-session workspace binding (docs/SESSION_WORKSPACE_SPEC.md) ──
+  // Source of truth is the session record's `workspaceDir` field; after a
+  // successful update we reload sessions so the prop refreshes.
+  const workspaceDir = session?.workspaceDir || null;
+  async function handleWorkspaceChange(dir) {
+    if (!selectedSessionId || !hermesRef.current?.updateSession) return;
+    try {
+      await hermesRef.current.updateSession(selectedSessionId, { workspaceDir: dir || null });
+      onSessionUpdatedRef.current && onSessionUpdatedRef.current();
+    } catch (err) {
+      console.error("update workspace failed", err);
+    }
+  }
+  async function handlePickWorkspace() {
+    if (!hermes || !hermes.selectDirectory) return;
+    try {
+      const dir = await hermes.selectDirectory();
+      if (dir) await handleWorkspaceChange(dir);
+    } catch (err) {
+      console.error("select directory failed", err);
+    }
+  }
+
   const pendingSendRef = useRef(null);
 
   // Queued messages belong to a session; drop them when switching away.
@@ -361,12 +384,16 @@ function ChatShell({
   async function doSend(text, mentions, explicitThreadId) {
     if (!text.trim()) return;
     const threadId = explicitThreadId || selectedSessionId;
+    // Workspace binding: resolve from the live session list so background
+    // sends (explicitThreadId ≠ selected) still carry the right folder.
+    const wsSource = (sessionsListRef.current || []).find((s) => s.id === threadId);
     await sendMessage(text, {
       threadId,
       assistantId: selectedAssistantId,
       skillId: assistant?.skillId,
       model,
       mentions,
+      workspaceDir: wsSource?.workspaceDir || null,
     });
   }
 
@@ -707,6 +734,9 @@ function ChatShell({
         onModelChange={onModelChange}
         permission={permissionMode}
         onPermissionChange={handlePermissionChange}
+        workspace={workspaceDir}
+        onWorkspaceChange={handleWorkspaceChange}
+        onPickWorkspace={handlePickWorkspace}
         queuedMessages={queuedMessages}
         onRemoveQueued={handleRemoveQueued}
         backendStatus={backendStatus}

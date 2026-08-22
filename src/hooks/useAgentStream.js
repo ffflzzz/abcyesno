@@ -825,7 +825,7 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
 
   // ── 发送消息（建立 SSE 连接）────────────────────────────────
   const sendMessage = useCallback(
-    async (text, { threadId, assistantId, skillId, model, history, mentions } = {}) => {
+    async (text, { threadId, assistantId, skillId, model, history, mentions, workspaceDir } = {}) => {
       const sess = getSession(threadId);
       if (!aguiPort) {
         sess.error = "aguiPort 未就绪";
@@ -899,7 +899,7 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
             threadId: sess.id || `thread-${Date.now()}`,
             runId,
             messages: outgoing,
-            forwardedProps: { assistantId, skillId, model, mentions: mentions || [] },
+            forwardedProps: { assistantId, skillId, model, mentions: mentions || [], workspaceDir: workspaceDir || undefined },
             images: attachedImages.length > 0 ? attachedImages : undefined,
           }),
           signal: controller.signal,
