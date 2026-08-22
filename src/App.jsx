@@ -1107,12 +1107,21 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
       onClick: () => openApp({ type: "chat", title: "对话", icon: "chat", assistantId: selectedAssistantId || "" }),
     },
     ...launcherApps.map((app) => {
-      // openMode is data-driven (manifest `launcher.openMode`). "newTab" opens
-      // the workbench in a fresh in-app tab (default behavior for 漫剧go);
-      // any other value falls back to the legacy in-place replacement of the
-      // current Launcher tab.
+      // openMode is data-driven (manifest `launcher.openMode`).
+      //   "newTab"   → open the workbench in a fresh in-app tab (漫剧go).
+      //   "dashboard"→ open the agent's own local web service in an in-app
+      //               browser tab (paper_rewriter_agent FastAPI dashboard).
+      //   anything else → legacy in-place replacement of the Launcher tab.
       const onClick =
-        app.openMode === "newTab"
+        app.openMode === "dashboard" && app.url
+          ? () => createTab({
+              type: "browser",
+              title: app.title,
+              icon: app.icon,
+              iconSrc: launcherIconSrc,
+              browserUrl: app.url,
+            })
+          : app.openMode === "newTab"
           ? () => openAppAsNewTab(app)
           : () => openApp({ type: "studio", title: app.title, icon: app.icon, workflowId: app.workflowId, resultOpen: true, resultCollapsed: false, assistantId: selectedAssistantId || "" });
       // Map `app.key` (manifest id) → imported logo so we can drop the logo

@@ -60,11 +60,15 @@ function buildLauncherApps(manifests) {
   for (const m of manifests) {
     if (!m.launcher) continue;
     // openMode is data-driven (manifest field `launcher.openMode`).
-    //   "newTab" → open the workbench in a fresh in-app tab (漫剧go default).
+    //   "newTab"  → open the workbench in a fresh in-app tab (漫剧go default).
+    //   "dashboard" → open the agent's own local web service in an in-app
+    //               browser tab (paper_rewriter_agent). Requires `url`.
     //   anything else (incl. omitted) → "tab": replace the current Launcher
     //   tab in-place. (The old "window" standalone-window mode was removed;
     //   ides are always in-app now.)
-    const openMode = m.launcher.openMode === "newTab" ? "newTab" : "tab";
+    let openMode = "tab";
+    if (m.launcher.openMode === "newTab") openMode = "newTab";
+    else if (m.launcher.openMode === "dashboard") openMode = "dashboard";
     apps.push({
       key: m.id,
       title: m.launcher.title || m.name,
@@ -73,6 +77,7 @@ function buildLauncherApps(manifests) {
       color: m.launcher.color || "#111827",
       workflowId: m.id,
       openMode,
+      url: m.launcher.url || undefined,
     });
   }
   return apps;

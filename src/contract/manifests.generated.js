@@ -347,7 +347,7 @@ const manifests = [
     ],
     "notes": "ReAct 架构（agent↔tools↔review 循环）：大纲保存与每章写入都有 interrupt() 审批门，审批可附带 steer 文本指导修改。RECURSION_LIMIT=400 由 runtime 注入。",
     "ui": {
-      "type": "form",
+      "type": "chat",
       "title": "论文重写工作台"
     },
     "launcher": {
@@ -355,7 +355,8 @@ const manifests = [
       "icon": "book-open",
       "iconSrc": "app-paper.png",
       "color": "linear-gradient(135deg, #4f46e5, #7c3aed)",
-      "openMode": "newTab"
+      "openMode": "dashboard",
+      "url": "http://127.0.0.1:8765"
     }
   }
 ];
@@ -379,7 +380,8 @@ const launcherApps = [
     "iconSrc": "app-paper.png",
     "color": "linear-gradient(135deg, #4f46e5, #7c3aed)",
     "workflowId": "paper_rewriter_agent",
-    "openMode": "newTab"
+    "openMode": "dashboard",
+    "url": "http://127.0.0.1:8765"
   }
 ];
 

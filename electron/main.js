@@ -5,6 +5,7 @@ const os = require('os');
 const net = require('net');
 const http = require('http');
 const { HermesRunner } = require('./backend/hermes-runner');
+const { PaperRewriterDashboardRunner } = require('./backend/paper-rewriter-dashboard-runner');
 const { GatewayClient } = require('./backend/gateway-client');
 const { createAgUIServer } = require('./backend/agui-server');
 const { Storage } = require('./backend/storage');
@@ -75,6 +76,7 @@ const storage = new Storage(userDataDir);
 
 let mainWindow = null;
 let hermesRunner = null;
+let paperDashboardRunner = null;
 let gatewayClient = null;
 let aguiServer = null;
 let aguiPort = 0;
@@ -467,6 +469,18 @@ async function doStartBackend() {
   hermesRunner = new HermesRunner({ app });
   await hermesRunner.start();
 
+  // Best-effort: start the paper_rewriter dashboard local service (FastAPI
+  // serving its own React SPA + running the agent). It is independent of
+  // Hermes; a failure here must NOT block or crash the app. Fire-and-forget.
+  try {
+    paperDashboardRunner = new PaperRewriterDashboardRunner({ app });
+    paperDashboardRunner.start().catch((err) => {
+      log('paper-dashboard', `failed to start (non-fatal): ${err.message}`);
+    });
+  } catch (err) {
+    log('paper-dashboard', `init failed (non-fatal): ${err.message}`);
+  }
+
   const wsUrl = `ws://127.0.0.1:${hermesRunner.getPort()}/api/ws`;
   gatewayClient = new GatewayClient({ url: wsUrl, token: hermesRunner.getSessionToken() });
 
@@ -634,6 +648,7 @@ app.on('window-all-closed', () => {
     gatewayClient = null;
   }
   if (hermesRunner) hermesRunner.stop();
+  if (paperDashboardRunner) paperDashboardRunner.stop();
   stopBrowserDriver();
   if (process.platform !== 'darwin') {
     app.quit();
@@ -650,6 +665,7 @@ app.on('before-quit', () => {
     gatewayClient = null;
   }
   if (hermesRunner) hermesRunner.stop();
+  if (paperDashboardRunner) paperDashboardRunner.stop();
   stopBrowserDriver();
   globalShortcut.unregisterAll();
 });

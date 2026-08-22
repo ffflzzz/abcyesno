@@ -435,9 +435,11 @@ check(
   "main.js 不得再注册 open-app-window handler 或按 panel=studio 加载"
 );
 check(
-  "G11 gen-contract 把 openMode 写入 launcherApps（newTab|tab，去掉 window）",
-  /openMode\s*===?\s*['"]newTab['"]\s*\?\s*['"]newTab['"]\s*:\s*['"]tab['"]/.test(genContractSrc),
-  "gen-contract.mjs buildLauncherApps 必须按 launcher.openMode 决定 'newTab'|'tab'（默认 tab，已无 window）"
+  "G11 gen-contract 把 openMode 写入 launcherApps（newTab|dashboard|tab，去掉 window）",
+  /openMode\s*===\s*['"]newTab['"]/.test(genContractSrc) &&
+    /openMode\s*===\s*['"]dashboard['"]/.test(genContractSrc) &&
+    /openMode\s*=\s*['"]tab['"]/.test(genContractSrc),
+  "gen-contract.mjs buildLauncherApps 必须按 launcher.openMode 决定 'newTab'|'dashboard'（默认 tab，已无 window）"
 );
 check(
   "G12 生成的 launcherApps 含 openMode:newTab（漫剧go）",
