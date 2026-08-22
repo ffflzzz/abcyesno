@@ -112,19 +112,11 @@ async def batch_generate_video(state: AgentState) -> dict:
             result["error"] = str(exc)
         return result
 
-    # Concurrency: Token Plan primary key allows ~5 RPM, so run shots in
-    # parallel. If any shot falls back to the public key (1 RPM), drop to
-    # serialized execution for the remaining shots to avoid 429 storms.
-    sem = asyncio.Semaphore(5)
-    serial_gate = asyncio.Lock()
+    # Rate limiting is handled inside agnes_media.generate_video_to_file
+    # (primary key 4 RPM, fallback key 1 RPM via _RpmLimiter), so we can safely
+    # fire all shots concurrently here — the limiter paces the actual API calls.
+    # Once any shot switches to the fallback key, video_on_fallback() flips and
+    # the limiter enforces the stricter 1 RPM for the rest.
 
-    async def gen_one_throttled(result: dict) -> dict:
-        if video_on_fallback():
-            # Public key path: strictly one-at-a-time (1 RPM).
-            async with serial_gate:
-                return await gen_one(result)
-        async with sem:
-            return await gen_one(result)
-
-    updated = await asyncio.gather(*(gen_one_throttled(r) for r in shot_results))
+    updated = await asyncio.gather(*(gen_one(r) for r in shot_results))
     return {"shot_results": updated}

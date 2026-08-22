@@ -44,6 +44,36 @@ def video_on_fallback() -> bool:
     return _VIDEO_ON_FALLBACK
 
 
+class _RpmLimiter:
+    """Simple async token-bucket rate limiter honoring Agnes RPM caps.
+
+    Agnes enforces Requests-Per-Minute, not concurrency. A Semaphore only caps
+    in-flight requests, which still bursts past the RPM window. This limiter
+    enforces a minimum spacing (``60/rpm`` seconds) between *starts* of calls
+    sharing the same key, so N shots never exceed the published RPM.
+    """
+
+    def __init__(self, rpm: int) -> None:
+        self._rpm = max(1, rpm)
+        self._gap = 60.0 / self._rpm
+        self._lock = asyncio.Lock()
+        self._last = 0.0
+
+    async def acquire(self) -> None:
+        async with self._lock:
+            now = time.monotonic()
+            wait = self._gap - (now - self._last)
+            if wait > 0:
+                await asyncio.sleep(wait)
+            self._last = time.monotonic()
+
+
+# Primary (Token Plan) key: 5 RPM -> keep a safe 4 RPM headroom.
+_PRIMARY_RPM_LIMITER = _RpmLimiter(int(os.environ.get("AGNES_VIDEO_PRIMARY_RPM", "4")))
+# Fallback (public) key: strictly 1 RPM.
+_FALLBACK_RPM_LIMITER = _RpmLimiter(1)
+
+
 def _primary_api_key() -> str:
     key = os.environ.get("AGNES_API_KEY")
     if not key:
@@ -56,9 +86,16 @@ def _fallback_api_key() -> str | None:
 
     Configured via AGNES_FALLBACK_API_KEY (env, injected by hermes-runner) or
     read directly from HERMES_HOME/.env so the agent also works if the Electron
-    bridge is bypassed. May be empty if no fallback is set.
+    bridge is bypassed. An explicitly-empty env var (set to "") disables the
+    fallback even if .env has a value, which is useful for testing.
     """
-    env_key = os.environ.get("AGNES_FALLBACK_API_KEY") or os.environ.get("AGNES_PUBLIC_API_KEY")
+    env_key = os.environ.get("AGNES_FALLBACK_API_KEY")
+    if env_key is not None:
+        # Explicitly set (even to "") takes precedence over .env.
+        if env_key == "":
+            return None
+        return env_key
+    env_key = os.environ.get("AGNES_PUBLIC_API_KEY")
     if env_key:
         return env_key
     # Fall back to parsing HERMES_HOME/.env (same source the Electron bridge uses).
@@ -109,17 +146,42 @@ def _token_plan_quota_remaining() -> float:
 
 
 def _is_quota_exceeded_error(exc: Exception) -> bool:
-    """Detect Agnes 429 / quota-exceeded responses worth a key fallback."""
+    """Detect Agnes quota/rate-limit responses worth a key fallback.
+
+    Empirically the video create endpoint returns **429** when the Token Plan
+    daily-second quota or RPM cap is hit (the agnes-video-v20 doc lists
+    400/401/404/500/503 but the live API also emits 429 on over-quota). We treat
+    429 as an unconditional over-quota signal, and also match 401/400/403 whose
+    body mentions quota/limit/plan as a belt-and-suspenders fallback.
+    """
     if isinstance(exc, httpx.HTTPStatusError):
         if exc.response.status_code == 429:
             return True
         try:
             body = exc.response.json()
         except Exception:
-            return False
-        msg = " ".join(str(v) for v in body.values() if isinstance(v, (str, int))).lower()
-        return any(k in msg for k in ("quota", "exceed", "rate limit", "too many", "429"))
+            body = {}
+        if isinstance(body, dict):
+            msg = " ".join(str(v) for v in body.values() if isinstance(v, (str, int))).lower()
+        else:
+            msg = str(body).lower()
+        if exc.response.status_code in (401, 400, 403):
+            return any(k in msg for k in ("quota", "exceed", "limit", "plan", "subscription", "too many"))
     return False
+
+
+def _result_video_url(data: dict) -> str | None:
+    """Extract the finished video URL from a poll response.
+
+    Per agnes-video-v20 docs, the URL lives at ``metadata.url`` and is only
+    present when ``status == "completed"``. Older/id-style responses may nest it
+    differently, so we probe both ``metadata.url`` and a top-level ``url``.
+    """
+    if isinstance(data.get("metadata"), dict) and data["metadata"].get("url"):
+        return data["metadata"]["url"]
+    if data.get("url"):
+        return data["url"]
+    return None
 
 
 def _poll_base() -> str:
@@ -229,7 +291,7 @@ async def generate_image(
 
     resp = await _post_json_with_retry(
         f"{BASE_URL}/images/generations",
-        headers={"Authorization": f"Bearer {_api_key()}", "Content-Type": "application/json"},
+        headers={"Authorization": f"Bearer {_primary_api_key()}", "Content-Type": "application/json"},
         json=body,
         timeout=timeout,
     )
@@ -380,8 +442,9 @@ async def generate_video_to_file(
             if use_fallback:
                 if not fb_key:
                     raise RuntimeError("Token Plan video quota exhausted and no AGNES_FALLBACK_API_KEY configured")
-                # Serialize fallback calls to respect 1 RPM.
+                # Public key: strictly 1 RPM -> rate-limit + serialize.
                 async with _FALLBACK_SERIAL_LOCK:
+                    await _FALLBACK_RPM_LIMITER.acquire()
                     video_id = await create_video(
                         prompt, image=image, keyframes=keyframes,
                         reference_images=reference_images, width=width, height=height,
@@ -390,6 +453,8 @@ async def generate_video_to_file(
                     )
                     result = await poll_video(video_id, api_key=fb_key)
             else:
+                # Token Plan primary key: honor 4 RPM headroom.
+                await _PRIMARY_RPM_LIMITER.acquire()
                 video_id = await create_video(
                     prompt, image=image, keyframes=keyframes,
                     reference_images=reference_images, width=width, height=height,
@@ -397,7 +462,7 @@ async def generate_video_to_file(
                 )
                 result = await poll_video(video_id)
 
-            url = result.get("url")
+            url = _result_video_url(result)
             if not url:
                 raise RuntimeError("completed video has no url")
             async with httpx.AsyncClient(timeout=120) as client:
