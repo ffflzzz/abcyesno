@@ -47,7 +47,8 @@
     "asar": false,
     "extraResources": [
       { "from": "build/playwright-browsers", "to": "playwright-browsers" },
-      { "from": "build/runtime/python", "to": "runtime/python" }
+      { "from": "build/runtime/python", "to": "runtime/python" },
+      { "from": "bin", "to": "app/bin" }
     ],
     "files": [
       "dist/**/*",

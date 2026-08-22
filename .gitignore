@@ -54,3 +54,6 @@ gen/
 selfdiag-shots/
 selfdiag-report.json
 selfdiag-report.md
+
+# bundled ffmpeg binary (large; deployed via copy, not versioned)
+bin/

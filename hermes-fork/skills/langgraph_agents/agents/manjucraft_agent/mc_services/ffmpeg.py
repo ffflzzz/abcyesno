@@ -3,17 +3,27 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
 from mc_services.agnes_media import MOCK
 
+# repo 根 = hermes-fork/skills/langgraph_agents/agents/manjucraft_agent/mc_services/ffmpeg.py
+# 往上 6 级到 abcyesno 工程根
+_REPO_ROOT = Path(__file__).resolve().parents[6]
+_BUNDLED = _REPO_ROOT / "bin" / "ffmpeg.exe"
+
 
 def ffmpeg_path() -> str:
-    bundled = "./bin/ffmpeg.exe"
-    if os.path.exists(bundled):
-        return bundled
-    return "ffmpeg"
+    """优先用工程自带 bin/ffmpeg.exe，否则退回 PATH 中的 ffmpeg。"""
+    if _BUNDLED.exists():
+        return str(_BUNDLED)
+    on_path = shutil.which("ffmpeg.exe") or shutil.which("ffmpeg")
+    if on_path:
+        return on_path
+    # 最后退回相对路径，让调用方看到明确报错而非静默失败
+    return str(_BUNDLED)
 
 
 def run_ffmpeg(args: list[str], check: bool = True) -> subprocess.CompletedProcess:
