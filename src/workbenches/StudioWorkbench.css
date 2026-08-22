@@ -14,7 +14,7 @@
   --st-text: var(--text);
   --st-muted: var(--muted);
   --st-accent: var(--accent);
-  --st-accent-2: #a371f7;
+  --st-accent-2: var(--muted);
   --st-soft: color-mix(in srgb, var(--accent) 12%, transparent);
   --st-soft-2: color-mix(in srgb, var(--accent) 20%, transparent);
   --st-shadow-sm: 0 1px 2px rgba(0, 0, 0, .06), 0 1px 3px rgba(0, 0, 0, .05);
@@ -153,7 +153,7 @@
 .st-row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 
 .st-form-actions { padding: 0 24px 22px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.st-primary { background: linear-gradient(90deg, var(--st-accent), var(--st-accent-2)); color: #fff; border: none; padding: 11px 22px; border-radius: var(--st-radius-xs); font-weight: 700; cursor: pointer; font-size: 14px; transition: filter .15s, transform .15s, box-shadow .15s; box-shadow: 0 4px 14px color-mix(in srgb, var(--st-accent-2) 30%, transparent); }
+.st-primary { background: var(--st-accent); color: var(--bg); border: none; padding: 11px 22px; border-radius: var(--st-radius-xs); font-weight: 700; cursor: pointer; font-size: 14px; transition: filter .15s, transform .15s, box-shadow .15s; box-shadow: 0 4px 14px color-mix(in srgb, var(--st-accent) 30%, transparent); }
 .st-primary:hover:not(:disabled) { filter: brightness(1.06); transform: translateY(-1px); }
 .st-primary:disabled { opacity: .55; cursor: not-allowed; transform: none; box-shadow: none; }
 
@@ -198,7 +198,7 @@
 .st-preview.busy { background: linear-gradient(90deg, var(--st-soft), var(--st-soft-2), var(--st-soft)); background-size: 200% 100%; animation: st-sh 1.1s linear infinite; }
 @keyframes st-sh { to { background-position: -200% 0; } }
 .st-mini-prog { height: 5px; background: var(--st-track); border-radius: 4px; overflow: hidden; margin-top: 4px; }
-.st-mini-prog > i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--st-accent), var(--st-accent-2)); }
+.st-mini-prog > i { display: block; height: 100%; width: 0; background: var(--st-accent); }
 .st-gen-shot { margin-top: 6px; padding: 8px; border: 1px solid var(--st-line); background: var(--st-surface-2); color: var(--st-accent); border-radius: var(--st-radius-xs); cursor: pointer; font-size: 12px; font-weight: 500; transition: background .15s; }
 .st-gen-shot:hover { background: var(--st-soft); }
 .st-gen-video { color: var(--st-accent-2); border-color: color-mix(in srgb, var(--st-accent-2) 40%, var(--st-line)); }
@@ -242,7 +242,7 @@
 .st-task-err { border-color: color-mix(in srgb, var(--error) 40%, var(--st-line)); }
 .st-task-err-msg { margin-top: 6px; font-size: 11px; color: var(--error); word-break: break-all; opacity: .9; }
 .st-bar { height: 6px; background: var(--st-track); border-radius: 4px; overflow: hidden; margin-top: 8px; }
-.st-bar > i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--st-accent), var(--st-accent-2)); transition: width .25s; }
+.st-bar > i { display: block; height: 100%; width: 0; background: var(--st-accent); transition: width .25s; }
 
 /* ── generated media (real Agnes output) ── */
 .st-asset-img { width: 100%; margin-top: 8px; border-radius: var(--st-radius-xs); overflow: hidden; border: 1px solid var(--st-line); background: var(--st-preview-bg); min-height: 120px; }
@@ -314,9 +314,8 @@
 
 .wf-canvas {
   position: relative;
-  min-height: 360px;
-  height: auto;
-  max-height: 520px;
+  height: 380px;            /* 固定可见区，让 SVG overflow 与滚动一致 */
+  max-height: 60vh;         /* 大屏也别占满，让位给 TaskCenter */
   overflow: auto;
   cursor: grab;
   background:
@@ -324,7 +323,10 @@
     var(--st-surface-2);
   touch-action: none;
 }
-.wf-svg { display: block; min-width: 100%; }
+/* SVG 默认 overflow:hidden 会把 <g transform> 平移/缩放后的内容裁掉，导
+   致节点多时下半截看不见。设成 visible 后，画布的 overflow:auto 才会真
+   正接管滚动，用户可以滚到看所有节点。 */
+.wf-svg { display: block; min-width: 100%; overflow: visible; }
 .wf-empty {
   position: absolute;
   inset: 0;
@@ -431,7 +433,7 @@
 .st-clip-thumb { position: absolute; inset: 0; background-size: cover; background-position: center; opacity: .55; border-radius: 5px; pointer-events: none; }
 .st-clip .st-clabel { position: relative; z-index: 1; text-shadow: 0 1px 2px rgba(0,0,0,.8); }
 .st-clip .st-cdur { position: relative; z-index: 1; }
-.st-ctrans { position: absolute; bottom: 2px; right: 4px; font-size: 9px; color: #ffd166; background: rgba(0,0,0,.5); padding: 0 4px; border-radius: 3px; pointer-events: none; z-index: 1; }
+.st-ctrans { position: absolute; bottom: 2px; right: 4px; font-size: 9px; color: #e6edf3; background: rgba(0,0,0,.5); padding: 0 4px; border-radius: 3px; pointer-events: none; z-index: 1; }
 
 /* range input */
 input[type="range"].st-edit-seek, .st-sd-row input[type="range"] { accent-color: var(--st-accent); }

@@ -31,9 +31,9 @@ function phaseOf(id) {
 
 const PHASE_VAR = {
   script: "var(--accent)",
-  assets: "#f0a",
-  storyboard: "#ffb020",
-  export: "#22c55e",
+  assets: "#8b949e",
+  storyboard: "#c0c8d4",
+  export: "#6f7785",
 };
 
 function layoutGraph(topology) {
@@ -77,17 +77,18 @@ export default function WorkflowGraphPanel({ topology, trace, runState, episode,
     return active;
   }, [trace]);
 
-  // Fit-to-view whenever the topology or container size changes. The fit
-  // ratio is clamped so the SVG never shrinks below 0.7× (else node text
-  // becomes unreadable) and grows past 1.6× when there are only a handful
-  // of nodes. Surplus topology scrolls in the canvas (overflow:auto).
+  // Fit-to-view whenever the topology or container size changes. Surplus
+  // topology scrolls in the canvas (overflow:auto + SVG overflow:visible);
+  // we clamp k into [0.4, 1.6] — the lower bound (0.4) is intentionally
+  // tight so 9-node DAGs default to "everything visible, scroll to explore"
+  // rather than cropping the tail behind the SVG viewport.
   const fit = useCallback(() => {
     const el = wrapRef.current;
     if (!el || !layout.count) return;
     const cw = el.clientWidth;
     const ch = el.clientHeight;
     const kRaw = Math.min(cw / layout.width, ch / layout.height, 1.6);
-    const k = Math.max(0.7, kRaw);
+    const k = Math.max(0.4, kRaw);
     const x = (cw - layout.width * k) / 2;
     const y = Math.max(8, (ch - layout.height * k) / 2);
     setView({ x, y, k });
