@@ -260,6 +260,16 @@ class HermesRunner {
     }
   }
 
+  _readFallbackKey() {
+    try {
+      const text = fs.readFileSync(this._envFile(), 'utf-8');
+      const m = text.match(/^AGNES_FALLBACK_API_KEY=(.+)$/m);
+      return m ? m[1].trim() : '';
+    } catch (_) {
+      return '';
+    }
+  }
+
   setApiKey(key) {
     this.apiKey = (key || '').trim();
     const file = this._envFile();
@@ -408,6 +418,10 @@ class HermesRunner {
       HERMES_DASHBOARD_SESSION_TOKEN: this.sessionToken,
       AGNES_API_KEY: this.apiKey || process.env.AGNES_API_KEY || '',
       AGNES_BASE_URL: process.env.AGNES_BASE_URL || 'https://apihub.agnes-ai.com/v1',
+      // Public/default fallback key for video generation: used when the Token
+      // Plan daily video-second quota (500s) is exhausted. Unlimited seconds
+      // but 1 RPM, so the agent serializes fallback video calls.
+      AGNES_FALLBACK_API_KEY: process.env.AGNES_FALLBACK_API_KEY || this._readFallbackKey() || '',
       // Port the agui-server bridge listens on. The Python langgraph runtime
       // POSTs HITL workflow events here so they can reach the frontend SSE.
       AGUI_PORT: process.env.AGUI_PORT || '9121',

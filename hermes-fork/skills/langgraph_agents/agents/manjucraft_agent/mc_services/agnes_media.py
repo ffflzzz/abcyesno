@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import os
+import re
 import time
 from pathlib import Path
 
@@ -21,12 +23,103 @@ MOCK = bool(os.environ.get("MANJUCRAFT_AGENT_MOCK"))
 # other code change is then required for multi-view character consistency.
 VIDEO_SUPPORTS_REFERENCE_IMAGES = False
 
+# ---------------------------------------------------------------------------
+# Video key fallback + daily quota bookkeeping (Token Plan = 500s/day, RPM 5;
+# public/default key = unlimited seconds, RPM 1). When the Token Plan daily
+# quota is exhausted (or a 429 comes back), we transparently fall back to the
+# public key, which is rate-limited to 1 RPM so calls must be serialized.
+# ---------------------------------------------------------------------------
+HERMES_HOME = os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes_portable_data"))
+_VIDEO_USAGE_FILE = os.path.join(HERMES_HOME, "manjucraft_agent", "video_quota_usage.json")
+# Token Plan daily video-second quota (see https://www.agnes-ai.com/zh-Hans/docs/tokenplan)
+TOKEN_PLAN_DAILY_VIDEO_SECONDS = int(os.environ.get("AGNES_VIDEO_DAILY_QUOTA", "500"))
+# Once we fall back to the public key, serialize every call (RPM 1).
+_FALLBACK_SERIAL_LOCK = asyncio.Lock()
+# Process-wide flag: True once any video call has switched to the fallback key.
+# Lets the batch node drop to serialized execution for the remaining shots.
+_VIDEO_ON_FALLBACK = False
 
-def _api_key() -> str:
+
+def video_on_fallback() -> bool:
+    return _VIDEO_ON_FALLBACK
+
+
+def _primary_api_key() -> str:
     key = os.environ.get("AGNES_API_KEY")
     if not key:
         raise RuntimeError("AGNES_API_KEY not set")
     return key
+
+
+def _fallback_api_key() -> str | None:
+    """Public/default key used when the Token Plan quota is exhausted.
+
+    Configured via AGNES_FALLBACK_API_KEY (env, injected by hermes-runner) or
+    read directly from HERMES_HOME/.env so the agent also works if the Electron
+    bridge is bypassed. May be empty if no fallback is set.
+    """
+    env_key = os.environ.get("AGNES_FALLBACK_API_KEY") or os.environ.get("AGNES_PUBLIC_API_KEY")
+    if env_key:
+        return env_key
+    # Fall back to parsing HERMES_HOME/.env (same source the Electron bridge uses).
+    try:
+        text = Path(os.path.join(HERMES_HOME, ".env")).read_text("utf-8")
+        m = re.search(r"^AGNES_FALLBACK_API_KEY=(.+)$", text, re.MULTILINE)
+        if m:
+            return m.group(1).strip()
+    except Exception:
+        pass
+    return None
+
+
+def _today_key() -> str:
+    return time.strftime("%Y-%m-%d", time.localtime())
+
+
+def _load_video_usage() -> dict:
+    """Return {date, seconds} for the local daily video-second ledger."""
+    try:
+        data = json.loads(Path(_VIDEO_USAGE_FILE).read_text("utf-8"))
+    except Exception:
+        data = {}
+    if data.get("date") != _today_key():
+        # New local day -> reset ledger (remote quota also resets at Agnes' TZ).
+        return {"date": _today_key(), "seconds": 0}
+    return data
+
+
+def _add_video_usage(seconds: float) -> None:
+    """Persist consumed video seconds to the local daily ledger."""
+    try:
+        data = _load_video_usage()
+        data["seconds"] = float(data.get("seconds", 0)) + float(seconds)
+        Path(_VIDEO_USAGE_FILE).parent.mkdir(parents=True, exist_ok=True)
+        Path(_VIDEO_USAGE_FILE).write_text(json.dumps(data, ensure_ascii=False), "utf-8")
+    except Exception:
+        pass
+
+
+def _token_plan_quota_remaining() -> float:
+    """Seconds left in the Token Plan daily quota (local estimate)."""
+    if not _fallback_api_key():
+        # No fallback configured: always use the primary key, never "exhausted".
+        return float("inf")
+    used = float(_load_video_usage().get("seconds", 0))
+    return max(0.0, TOKEN_PLAN_DAILY_VIDEO_SECONDS - used)
+
+
+def _is_quota_exceeded_error(exc: Exception) -> bool:
+    """Detect Agnes 429 / quota-exceeded responses worth a key fallback."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        if exc.response.status_code == 429:
+            return True
+        try:
+            body = exc.response.json()
+        except Exception:
+            return False
+        msg = " ".join(str(v) for v in body.values() if isinstance(v, (str, int))).lower()
+        return any(k in msg for k in ("quota", "exceed", "rate limit", "too many", "429"))
+    return False
 
 
 def _poll_base() -> str:
@@ -184,8 +277,13 @@ async def create_video(
     num_frames: int = 121,
     frame_rate: int = 24,
     timeout: float = 60.0,
+    api_key: str | None = None,
 ) -> str:
-    """Create an async video task. Returns video_id."""
+    """Create an async video task. Returns video_id.
+
+    ``api_key`` lets callers pick the primary (Token Plan) or fallback (public)
+    key. When omitted, the primary AGNES_API_KEY is used.
+    """
     body: dict = {
         "model": VIDEO_MODEL,
         "prompt": prompt,
@@ -213,25 +311,27 @@ async def create_video(
             for p in reference_images
         ]
 
+    auth_key = api_key or _primary_api_key()
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(
             f"{BASE_URL}/videos",
-            headers={"Authorization": f"Bearer {_api_key()}", "Content-Type": "application/json"},
+            headers={"Authorization": f"Bearer {auth_key}", "Content-Type": "application/json"},
             json=body,
         )
         resp.raise_for_status()
         return resp.json()["video_id"]
 
 
-async def poll_video(video_id: str, *, timeout: float = 600.0, interval: float = 5.0) -> dict:
+async def poll_video(video_id: str, *, timeout: float = 600.0, interval: float = 5.0, api_key: str | None = None) -> dict:
     """Poll until the video task completes or fails (endpoint derived from BASE_URL)."""
+    auth_key = api_key or _primary_api_key()
     deadline = time.time() + timeout
     async with httpx.AsyncClient(timeout=30) as client:
         while time.time() < deadline:
             resp = await client.get(
                 _poll_base(),
                 params={"video_id": video_id},
-                headers={"Authorization": f"Bearer {_api_key()}"},
+                headers={"Authorization": f"Bearer {auth_key}"},
             )
             resp.raise_for_status()
             data = resp.json()
@@ -257,19 +357,46 @@ async def generate_video_to_file(
     frame_rate: int = 24,
     max_attempts: int = 3,
 ) -> str:
-    """Create and download a video to output_path. Returns output_path."""
+    """Create and download a video to output_path. Returns output_path.
+
+    Implements Token-Plan -> public-key fallback:
+      * Primary key is the user's Token Plan key (500s/day, 5 RPM).
+      * If the local daily ledger predicts exhaustion, OR a 429/quota error is
+        observed, fall back to AGNES_FALLBACK_API_KEY (unlimited seconds, 1 RPM).
+      * The fallback path is serialized through a global lock to honor 1 RPM.
+    """
     if MOCK:
         return _mock_video_file(output_path)
+
+    # Decide whether to start on the fallback key up-front (quota predicted
+    # exhausted). We always try the primary first unless it's clearly spent.
+    use_fallback = _token_plan_quota_remaining() <= 0
+    fb_key = _fallback_api_key()
 
     last_error: Exception | None = None
     for attempt in range(1, max_attempts + 1):
         try:
-            video_id = await create_video(
-                prompt, image=image, keyframes=keyframes,
-                reference_images=reference_images, width=width, height=height,
-                num_frames=num_frames, frame_rate=frame_rate, timeout=120,
-            )
-            result = await poll_video(video_id)
+            # Pick the key for this attempt.
+            if use_fallback:
+                if not fb_key:
+                    raise RuntimeError("Token Plan video quota exhausted and no AGNES_FALLBACK_API_KEY configured")
+                # Serialize fallback calls to respect 1 RPM.
+                async with _FALLBACK_SERIAL_LOCK:
+                    video_id = await create_video(
+                        prompt, image=image, keyframes=keyframes,
+                        reference_images=reference_images, width=width, height=height,
+                        num_frames=num_frames, frame_rate=frame_rate, timeout=120,
+                        api_key=fb_key,
+                    )
+                    result = await poll_video(video_id, api_key=fb_key)
+            else:
+                video_id = await create_video(
+                    prompt, image=image, keyframes=keyframes,
+                    reference_images=reference_images, width=width, height=height,
+                    num_frames=num_frames, frame_rate=frame_rate, timeout=120,
+                )
+                result = await poll_video(video_id)
+
             url = result.get("url")
             if not url:
                 raise RuntimeError("completed video has no url")
@@ -277,9 +404,19 @@ async def generate_video_to_file(
                 raw = (await client.get(url)).content
             Path(output_path).parent.mkdir(parents=True, exist_ok=True)
             Path(output_path).write_bytes(raw)
+
+            # Book the consumed seconds only on the primary (Token Plan) key.
+            if not use_fallback:
+                _add_video_usage(num_frames / frame_rate)
             return output_path
         except Exception as exc:
             last_error = exc
+            # On quota/429, switch to the fallback key for the next attempt.
+            if (not use_fallback) and fb_key and _is_quota_exceeded_error(exc):
+                use_fallback = True
+                global _VIDEO_ON_FALLBACK
+                _VIDEO_ON_FALLBACK = True
+                continue
             if attempt < max_attempts:
                 await asyncio.sleep(2 ** attempt)
     raise last_error or RuntimeError("video generation failed")

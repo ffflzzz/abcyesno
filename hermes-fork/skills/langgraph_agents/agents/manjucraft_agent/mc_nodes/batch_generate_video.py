@@ -6,7 +6,7 @@ import asyncio
 import os
 import re
 
-from mc_services.agnes_media import generate_video_to_file
+from mc_services.agnes_media import generate_video_to_file, video_on_fallback
 from mc_state import AgentState, episode_project_dir
 
 
@@ -112,5 +112,19 @@ async def batch_generate_video(state: AgentState) -> dict:
             result["error"] = str(exc)
         return result
 
-    updated = await asyncio.gather(*(gen_one(r) for r in shot_results))
+    # Concurrency: Token Plan primary key allows ~5 RPM, so run shots in
+    # parallel. If any shot falls back to the public key (1 RPM), drop to
+    # serialized execution for the remaining shots to avoid 429 storms.
+    sem = asyncio.Semaphore(5)
+    serial_gate = asyncio.Lock()
+
+    async def gen_one_throttled(result: dict) -> dict:
+        if video_on_fallback():
+            # Public key path: strictly one-at-a-time (1 RPM).
+            async with serial_gate:
+                return await gen_one(result)
+        async with sem:
+            return await gen_one(result)
+
+    updated = await asyncio.gather(*(gen_one_throttled(r) for r in shot_results))
     return {"shot_results": updated}
