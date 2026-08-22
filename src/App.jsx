@@ -19,6 +19,7 @@ import { subscribeContractEvents } from "./contract/eventBus.js";
 import excalidrawIcon from "./assets/excalidraw.png";
 import appChatIcon from "./assets/app-chat.png";
 import appManjuIcon from "./assets/app-manju.png";
+import appPaperIcon from "./assets/app-paper.png";
 import { sanitizeMessageContent } from "./components/MessageThread.jsx";
 import { useAgentStream } from "./hooks/useAgentStream.js";
 import { useTaskManager } from "./components/TaskPanel.jsx";
@@ -1118,7 +1119,8 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
       // files in src/assets and reference them here without going through a
       // build-time loader. Keep the data-driven `icon` field as a Lucide
       // fallback for tabs that don't have a custom logo yet.
-      const launcherIconSrc = app.key === "manjucraft_agent" ? appManjuIcon : app.iconSrc;
+      const LAUNCHER_ICONS = { manjucraft_agent: appManjuIcon, paper_rewriter_agent: appPaperIcon };
+      const launcherIconSrc = LAUNCHER_ICONS[app.key] || app.iconSrc;
       return {
         key: app.key,
         title: app.title,

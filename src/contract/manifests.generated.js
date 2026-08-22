@@ -225,10 +225,142 @@ const manifests = [
       "openMode": "newTab"
     },
     "notes": "series 模式：首集走 first_frame/each_scene/end 三个完整门（首帧门批准即锁定 character_bible）；续集仅走轻量 episode_ready 门。"
+  },
+  {
+    "id": "paper_rewriter_agent",
+    "name": "论文重写工作台",
+    "description": "学术论文→中文通俗重写：搜索下载论文（arXiv/S2/CrossRef/PubMed）、生成大纲、逐章写作（逐章人工确认+独立审查）、导出PDF",
+    "category": "writing",
+    "icon": "book-open",
+    "version": "1.0.0",
+    "entry": "agents/paper_rewriter_agent/agent.py",
+    "runtime": "inprocess",
+    "skill_id": "langgraph-agents",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "paste",
+            "download"
+          ],
+          "default": "paste",
+          "x_ui": {
+            "control": "select",
+            "label": "原文来源",
+            "description": "paste=粘贴文本；download=让 agent 去学术源搜索下载"
+          }
+        },
+        "paper_title": {
+          "type": "string",
+          "x_ui": {
+            "control": "text",
+            "label": "论文标题（可选）"
+          }
+        },
+        "original_text": {
+          "type": "string",
+          "x_ui": {
+            "control": "textarea",
+            "label": "原文全文（paste 模式）",
+            "placeholder": "粘贴论文全文；留空则请在对话中给出 arXiv ID / DOI / 标题由 agent 下载…"
+          }
+        },
+        "target_audience": {
+          "type": "string",
+          "default": "大一非理工科学生",
+          "x_ui": {
+            "control": "text",
+            "label": "目标读者"
+          }
+        },
+        "instruction": {
+          "type": "string",
+          "x_ui": {
+            "control": "textarea",
+            "label": "附加指令（可选，download 模式填 arXiv ID/DOI/标题）",
+            "placeholder": "例如：下载 arXiv:2005.14165 并重写"
+          }
+        }
+      },
+      "required": []
+    },
+    "output_schema": {
+      "summary": "markdown",
+      "artifacts": [
+        {
+          "id": "paper_pdf",
+          "type": "file",
+          "mime": "application/pdf",
+          "source": "path",
+          "label": "重写PDF"
+        },
+        {
+          "id": "chapters",
+          "type": "file",
+          "mime": "text/plain",
+          "source": "path",
+          "label": "章节文稿"
+        }
+      ]
+    },
+    "capabilities": [
+      "paper-search",
+      "long-form-writing",
+      "hitl",
+      "pdf-export"
+    ],
+    "approval_gates": [
+      {
+        "gate_id": "save_outline",
+        "label": "大纲确认",
+        "allowSteer": true,
+        "modes": [
+          "paste",
+          "download"
+        ]
+      },
+      {
+        "gate_id": "write_chapter",
+        "label": "章节写入确认",
+        "allowSteer": true,
+        "modes": [
+          "paste",
+          "download"
+        ]
+      },
+      {
+        "gate_id": "download_paper",
+        "label": "论文下载确认",
+        "allowSteer": true,
+        "modes": [
+          "download"
+        ]
+      }
+    ],
+    "progress_events": [
+      "workflow.progress",
+      "workflow.artifact",
+      "workflow.approval",
+      "workflow.done"
+    ],
+    "notes": "ReAct 架构（agent↔tools↔review 循环）：大纲保存与每章写入都有 interrupt() 审批门，审批可附带 steer 文本指导修改。RECURSION_LIMIT=400 由 runtime 注入。",
+    "ui": {
+      "type": "form",
+      "title": "论文重写工作台"
+    },
+    "launcher": {
+      "title": "论文重写",
+      "icon": "book-open",
+      "iconSrc": "app-paper.png",
+      "color": "linear-gradient(135deg, #4f46e5, #7c3aed)",
+      "openMode": "newTab"
+    }
   }
 ];
 
-const allowedIds = ["manjucraft_agent"];
+const allowedIds = ["manjucraft_agent","paper_rewriter_agent"];
 
 const launcherApps = [
   {
@@ -238,6 +370,15 @@ const launcherApps = [
     "iconSrc": "app-manju.png",
     "color": "linear-gradient(135deg, #0d9488, #14b8a6)",
     "workflowId": "manjucraft_agent",
+    "openMode": "newTab"
+  },
+  {
+    "key": "paper_rewriter_agent",
+    "title": "论文重写",
+    "icon": "book-open",
+    "iconSrc": "app-paper.png",
+    "color": "linear-gradient(135deg, #4f46e5, #7c3aed)",
+    "workflowId": "paper_rewriter_agent",
     "openMode": "newTab"
   }
 ];

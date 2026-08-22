@@ -55,6 +55,16 @@ to poll.
   across episodes). Reads the Agnes API key from `AGNES_API_KEY` or the active
   Hermes config.
 
+- `paper_rewriter_agent` — 论文重写工作台 (new). A ReAct agent that rewrites a
+  paper for a target audience: multi-source paper search (arXiv / Semantic
+  Scholar / CrossRef / PubMed), chapter-by-chapter rewriting with self-review,
+  outline gate, and a PDF export. Exposes three HITL approval gates
+  (`save_outline`, `write_chapter`, `download_paper`). Launcher entry "论文重写"
+  opens its form workbench in a new tab. Reads the Agnes API key from the active
+  Hermes config (no hardcoded key). Runtime LLM via `langchain-openai`
+  (ChatOpenAI + bind_tools); PDF export via `fpdf2`. ReAct loop needs a high
+  `RECURSION_LIMIT` (400) — injected by the runtime, not hardcoded here.
+
 For a credit-free smoke test, set `MANJUCRAFT_AGENT_MOCK=1` before invoking the
 agent — the LLM / image / video / TTS / ffmpeg service layers fall back to local
 stubs, so the full graph (incl. HITL gates and the series loop) runs offline.

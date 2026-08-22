@@ -861,6 +861,18 @@ def run_agent(
         effective_run_id = run_id or effective_thread_id
         config = {"configurable": {"thread_id": effective_thread_id}}
 
+        # Per-agent recursion limit (contract: agent.py exposes RECURSION_LIMIT).
+        # ReAct-style agents (agent↔tools↔review loops) routinely need hundreds
+        # of steps; LangGraph's default cap (25) aborts them mid-rewrite with
+        # GraphRecursionError. Data-driven: agents that don't define it are
+        # unaffected.
+        _recursion_limit = getattr(mod, "RECURSION_LIMIT", None)
+        if _recursion_limit:
+            try:
+                config["recursion_limit"] = max(25, int(_recursion_limit))
+            except (TypeError, ValueError):
+                pass
+
         # Per-agent summary override (contract L3). Defaults to the structured
         # short-drama-aware summarizer defined above.
         summarize = getattr(mod, "summarize_state", _summarize_state)
