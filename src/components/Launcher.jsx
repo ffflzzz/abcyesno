@@ -14,7 +14,7 @@ export default function Launcher({ apps = [] }) {
             <button key={app.key} className="launcher-app" onClick={app.onClick}>
               <span
                 className="launcher-app-icon"
-                style={app.iconSrc ? undefined : { background: app.color }}
+                style={app.iconSrc ? { background: "transparent", boxShadow: "none" } : { background: app.color }}
               >
                 {app.iconSrc ? (
                   <img

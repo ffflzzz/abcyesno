@@ -5436,11 +5436,16 @@ body[--resizing="1"] .result-panel-resize-handle::before {
   position: relative;
 }
 /* Fullscreen mode: browser-type tab fills the whole content area (no resize
-   handle, no left border). Used by Launcher apps like Excalidraw. */
+   handle, no left border). Used by Launcher apps like Excalidraw. The
+   `height:100%` is critical — without it .browser-panel sits in an absolutely
+   positioned parent (.browser-tab-host) and its own height collapses to the
+   intrinsic height of the toolbar (~41px), leaving the webview body at ~150px
+   and producing a black void below the Excalidraw toolbar. */
 .browser-panel.fullscreen {
   width: 100% !important;
   max-width: 100%;
   min-width: 0;
+  height: 100%;
   border-left: none;
 }
 .browser-panel.fullscreen .bp-resize-handle {
@@ -7424,10 +7429,15 @@ body[--resizing="1"] .result-panel-resize-handle::before {
   color: var(--text);
 }
 .launcher-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, 88px);
-  gap: 20px 16px;
-  justify-content: start;
+  /* Horizontal single-row layout: icons sit side-by-side with the label
+     below each one. align-items: flex-end so every label shares the same
+     baseline regardless of icon visual weight — fixes the "文字高低不一"
+     drift caused by different font metrics inside the column flex. */
+  display: flex;
+  flex-direction: row;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 12px 20px;
 }
 .launcher-app {
   display: flex;
@@ -7441,6 +7451,8 @@ body[--resizing="1"] .result-panel-resize-handle::before {
   color: var(--text);
   cursor: pointer;
   transition: transform 0.15s ease;
+  /* 锁定行高，避免文字标签因 font baseline 微小差异上下漂移 */
+  line-height: 1;
 }
 .launcher-app:hover {
   transform: translateY(-2px);
@@ -7463,11 +7475,11 @@ body[--resizing="1"] .result-panel-resize-handle::before {
   display: block;
 }
 .launcher-app-icon img {
-  width: 30px;
-  height: 30px;
+  width: 56px;
+  height: 56px;
   object-fit: contain;
   display: block;
-  border-radius: 8px;
+  border-radius: 12px;
 }
 .launcher-app:hover .launcher-app-icon {
   transform: scale(1.06);
@@ -7480,6 +7492,7 @@ body[--resizing="1"] .result-panel-resize-handle::before {
   white-space: nowrap;
   text-align: center;
   width: 100%;
+  line-height: 1;
   overflow: hidden;
   text-overflow: ellipsis;
 }

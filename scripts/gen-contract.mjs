@@ -69,6 +69,7 @@ function buildLauncherApps(manifests) {
       key: m.id,
       title: m.launcher.title || m.name,
       icon: m.launcher.icon || m.icon || "film",
+      iconSrc: m.launcher.iconSrc || undefined,
       color: m.launcher.color || "#111827",
       workflowId: m.id,
       openMode,

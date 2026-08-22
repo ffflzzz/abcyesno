@@ -100,6 +100,7 @@
   "launcher": {
     "title": "漫剧go",
     "icon": "film",
+    "iconSrc": "app-manju.png",
     "color": "linear-gradient(135deg, #0d9488, #14b8a6)",
     "openMode": "newTab"
   },

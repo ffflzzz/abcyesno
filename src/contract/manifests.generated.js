@@ -220,6 +220,7 @@ const manifests = [
     "launcher": {
       "title": "漫剧go",
       "icon": "film",
+      "iconSrc": "app-manju.png",
       "color": "linear-gradient(135deg, #0d9488, #14b8a6)",
       "openMode": "newTab"
     },
@@ -234,6 +235,7 @@ const launcherApps = [
     "key": "manjucraft_agent",
     "title": "漫剧go",
     "icon": "film",
+    "iconSrc": "app-manju.png",
     "color": "linear-gradient(135deg, #0d9488, #14b8a6)",
     "workflowId": "manjucraft_agent",
     "openMode": "newTab"
