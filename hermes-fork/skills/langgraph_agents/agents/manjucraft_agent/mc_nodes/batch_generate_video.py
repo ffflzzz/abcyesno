@@ -7,7 +7,16 @@ import os
 import re
 
 from mc_services.agnes_media import generate_video_to_file, video_on_fallback
+from mc_services.ffmpeg import extract_last_frame
 from mc_state import AgentState, episode_project_dir
+
+# Inter-shot continuity bridge: when generating shot N (N>0), extract the last
+# frame of shot N-1's finished video and feed it as the first-frame reference
+# (image) for shot N. This gives the model a visual anchor so the next clip
+# starts where the previous one ended — the most reliable continuity lever we
+# have, since agnes-video-v2.0 does NOT honor endpoint-pinned keyframes across
+# unrelated shots (see docs/AGNES_VIDEO_KEYFRAMES_REALITY.md).
+_PREV_FRAME_BRIDGE = True
 
 
 def _duration_to_frames(duration: float) -> int:
@@ -75,7 +84,7 @@ async def batch_generate_video(state: AgentState) -> dict:
                 _seen.add(v)
                 character_refs.append(v)
 
-    async def gen_one(result: dict) -> dict:
+    async def gen_one(result: dict, prev_last_frame: str | None = None) -> dict:
         if result.get("status") == "error" or not result.get("keyframe_path"):
             return result
         idx = result["index"]
@@ -93,6 +102,11 @@ async def batch_generate_video(state: AgentState) -> dict:
         # transition. Forward-compatible: Agnes ignores these when unsupported.
         first_url = shot.get("first_frame_url") if shot else None
         last_url = shot.get("last_frame_url") if shot else None
+        # Inter-shot continuity bridge (prev-frame): if enabled and the previous
+        # shot emitted a last-frame PNG, use it as the first-frame reference
+        # UNLESS the user explicitly uploaded a first frame (explicit > auto).
+        if not first_url and prev_last_frame and os.path.exists(prev_last_frame):
+            first_url = prev_last_frame
         image = first_url or result.get("keyframe_path")
         keyframes = [first_url, last_url] if (first_url and last_url) else None
         try:
@@ -107,16 +121,27 @@ async def batch_generate_video(state: AgentState) -> dict:
             )
             result["video_path"] = out_path
             result["status"] = "video_ok"
+            # Extract this shot's last frame for the NEXT shot's bridge.
+            if _PREV_FRAME_BRIDGE:
+                last_png = os.path.join(project_dir, "keyframes", f"shot_{idx:03d}_last.png")
+                try:
+                    extract_last_frame(out_path, last_png)
+                    result["last_frame_path"] = last_png
+                except Exception:
+                    pass
         except Exception as exc:
             result["status"] = "video_fail"
             result["error"] = str(exc)
         return result
 
-    # Rate limiting is handled inside agnes_media.generate_video_to_file
-    # (primary key 4 RPM, fallback key 1 RPM via _RpmLimiter), so we can safely
-    # fire all shots concurrently here — the limiter paces the actual API calls.
-    # Once any shot switches to the fallback key, video_on_fallback() flips and
-    # the limiter enforces the stricter 1 RPM for the rest.
-
-    updated = await asyncio.gather(*(gen_one(r) for r in shot_results))
+    # Process shots in ORDER and serially when the prev-frame bridge is on:
+    # shot N needs shot N-1's extracted last frame as its first-frame anchor.
+    # (Rate limiting still happens inside generate_video_to_file via the RPM
+    # limiter, so serializing here only affects ordering, not API pacing.)
+    updated: list[dict] = []
+    prev_last: str | None = None
+    for r in shot_results:
+        r = await gen_one(r, prev_last_frame=prev_last if _PREV_FRAME_BRIDGE else None)
+        updated.append(r)
+        prev_last = r.get("last_frame_path")
     return {"shot_results": updated}

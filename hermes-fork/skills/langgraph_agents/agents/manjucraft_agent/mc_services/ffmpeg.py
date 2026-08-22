@@ -42,6 +42,13 @@ def normalize_audio(input_path: str, output_path: str, target_seconds: float) ->
     return output_path
 
 
+def extract_last_frame(video_path: str, out_png: str) -> str:
+    """Extract the final frame of a video to a PNG (for inter-shot bridging)."""
+    os.makedirs(os.path.dirname(out_png) or ".", exist_ok=True)
+    run_ffmpeg(["-y", "-sseof", "-0.1", "-i", video_path, "-frames:v", "1", out_png])
+    return out_png
+
+
 def make_concat_list_file(paths: list[str], list_path: str) -> None:
     os.makedirs(os.path.dirname(list_path) or ".", exist_ok=True)
     lines = [f"file '{Path(p).as_posix()}'" for p in paths]
