@@ -7463,10 +7463,14 @@ body[--resizing="1"] .result-panel-resize-handle::before {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 16px;
+  border-radius: 14px;
   color: #fff;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
   transition: transform 0.15s ease, box-shadow 0.15s ease;
+  /* 卡片式溢出裁剪：所有 icon 资源 PNG 都已 pad 成 1024x1024 透明背景，
+     但保留 overflow:hidden 作为兜底，避免任何源尺寸异常把内容溢出 56×56 */
+  overflow: hidden;
+  position: relative;
 }
 /* 统一图标视觉体量：Lucide 图标与自定义图片都锁定到同一尺寸 */
 .launcher-app-icon svg {
@@ -7475,11 +7479,15 @@ body[--resizing="1"] .result-panel-resize-handle::before {
   display: block;
 }
 .launcher-app-icon img {
-  width: 56px;
-  height: 56px;
+  width: 100%;
+  height: 100%;
   object-fit: contain;
   display: block;
-  border-radius: 12px;
+  /* PNG 自身已是 1024x1024 透明背景，源里面 icon ink 周围留 ~5-6% 透明 padding，
+     所以容器彩色底会从四周露出，让三个图标在视觉上呈现「同尺寸 56×56 彩盒 + 居中图标」 */
+  padding: 0;
+  margin: 0;
+  border-radius: 0;
 }
 .launcher-app:hover .launcher-app-icon {
   transform: scale(1.06);

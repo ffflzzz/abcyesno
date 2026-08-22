@@ -46,3 +46,11 @@ Thumbs.db
 # generated at runtime by scripts/test-multisession/run.mjs
 scripts/test-multisession/hook.mjs
 scripts/test-multisession/fake-eventbus.mjs
+
+# ImageGen 临时输出（scripts/normalize-icons.cjs 的中间产物；最终源在 src/assets/）
+gen/
+
+# selfdiag 自检产物（运行时生成；截图+报告）
+selfdiag-shots/
+selfdiag-report.json
+selfdiag-report.md

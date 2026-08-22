@@ -15,7 +15,7 @@ import BlockRequestDialog from "./components/BlockRequestDialog.jsx";
 import { initContract, listManifests } from "./contract/registry.js";
 import { launcherApps } from "./contract/manifests.generated.js";
 import { subscribeContractEvents } from "./contract/eventBus.js";
-import excalidrawIcon from "./assets/excalidraw.ico";
+import excalidrawIcon from "./assets/excalidraw.png";
 import appChatIcon from "./assets/app-chat.png";
 import appManjuIcon from "./assets/app-manju.png";
 import { sanitizeMessageContent } from "./components/MessageThread.jsx";
