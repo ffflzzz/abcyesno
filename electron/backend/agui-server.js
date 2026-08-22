@@ -566,6 +566,13 @@ function createAgUIServer(getGatewayClient, storage, options) {
       return text.replace(/\s+/g, ' ').trim();
     }
 
+    // Overlap stripping below this length is treated as coincidence, not as
+    // a cumulative/echoed resend. Without a floor, short CJK coincidences
+    // ("。", "确认了", …) stripped real leading characters from incremental
+    // deltas — garbling the streamed copy — which then also broke the
+    // finalize() prefix alignment and re-appended the entire answer.
+    const MIN_OVERLAP_STRIP = 10;
+
     // Append `delta` to the emitted text, skipping any part that is already present
     // at the end. This handles both true incremental deltas and accidental cumulative
     // or partially-repeated deltas from downstream providers.
@@ -575,7 +582,7 @@ function createAgUIServer(getGatewayClient, storage, options) {
       if (emittedText && emittedText.endsWith(delta)) return '';
       const overlap = overlapLen(emittedText, delta);
       let actual = delta;
-      if (overlap > 0) {
+      if (overlap >= MIN_OVERLAP_STRIP) {
         actual = delta.slice(overlap);
       }
       // Second line of defence: if the whitespace-normalized version is fully
@@ -654,7 +661,24 @@ function createAgUIServer(getGatewayClient, storage, options) {
       // so a cumulative `message.complete` cannot re-emit content that was
       // already streamed as deltas (including repeated thinking prefixes).
       if (text && typeof text === 'string') {
-        const actual = appendDelta(text);
+        // Belt-and-braces: if deltas already streamed this message but drifted
+        // (so prefix alignment fails), do NOT treat the full text as a
+        // "remainder" — that duplicated the whole answer. Detect by comparing
+        // normalized heads: same message start + no structural overlap ⇒ skip.
+        const fullPlain = normalizeForDedup(text);
+        const guardLen = Math.min(40, fullPlain.length);
+        const sameHead =
+          hasTextDelta &&
+          guardLen >= 12 &&
+          normalizeForDedup(emittedText).slice(0, guardLen) === fullPlain.slice(0, guardLen);
+        const aligned = overlapLen(emittedText, text) >= MIN_OVERLAP_STRIP;
+        let actual;
+        if (sameHead && !aligned) {
+          log('agui-server', `[translator] finalize drift guard: dropped re-delivered text (len=${text.length}, emitted=${emittedText.length})`);
+          actual = '';
+        } else {
+          actual = appendDelta(text);
+        }
         if (actual) {
           ensureMessageStarted();
           hasTextDelta = true;
