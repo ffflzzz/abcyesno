@@ -449,29 +449,25 @@ export default function ResultPanel({
     return "";
   }, [activeTab, paperSelRun, paperSelChapter]);
 
-  // 真正的写盘下载：主进程弹原生保存框 → 拉流写盘，全程有反馈，不依赖浏览器。
+  // 真正的写盘下载：主进程固定写到 ~/Downloads/<runId>.pdf，再弹文件管理器揭示。
+// 不依赖 dialog.showSaveDialog（部分 Windows 下静默不弹），全程有反馈。
   const handlePaperDownload = useCallback(async () => {
     if (!paperSelRun) return;
     const url = paperPdfUrl(paperSelRun);
-    const filename = `${paperSelRun}.pdf`;
-    setPaperDownload({ status: "loading", msg: "请在弹出的保存框中选择路径…" });
-    // 防静默：若主进程 30s 内无响应（极端情况下对话框未弹出），给出明确提示。
+    setPaperDownload({ status: "loading", msg: "正在下载并定位文件…" });
+    // 防静默：30s 内主进程无响应，给出明确错误提示。
     let timedOut = false;
     const guard = setTimeout(() => {
       timedOut = true;
-      setPaperDownload({ status: "error", msg: "下载无响应，请重试或检查弹窗是否被遮挡" });
+      setPaperDownload({ status: "error", msg: "下载无响应，请重试" });
     }, 30000);
     try {
-      if (!window.hermes?.downloadUrl) throw new Error("download 接口不可用");
-      const res = await window.hermes.downloadUrl({ url, filename });
+      if (!window.hermes?.paperDownload) throw new Error("paperDownload 接口不可用");
+      const res = await window.hermes.paperDownload({ runId: paperSelRun, url });
       clearTimeout(guard);
-      if (timedOut) return; // 已超时提示，忽略迟到的响应
-      if (res?.canceled) {
-        setPaperDownload({ status: "idle", msg: "" });
-        return;
-      }
+      if (timedOut) return;
       if (res?.success) {
-        setPaperDownload({ status: "done", msg: `已保存：${res.path}` });
+        setPaperDownload({ status: "done", msg: `已保存并定位：${res.path}` });
       } else {
         setPaperDownload({ status: "error", msg: res?.error || "下载失败" });
       }

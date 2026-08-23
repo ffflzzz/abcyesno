@@ -1335,10 +1335,12 @@ ipcMain.handle('download-url', async (_event, { url, filename, proxy } = {}) => 
   // can return null or a hidden launcher/splash window when the OS focus state
   // is ambiguous — that case made the save dialog silently not appear.
   const senderWin = _event.sender ? BrowserWindow.fromWebContents(_event.sender) : null;
+  log(`[download-url] called url=${url} senderWin=${senderWin ? senderWin.id : 'null'} allWindows=${BrowserWindow.getAllWindows().length}`);
   const save = await dialog.showSaveDialog(senderWin || undefined, {
     defaultPath: suggested,
     title: '保存文件',
   });
+  log(`[download-url] dialog result canceled=${save?.canceled} filePath=${save?.filePath}`);
   if (save.canceled || !save.filePath) return { success: false, canceled: true };
 
   const target = save.filePath;
@@ -1375,6 +1377,44 @@ ipcMain.handle('download-url', async (_event, { url, filename, proxy } = {}) => 
     try { fs.unlinkSync(target); } catch { /* ignore */ }
     return { success: false, error: err && err.message ? err.message : String(err) };
   }
+});
+
+// ── Paper-download reveal: stream PDF to a fixed downloads dir and pop the
+//    file manager with the file selected. This sidesteps dialog.showSaveDialog
+//    which on some Windows builds (e.g. unactivated Win10) silently fails to
+//    anchor the dialog. The user can still see and grab the file reliably. ──
+ipcMain.handle('paper-download', async (_event, { runId, url } = {}) => {
+  if (!runId || !url) return { success: false, error: 'missing runId/url' };
+  const safeName = String(runId).replace(/[\\/:*?"<>|]/g, '_') + '.pdf';
+  const downloadsDir = app.getPath('downloads');
+  let target;
+  try { fs.mkdirSync(downloadsDir, { recursive: true }); target = path.join(downloadsDir, safeName); }
+  catch (err) { return { success: false, error: 'mkdir failed: ' + (err && err.message) }; }
+
+  log(`[paper-download] run=${runId} target=${target}`);
+  try {
+    await new Promise((resolve, reject) => {
+      const req = http.get(url, (res) => {
+        if (res.statusCode !== 200) { reject(new Error('HTTP ' + res.statusCode)); return; }
+        const out = fs.createWriteStream(target);
+        res.pipe(out);
+        out.on('finish', resolve);
+        out.on('error', reject);
+      });
+      req.on('error', reject);
+    });
+  } catch (err) {
+    try { fs.unlinkSync(target); } catch { /* ignore */ }
+    return { success: false, error: err && err.message ? err.message : String(err) };
+  }
+
+  // Reveal in file manager. shell.showItemInFolder opens Explorer/Finder with
+  // the file highlighted — user gets unmistakable visual feedback even when
+  // save dialogs misbehave.
+  try { shell.showItemInFolder(target); } catch (err) {
+    log(`[paper-download] showItemInFolder failed: ${err && err.message}`);
+  }
+  return { success: true, path: target };
 });
 
 // ── Read a local image file as a base64 data URL ──

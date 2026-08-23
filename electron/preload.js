@@ -95,6 +95,10 @@ contextBridge.exposeInMainWorld('hermes', {
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
   // Real file download: native save dialog → stream to disk (no browser).
   downloadUrl: (opts) => ipcRenderer.invoke('download-url', opts || {}),
+  // Paper-download reveal: stream to ~/Downloads, then shell.showItemInFolder
+  // so the file manager pops up with the PDF highlighted. Reliable even when
+  // the save dialog misbehaves on some Windows builds.
+  paperDownload: (opts) => ipcRenderer.invoke('paper-download', opts || {}),
 
   // Read a local image file as a base64 data URL. Used by ApprovalBubble to
   // render workspace artifacts: the file:// renderer cannot load cross-directory
