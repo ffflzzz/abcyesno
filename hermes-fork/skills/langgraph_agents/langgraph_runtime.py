@@ -413,11 +413,19 @@ def _hitl_dir() -> Path:
 
 
 def _hitl_timeout() -> float:
-    """Max seconds to wait for a human decision before aborting (env-overridable)."""
+    """Max seconds to wait for a human decision before aborting (env-overridable).
+
+    Default raised to 24h (was 3600s). A short window silently expired an
+    overnight/unattended approval gate: Python returned ``None`` -> emitted
+    ``workflow.done status=timeout``, but the SSE had already been force-closed
+    upstream so the frontend never saw it and kept showing a live "确认" button
+    whose clicks wrote a decision file nobody consumed (silent deadlock, bug
+    fixed 2026-08-23). 24h keeps the gate open long enough for a human to return.
+    """
     try:
-        return float(os.environ.get("ABC_HITL_TIMEOUT", "3600"))
+        return float(os.environ.get("ABC_HITL_TIMEOUT", "86400"))
     except ValueError:
-        return 3600.0
+        return 86400.0
 
 
 def _collect_artifacts(state: Any) -> List[Dict[str, Any]]:

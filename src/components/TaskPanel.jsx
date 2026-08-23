@@ -15,6 +15,11 @@ const STATUS_MAP = {
   completed: { label: "已完成", icon: "check-circle", cls: "task-completed" },
   failed: { label: "失败", icon: "close", cls: "task-failed" },
   stopped: { label: "已停止", icon: "stop", cls: "task-stopped" },
+  // Restored from localStorage at app start while the previous process had it
+  // "running". The backing stream died with that process, so claiming
+  // "运行中" would be a fabricated state — we surface an explicit
+  // "已中断" instead (runId is kept so a future re-run can reuse it).
+  interrupted: { label: "已中断", icon: "alert", cls: "task-interrupted" },
 };
 
 function formatTaskTime(ts) {
@@ -75,7 +80,7 @@ function TaskProgressBar({ events }) {
 }
 
 // ── Single task card in the list ──
-function TaskCard({ task, active, onClick }) {
+function TaskCard({ task, active, onClick, onRemove }) {
   const si = statusInfo(task.status);
   const events = task.events || [];
 
@@ -90,12 +95,24 @@ function TaskCard({ task, active, onClick }) {
           <span className="task-card-name">{task.workflowName || task.workflowId || "任务"}</span>
           <span className="task-card-time">{formatTaskTime(task.startedAt)}</span>
         </div>
+        {onRemove && (
+          <button
+            className="task-card-remove"
+            title="移除此任务"
+            onClick={(e) => {
+              e.stopPropagation();
+              onRemove(task.id);
+            }}
+          >
+            <Icon name="x" size={12} />
+          </button>
+        )}
       </div>
       <div className="task-card-status">
         <span className={`task-status-label ${si.cls}`}>{si.label}</span>
         {task.status === "running" && <TaskProgressBar events={events} />}
       </div>
-      {(task.status === "completed" || task.status === "failed") && task.artifacts && task.artifacts.length > 0 && (
+      {(task.status === "completed" || task.status === "failed" || task.status === "interrupted") && task.artifacts && task.artifacts.length > 0 && (
         <div className="task-artifacts-hint">
           <Icon name="folder" size={14} /> {task.artifacts.length} 个产物
         </div>
@@ -216,10 +233,13 @@ export default function TaskPanel({
   onStopTask,
   onClearCompleted,
   onClearAll,
+  onRemoveTask,
 }) {
   // Auto-select first running task
   const runningTasks = tasks.filter((t) => t.status === "running");
-  const completedTasks = tasks.filter((t) => t.status === "completed" || t.status === "failed" || t.status === "stopped");
+  const completedTasks = tasks.filter((t) =>
+    t.status === "completed" || t.status === "failed" || t.status === "stopped" || t.status === "interrupted"
+  );
   const pendingTasks = tasks.filter((t) => t.status === "pending");
 
   const activeTask = tasks.find((t) => t.id === selectedTaskId);
@@ -247,6 +267,7 @@ export default function TaskPanel({
                 task={t}
                 active={selectedTaskId === t.id}
                 onClick={onSelectTask}
+                onRemove={onRemoveTask}
               />
             ))}
           </>
@@ -264,6 +285,7 @@ export default function TaskPanel({
                 task={t}
                 active={selectedTaskId === t.id}
                 onClick={onSelectTask}
+                onRemove={onRemoveTask}
               />
             ))}
           </>
@@ -291,6 +313,22 @@ export default function TaskPanel({
   );
 }
 
+// Re-derive a task status from an event list (same mapping as the live
+// subscription below). workflow.graph/started only promotes pending→running so
+// it never resurrects a terminal state.
+function deriveStatusFromEvents(events, fallback) {
+  let s = fallback;
+  for (const ev of events || []) {
+    const t = (ev && ev.type) || "";
+    if (t === "workflow.progress" || t === "workflow.step") s = "running";
+    else if (t === "workflow.complete" || t === "workflow.done") s = "completed";
+    else if (t === "workflow.error" || t === "workflow.fail") s = "failed";
+    else if (t === "workflow.stopped" || t === "workflow.interrupted") s = "stopped";
+    else if ((t === "workflow.graph" || t === "workflow.started") && s === "pending") s = "running";
+  }
+  return s;
+}
+
 // ── Hook: manage task lifecycle ──
 // Call this in App.jsx to own the task state and bridge eventBus → tasks.
 export function useTaskManager(onSend, onStop) {
@@ -299,7 +337,32 @@ export function useTaskManager(onSend, onStop) {
       const raw = JSON.parse(localStorage.getItem("abcyesno:tasks") || "[]");
       // Filter out tasks whose workflowId no longer exists in the manifest registry
       const validIds = new Set((listManifests() || []).map((m) => m.id));
-      return raw.filter((t) => !t.workflowId || validIds.has(t.workflowId));
+      return raw
+        .filter((t) => !t.workflowId || validIds.has(t.workflowId))
+        .map((t) => {
+          if (t.status !== "running" && t.status !== "pending") return t;
+          // This initializer runs BOTH on a fresh app process AND on same-
+          // process remounts (e.g. tab switches). Only the former means the
+          // backing stream died — fabricating "interrupted" for a live run
+          // would be wrong (the user saw results arrive later with all mid-
+          // run state lost). The module-level eventBus buffers every event
+          // per runId and survives remounts, so:
+          //   buffer non-empty → same process, run alive (or awaiting HITL):
+          //     replay the full buffer into the task and re-derive status.
+          //   buffer empty     → fresh process, stream dead → explicit 已中断.
+          const buffered = getContractEvents(t.runId);
+          if (buffered && buffered.length > 0) {
+            const status = deriveStatusFromEvents(buffered, t.status);
+            const terminal = status !== "running" && status !== "pending";
+            return {
+              ...t,
+              status,
+              events: buffered,
+              completedAt: terminal ? (t.completedAt || Date.now()) : null,
+            };
+          }
+          return { ...t, status: "interrupted", completedAt: t.completedAt || Date.now() };
+        });
     } catch (_) {
       return [];
     }
@@ -351,7 +414,7 @@ export function useTaskManager(onSend, onStop) {
         // ── Re-run in the same session: restart the existing task ──
         if (
           (evType === "workflow.graph" || evType === "workflow.started") &&
-          (existing.status === "completed" || existing.status === "failed" || existing.status === "stopped")
+          (existing.status === "completed" || existing.status === "failed" || existing.status === "stopped" || existing.status === "interrupted")
         ) {
           return prev.map((t) =>
             t.runId === runId
@@ -459,11 +522,19 @@ export function useTaskManager(onSend, onStop) {
 
   // Clear completed tasks
   const clearCompleted = useCallback(() => {
-    setTasks((prev) => prev.filter((t) => !(t.status === "completed" || t.status === "failed" || t.status === "stopped")));
+    setTasks((prev) => prev.filter((t) => !(t.status === "completed" || t.status === "failed" || t.status === "stopped" || t.status === "interrupted")));
     if (selectedTaskId) {
       setSelectedTaskId("");
     }
   }, [selectedTaskId]);
+
+  // Remove a single task (any status) from the list. Front-end removal only —
+  // the backend run, if any, keeps going (or is already dead); this just
+  // un-clutters the panel.
+  const removeTask = useCallback((taskId) => {
+    setTasks((prev) => prev.filter((t) => t.id !== taskId));
+    setSelectedTaskId((sel) => (sel === taskId ? "" : sel));
+  }, []);
 
   // Clear ALL tasks (for cleaning up stale / test data)
   const clearAll = useCallback(() => {
@@ -479,5 +550,6 @@ export function useTaskManager(onSend, onStop) {
     stopTask,
     clearCompleted,
     clearAll,
+    removeTask,
   };
 }

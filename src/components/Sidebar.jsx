@@ -289,6 +289,7 @@ export default function Sidebar({
           onStopTask={taskManager.stopTask}
           onClearCompleted={taskManager.clearCompleted}
           onClearAll={taskManager.clearAll}
+          onRemoveTask={taskManager.removeTask}
         />
       </div>
     );

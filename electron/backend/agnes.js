@@ -22,6 +22,42 @@ function readAgnesApiKey() {
   return process.env.AGNES_API_KEY || '';
 }
 
+// Public/default key (sk- prefix) used when the Token Plan primary key's
+// daily video-second quota or RPM cap is exhausted. Read from the env (injected
+// by hermes-runner) or HERMES_HOME/.env. Returns '' when not configured.
+function readAgnesFallbackKey() {
+  const home = process.env.HERMES_HOME || path.join(os.homedir(), '.hermes_portable_data');
+  try {
+    const text = fs.readFileSync(path.join(home, '.env'), 'utf-8');
+    const m = text.match(/^AGNES_FALLBACK_API_KEY=(.+)$/m);
+    if (m) return m[1].trim();
+  } catch (_) {}
+  return process.env.AGNES_FALLBACK_API_KEY || '';
+}
+
+// Detect Agnes quota / rate-limit responses worth a key fallback. The video
+// create endpoint returns 429 when the Token Plan daily-second quota or RPM
+// cap is hit. We also match other 4xx whose body mentions quota/limit/plan/
+// usage as a belt-and-suspenders signal.
+function _isQuotaError(e) {
+  const msg = (e && e.message) || '';
+  if (/HTTP 429/i.test(msg)) return true;
+  if (/\b(quota|exceed|limit|plan|subscription|too many|usage limit|daily)\b/i.test(msg)) return true;
+  return false;
+}
+
+// The public/fallback key is rate-limited to 1 RPM. Serialize every fallback
+// call so we never burst past it. A module-level timestamp + sleep is enough
+// because agui-server runs in a single Node process.
+let _lastFallbackTs = 0;
+async function _throttleFallback() {
+  const minGap = 61 * 1000;
+  const now = Date.now();
+  const wait = minGap - (now - _lastFallbackTs);
+  if (wait > 0) await sleep(wait);
+  _lastFallbackTs = Date.now();
+}
+
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -87,11 +123,14 @@ async function generateImage({ prompt, size = '2K', ratio = '1:1' }, key) {
 //   resp: { video_id, status:"queued", seconds, size }
 // Poll GET {VIDEO_STATUS_BASE}/agnesapi?video_id=<ID> until status:"completed"
 //   resp: { status, metadata:{ url } }
-async function generateVideo(
+//
+// Token-Plan -> public-key fallback: if the primary (Token Plan) key returns
+// 429 / quota-exceeded, transparently retry with AGNES_FALLBACK_API_KEY (the
+// public key, unlimited seconds but 1 RPM). See generateVideo() below.
+async function _generateVideoWithKey(
   { prompt, image, keyframes, reference_images, width = 1152, height = 768, num_frames = 81, frame_rate = 24 },
-  key
+  apiKey
 ) {
-  const apiKey = key || readAgnesApiKey();
   if (!apiKey) throw new Error('AGNES_API_KEY 未配置');
   if (!prompt) throw new Error('prompt 必填');
   // Agnes video API only accepts http(s) URLs or base64 image data. Convert
@@ -167,6 +206,39 @@ async function generateVideo(
     }
   }
   throw new Error('VIDEO 轮询超时 (10min)');
+}
+
+async function generateVideo(opts, key) {
+  const primaryKey = key || readAgnesApiKey();
+  if (!primaryKey) throw new Error('AGNES_API_KEY 未配置');
+  const fbKey = readAgnesFallbackKey();
+  // Build the key chain: primary first, then the public fallback key (if a
+  // distinct one is configured). We only ever advance to the fallback on a
+  // 429 / quota-exceeded error from the primary.
+  const chain = [primaryKey];
+  if (fbKey && fbKey !== primaryKey) chain.push(fbKey);
+
+  let lastErr;
+  for (let i = 0; i < chain.length; i++) {
+    const apiKey = chain[i];
+    const isFallback = i > 0;
+    try {
+      if (isFallback) {
+        console.log('[agnes] Token Plan 主 key 额度/限流，回退到 Agnes 公网 key 重试');
+        await _throttleFallback();
+      }
+      return await _generateVideoWithKey(opts, apiKey);
+    } catch (e) {
+      lastErr = e;
+      // Surface immediately if we're already on the fallback key, if this
+      // isn't a quota/limit error, or if there's no fallback key at all.
+      if (isFallback || !_isQuotaError(e) || chain.length === 1) {
+        throw e;
+      }
+      // Primary key hit quota/limit -> loop retries on the fallback key.
+    }
+  }
+  throw lastErr || new Error('video generation failed');
 }
 
 // ── Media download (for exporting real assets into a local Jianying draft) ──

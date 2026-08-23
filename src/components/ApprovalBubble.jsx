@@ -31,6 +31,7 @@ export default function ApprovalBubble({ approval, onRespond, toolMessages = [],
     allowSteer,
     gateId,
     context,
+    ended,
   } = approval || {};
 
   const [remember, setRemember] = useState(false);
@@ -188,6 +189,41 @@ export default function ApprovalBubble({ approval, onRespond, toolMessages = [],
       src: a.src,
       label: a.label || "已收集的产物",
     }));
+  }
+
+  // 关键修复（2026-08-23）：审批任务已失效/已结束（后端 HITL 超时、或用户点
+  // 确认时该 run 早已结束）。此时不能再渲染活的「批准」按钮——点了也是静默
+  // 死锁（决策文件无人消费）。改为明确的失效态：禁用操作、给出原因、提供关闭。
+  if (ended) {
+    return (
+      <div className="message-row assistant">
+        <div className="message-avatar agent-avatar approval">
+          <Icon name="alert" size={18} style={{ color: "#d29922" }} />
+        </div>
+        <div className="message-col">
+          <div className="message-bubble assistant approval-bubble approval-ended">
+            <div className="approval-bubble-header">
+              <span className="approval-bubble-icon"><Icon name="alert" size={14} /></span>
+              <span className="approval-bubble-title">{label || "审批已失效"}</span>
+              {operationName && operationName !== (label || "审批已失效") && (
+                <span className="approval-bubble-gate">{operationName}</span>
+              )}
+            </div>
+            <div className="approval-bubble-message">
+              {message || "该审批任务已结束或已超时，无法再响应。请重新发起任务。"}
+            </div>
+            <div className="approval-bubble-actions">
+              <button
+                className="approval-btn dismiss"
+                onClick={() => onRespond && onRespond(null, false, "")}
+              >
+                知道了
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   return (

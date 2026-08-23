@@ -9,6 +9,9 @@ const STATUS_MAP = {
   completed: { label: "已完成", cls: "task-completed", icon: "check-circle" },
   failed: { label: "失败", cls: "task-failed", icon: "close" },
   stopped: { label: "已停止", cls: "task-stopped", icon: "stop" },
+  // Persisted-as-running tasks restored on a fresh process (stream dead with
+  // the old one). Must match TaskPanel's STATUS_MAP so both views agree.
+  interrupted: { label: "已中断", cls: "task-interrupted", icon: "alert" },
 };
 
 function statusInfo(status) {

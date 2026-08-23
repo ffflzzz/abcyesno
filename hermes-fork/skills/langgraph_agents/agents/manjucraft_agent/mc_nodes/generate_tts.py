@@ -10,8 +10,21 @@ from mc_state import AgentState, episode_project_dir
 
 
 async def generate_tts_node(state: AgentState) -> dict:
-    """Generate and normalize TTS audio for shots with dialogue."""
+    """Generate and normalize TTS audio for shots with dialogue.
+
+    DEFAULT-OFF: Agnes Video V2.0 generates lip-synced speech from the video
+    prompt itself (verified 2026-08-23), so the separate TTS pass is redundant
+    by default — running it would stack a second voice track on top of the
+    model's native dialogue. Set ``state["tts_enabled"] = True`` to opt back in
+    (e.g. to force a specific external dub voice or when the video model's
+    native speech is undesirable). When off, this node simply passes
+    ``shot_results`` through untouched, so ``merge_and_concat`` concatenates
+    the videos' native audio tracks.
+    """
     if state.get("stop_requested"):
+        return {"shot_results": state.get("shot_results", [])}
+
+    if not state.get("tts_enabled"):
         return {"shot_results": state.get("shot_results", [])}
 
     project_dir = episode_project_dir(state)

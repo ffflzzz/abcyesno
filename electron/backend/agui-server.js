@@ -61,6 +61,8 @@ function createAgUIServer(getGatewayClient, storage, options) {
     if (!br || br.ended) return;
     br.ended = true;
     try {
+      if (br.timer) { try { clearInterval(br.timer); } catch (_) {} br.timer = null; }
+    } catch (_) {}
       backgroundRuns.delete(br.wfRunId);
       workflowSubscribers.delete(br.wfRunId);
       clearEventBuffer(br.wfRunId);
@@ -1396,12 +1398,25 @@ function createAgUIServer(getGatewayClient, storage, options) {
       const br = backgroundRuns.get(wfRunId);
       if (br && br.keepOpen) {
         // 后台 workflow 已启动：保持 SSE 打开，等 workflow.done 再关闭。
+        // 关键修复（2026-08-23）：此前用「盲 60 分钟定时器」强制关 SSE 并删除
+        // 协调文件，会把「仍在 HITL 审批门等待真人决策」的后台 run 一起杀掉——
+        // Python 侧 _wait_for_decision 仍在轮询决策文件，但 SSE 已被关、前端
+        // approval 弹窗变成孤儿，用户回来点确认写出的决策文件无人消费（静默
+        // 死锁）。现改为「被动遗弃定时器」：只在「超长一段时间（默认 24h）内
+        // 完全没有任何事件」时才判定为真正遗弃并清理；活跃（含 HITL 等待中）
+        // 的 run 永不被盲杀。协调文件也只在 done/真遗弃时删除。
         log('agui-server', `keeping SSE open for background run ${wfRunId}`);
-        const TIMEOUT = Number(process.env.ABC_BACKGROUND_RUN_TIMEOUT || 3600000); // 默认 60 分钟
-        br.timer = setTimeout(() => {
-          log('agui-server', `background run ${wfRunId} exceeded timeout, forcing close`);
-          finishBackgroundRun(br);
-        }, TIMEOUT);
+        const ABANDON_MS = Number(process.env.ABC_BACKGROUND_RUN_ABANDON || 86400000); // 默认 24 小时
+        br.keepAliveAt = Date.now();
+        br.timer = setInterval(() => {
+          const since = Date.now() - (br.keepAliveAt || 0);
+          if (since >= ABANDON_MS) {
+            log('agui-server', `background run ${wfRunId} abandoned (no events for ${ABANDON_MS}ms), forcing close`);
+            clearInterval(br.timer);
+            finishBackgroundRun(br);
+          }
+          // 否则保持打开：run 仍在跑（或在 HITL 审批门等待真人），绝不误杀。
+        }, 60000);
         return; // 挂起等待 workflow.done，不在这里 end SSE
       }
       if (translator && !translator.hasError()) {
@@ -1544,6 +1559,11 @@ function createAgUIServer(getGatewayClient, storage, options) {
         return res.json({ status: 'buffered', runId });
       }
       send({ type: 'CUSTOM', name: `workflow.${eventType}`, value: payload });
+      // 任何事件到达都刷新「最后活跃时间」，被动遗弃定时器据此判断 run 是否
+      // 仍存活（含 HITL 审批门等待中——Python 每 0.5s 轮询决策文件，但并
+      // 不向本通道发事件；此时靠 below 的 HITL 保活心跳兜底，见 interrupt 路由）。
+      const brLive = backgroundRuns.get(runId);
+      if (brLive) brLive.keepAliveAt = Date.now();
       // 后台 run 生命周期钩子（contract B）：
       //  started → 标记本路 SSE 保持打开，直到 done 才关闭；
       //  done    → 关闭并保持打开的 SSE（清理 subscriber / coord / end）。
@@ -1554,7 +1574,7 @@ function createAgUIServer(getGatewayClient, storage, options) {
       } else if (eventType === 'done') {
         const br = backgroundRuns.get(runId);
         if (br) {
-          clearTimeout(br.timer);
+          if (br.timer) clearInterval(br.timer);
           finishBackgroundRun(br);
         }
       }
@@ -1579,6 +1599,20 @@ function createAgUIServer(getGatewayClient, storage, options) {
       if (!runId) {
         return res.json({ status: 'error', message: 'workflowRunId is required' });
       }
+      // 关键修复（2026-08-23）：若该 run 的 SSE 订阅者已不存在（后台 run 已
+      // 结束/被遗弃、协调文件已删），则拒绝写入决策文件并返回显式错误，让
+      // 前端把 approval 弹窗改成「已失效/任务已结束」状态，而不是静默写出一个
+      // 无人消费的决策文件（旧 bug：用户点确认毫无反应）。
+      if (!workflowSubscribers.has(runId)) {
+        log('agui-server', `interrupt rejected for dead run ${runId} (no subscriber)`);
+        return res.json({ status: 'error', message: '该审批任务已结束或已超时，请重新发起任务。', code: 'RUN_ENDED' });
+      }
+      // 心跳保活：用户在 HITL 审批门等待期间，Python 只轮询决策文件、不向本
+      // 通道发任何 workflow.* 事件。刷新 keepAliveAt 防止被动遗弃定时器把
+      // 一个「只是等人确认」的活跃 run 误判为遗弃。
+      const brHeart = backgroundRuns.get(runId);
+      if (brHeart) brHeart.keepAliveAt = Date.now();
+
       const base = process.env.HERMES_HOME || path.join(os.homedir(), '.hermes_portable_data');
       const dir = path.join(base, 'workflow_hitl');
       fs.mkdirSync(dir, { recursive: true });

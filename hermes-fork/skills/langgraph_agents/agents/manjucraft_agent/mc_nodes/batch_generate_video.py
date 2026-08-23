@@ -59,6 +59,41 @@ def _video_dims(res: str) -> tuple[int, int]:
     return (vw, vh)
 
 
+# When True, dialogue lines are injected into the video prompt so Agnes
+# Video V2.0 generates SYNCHRONIZED lip-synced speech in its native audio
+# track (verified 2026-08-23: the model DOES speak prompt-supplied lines,
+# e.g. a Chinese VO when the prompt asks for it). When False, the video ships
+# with only its ambient native audio and the separate TTS node is the only
+# source of spoken dialogue. We default to True because the model's native
+# audio already contains the lines — running TTS on top would double the voice
+# track. The TTS node is still reachable (see mc_graph) for consumers that
+# want an explicit external dub.
+_USE_NATIVE_DIALOGUE = True
+
+
+def _build_video_prompt(shot: dict | None, base_prompt: str, motion: str | None) -> str:
+    """Compose the final video prompt, appending dialogue for native speech.
+
+    Agnes Video V2.0 generates lip-synced speech from the prompt text itself
+    (no dedicated dialogue field). We append the shot's dialogue (if any) as a
+    spoken-line directive so the model voices it in the native audio track.
+    """
+    video_prompt = base_prompt
+    if motion and motion != "固定":
+        video_prompt = f"{video_prompt}, {MOTION_EN.get(motion, '')}"
+    if _USE_NATIVE_DIALOGUE and shot:
+        dialogue = (shot.get("dialogue") or "").strip()
+        if dialogue:
+            # Keep the directive language-agnostic: tell the model to actually
+            # speak the line (not just show it) and to lip-sync to it.
+            video_prompt = (
+                f"{video_prompt}. "
+                f"The character speaks the following line aloud, clearly audible, "
+                f"lip-synced to the words: “{dialogue}”"
+            )
+    return video_prompt
+
+
 async def batch_generate_video(state: AgentState) -> dict:
     """Generate a short video for each shot that has a keyframe."""
     if state.get("stop_requested"):
@@ -92,10 +127,9 @@ async def batch_generate_video(state: AgentState) -> dict:
         duration = shot["duration"] if shot else 5.0
         num_frames = _duration_to_frames(duration)
         out_path = os.path.join(project_dir, "videos", f"shot_{idx:03d}.mp4")
-        video_prompt = shot["video_prompt"] if shot else "subtle cinematic motion"
+        base_video_prompt = shot["video_prompt"] if shot else "subtle cinematic motion"
         motion = shot.get("motion") if shot else None
-        if motion and motion != "固定":
-            video_prompt = f"{video_prompt}, {MOTION_EN.get(motion, '')}"
+        video_prompt = _build_video_prompt(shot, base_video_prompt, motion)
         # Frame bridge (debt #7): prefer a user-uploaded first frame over the
         # auto-generated keyframe; when both first+last frames are supplied,
         # drive the model in keyframes mode so the clip spans the intended

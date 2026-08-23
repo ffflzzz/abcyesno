@@ -1410,6 +1410,25 @@ useEffect(() => {
       }
 
       if (type === "workflow.done") {
+        const doneStatus = ev.payload?.status;
+        // 审批门超时 / 被拒 / 失败：不要静默清掉 approval，而是把真实终态透出
+        // 到 approval 槽位，让覆盖层显示「已超时/已拒绝/失败」而不是一个死按钮。
+        if (doneStatus === "timeout" || doneStatus === "rejected" || doneStatus === "failed" || doneStatus === "error" || doneStatus === "network") {
+          setRunState(doneStatus === "timeout" ? "timeout" : "error");
+          setApproval({
+            id: "workflow-" + (doneStatus || "done"),
+            operation: "workflow-ended",
+            source: "workflow",
+            label: doneStatus === "timeout" ? "审批已超时" : doneStatus === "rejected" ? "已拒绝" : "任务结束",
+            message:
+              doneStatus === "timeout"
+                ? "审批等待超时（超过最长等待时间仍无人确认），工作流已中止。请重新发起任务。"
+                : ev.payload?.error || ev.payload?.message || "任务已结束。",
+            ended: true,
+            allowSteer: false,
+          });
+          return;
+        }
         setApproval(null);
         setRunState("done");
         setDone({ script: true, assets: true, storyboard: true, export: true });
@@ -1582,15 +1601,39 @@ useEffect(() => {
   // (window.hermes.sendWorkflowInterrupt) directly and clear our local gate.
   async function handleWorkbenchApprove(choice, remember, steerText) {
     if (!approval) return;
+    // 失效态的「知道了」按钮传 choice === null：只关闭覆盖层，不再向后端发任何
+    // 决策（run 已死，发了也是静默死锁）。
+    if (choice === null || choice === undefined) {
+      setApproval(null);
+      return;
+    }
     try {
       const hasSteer = !!(choice && steerText && steerText.trim());
       const api = typeof window !== "undefined" && window.hermes;
       if (api && api.sendWorkflowInterrupt) {
-        await api.sendWorkflowInterrupt({
+        const resp = await api.sendWorkflowInterrupt({
           workflowRunId: approval.runId,
           decision: choice ? (hasSteer ? "steer" : "approve") : "reject",
           steerText: hasSteer ? steerText : "",
         });
+        // 关键修复（2026-08-23）：若后端判定该 run 已结束/已超时（无 SSE
+        // 订阅者），中断写入决策文件会返回 error。此时绝不能再静默 setApproval
+        // (null) 让按钮凭空消失——必须把 approval 覆盖层切到「已失效」状态，
+        // 告诉用户这个审批任务已经死了、需要重新发起。否则用户点确认毫无
+        // 反应（旧 bug 根因之一）。
+        if (resp && resp.status === "error") {
+          setApproval((prev) => ({
+            ...(prev || {}),
+            id: "workflow-ended",
+            operation: "workflow-ended",
+            source: "workflow",
+            label: "审批已失效",
+            message: resp.message || "该审批任务已结束或已超时，请重新发起任务。",
+            ended: true,
+            allowSteer: false,
+          }));
+          return;
+        }
       }
     } catch (err) {
       console.error("workbench approval response failed", err);
