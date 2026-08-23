@@ -9,20 +9,14 @@ import WorkflowTimeline from "./WorkflowTimeline.jsx";
 import ArtifactViewer from "./ArtifactViewer.jsx";
 import WorkspaceTree from "./WorkspaceTree.jsx";
 import ChangeDiff from "./ChangeDiff.jsx";
+import { usePaperRewriteArtifacts, fetchChapterContent, paperPdfUrl } from "../hooks/usePaperRewriteArtifacts.js";
 
 // ResultPanel — right-side dock (spec RESULT_PANEL_SPEC.md).
-// Mode 1 (default): Tabs 概览 / 产物 / 文件 / 变更.
+// Mode 1 (default): Tabs 概览 / 产物 / 文件 / 变更 (+ 论文产物, 按需显示).
 // Mode 2 (workflow): When selectedWorkflowId is set, the entire panel shows
 //   the workflow UI (ContractForm + Workbench + Timeline) — keeping the main
 //   chat area clean.
 // Mode 3 (external preview): When externalPreviewUrl is set, shows a webview.
-
-const TABS = [
-  { id: "overview", label: "概览" },
-  { id: "artifacts", label: "产物" },
-  { id: "files", label: "文件" },
-  { id: "changes", label: "变更" },
-];
 
 const TEXT_EXTS = new Set([
   ".txt", ".md", ".markdown", ".json", ".js", ".jsx", ".ts", ".tsx", ".mjs",
@@ -155,10 +149,26 @@ export default function ResultPanel({
   // ── Detach handler — owned by App so it can clear the in-window state
   //    (selectedWorkflowId, etc.) right after the new window opens. ──
   onDetachResultPanel,
+  // ── 论文重写 dashboard 产物（由 App 用 usePaperRewriteArtifacts 拉取后传入，
+  //    单例轮询，避免 detach 窗口重复轮询）。为空数组/undefined 时隐藏该 tab。 ──
+  paperRuns,
 }) {
   const [activeTab, setActiveTab] = useState("overview");
   const [maximized, setMaximized] = useState(false);
   const [root, setRoot] = useState("home"); // home | project
+
+  // 论文产物 tab：仅当 paperRuns 有数据时显示（按需）。保持其它 tab 顺序不变。
+  const showPaperTab = Array.isArray(paperRuns) && paperRuns.length > 0;
+  const tabs = useMemo(() => {
+    const base = [
+      { id: "overview", label: "概览" },
+      { id: "artifacts", label: "产物" },
+      { id: "files", label: "文件" },
+      { id: "changes", label: "变更" },
+    ];
+    if (showPaperTab) base.push({ id: "paper", label: "论文产物" });
+    return base;
+  }, [showPaperTab]);
 
   // Handle tab switch via externalPreviewUrl protocol (e.g. "tab:artifacts" from chat chip click)
   useEffect(() => {
@@ -393,6 +403,50 @@ export default function ResultPanel({
   const selectedChangeObj = changes.find((c) => c.path === selectedChange);
   const changeCount = changes.length;
 
+  // ── 论文产物 tab 状态 ──
+  const [paperSelRun, setPaperSelRun] = useState(null);   // 当前查看的 run_id
+  const [paperSelChapter, setPaperSelChapter] = useState(null); // 当前查看的章节 id
+  const [paperChapterContent, setPaperChapterContent] = useState(null); // {content, chars}
+  const [paperChapterLoading, setPaperChapterLoading] = useState(false);
+  const [paperChapterError, setPaperChapterError] = useState(null);
+
+  // 当 runs 列表变化时，确保 paperSelRun 仍有效（首条默认选中）
+  useEffect(() => {
+    if (!showPaperTab) return;
+    const ids = paperRuns.map((r) => r.run_id);
+    if (!paperSelRun || !ids.includes(paperSelRun)) {
+      setPaperSelRun(paperRuns[0]?.run_id || null);
+      setPaperSelChapter(null);
+      setPaperChapterContent(null);
+    }
+  }, [showPaperTab, paperRuns, paperSelRun]);
+
+  const paperSelRunObj = paperRuns?.find((r) => r.run_id === paperSelRun) || null;
+
+  const openPaperChapter = useCallback(async (runId, chapterId) => {
+    setPaperSelChapter(chapterId);
+    setPaperChapterLoading(true);
+    setPaperChapterError(null);
+    setPaperChapterContent(null);
+    try {
+      const data = await fetchChapterContent(runId, chapterId);
+      setPaperChapterContent(data);
+    } catch (err) {
+      setPaperChapterError(String(err && err.message ? err.message : err));
+    } finally {
+      setPaperChapterLoading(false);
+    }
+  }, []);
+
+  // 预览：PDF 用 abcyesno-local 不行（渲染进程无绝对路径），改走 HTTP 内嵌 webview；
+  // 章节文本直接用已加载的 paperChapterContent。下载/外开走 openExternal(HTTP 端点)。
+  const paperPreviewUrl = useMemo(() => {
+    if (activeTab === "paper" && paperSelRun && paperSelChapter === "__pdf__") {
+      return paperPdfUrl(paperSelRun);
+    }
+    return "";
+  }, [activeTab, paperSelRun, paperSelChapter]);
+
   // Body content renderer: external URL → workflow → tabs
   const renderBody = () => {
     // Priority 1: external URL preview (e.g. abcyesno.cn from Bach click).
@@ -565,6 +619,74 @@ export default function ResultPanel({
             )}
           </div>
         )}
+
+        {/* T5 论文产物（paper_rewriter_agent dashboard 产物，按需显示） */}
+        {activeTab === "paper" && (
+          <div className="result-paper">
+            {!paperRuns || paperRuns.length === 0 ? (
+              <div className="result-empty">尚未检测到论文重写产物。<br />在「论文重写」工作台运行任务后，产物会自动出现在这里。</div>
+            ) : (
+              <div className="result-paper-layout">
+                {/* 左：run 列表 + 章节列表 */}
+                <div className="result-paper-side">
+                  {paperRuns.map((r) => (
+                    <div key={r.run_id} className={`result-paper-run ${paperSelRun === r.run_id ? "active" : ""}`} onClick={() => { setPaperSelRun(r.run_id); setPaperSelChapter(null); setPaperChapterContent(null); }}>
+                      <div className="result-paper-run-title">{r.paper_title || r.run_id}</div>
+                      <div className="result-paper-run-sub">
+                        {r.chapters_written} 章 · {r.total_chars ? `${(r.total_chars / 1000).toFixed(1)}k` : "0"} 字
+                        {r.pdf_ready && <span className="result-paper-pdf-badge">PDF</span>}
+                      </div>
+                    </div>
+                  ))}
+                  {paperSelRunObj && (
+                    <div className="result-paper-chapters">
+                      {paperSelRunObj.pdf_ready && (
+                        <div className={`result-paper-chapter ${paperSelChapter === "__pdf__" ? "active" : ""}`} onClick={() => setPaperSelChapter("__pdf__")}>
+                          <Icon name="file" size={14} /> 整篇 PDF
+                        </div>
+                      )}
+                      {paperSelRunObj.chapters.length === 0 && !paperSelRunObj.pdf_ready && (
+                        <div className="result-paper-chapter-empty">该运行暂无章节/PDF 产物</div>
+                      )}
+                      {paperSelRunObj.chapters.map((ch) => (
+                        <div key={ch.id} className={`result-paper-chapter ${paperSelChapter === ch.id ? "active" : ""}`} onClick={() => openPaperChapter(paperSelRun, ch.id)}>
+                          <Icon name="note" size={14} /> {ch.id}
+                          {ch.chars ? <span className="result-paper-chapter-chars">{(ch.chars / 1000).toFixed(1)}k</span> : null}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* 右：预览 + 操作 */}
+                <div className="result-paper-view">
+                  {!paperSelChapter ? (
+                    <div className="result-empty">选择左侧章节或 PDF 查看</div>
+                  ) : paperSelChapter === "__pdf__" ? (
+                    <webview className="result-webview result-paper-webview" src={paperPreviewUrl} partition="isolated-paper" webpreferences="contextIsolation=true" />
+                  ) : paperChapterLoading ? (
+                    <div className="result-empty">加载章节内容…</div>
+                  ) : paperChapterError ? (
+                    <div className="result-empty">读取失败: {paperChapterError}</div>
+                  ) : (
+                    <pre className="result-paper-content">{paperChapterContent?.content || "（空）"}</pre>
+                  )}
+
+                  {paperSelRun && (
+                    <div className="result-paper-actions">
+                      <button className="result-link" onClick={() => handleOpenExternal(paperPdfUrl(paperSelRun))} title="在系统默认程序中打开/下载 PDF">
+                        <Icon name="file" size={14} /> 下载 PDF
+                      </button>
+                      <button className="result-link" onClick={() => handleOpenExternal(`http://127.0.0.1:8765/?run=${encodeURIComponent(paperSelRun)}`)} title="在 dashboard 网页中打开该运行">
+                        <Icon name="external" size={14} /> 打开 Dashboard
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </>
     );
   };
@@ -590,7 +712,7 @@ export default function ResultPanel({
           </div>
         ) : (
           <div className="result-tabs">
-            {TABS.map((t) => (
+            {tabs.map((t) => (
               <button key={t.id} className={`result-tab ${activeTab === t.id ? "active" : ""}`} onClick={() => { setActiveTab(t.id); if (externalPreviewUrl) onClearExternalPreview?.(); }}>
                 {t.label}
                 {t.id === "artifacts" && artifacts.length > 0 && <span className="result-tab-badge">{artifacts.length}</span>}

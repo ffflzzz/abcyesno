@@ -22,6 +22,7 @@ import appManjuIcon from "./assets/app-manju.png";
 import appPaperIcon from "./assets/app-paper.png";
 import { sanitizeMessageContent } from "./components/MessageThread.jsx";
 import { useAgentStream } from "./hooks/useAgentStream.js";
+import { usePaperRewriteArtifacts } from "./hooks/usePaperRewriteArtifacts.js";
 import { useTaskManager } from "./components/TaskPanel.jsx";
 import { ErrorBoundary } from "./ErrorBoundary.jsx";
 
@@ -833,6 +834,7 @@ function ChatShell({
         onToggleCollapse={onToggleResultPanelCollapse}
         style={!resultPanelCollapsed ? { width: resultPanelWidth, minWidth: resultPanelWidth, flexShrink: 0 } : undefined}
         onDetachResultPanel={onDetachResultPanel}
+        paperRuns={paperRuns}
       />
         </div>
       )}
@@ -897,6 +899,10 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
   const [browserPanelOpen, setBrowserPanelOpen] = useState(false);
   const toggleBrowserPanel = useCallback(() => setBrowserPanelOpen((o) => !o), []);
   const openBrowserPanel = useCallback(() => setBrowserPanelOpen(true), []);
+
+  // 论文重写 dashboard 产物（单例轮询，传给 ResultPanel 的「论文产物」tab）。
+  // 服务未就绪时静默降级，不干扰其它会话。
+  const { runs: paperRuns } = usePaperRewriteArtifacts();
   const [externalPreviewUrl, setExternalPreviewUrl] = useState(null); // URL or "tab:xxx" to switch sidebar tab (e.g. abcyesno.cn / tab:artifacts)
   const [confirmDialog, setConfirmDialog] = useState(null); // { title, message, danger, onConfirm } | null
   const [skills, setSkills] = useState([{ id: "default", name: "通用助手", category: "general" }]);

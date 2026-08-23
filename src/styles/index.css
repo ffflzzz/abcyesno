@@ -2654,6 +2654,27 @@ body {
   background: var(--assistant-bubble) !important;
 }
 
+/* 审批已失效/已结束态：明确告知用户该审批已死、禁止再点「批准」造成静默死锁 */
+.approval-bubble.approval-ended {
+  border: 1px solid rgba(210, 153, 34, 0.55) !important;
+  background: rgba(210, 153, 34, 0.06) !important;
+}
+.approval-bubble.approval-ended .approval-bubble-title {
+  color: #d29922;
+}
+.approval-btn.dismiss {
+  background: transparent;
+  border: 1px solid rgba(210, 153, 34, 0.55);
+  color: #d29922;
+  border-radius: 8px;
+  padding: 6px 16px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.approval-btn.dismiss:hover {
+  background: rgba(210, 153, 34, 0.12);
+}
+
 .approval-bubble-header {
   display: flex;
   align-items: center;
@@ -5805,6 +5826,54 @@ body[--resizing="1"] .result-panel-resize-handle::before {
 .artifact-row-sub { font-size: 10px; color: var(--muted); }
 .result-artifact-view { flex: 1; min-width: 0; overflow: auto; padding: 10px; }
 
+/* Paper rewrite artifacts (论文产物 tab) */
+.result-paper { flex: 1; min-height: 0; display: flex; }
+.result-paper-layout { display: flex; width: 100%; min-height: 0; }
+.result-paper-side {
+  width: 170px; min-width: 170px; border-right: 1px solid var(--border);
+  overflow-y: auto; padding: 6px;
+}
+.result-paper-run {
+  padding: 8px 9px; border-radius: 7px; cursor: pointer; margin-bottom: 3px;
+}
+.result-paper-run:hover { background: var(--bg); }
+.result-paper-run.active { background: var(--bg); outline: 1px solid var(--accent); }
+.result-paper-run-title {
+  font-size: 12px; color: var(--text); font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.result-paper-run-sub { font-size: 10px; color: var(--muted); margin-top: 2px; display: flex; align-items: center; gap: 6px; }
+.result-paper-pdf-badge {
+  font-size: 9px; padding: 1px 5px; border-radius: 5px;
+  background: var(--accent); color: #fff; font-weight: 600;
+}
+.result-paper-chapters { margin-top: 6px; padding-left: 4px; }
+.result-paper-chapter {
+  display: flex; align-items: center; gap: 6px; padding: 6px 7px;
+  border-radius: 6px; cursor: pointer; font-size: 12px; color: var(--text);
+  margin-bottom: 2px;
+}
+.result-paper-chapter:hover { background: var(--bg); }
+.result-paper-chapter.active { background: var(--bg); outline: 1px solid var(--accent); }
+.result-paper-chapter-chars { margin-left: auto; font-size: 10px; color: var(--muted); }
+.result-paper-chapter-empty { font-size: 11px; color: var(--muted); padding: 6px 7px; }
+.result-paper-view {
+  flex: 1; min-width: 0; display: flex; flex-direction: column;
+  overflow: hidden; padding: 10px;
+}
+.result-paper-webview { flex: 1; min-height: 300px; }
+.result-paper-content {
+  flex: 1; min-height: 0; overflow: auto; font-size: 12px; line-height: 1.7;
+  white-space: pre-wrap; word-break: break-word;
+  font-family: ui-monospace, Consolas, monospace;
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: 8px; padding: 12px; margin: 0;
+}
+.result-paper-actions {
+  display: flex; gap: 14px; padding-top: 10px; flex-shrink: 0;
+}
+.result-paper-actions .result-link { display: inline-flex; align-items: center; gap: 4px; }
+
 /* Artifact viewer */
 .artifact-full-img, .artifact-full-video, .artifact-full-audio {
   max-width: 100%; border-radius: 8px; display: block;
@@ -6217,6 +6286,44 @@ body[--resizing="1"] .result-panel-resize-handle::before {
 }
 .task-clear-btn:hover { color: var(--error-text); border-color: var(--error); }
 
+/* Header "clear all" — same ghost style as .task-clear-btn (it previously had
+   NO css at all and fell back to the browser's default light-gray button,
+   which broke the global dark-accent look). */
+.task-clear-all-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 3px;
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+.task-clear-all-btn:hover { color: var(--error-text); border-color: var(--error); background: rgba(218,54,51,0.08); }
+
+/* Per-card remove (X) button — hidden until card hover so it stays quiet. */
+.task-card-remove {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border-radius: 4px;
+  background: none;
+  border: none;
+  color: var(--muted);
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity 0.12s ease, color 0.12s ease, background 0.12s ease;
+}
+.task-card:hover .task-card-remove { opacity: 1; }
+.task-card-remove:hover { color: var(--error-text); background: rgba(218,54,51,0.12); }
+
 /* Task card */
 .task-card {
   padding: 8px 10px;
@@ -6269,6 +6376,7 @@ body[--resizing="1"] .result-panel-resize-handle::before {
 .task-status-label.task-failed { background: rgba(218,54,51,0.15); color: var(--error-text); }
 .task-status-label.task-stopped { background: var(--panel-2); color: var(--muted); }
 .task-status-label.task-pending { background: var(--panel-2); color: var(--muted); }
+.task-status-label.task-interrupted { background: rgba(210,153,34,0.15); color: #d29922; }
 
 .task-artifacts-hint {
   font-size: 10px;
@@ -6336,6 +6444,7 @@ body[--resizing="1"] .result-panel-resize-handle::before {
   font-weight: 600;
 }
 .task-status-badge.task-running { background: rgba(230,237,243,0.15); color: var(--accent); }
+.task-status-badge.task-interrupted { background: rgba(210,153,34,0.15); color: #d29922; }
 .task-status-badge.task-completed { background: rgba(35,134,54,0.15); color: #3fb950; }
 .task-status-badge.task-failed { background: rgba(218,54,51,0.15); color: var(--error-text); }
 
@@ -7548,6 +7657,7 @@ body[--resizing="1"] .result-panel-resize-handle::before {
 .agent-run-monitor.task-completed { border-color: var(--accent-2); }
 .agent-run-monitor.task-failed { border-color: #ef4444; }
 .agent-run-monitor.task-stopped { border-color: #6b7280; }
+.agent-run-monitor.task-interrupted { border-color: rgba(210,153,34,0.6); }
 
 .arm-header {
   display: flex;
@@ -7563,6 +7673,7 @@ body[--resizing="1"] .result-panel-resize-handle::before {
 .arm-status-icon.task-failed { color: #ef4444; }
 .arm-status-icon.task-stopped { color: #6b7280; }
 .arm-status-icon.task-pending { color: #eab308; }
+.arm-status-icon.task-interrupted { color: #d29922; }
 
 .arm-title { display: flex; flex-direction: column; line-height: 1.2; min-width: 0; }
 .arm-name { font-weight: 600; color: var(--text, #e6edf3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 180px; }
@@ -7572,6 +7683,7 @@ body[--resizing="1"] .result-panel-resize-handle::before {
 .arm-status.task-failed { color: #f87171; }
 .arm-status.task-stopped { color: #9ca3af; }
 .arm-status.task-pending { color: #fbbf24; }
+.arm-status.task-interrupted { color: #d29922; }
 
 .arm-current { flex: 1; min-width: 0; padding: 0 6px; }
 .arm-generating { display: inline-flex; align-items: center; gap: 6px; color: #93c5fd; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
