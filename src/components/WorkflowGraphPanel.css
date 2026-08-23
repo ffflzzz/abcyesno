@@ -1,38 +1,32 @@
 /* WorkflowGraphPanel 自带样式 — 让「运行追踪」面板在任意挂载点都正确渲染。
    StudioWorkbench.css 里也定义了同一批 .wf-* 类，但那些规则依赖 .st-workbench
-   作用域内的 --st-* 令牌；本面板被嵌入主 agent 聊天流（SubagentPanel）时拿不到
-   这些变量，SVG fill 会回退成默认黑色（黑底黑字）。这里用
-   var(--st-x, <全局令牌>) 的写法：在 Studio 内解析到 --st-*（外观与原来完全
-   一致），在 Studio 外回退到 app 级语义令牌，两种主题下都可读。 */
+   作用域内的 --st-* 令牌；且打包后 StudioWorkbench.css 可能排在本文件之后，
+   同特异性会覆盖这里。因此所有选择器都带 `.wf-panel` 前缀提高特异性（本文件
+   必胜），并全部使用 var(--st-x, <全局令牌>) 兜底：Studio 内解析到 --st-*
+   （外观与原来完全一致），Studio 外回退到 app 级语义令牌，两种主题下都可读。 */
 
-.wf-panel {
-  display: flex;
-  flex-direction: column;
-  border-bottom: 1px solid var(--st-line, var(--border));
-  background: var(--st-surface, var(--panel));
-}
-.wf-head {
+.wf-panel .wf-head {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 10px 14px;
   border-bottom: 1px solid var(--st-line, var(--border));
 }
-.wf-title {
+.wf-panel .wf-title {
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 1.2px;
   text-transform: uppercase;
   color: var(--st-muted, var(--muted));
 }
-.wf-ep {
+.wf-panel .wf-ep {
   font-size: 11px;
   color: var(--st-accent, var(--accent));
   background: var(--st-soft, color-mix(in srgb, var(--accent) 12%, transparent));
   padding: 2px 8px;
   border-radius: 999px;
 }
-.wf-live {
+.wf-panel .wf-live {
   font-size: 10px;
   font-weight: 700;
   letter-spacing: .5px;
@@ -40,12 +34,12 @@
   animation: wf-blink 1.2s ease-in-out infinite;
 }
 @keyframes wf-blink { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
-.wf-zoom {
+.wf-panel .wf-zoom {
   margin-left: auto;
   display: flex;
   gap: 4px;
 }
-.wf-zoom button {
+.wf-panel .wf-zoom button {
   width: 24px;
   height: 24px;
   border: 1px solid var(--st-line, var(--border));
@@ -60,9 +54,9 @@
   justify-content: center;
   transition: background .15s, border-color .15s;
 }
-.wf-zoom button:hover { background: var(--st-soft, rgba(139, 148, 158, .12)); border-color: var(--st-accent, var(--accent)); }
+.wf-panel .wf-zoom button:hover { background: var(--st-soft, rgba(139, 148, 158, .12)); border-color: var(--st-accent, var(--accent)); }
 
-.wf-canvas {
+.wf-panel .wf-canvas {
   position: relative;
   height: 380px;            /* 固定可见区，让 SVG overflow 与滚动一致 */
   max-height: 60vh;         /* 大屏也别占满，让位给 TaskCenter */
@@ -74,8 +68,8 @@
   touch-action: none;
 }
 /* SVG 默认 overflow:hidden 会把 <g transform> 平移/缩放后的内容裁掉。 */
-.wf-svg { display: block; min-width: 100%; overflow: visible; }
-.wf-empty {
+.wf-panel .wf-svg { display: block; min-width: 100%; overflow: visible; }
+.wf-panel .wf-empty {
   position: absolute;
   inset: 0;
   display: flex;
@@ -86,14 +80,15 @@
 }
 
 /* edges */
-.wf-edge { stroke: var(--st-line, var(--border)); stroke-width: 2; transition: stroke .3s; }
-.wf-edge-active { stroke: var(--st-accent, var(--accent)); stroke-width: 2.4; stroke-dasharray: 6 5; animation: wf-flow 1s linear infinite; }
+.wf-panel .wf-edge { stroke: var(--st-line, var(--border)); stroke-width: 2; transition: stroke .3s; }
+.wf-panel .wf-edge-active { stroke: var(--st-accent, var(--accent)); stroke-width: 2.4; stroke-dasharray: 6 5; animation: wf-flow 1s linear infinite; }
 @keyframes wf-flow { to { stroke-dashoffset: -22; } }
-.wf-edge-loop { stroke: color-mix(in srgb, var(--success) 45%, var(--st-line, var(--border))); stroke-dasharray: 2 4; }
+.wf-panel .wf-edge-loop { stroke: color-mix(in srgb, var(--success) 45%, var(--st-line, var(--border))); stroke-dasharray: 2 4; }
 
-/* nodes — 关键修复点：fill 必须有兜底，否则在 --st-* 未定义的挂载点会变成默认黑 */
-.wf-node-box { fill: var(--st-surface, var(--panel)); stroke: var(--st-line, var(--border)); stroke-width: 1.4; transition: fill .3s, stroke .3s; }
-.wf-node-label {
+/* nodes — 关键修复点：fill 必须有兜底，否则在 --st-* 未定义的挂载点会变成默认黑。
+   状态类（.wf-node-*）挂在 <g> 上，特异性 0-3-0，必须压过基础框的 0-2-0。 */
+.wf-panel .wf-node-box { fill: var(--st-surface, var(--panel)); stroke: var(--st-line, var(--border)); stroke-width: 1.4; transition: fill .3s, stroke .3s; }
+.wf-panel .wf-node-label {
   fill: var(--st-text, var(--text, #e6edf3));
   font-size: 13px;
   font-weight: 600;
@@ -101,14 +96,14 @@
   pointer-events: none;
   dominant-baseline: middle;
 }
-.wf-node-accent { pointer-events: none; opacity: .9; }
-.wf-node-check { fill: var(--success); font-size: 13px; font-weight: 700; text-anchor: middle; }
-.wf-node-dot { fill: var(--st-accent, var(--accent)); }
+.wf-panel .wf-node-accent { pointer-events: none; opacity: .9; }
+.wf-panel .wf-node-check { fill: var(--success); font-size: 13px; font-weight: 700; text-anchor: middle; }
+.wf-panel .wf-node-dot { fill: var(--st-accent, var(--accent)); }
 
-.wf-node-done .wf-node-box { fill: color-mix(in srgb, var(--success) 14%, var(--st-surface, var(--panel))); stroke: var(--success); }
-.wf-node-pending .wf-node-box { fill: color-mix(in srgb, var(--warning) 16%, var(--st-surface, var(--panel))); stroke: var(--warning); animation: wf-blink 1.1s ease-in-out infinite; }
-.wf-node-error .wf-node-box { fill: color-mix(in srgb, var(--error) 14%, var(--st-surface, var(--panel))); stroke: var(--error); }
-.wf-node-running .wf-node-box {
+.wf-panel .wf-node-done .wf-node-box { fill: color-mix(in srgb, var(--success) 14%, var(--st-surface, var(--panel))); stroke: var(--success); }
+.wf-panel .wf-node-pending .wf-node-box { fill: color-mix(in srgb, var(--warning) 16%, var(--st-surface, var(--panel))); stroke: var(--warning); animation: wf-blink 1.1s ease-in-out infinite; }
+.wf-panel .wf-node-error .wf-node-box { fill: color-mix(in srgb, var(--error) 14%, var(--st-surface, var(--panel))); stroke: var(--error); }
+.wf-panel .wf-node-running .wf-node-box {
   fill: var(--st-soft, color-mix(in srgb, var(--accent) 12%, transparent));
   stroke: var(--st-accent, var(--accent));
   stroke-width: 2;
@@ -119,13 +114,13 @@
   50% { stroke-width: 3; filter: drop-shadow(0 0 7px var(--st-soft-2, color-mix(in srgb, var(--accent) 20%, transparent))); }
 }
 
-.wf-panel-skeleton { opacity: .85; }
-.wf-panel-skeleton .wf-canvas { cursor: default; }
+.wf-panel.wf-panel-skeleton { opacity: .85; }
+.wf-panel.wf-panel-skeleton .wf-canvas { cursor: default; }
 
 /* respect reduced-motion: drop the pulse / blink, keep a static accent ring */
 @media (prefers-reduced-motion: reduce) {
-  .wf-node-running .wf-node-box { animation: none; stroke-width: 3; }
-  .wf-live, .wf-node-pending .wf-node-box, .wf-edge-active { animation: none; }
+  .wf-panel .wf-node-running .wf-node-box { animation: none; stroke-width: 3; }
+  .wf-panel .wf-live, .wf-panel .wf-node-pending .wf-node-box, .wf-panel .wf-edge-active { animation: none; }
 }
 
 /* 嵌入聊天流的紧凑变体：SubagentPanel 的 .subagent-graph 只有 260px 高，
