@@ -118,6 +118,11 @@ class PaperRewriterDashboardRunner {
       SERVER_PORT: String(this.port),
       // Make the dashboard package importable as top-level `agent` / `pipeline`.
       PYTHONPATH: DASHBOARD_DIR + (process.env.PYTHONPATH ? path.delimiter + process.env.PYTHONPATH : ''),
+      // Windows console defaults to GBK (cp936); agent_app.py's __main__ prints
+      // an emoji banner ("🚀 论文重写...") which raises UnicodeEncodeError under
+      // GBK and aborts the process BEFORE uvicorn.run — leaving the PDF endpoint
+      // 404 on a clean restart. Force UTF-8 stdio so the banner can't crash it.
+      PYTHONIOENCODING: 'utf-8',
     };
 
     const logFile = path.join(logDir, 'paper-rewriter-dashboard.log');
