@@ -1329,8 +1329,13 @@ ipcMain.handle('download-url', async (_event, { url, filename, proxy } = {}) => 
     catch { return 'download'; }
   })();
 
-  const win = BrowserWindow.getFocusedWindow() || (BrowserWindow.getAllWindows()[0]);
-  const save = await dialog.showSaveDialog(win || undefined, {
+  // Anchor the dialog to the window that actually sent the IPC request
+  // (works for both the in-main-window ResultPanel and the detached panel).
+  // Using _event.sender is far more reliable than getFocusedWindow(), which
+  // can return null or a hidden launcher/splash window when the OS focus state
+  // is ambiguous — that case made the save dialog silently not appear.
+  const senderWin = _event.sender ? BrowserWindow.fromWebContents(_event.sender) : null;
+  const save = await dialog.showSaveDialog(senderWin || undefined, {
     defaultPath: suggested,
     title: '保存文件',
   });

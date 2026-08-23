@@ -454,10 +454,18 @@ export default function ResultPanel({
     if (!paperSelRun) return;
     const url = paperPdfUrl(paperSelRun);
     const filename = `${paperSelRun}.pdf`;
-    setPaperDownload({ status: "loading", msg: "正在准备下载…" });
+    setPaperDownload({ status: "loading", msg: "请在弹出的保存框中选择路径…" });
+    // 防静默：若主进程 30s 内无响应（极端情况下对话框未弹出），给出明确提示。
+    let timedOut = false;
+    const guard = setTimeout(() => {
+      timedOut = true;
+      setPaperDownload({ status: "error", msg: "下载无响应，请重试或检查弹窗是否被遮挡" });
+    }, 30000);
     try {
       if (!window.hermes?.downloadUrl) throw new Error("download 接口不可用");
       const res = await window.hermes.downloadUrl({ url, filename });
+      clearTimeout(guard);
+      if (timedOut) return; // 已超时提示，忽略迟到的响应
       if (res?.canceled) {
         setPaperDownload({ status: "idle", msg: "" });
         return;
@@ -468,6 +476,8 @@ export default function ResultPanel({
         setPaperDownload({ status: "error", msg: res?.error || "下载失败" });
       }
     } catch (err) {
+      clearTimeout(guard);
+      if (timedOut) return;
       setPaperDownload({ status: "error", msg: err && err.message ? err.message : String(err) });
     }
   }, [paperSelRun]);
