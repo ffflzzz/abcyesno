@@ -78,6 +78,7 @@ const storage = new Storage(userDataDir);
 let mainWindow = null;
 let hermesRunner = null;
 let paperDashboardRunner = null;
+let wechatBridgeRunner = null;
 let gatewayClient = null;
 let aguiServer = null;
 let aguiPort = 0;
@@ -482,6 +483,29 @@ async function doStartBackend() {
     log('paper-dashboard', `init failed (non-fatal): ${err.message}`);
   }
 
+  // WeChat bridge (vendored wechat-claude-code): in-process daemon bridging
+  // personal WeChat <-> the default chat agent via agui-server SSE.
+  // Fire-and-forget like paper-dashboard; never blocks startup. Only auto-
+  // connects if a WeChat account was previously bound — otherwise it idles
+  // in 'idle' state until the user binds from Settings -> 微信绑定.
+  try {
+    wechatBridgeRunner = createWechatBridgeRunner({
+      onStatus: (payload) => {
+        log('wechat-bridge', `status: ${payload.state}${payload.detail ? ` (${payload.detail})` : ''}`);
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('wechat-status', payload);
+        }
+      },
+    });
+    wechatBridgeRunner.start().then((r) => {
+      if (!r.ok) log('wechat-bridge', `failed to start (non-fatal): ${r.error}`);
+    }).catch((err) => {
+      log('wechat-bridge', `start threw (non-fatal): ${err.message}`);
+    });
+  } catch (err) {
+    log('wechat-bridge', `init failed (non-fatal): ${err.message}`);
+  }
+
   const wsUrl = `ws://127.0.0.1:${hermesRunner.getPort()}/api/ws`;
   gatewayClient = new GatewayClient({ url: wsUrl, token: hermesRunner.getSessionToken() });
 
@@ -650,6 +674,7 @@ app.on('window-all-closed', () => {
   }
   if (hermesRunner) hermesRunner.stop();
   if (paperDashboardRunner) paperDashboardRunner.stop();
+  if (wechatBridgeRunner) wechatBridgeRunner.stop();
   stopBrowserDriver();
   if (process.platform !== 'darwin') {
     app.quit();
@@ -667,6 +692,7 @@ app.on('before-quit', () => {
   }
   if (hermesRunner) hermesRunner.stop();
   if (paperDashboardRunner) paperDashboardRunner.stop();
+  if (wechatBridgeRunner) wechatBridgeRunner.stop();
   stopBrowserDriver();
   globalShortcut.unregisterAll();
 });
@@ -738,6 +764,23 @@ ipcMain.handle('get-agui-port', () => {
 // Studio workbench: proxy Agnes calls through IPC (avoids renderer fetch/CSP issues)
 const agnes = require('./backend/agnes');
 const characterLibrary = require('./backend/character_library');
+
+// WeChat bridge IPC — same {action, params} dispatch pattern as studio-call.
+ipcMain.handle('wechat-call', async (_event, payload) => {
+  if (!wechatBridgeRunner) {
+    return { ok: false, error: 'wechat bridge not initialized' };
+  }
+  try {
+    const action = (payload && payload.action) || '';
+    const params = (payload && payload.params) || {};
+    const result = await wechatBridgeRunner.call(action, params);
+    return { ok: true, result };
+  } catch (err) {
+    log('wechat-bridge', `call failed: ${err.message}`);
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+});
+
 // In-flight guard: card ids currently being generated (see character_library.generate).
 let characterLibGenerating = null;
 ipcMain.handle('studio-call', async (event, { action, params }) => {

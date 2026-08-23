@@ -46,13 +46,23 @@
     "asarUnpack": [],
     "asar": false,
     "extraResources": [
-      { "from": "build/playwright-browsers", "to": "playwright-browsers" },
-      { "from": "build/runtime/python", "to": "runtime/python" },
-      { "from": "bin", "to": "app/bin" }
+      {
+        "from": "build/playwright-browsers",
+        "to": "playwright-browsers"
+      },
+      {
+        "from": "build/runtime/python",
+        "to": "runtime/python"
+      },
+      {
+        "from": "bin",
+        "to": "app/bin"
+      }
     ],
     "files": [
       "dist/**/*",
       "electron/**/*",
+      "!electron/backend/wechat_bridge/src/tests/**",
       "hermes-fork/**/*",
       "!hermes-fork/website/**",
       "package.json"
@@ -69,6 +79,7 @@
     "cors": "^2.8.5",
     "express": "^4.21.0",
     "lucide-react": "^1.26.0",
+    "qrcode": "^1.5.4",
     "react-markdown": "10.0.0",
     "react-virtuoso": "^4.18.11",
     "remark-gfm": "4.0.1",

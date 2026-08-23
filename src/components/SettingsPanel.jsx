@@ -7,7 +7,7 @@ function maskKey(key) {
   return `${key.slice(0, 4)}...${key.slice(-4)}`;
 }
 
-export default function SettingsPanel({ apiKey = "", hasApiKey = false, model = "", theme = "dark", onThemeChange, onEditApiKey, onClose, version = "" }) {
+export default function SettingsPanel({ apiKey = "", hasApiKey = false, model = "", theme = "dark", onThemeChange, onEditApiKey, onClose, version = "", onOpenWechatBind }) {
   const [openDirStatus, setOpenDirStatus] = useState("");
 
   useEffect(() => {
@@ -127,6 +127,20 @@ export default function SettingsPanel({ apiKey = "", hasApiKey = false, model = 
             </div>
           </div>
           {openDirStatus && <div className="settings-status-error">{openDirStatus}</div>}
+        </div>
+
+        {/* 微信绑定 */}
+        <div className="settings-group">
+          <div className="settings-group-title">微信</div>
+          <div className="settings-item">
+            <div className="settings-item-text">
+              <div className="settings-item-name">微信桥接</div>
+              <div className="settings-item-desc">把个人微信接入 Abcyesno，在微信里直接发消息调用默认对话。</div>
+            </div>
+            <div className="settings-item-control">
+              <button className="ghost" onClick={onOpenWechatBind}>绑定 / 管理</button>
+            </div>
+          </div>
         </div>
 
         {/* 高级（原原生菜单栏的功能迁移至此） */}

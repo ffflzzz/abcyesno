@@ -12,6 +12,13 @@ function getStatusDotClass(backendStatus) {
   return "online";
 }
 
+function getWechatDotClass(ws) {
+  if (!ws) return "offline";
+  if (ws.state === "connected") return "online";
+  if (["awaiting_qr", "qr_expired", "connecting", "reconnecting"].includes(ws.state)) return "connecting";
+  return "offline";
+}
+
 function getInitials(name) {
   if (!name) return "?";
   return name.slice(0, 2).toUpperCase();
@@ -114,6 +121,8 @@ export default function Sidebar({
   onToggle,
   onOpenSkills,
   onOpenSettings,
+  onOpenWechatBind,
+  wechatStatus = { state: "idle", bound: false },
   backendStatus,
   // ── Task panel props ──
   taskManager,           // { tasks, selectedTaskId, onSelectTask, createTask, stopTask, clearCompleted, clearAll }
@@ -341,6 +350,10 @@ export default function Sidebar({
         {/* Footer */}
         <div className="sidebar-footer">
           <button className="footer-btn" title="技能" onClick={onOpenSkills}><Icon name="skills" size={14} /> 技能</button>
+          <button className={`footer-btn ${getWechatDotClass(wechatStatus)}`} title="微信绑定" onClick={onOpenWechatBind}>
+            <span className={`status-dot ${getWechatDotClass(wechatStatus)}`} />
+            <Icon name="wechat" size={14} /> 微信
+          </button>
           <button className="footer-btn" title="设置" onClick={onOpenSettings}><Icon name="settings" size={14} /> 设置</button>
         </div>
 

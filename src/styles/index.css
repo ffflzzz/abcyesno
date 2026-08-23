@@ -3645,6 +3645,95 @@ body {
   flex-shrink: 0;
 }
 
+/* ── WeChat bind modal ── */
+.wx-status-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+  font-size: 13px;
+  color: var(--text);
+}
+.wx-status-label {
+  font-weight: 500;
+}
+.wx-account {
+  margin-left: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.wx-qr-block {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  margin: 8px 0 14px;
+}
+.wx-qr {
+  width: 220px;
+  height: 220px;
+  object-fit: contain;
+  border-radius: 8px;
+  background: #fff;
+  padding: 8px;
+  border: 1px solid var(--border);
+}
+.wx-qr-placeholder {
+  width: 220px;
+  height: 220px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+}
+.wx-bound-block {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 8px 0 14px;
+}
+.wx-row {
+  display: flex;
+  gap: 8px;
+}
+.wx-row input {
+  flex: 1;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 13px;
+}
+.wx-row input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.wx-test-result {
+  font-size: 12px;
+  color: var(--success);
+}
+.wx-logs-toggle {
+  align-self: flex-start;
+}
+.wx-logs {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--muted);
+  max-height: 180px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
 /* Segmented theme control (横排，替代竖排 radio) */
 .settings-seg {
   display: inline-flex;

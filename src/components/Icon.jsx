@@ -74,6 +74,7 @@ import {
   AppWindow,       // app-window / "move tab to new window"
   Maximize2,       // maximize-2 (detach)
   Home,            // home / launcher
+  MessageCircle,   // wechat bridge
 } from "lucide-react";
 
 // Single source of truth: name -> Lucide component.
@@ -174,6 +175,8 @@ const MAP = {
   "maximize-2": Maximize2,
   home: Home,
   launcher: Home,
+  wechat: MessageCircle,
+  "message-circle": MessageCircle,
   // neutral fallback for unknown names
   default: CircleDot,
 };

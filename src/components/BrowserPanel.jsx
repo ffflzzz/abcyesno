@@ -308,6 +308,7 @@ export default function BrowserPanel({ progress = [], initialUrl = "", fullscree
               src={initialUrl || marker}
               partition={partition}
               webpreferences="contextIsolation=true"
+              allowpopups
             />
             {showHint && (
               <div className="bp-hint">

@@ -13,6 +13,7 @@ import StudioWorkbench from "./workbenches/StudioWorkbench.jsx";
 import BrowserPanel from "./components/BrowserPanel.jsx";
 import ConfirmModal from "./components/ConfirmModal.jsx";
 import BlockRequestDialog from "./components/BlockRequestDialog.jsx";
+import WechatBindModal from "./components/WechatBindModal.jsx";
 import { initContract, listManifests } from "./contract/registry.js";
 import { launcherApps } from "./contract/manifests.generated.js";
 import { subscribeContractEvents } from "./contract/eventBus.js";
@@ -171,6 +172,9 @@ function ChatShell({
   onOpenBrowserPanel = () => {},
   onDetachResultPanel,
   studioEntry = false,
+  paperRuns,
+  onOpenWechatBind = () => {},
+  wechatStatus = { state: "idle", bound: false },
 }) {
   // Keep a live ref to the session list so the settle callback (which is
   // identity-stable by design) can look up titles without going stale.
@@ -709,6 +713,8 @@ function ChatShell({
         onToggle={() => setSidebarOpen((o) => !o)}
         onOpenSkills={onToggleSkills}
         onOpenSettings={() => setShowSettings(true)}
+        onOpenWechatBind={onOpenWechatBind}
+        wechatStatus={wechatStatus}
         backendStatus={backendStatus}
         taskManager={taskManager}
         sidebarTab={sidebarTab}
@@ -879,6 +885,8 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
   const [apiKeySet, setApiKeySet] = useState(false);
   const [showKeyModal, setShowKeyModal] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showWechatBind, setShowWechatBind] = useState(false);
+  const [wechatStatus, setWechatStatus] = useState({ state: "idle", bound: false });
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showSkills, setShowSkills] = useState(false);
   const [showMarket, setShowMarket] = useState(false);
@@ -1269,6 +1277,16 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
     };
     hermes.on("gateway-status", onGatewayStatus);
 
+    // WeChat bridge status (bound / online / error) — drives the sidebar dot.
+    const onWechatStatus = (payload) => {
+      setWechatStatus({
+        state: payload?.state || "idle",
+        bound: !!payload?.bound,
+        accountMasked: payload?.accountMasked || "",
+      });
+    };
+    if (hermes.onWechatStatus) hermes.onWechatStatus(onWechatStatus);
+
     hermes.getStatus().then((status) => {
       // Only downgrade if we started as not-ready; never flip from ready→not-ready
       // after Bootstrap has already confirmed the backend is up (aguiPort != null).
@@ -1327,6 +1345,7 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
       hermes.off("terminal-read-request", onTerminalReadRequest);
       hermes.off("clarify-request", onClarifyRequest);
       hermes.off("gateway-status", onGatewayStatus);
+      if (hermes.offWechatStatus) hermes.offWechatStatus(onWechatStatus);
       unsubContract && unsubContract();
     };
   }, [hermes]);
@@ -1588,9 +1607,13 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
             setShowSettings(false);
             setShowKeyModal(true);
           }}
+          onOpenWechatBind={() => setShowWechatBind(true)}
           onClose={() => setShowSettings(false)}
           version={version}
         />
+      )}
+      {showWechatBind && (
+        <WechatBindModal onClose={() => setShowWechatBind(false)} />
       )}
       <ConfirmModal
         open={!!confirmDialog}
@@ -1708,6 +1731,9 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
           onOpenBrowserPanel={openBrowserPanel}
           onDetachResultPanel={handleDetachResultPanel}
           studioEntry={studioEntry}
+          paperRuns={paperRuns}
+          onOpenWechatBind={() => setShowWechatBind(true)}
+          wechatStatus={wechatStatus}
         />
               </div>
               {activeTab.type === "homepage" && (

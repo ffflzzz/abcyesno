@@ -133,4 +133,11 @@ contextBridge.exposeInMainWorld('hermes', {
 
   // Studio workbench: call Agnes image/video generation via IPC (main process)
   studioCall: (action, params) => ipcRenderer.invoke('studio-call', { action, params }),
+
+  // WeChat bridge: {action,params} dispatch to wechat-bridge-runner.
+  // Actions: getStatus/start/stop/restart/getQrCode/refreshQrCode/unbind/getLogs/sendTestMessage
+  wechatCall: (action, params) => ipcRenderer.invoke('wechat-call', { action, params }),
+  // Status pushes from the bridge: {state,bound,accountMasked,detail,ts}
+  onWechatStatus: (cb) => on('wechat-status', cb),
+  offWechatStatus: (cb) => off('wechat-status', cb),
 });
