@@ -3,7 +3,7 @@ import Icon from "../components/Icon.jsx";
 import ApprovalBubble from "../components/ApprovalBubble.jsx";
 import WorkflowGraphPanel from "../components/WorkflowGraphPanel.jsx";
 import CharacterLibraryModal from "../components/CharacterLibraryModal.jsx";
-import { subscribeContractEvents } from "../contract/eventBus.js";
+import { subscribeContractEvents, getContractEvents } from "../contract/eventBus.js";
 import "./StudioWorkbench.css";
 
 // Module-level state cache keyed by workflowId.
@@ -1071,6 +1071,19 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
     return () => timersRef.current.forEach((t) => clearInterval(t));
   }, []);
 
+  // Ref holding the current contract-event handler (assigned every render so
+  // its closure always sees fresh runId/topology), plus a deferred-replay slot:
+  // on remount we must NOT blindly mark a persisted "running" state as
+  // interrupted — that's only true after an app relaunch (backend process
+  // gone). Within the same renderer process, tab switches keep the Hermes
+  // SSE alive and every workflow.* event emitted while this workbench was
+  // unmounted is buffered in the module-level eventBus. The replay effect
+  // (below, runs after the handler ref is assigned) replays that backlog and
+  // resumes live tracking; only an empty buffer means the backend is really
+  // gone → surface the "已中断" banner.
+  const contractHandlerRef = useRef(null);
+  const pendingReplayRef = useRef(null);
+
   // 🎲 Random-fill button: when the user has no idea what to make, this fills
   // the smart-input textarea with a curated standard template (one of several
   // styles/genres tuned to be parser-friendly). The user can then either edit
@@ -1135,17 +1148,14 @@ useEffect(() => {
     if (saved.selectedClip !== undefined) setSelectedClip(saved.selectedClip);
     if (saved.exportJson) setExportJson(saved.exportJson);
     if (typeof saved.asideCollapsed === "boolean") setAsideCollapsed(saved.asideCollapsed);
-    // The backend died on app shutdown — whatever was "running" is dead.
-    // Show the user a clear interruption banner with a "重新跑同流程" button.
+    // A persisted "running" state is ambiguous:
+    //   • App relaunch  → backend process is gone → flip to "interrupted".
+    //   • Tab switch    → the run is still alive; events emitted while this
+    //     workbench was unmounted sit buffered in the module-level eventBus.
+    // Distinguish by buffer content — the actual replay runs in a dedicated
+    // effect AFTER the contract handler ref is assigned (see below).
     if (saved.runState === "running" && saved.runId) {
-      setRunState("interrupted");
-      // Mark every formerly-running task as interrupted so the TaskCenter
-      // does not pretend they are still in flight.
-      setTasks((prev) =>
-        prev.map((t) =>
-          t.status === "run" ? { ...t, status: "interrupted", prog: 0 } : t
-        )
-      );
+      pendingReplayRef.current = saved.runId;
     } else if (saved.runId) {
       setRunId(saved.runId);
       if (saved.runState) setRunState(saved.runState);
@@ -1223,8 +1233,13 @@ useEffect(() => {
 
   // Consume workflow.* events globally; the workflow may run in a dedicated
   // session (via TaskPanel), so session?.id alone is not enough.
+  //
+  // Structure: the handler body is stored in contractHandlerRef (re-assigned
+  // every render → closure always fresh) and a separate subscribe-once effect
+  // forwards live events to it. This lets the remount-replay effect reuse the
+  // exact same logic for buffered events without resubscribing.
   useEffect(() => {
-    const unsub = subscribeContractEvents((rid, ev) => {
+    contractHandlerRef.current = (rid, ev) => {
       if (!ev) return;
       const type = eventType(ev);
 
@@ -1409,9 +1424,53 @@ useEffect(() => {
         });
         setTasks((prev) => prev.map((t) => (t.status === "run" ? { ...t, status: "ok", prog: 100 } : t)));
       }
+    };
+  });
+
+  // Live subscription — forward to the fresh handler; subscribe exactly once.
+  useEffect(() => {
+    const unsub = subscribeContractEvents((rid, ev) => {
+      if (contractHandlerRef.current) contractHandlerRef.current(rid, ev);
     });
     return unsub;
-  }, [runId]);
+  }, []);
+
+  // Remount replay: a persisted "running" run resumes here. If the eventBus
+  // still buffers events for this runId, the same renderer process produced
+  // them → backend alive → replay the backlog through the normal handler
+  // (restoring topology/trace/tasks/artifacts in order) and stay "running"
+  // for live updates. Empty buffer → app relaunch, backend gone → explicit
+  // "interrupted" banner (never fabricate liveness).
+  useEffect(() => {
+    const rid = pendingReplayRef.current;
+    if (!rid) return;
+    pendingReplayRef.current = null;
+    const TERMINAL = new Set(["workflow.done", "workflow.error", "RUN_ERROR", "RUN_FINISHED"]);
+    const backlog = getContractEvents(rid);
+    setRunId(rid); // restore filter early so live events aren't rejected
+    if (backlog.length) {
+      let lastType = "";
+      for (const ev of backlog) {
+        try {
+          if (contractHandlerRef.current) contractHandlerRef.current(rid, ev);
+        } catch (err) {
+          console.error("studio event replay error", err);
+        }
+        lastType = (ev && ev.type) || "";
+      }
+      // Non-terminal tail → still in flight; keep tracking live.
+      if (!TERMINAL.has(lastType)) setRunState("running");
+    } else {
+      setRunState("interrupted");
+      // Mark every formerly-running task as interrupted so the TaskCenter
+      // does not pretend they are still in flight.
+      setTasks((prev) =>
+        prev.map((t) =>
+          t.status === "run" ? { ...t, status: "interrupted", prog: 0 } : t
+        )
+      );
+    }
+  }, []);
 
   // Mirror of the user frame overrides captured at the last run start, keyed
   // by shotKey, so ingestArtifact can re-apply them to the per-shot entries as
