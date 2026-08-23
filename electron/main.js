@@ -1318,6 +1318,60 @@ ipcMain.handle('open-external', async (_event, url) => {
   }
 });
 
+// ── Real file download: native save dialog → stream HTTP body to disk ──
+// Used by the paper-rewrite "论文产物" tab so "下载 PDF" writes to disk
+// instead of relying on shell.openExternal (which silently fails for
+// localhost URLs in some default browsers). Returns progress-friendly result.
+ipcMain.handle('download-url', async (_event, { url, filename, proxy } = {}) => {
+  if (!url || typeof url !== 'string') return { success: false, error: 'missing url' };
+  let suggested = filename || (() => {
+    try { return decodeURIComponent(url.split('/').pop().split('?')[0]) || 'download'; }
+    catch { return 'download'; }
+  })();
+
+  const win = BrowserWindow.getFocusedWindow() || (BrowserWindow.getAllWindows()[0]);
+  const save = await dialog.showSaveDialog(win || undefined, {
+    defaultPath: suggested,
+    title: '保存文件',
+  });
+  if (save.canceled || !save.filePath) return { success: false, canceled: true };
+
+  const target = save.filePath;
+  const reqHeaders = {};
+  // Forward a proxy only if explicitly provided (keeps localhost direct).
+  const doGet = () => new Promise((resolve, reject) => {
+    const req = http.get(url, { headers: reqHeaders }, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        // Follow one redirect (e.g. dashboard FileResponse without inline).
+        const r = http.get(res.headers.location, (r2) => {
+          if (r2.statusCode !== 200) { reject(new Error('HTTP ' + r2.statusCode)); return; }
+          const out = fs.createWriteStream(target);
+          r2.pipe(out);
+          out.on('finish', () => resolve({ success: true, path: target }));
+          out.on('error', (e) => reject(e));
+        });
+        r.on('error', reject);
+        return;
+      }
+      if (res.statusCode !== 200) { reject(new Error('HTTP ' + res.statusCode)); return; }
+      const out = fs.createWriteStream(target);
+      res.pipe(out);
+      out.on('finish', () => resolve({ success: true, path: target }));
+      out.on('error', (e) => reject(e));
+    });
+    req.on('error', reject);
+  });
+
+  try {
+    const result = await doGet();
+    return result;
+  } catch (err) {
+    // Best-effort cleanup of partial file.
+    try { fs.unlinkSync(target); } catch { /* ignore */ }
+    return { success: false, error: err && err.message ? err.message : String(err) };
+  }
+});
+
 // ── Read a local image file as a base64 data URL ──
 // The renderer is loaded via file:// and Chromium blocks cross-directory
 // file:// subresource loads (opaque origin). So the sandboxed renderer cannot

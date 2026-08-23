@@ -409,6 +409,8 @@ export default function ResultPanel({
   const [paperChapterContent, setPaperChapterContent] = useState(null); // {content, chars}
   const [paperChapterLoading, setPaperChapterLoading] = useState(false);
   const [paperChapterError, setPaperChapterError] = useState(null);
+  // 下载 PDF 反馈态：idle | loading | done | error
+  const [paperDownload, setPaperDownload] = useState({ status: "idle", msg: "" });
 
   // 当 runs 列表变化时，确保 paperSelRun 仍有效（首条默认选中）
   useEffect(() => {
@@ -446,6 +448,29 @@ export default function ResultPanel({
     }
     return "";
   }, [activeTab, paperSelRun, paperSelChapter]);
+
+  // 真正的写盘下载：主进程弹原生保存框 → 拉流写盘，全程有反馈，不依赖浏览器。
+  const handlePaperDownload = useCallback(async () => {
+    if (!paperSelRun) return;
+    const url = paperPdfUrl(paperSelRun);
+    const filename = `${paperSelRun}.pdf`;
+    setPaperDownload({ status: "loading", msg: "正在准备下载…" });
+    try {
+      if (!window.hermes?.downloadUrl) throw new Error("download 接口不可用");
+      const res = await window.hermes.downloadUrl({ url, filename });
+      if (res?.canceled) {
+        setPaperDownload({ status: "idle", msg: "" });
+        return;
+      }
+      if (res?.success) {
+        setPaperDownload({ status: "done", msg: `已保存：${res.path}` });
+      } else {
+        setPaperDownload({ status: "error", msg: res?.error || "下载失败" });
+      }
+    } catch (err) {
+      setPaperDownload({ status: "error", msg: err && err.message ? err.message : String(err) });
+    }
+  }, [paperSelRun]);
 
   // Body content renderer: external URL → workflow → tabs
   const renderBody = () => {
@@ -674,12 +699,24 @@ export default function ResultPanel({
 
                   {paperSelRun && (
                     <div className="result-paper-actions">
-                      <button className="result-link" onClick={() => handleOpenExternal(paperPdfUrl(paperSelRun))} title="在系统默认程序中打开/下载 PDF">
-                        <Icon name="file" size={14} /> 下载 PDF
+                      <button
+                        className="result-link"
+                        onClick={handlePaperDownload}
+                        disabled={paperDownload.status === "loading"}
+                        title="下载 PDF 到本地（原生保存框）"
+                      >
+                        <Icon name="file" size={14} />
+                        {paperDownload.status === "loading" ? "下载中…" : "下载 PDF"}
                       </button>
                       <button className="result-link" onClick={() => handleOpenExternal(`http://127.0.0.1:8765/?run=${encodeURIComponent(paperSelRun)}`)} title="在 dashboard 网页中打开该运行">
                         <Icon name="external" size={14} /> 打开 Dashboard
                       </button>
+                      {paperDownload.status === "done" && (
+                        <span className="result-paper-dl-msg ok" title={paperDownload.msg}>{paperDownload.msg}</span>
+                      )}
+                      {paperDownload.status === "error" && (
+                        <span className="result-paper-dl-msg err" title={paperDownload.msg}>{paperDownload.msg}</span>
+                      )}
                     </div>
                   )}
                 </div>

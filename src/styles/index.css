@@ -5873,6 +5873,13 @@ body[--resizing="1"] .result-panel-resize-handle::before {
   display: flex; gap: 14px; padding-top: 10px; flex-shrink: 0;
 }
 .result-paper-actions .result-link { display: inline-flex; align-items: center; gap: 4px; }
+.result-paper-actions .result-link:disabled { opacity: 0.55; cursor: default; }
+.result-paper-dl-msg {
+  align-self: center; font-size: 12px; max-width: 220px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.result-paper-dl-msg.ok { color: var(--ok-color, #2e9e5b); }
+.result-paper-dl-msg.err { color: var(--error-color, #d9534f); }
 
 /* Artifact viewer */
 .artifact-full-img, .artifact-full-video, .artifact-full-audio {

@@ -93,6 +93,8 @@ contextBridge.exposeInMainWorld('hermes', {
   listWorkspace: (opts) => ipcRenderer.invoke('list-workspace', opts),
   readFile: (opts) => ipcRenderer.invoke('read-file', opts),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
+  // Real file download: native save dialog → stream to disk (no browser).
+  downloadUrl: (opts) => ipcRenderer.invoke('download-url', opts || {}),
 
   // Read a local image file as a base64 data URL. Used by ApprovalBubble to
   // render workspace artifacts: the file:// renderer cannot load cross-directory
