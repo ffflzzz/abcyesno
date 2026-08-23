@@ -1,4 +1,5 @@
 import React, { useRef, useState, useMemo, useCallback, useEffect } from "react";
+import "./WorkflowGraphPanel.css";
 
 // Live LangGraph node-trace panel.
 //
