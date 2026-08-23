@@ -6,6 +6,7 @@ const net = require('net');
 const http = require('http');
 const { HermesRunner } = require('./backend/hermes-runner');
 const { PaperRewriterDashboardRunner } = require('./backend/paper-rewriter-dashboard-runner');
+const { createWechatBridgeRunner } = require('./backend/wechat-bridge-runner');
 const { GatewayClient } = require('./backend/gateway-client');
 const { createAgUIServer } = require('./backend/agui-server');
 const { Storage } = require('./backend/storage');
@@ -1379,19 +1380,19 @@ ipcMain.handle('download-url', async (_event, { url, filename, proxy } = {}) => 
   }
 });
 
-// ── Paper-download reveal: stream PDF to a fixed downloads dir and pop the
-//    file manager with the file selected. This sidesteps dialog.showSaveDialog
-//    which on some Windows builds (e.g. unactivated Win10) silently fails to
-//    anchor the dialog. The user can still see and grab the file reliably. ──
-ipcMain.handle('paper-download', async (_event, { runId, url } = {}) => {
-  if (!runId || !url) return { success: false, error: 'missing runId/url' };
-  const safeName = String(runId).replace(/[\\/:*?"<>|]/g, '_') + '.pdf';
+// ── Download-to-Downloads helper: stream an HTTP URL to a fixed file under
+//    ~/Downloads and reveal it in the file manager. Shared by the
+//    paper-download IPC and the webview new-window handler (below). Avoids
+//    dialog.showSaveDialog which on some Windows builds (e.g. unactivated
+//    Win10) silently fails to anchor the dialog. ──
+async function _streamToDownloads(url, filename) {
+  const safeName = String(filename || 'download').replace(/[\\/:*?"<>|]/g, '_');
   const downloadsDir = app.getPath('downloads');
   let target;
   try { fs.mkdirSync(downloadsDir, { recursive: true }); target = path.join(downloadsDir, safeName); }
   catch (err) { return { success: false, error: 'mkdir failed: ' + (err && err.message) }; }
 
-  log(`[paper-download] run=${runId} target=${target}`);
+  log(`[stream-to-downloads] url=${url} target=${target}`);
   try {
     await new Promise((resolve, reject) => {
       const req = http.get(url, (res) => {
@@ -1412,9 +1413,48 @@ ipcMain.handle('paper-download', async (_event, { runId, url } = {}) => {
   // the file highlighted — user gets unmistakable visual feedback even when
   // save dialogs misbehave.
   try { shell.showItemInFolder(target); } catch (err) {
-    log(`[paper-download] showItemInFolder failed: ${err && err.message}`);
+    log(`[stream-to-downloads] showItemInFolder failed: ${err && err.message}`);
   }
   return { success: true, path: target };
+}
+
+// ── paper-download IPC: stream a paper PDF to ~/Downloads and reveal it. ──
+ipcMain.handle('paper-download', async (_event, { runId, url } = {}) => {
+  if (!runId || !url) return { success: false, error: 'missing runId/url' };
+  return _streamToDownloads(url, String(runId) + '.pdf');
+});
+
+// ── Embedded <webview> new-window routing ──
+// Electron <webview> silently drops target=_blank / window.open unless a
+// window-open handler is attached. Attach one to every webview guest so:
+//   • the paper dashboard's PDF link (Content-Disposition: attachment) becomes
+//     a real disk download + reveal (doesn't rely on the system browser, which
+//     can silently fail for localhost URLs);
+//   • every other http/https link opens in the system browser.
+// We return deny so nothing opens inside the app (no stray BrowserWindow).
+// Register on web-contents-created because webview guests cannot be reached
+// from the main window's own webContents.
+function _paperPdfRunIdFromUrl(url) {
+  const m = /^https?:\/\/(?:127\.0\.0\.1|localhost):8765\/api\/runs\/([^/?]+)\/pdf/i.exec(String(url || ''));
+  return m ? decodeURIComponent(m[1]) : null;
+}
+app.on('web-contents-created', (_event, contents) => {
+  if (contents.getType() !== 'webview') return;
+  contents.setWindowOpenHandler(({ url }) => {
+    const pdfRunId = _paperPdfRunIdFromUrl(url);
+    if (pdfRunId) {
+      log(`[webview-new-window] paper pdf run=${pdfRunId} url=${url}`);
+      _streamToDownloads(url, `${pdfRunId}.pdf`).catch((err) =>
+        log(`[webview-new-window] paper pdf download failed: ${err && err.message}`));
+      return { action: 'deny' };
+    }
+    if (/^https?:/i.test(String(url || ''))) {
+      log(`[webview-new-window] openExternal url=${url}`);
+      shell.openExternal(url).catch((err) =>
+        log(`[webview-new-window] openExternal failed: ${err && err.message}`));
+    }
+    return { action: 'deny' };
+  });
 });
 
 // ── Read a local image file as a base64 data URL ──

@@ -146,11 +146,27 @@ export default function BrowserPanel({ progress = [], initialUrl = "", fullscree
       }
       syncNavState();
     };
+    // Electron <webview> silently drops target=_blank / window.open unless a
+    // handler is attached. Forward such links to the system browser so embedded
+    // pages (e.g. the paper dashboard's "下载 PDF") actually respond instead of
+    // no-op. The main process also installs a setWindowOpenHandler (authoritative,
+    // routes the dashboard PDF to a real disk download); when that fires it
+    // returns deny and this renderer-side event never fires, so the two never
+    // double-handle the same click.
+    const onNewWindow = (e) => {
+      const url = e && e.url;
+      if (!url || !/^https?:/i.test(url)) return;
+      try { e.preventDefault && e.preventDefault(); } catch (_) {}
+      try {
+        window.hermes && window.hermes.openExternal && window.hermes.openExternal(url);
+      } catch (_) {}
+    };
     wv.addEventListener("dom-ready", onDomReady);
     wv.addEventListener("destroyed", onDestroyed);
     wv.addEventListener("did-start-loading", onEvent);
     wv.addEventListener("did-navigate", onEvent);
     wv.addEventListener("did-navigate-in-page", onEvent);
+    wv.addEventListener("new-window", onNewWindow);
     // If the webview is already ready by the time the ref callback runs,
     // manually fire so we don't miss the registration.
     try {
@@ -162,6 +178,7 @@ export default function BrowserPanel({ progress = [], initialUrl = "", fullscree
       wv.removeEventListener("did-start-loading", onEvent);
       wv.removeEventListener("did-navigate", onEvent);
       wv.removeEventListener("did-navigate-in-page", onEvent);
+      wv.removeEventListener("new-window", onNewWindow);
     };
   }, []);
 
