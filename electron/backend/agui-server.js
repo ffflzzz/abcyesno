@@ -60,9 +60,10 @@ function createAgUIServer(getGatewayClient, storage, options) {
   function finishBackgroundRun(br) {
     if (!br || br.ended) return;
     br.ended = true;
+    // clearInterval 在 null/未定义上是安全的，无需额外 try
+    if (br.timer) { clearInterval(br.timer); }
+    br.timer = null;
     try {
-      if (br.timer) { try { clearInterval(br.timer); } catch (_) {} br.timer = null; }
-    } catch (_) {}
       backgroundRuns.delete(br.wfRunId);
       workflowSubscribers.delete(br.wfRunId);
       clearEventBuffer(br.wfRunId);
