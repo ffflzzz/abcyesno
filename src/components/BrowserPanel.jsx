@@ -95,7 +95,10 @@ export default function BrowserPanel({ progress = [], initialUrl = "", fullscree
   // --- Navigation helpers ---
   const syncNavState = () => {
     const wv = webviewRef.current;
-    if (!wv) return;
+    // Electron <webview> 的 canGoBack/canGoForward 必须在 dom-ready 之后才能调。
+    // did-start-loading 等事件早于 dom-ready 触发，未 ready 时调用会抛
+    // "The WebView must be attached to the DOM and the dom-ready event emitted"。
+    if (!wv || !ready) return;
     setCanGoBack(!!wv.canGoBack && wv.canGoBack());
     setCanGoForward(!!wv.canGoForward && wv.canGoForward());
   };
