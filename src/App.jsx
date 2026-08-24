@@ -21,6 +21,18 @@ import excalidrawIcon from "./assets/excalidraw.png";
 import appChatIcon from "./assets/app-chat.png";
 import appManjuIcon from "./assets/app-manju.png";
 import appPaperIcon from "./assets/app-paper.png";
+
+// Map of manifest id / special key → vite-imported PNG so the same launcher
+// art shows in BOTH the homepage grid AND the browser-style tab strip.
+// `launcherApps[].iconSrc` is a plain string ("app-manju.png") which vite
+// does NOT resolve — this table is the only reliable source of a hash-based
+// asset URL. Keep in sync with homepageApps and App's openAppAsNewTab/openApp
+// call sites so every tab carries the right icon.
+const LAUNCHER_ICONS = {
+  chat: appChatIcon,
+  manjucraft_agent: appManjuIcon,
+  paper_rewriter_agent: appPaperIcon,
+};
 import { sanitizeMessageContent } from "./components/MessageThread.jsx";
 import { useAgentStream } from "./hooks/useAgentStream.js";
 import { usePaperRewriteArtifacts } from "./hooks/usePaperRewriteArtifacts.js";
@@ -1091,6 +1103,12 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
   // Open a launcher app as a NEW tab (never replacing the Launcher tab, and
   // never spawning a separate window). If a tab for this workflow already
   // exists, just focus it instead of duplicating.
+  //
+  // `app.iconSrc` (manifest) is a plain string that vite won't resolve; pull
+  // the hash-based asset URL from the module-level LAUNCHER_ICONS table so
+  // the new tab shows the same launcher art instead of falling back to the
+  // generic Lucide icon. Without this, the tab strip rendered the placeholder
+  // `film` / `book-open` icons instead of the redesigned PNGs.
   const openAppAsNewTab = useCallback((app) => {
     const existing = tabsRef.current.find(
       (t) => t.workflowId === app.workflowId && t.type === "studio"
@@ -1099,10 +1117,12 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
       activateExisting(existing.id);
       return;
     }
+    const iconSrc = LAUNCHER_ICONS[app.key] || app.iconSrc;
     createTab({
       type: "studio",
       title: app.title,
       icon: app.icon,
+      iconSrc,
       workflowId: app.workflowId,
       resultOpen: true,
       resultCollapsed: false,
@@ -1115,43 +1135,52 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
   // surface, not a LangGraph workflow, so it stays hardcoded here; every other
   // entry comes from a manifest with a `launcher` field. Adding an agent that
   // exposes a launcher entry requires no edit to this file.
+  //
+  // iconSrc resolution: pull from module-level LAUNCHER_ICONS (vite-imported
+  // hash URLs). The manifest's iconSrc is a bare string ("app-manju.png")
+  // that vite does not recognise; LAUNCHER_ICONS is the only reliable asset
+  // URL. The iconSrc is also forwarded into every tab created from this app
+  // — see openAppAsNewTab/openApp above — so the launcher grid and the
+  // browser-style tab strip always show the same artwork.
   const homepageApps = useMemo(() => [
     {
-      key: "chat", title: "对话", icon: "chat", iconSrc: appChatIcon, color: "#111827",
-      onClick: () => openApp({ type: "chat", title: "对话", icon: "chat", assistantId: selectedAssistantId || "" }),
+      key: "chat",
+      title: "对话",
+      icon: "chat",
+      iconSrc: LAUNCHER_ICONS.chat,
+      color: "#111827",
+      onClick: () => openApp({
+        type: "chat",
+        title: "对话",
+        icon: "chat",
+        iconSrc: LAUNCHER_ICONS.chat,
+        assistantId: selectedAssistantId || "",
+      }),
     },
     ...launcherApps.map((app) => {
-      // openMode is data-driven (manifest `launcher.openMode`).
-      //   "newTab"   → open the workbench in a fresh in-app tab (漫剧go).
-      //   "dashboard"→ open the agent's own local web service in an in-app
-      //               browser tab (paper_rewriter_agent FastAPI dashboard).
-      //   anything else → legacy in-place replacement of the Launcher tab.
+      const iconSrc = LAUNCHER_ICONS[app.key] || app.iconSrc;
       const onClick =
         app.openMode === "dashboard" && app.url
           ? () => createTab({
               type: "browser",
               title: app.title,
               icon: app.icon,
-              iconSrc: launcherIconSrc,
+              iconSrc,
               browserUrl: app.url,
             })
           : app.openMode === "newTab"
-          ? () => openAppAsNewTab(app)
-          : () => openApp({ type: "studio", title: app.title, icon: app.icon, workflowId: app.workflowId, resultOpen: true, resultCollapsed: false, assistantId: selectedAssistantId || "" });
-      // Map `app.key` (manifest id) → imported logo so we can drop the logo
-      // files in src/assets and reference them here without going through a
-      // build-time loader. Keep the data-driven `icon` field as a Lucide
-      // fallback for tabs that don't have a custom logo yet.
-      const LAUNCHER_ICONS = { manjucraft_agent: appManjuIcon, paper_rewriter_agent: appPaperIcon };
-      const launcherIconSrc = LAUNCHER_ICONS[app.key] || app.iconSrc;
-      return {
-        key: app.key,
-        title: app.title,
-        icon: app.icon,
-        iconSrc: launcherIconSrc,
-        color: app.color,
-        onClick,
-      };
+          ? () => openAppAsNewTab({ ...app, iconSrc })
+          : () => openApp({
+              type: "studio",
+              title: app.title,
+              icon: app.icon,
+              iconSrc,
+              workflowId: app.workflowId,
+              resultOpen: true,
+              resultCollapsed: false,
+              assistantId: selectedAssistantId || "",
+            });
+      return { key: app.key, title: app.title, icon: app.icon, iconSrc, color: app.color, onClick };
     }),
     // Excalidraw online whiteboard — opens as a NEW in-app tab with the
     // built-in browser (Electron <webview>), NOT the system browser. The
