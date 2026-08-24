@@ -1321,7 +1321,11 @@ function MessageThread({ messages = [], loading, streamPhase, thinkingText, reas
                     ))}
                   </div>
                 )}
-                {formatContent(displayContent, handleImageClick)}
+                {/* ReasoningBlock moved ABOVE the answer: per the 2026-08-24 UI
+                    pass, the 深度推理 panel now sits above formatContent so
+                    the model "thinks out loud" first, then the answer follows.
+                    `streaming` tells the block whether to auto-collapse once
+                    the answer is done (the block itself implements that). */}
                 {!isUser && (
                   (m.reasoning &&
                     m.reasoning.trim() &&
@@ -1339,8 +1343,10 @@ function MessageThread({ messages = [], loading, streamPhase, thinkingText, reas
                         ? m.reasoning
                         : reasoningText
                     }
+                    streaming={isLast && loading}
                   />
                 )}
+                {formatContent(displayContent, handleImageClick)}
               </>
             )}
           </div>
@@ -1434,15 +1440,36 @@ function MessageThread({ messages = [], loading, streamPhase, thinkingText, reas
 
 /**
  * ReasoningBlock — 模型深度推理 token 的折叠展示（区别于浅层 thinking 指示）。
- * Defaults to expanded, renders inside a scrollable translucent bubble, and
- * auto-scrolls to the bottom as new reasoning tokens stream in. Manual scroll
- * up pauses auto-scroll until the user scrolls back to the bottom.
+ * Sits ABOVE the answer (moved in 2026-08-24 UI pass). `streaming` controls
+ * the open/collapse cycle:
+ *   - while the agent is still streaming this turn -> open
+ *   - when streaming ends -> auto-collapse
+ *   - if the user manually toggles open -> respect that until the next
+ *     streaming cycle starts (a `userToggledRef` records the override so
+ *     the auto-collapse won't fight the user)
+ * Renders inside a scrollable translucent bubble, auto-scrolls to the
+ * bottom as new reasoning tokens stream in, and pauses auto-scroll when
+ * the user scrolls up.
  */
-function ReasoningBlock({ text }) {
-  const [open, setOpen] = useState(true);
+function ReasoningBlock({ text, streaming = false }) {
+  const [open, setOpen] = useState(streaming);
   const bubbleRef = useRef(null);
   const userScrolledRef = useRef(false);
+  const userToggledRef = useRef(false);
   const display = text || "";
+
+  // Sync open state with the streaming lifecycle. Manual user toggles are
+  // preserved across the rest of the same non-streaming window.
+  useEffect(() => {
+    if (streaming) {
+      // New streaming cycle: reset the user-override flag and open.
+      userToggledRef.current = false;
+      setOpen(true);
+    } else if (!userToggledRef.current) {
+      // Streaming just ended and the user hasn't clicked -> collapse.
+      setOpen(false);
+    }
+  }, [streaming]);
 
   useEffect(() => {
     const el = bubbleRef.current;
@@ -1459,9 +1486,14 @@ function ReasoningBlock({ text }) {
     userScrolledRef.current = !nearBottom;
   }, []);
 
+  const toggle = useCallback(() => {
+    userToggledRef.current = true;
+    setOpen((o) => !o);
+  }, []);
+
   return (
     <div className="reasoning-block">
-      <button className="reasoning-toggle" onClick={() => setOpen((o) => !o)}>
+      <button className="reasoning-toggle" onClick={toggle}>
         <Icon name="lightbulb" size={13} />
         <span>深度推理</span>
         <span className="reasoning-count">{display.length} 字符</span>
