@@ -3,6 +3,10 @@ node_modules/
 dist/
 release/
 build/dist/
+# paper_rewriter dashboard 的 built 前端要随仓库分发：源码在独立 fork
+# (C:/Users/Administrator/Downloads/paper_rewriter_langgraph/frontend)，
+# 不在本仓库，build 后拷贝到此。必须纳入版本控制，否则 clone 拿不到新图。
+!hermes-fork/skills/langgraph_agents/agents/paper_rewriter_agent/dashboard/frontend/dist/
 # Bundled Chromium for portable browser automation (regenerated at build time
 # via `playwright install chromium` → copied into build/playwright-browsers).
 # Never commit these ~700MB binaries.
