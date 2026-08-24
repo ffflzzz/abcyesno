@@ -1,6 +1,7 @@
 # --- dependencies / build output ---
 node_modules/
 dist/
+dist-preview/
 release/
 build/dist/
 # paper_rewriter dashboard 的 built 前端要随仓库分发：源码在独立 fork
