@@ -41,18 +41,24 @@
 
 /* Light theme tokens (Primer-aligned). Components only ever read the
    semantic variables above, so switching data-theme flips the whole tree
-   without touching component rules. */
+   without touching component rules.
+
+   Layering rule: --bg < --panel < --bg-elevated. The old collapsed
+   version had all three at #ffffff, which made borderless surfaces
+   invisible against each other (the chat body, sidebar and header
+   merged into a single blank page). The current values keep the
+   L0/L1/L2 tonal step that the dark theme already uses. */
 [data-theme="light"] {
-  --bg: #ffffff;
-  --panel: #ffffff;
-  --panel-2: #f6f8fa;
-  --bg-elevated: #ffffff;
+  --bg: #e9ecef;        /* L0 page base — slight cool gray */
+  --panel: #ffffff;     /* L1 sidebar / card */
+  --panel-2: #f1f3f5;   /* hover / nested secondary */
+  --bg-elevated: #ffffff; /* L2 chrome (tabbar, chat header) */
   --accent: #1f2328;
   --accent-2: #59636e;
   --text: #1f2328;
   --muted: #59636e;
   --border: #d1d9e0;
-  --user-bubble: #eaeef2;
+  --user-bubble: #e3e8ee;
   --assistant-bubble: #f6f8fa;
   --error: #d1242f;
   --error-text: #d1242f;
@@ -257,7 +263,10 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 16px;
+  padding: 8px 10px;
+  margin: 10px 10px 4px;
+  border-radius: var(--radius-md);
+  background: var(--panel-2);
 }
 
 .brand-small {
@@ -372,10 +381,11 @@ body {
   align-items: stretch;
   gap: 2px;
   padding: 8px 12px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   cursor: pointer;
   position: relative;
-  border: 1px solid transparent;
+  border: none;
+  transition: background 0.12s ease;
 }
 
 .assistant-item:hover,
@@ -568,9 +578,7 @@ body {
 
 .session-item.active {
   background: rgba(230, 237, 243, 0.10);
-  border-color: var(--accent);
   color: var(--accent);
-  border-left: 2px solid var(--accent);
 }
 
 .context-menu {
@@ -646,8 +654,8 @@ body {
 .header-icon {
   background: transparent;
   color: var(--muted);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border: none;
+  border-radius: var(--radius-pill);
   padding: 5px 10px;
   cursor: pointer;
   font-size: 12px;
@@ -706,8 +714,8 @@ body {
   background: var(--bg);
   color: var(--text);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 5px 10px;
+  border-radius: var(--radius-pill);
+  padding: 5px 14px;
   font-size: 13px;
   outline: none;
 }
@@ -2547,11 +2555,12 @@ body {
 .sidebar-footer {
   display: flex;
   justify-content: space-around;
-  padding: 10px;
+  gap: 4px;
+  padding: 8px 10px 10px;
 }
 
 .footer-btn {
-  background: transparent;
+  background: var(--panel-2);
   border: none;
   color: var(--muted);
   font-size: 12px;
@@ -2559,10 +2568,14 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
+  padding: 6px 10px;
+  border-radius: var(--radius-pill);
+  transition: background 0.12s ease, color 0.12s ease;
 }
 
 .footer-btn:hover {
   color: var(--text);
+  background: var(--bg-elevated);
 }
 
 .session-row {
@@ -4634,20 +4647,20 @@ body {
   width: 100%;
   max-width: 900px;
   background: var(--panel);
-  border: 1px solid var(--border);
+  border: none;
   border-radius: var(--radius-lg);
   padding: 12px 16px 10px;
   display: flex;
   flex-direction: column;
   gap: 8px;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition: box-shadow 0.15s ease, background 0.15s ease;
   box-sizing: border-box;
   position: relative; /* anchor for peeking Bach */
   overflow: visible; /* let Bach poke out above */
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18), 0 1px 2px rgba(0, 0, 0, 0.06);
 }
 .composer-shell:focus-within {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(230, 237, 243, 0.12);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.24), 0 0 0 2px rgba(230, 237, 243, 0.18);
 }
 .composer-shell.drag-over {
   background: rgba(230, 237, 243, 0.06);
@@ -6279,10 +6292,12 @@ body[--resizing="1"] .result-panel-resize-handle::before {
 /* ── Tab bar (replaces old search row) ── */
 .sidebar-tabs {
   display: flex;
-  gap: 0;
-  border-bottom: 1px solid var(--border);
-  padding: 0 4px;
+  gap: 4px;
+  padding: 6px 10px 8px;
   flex-shrink: 0;
+  background: var(--panel-2);
+  margin: 0 10px 4px;
+  border-radius: var(--radius-md);
 }
 .sidebar-tab {
   flex: 1;
@@ -6290,23 +6305,21 @@ body[--resizing="1"] .result-panel-resize-handle::before {
   align-items: center;
   justify-content: center;
   gap: 4px;
-  padding: 10px 0;
-  background: none;
+  padding: 7px 0;
+  background: transparent;
   border: none;
-  border-bottom: 2px solid transparent;
+  border-radius: var(--radius-pill);
   color: var(--muted);
   font-size: 13px;
   cursor: pointer;
   transition: all 0.15s ease;
   position: relative;
 }
-.sidebar-tab:hover { color: var(--text); background: rgba(255,255,255,0.03); }
+.sidebar-tab:hover { color: var(--text); background: rgba(255,255,255,0.04); }
 .sidebar-tab.active {
-  color: var(--accent);
-  background: rgba(230, 237, 243, 0.10);
-  border-left: 2px solid var(--accent);
-  border-bottom-color: transparent;
-  font-weight: 600;
+  background: var(--bg-elevated);
+  color: var(--text);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.08);
 }
 .tab-icon { font-size: 14px; line-height: 1; display: inline-flex; }
 .tab-label { font-size: 12px; }
@@ -6531,9 +6544,8 @@ body[--resizing="1"] .result-panel-resize-handle::before {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--border);
+  gap: 6px;
+  padding: 4px 4px 12px;
 }
 .task-detail-area {
   flex: 1;
@@ -6603,15 +6615,16 @@ body[--resizing="1"] .result-panel-resize-handle::before {
 
 /* Task card */
 .task-card {
-  padding: 8px 10px;
-  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
   background: var(--bg-elevated);
-  border: 1px solid var(--border);
+  border: none;
   cursor: pointer;
   transition: all 0.12s ease;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
 }
-.task-card:hover { border-color: var(--accent); }
-.task-card.active { border-color: var(--accent); background: rgba(230,237,243,0.08); }
+.task-card:hover { background: rgba(230,237,243,0.06); }
+.task-card.active { background: rgba(230,237,243,0.10); }
 
 .task-card-header {
   display: flex;
