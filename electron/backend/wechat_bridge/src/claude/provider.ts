@@ -201,13 +201,17 @@ export async function claudeQuery(options: QueryOptions): Promise<QueryResult> {
   }
 
   const QUERY_TIMEOUT_MS = 60 * 60 * 1000;
+  // fetch() returns a Web ReadableStream (not a Node stream), so we must use
+  // getReader()/TextDecoder — never setEncoding() or .on('data').
+  const streamReader = fetchRes.body.getReader();
   const timeoutId = setTimeout(() => {
     logger.warn('AG-UI run timed out, aborting');
-    controller.abort();
+    try { streamReader.cancel().catch(() => {}); } catch { /* ignore */ }
   }, QUERY_TIMEOUT_MS);
 
   const state: AgUiParserState = { messageId: null, textParts: [], finished: false };
-  const reader = new SseFrameReader();
+  const frameReader = new SseFrameReader();
+  const decoder = new TextDecoder();
 
   return new Promise<QueryResult>((resolve) => {
     let settled = false;
@@ -219,38 +223,9 @@ export async function claudeQuery(options: QueryOptions): Promise<QueryResult> {
       resolve(result);
     };
 
-    const decoder = new TextDecoder();
-    const nodeStream = fetchRes.body as unknown as NodeJS.ReadableStream;
-    nodeStream.setEncoding('utf8');
-
-    nodeStream.on('data', (chunk: string) => {
-      for (const ev of reader.push(decoder.decode(typeof chunk === 'string' ? chunk : Buffer.from(chunk), { stream: true }))) {
-        handleAgUiEvent(ev, state, {
-          onText: (t) => { try { onText?.(t); } catch { /* never kill stream on emit errors */ } },
-          onTurnEnd: (r) => { try { onTurnEnd?.(r); } catch { /* ignore */ } },
-        });
-        if (state.finished) {
-          try { (fetchRes.body as any)?.controller?.close?.(); } catch { /* ignore */ }
-          controller.abort(); // close SSE once terminal event seen
-        }
-      }
-    });
-
-    nodeStream.on('error', (err: Error) => {
-      if (!state.finished && !state.textParts.length && !state.errorMessage) {
-        finish({ text: '', sessionId: agThreadId, error: `SSE stream error: ${err.message}` });
-      } else {
-        settleNormal();
-      }
-    });
-
-    nodeStream.on('close', () => {
-      if (!state.finished && !state.errorMessage && state.textParts.length > 0) {
-        // Server closed without RUN_FINISHED (e.g. our own abort after cancel).
-        logger.info('SSE closed without RUN_FINISHED, keeping partial text');
-      }
-      settleNormal();
-    });
+    async function cancelStream() {
+      try { await streamReader.cancel(); } catch { /* ignore */ }
+    }
 
     function settleNormal() {
       const fullText = state.textParts.join('').trim();
@@ -262,11 +237,45 @@ export async function claudeQuery(options: QueryOptions): Promise<QueryResult> {
         textLength: fullText.length,
         hasError: !!state.errorMessage,
       });
-      finish({
-        text: fullText,
-        sessionId: agThreadId,
-        error: state.errorMessage,
-      });
+      finish({ text: fullText, sessionId: agThreadId, error: state.errorMessage });
     }
+
+    async function pump(): Promise<void> {
+      try {
+        while (true) {
+          if (abortController?.signal.aborted) {
+            await cancelStream();
+            settleNormal();
+            return;
+          }
+          const { done, value } = await streamReader.read();
+          if (done) {
+            settleNormal();
+            return;
+          }
+          const textChunk = decoder.decode(value as Uint8Array, { stream: true });
+          for (const ev of frameReader.push(textChunk)) {
+            handleAgUiEvent(ev, state, {
+              onText: (t) => { try { onText?.(t); } catch { /* never kill stream on emit errors */ } },
+              onTurnEnd: (r) => { try { onTurnEnd?.(r); } catch { /* ignore */ } },
+            });
+            if (state.finished) {
+              await cancelStream();
+              settleNormal();
+              return;
+            }
+          }
+        }
+      } catch (err: any) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (!state.finished && !state.textParts.length && !state.errorMessage) {
+          finish({ text: '', sessionId: agThreadId, error: `SSE stream error: ${msg}` });
+        } else {
+          settleNormal();
+        }
+      }
+    }
+
+    pump();
   });
 }

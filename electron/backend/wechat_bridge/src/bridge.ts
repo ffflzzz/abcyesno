@@ -6,6 +6,9 @@ import { startQrLogin, waitForQrScan } from './wechat/login.js';
 import { createDaemonRuntime, type DaemonRuntime } from './main.js';
 import { DATA_DIR } from './constants.js';
 import { logger } from './logger.js';
+import { claudeQuery } from './claude/provider.js';
+
+export { claudeQuery };
 
 // ---------------------------------------------------------------------------
 // Public types
