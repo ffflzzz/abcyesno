@@ -233,14 +233,16 @@ export default function ChatLayout({
       <div className="chat-body">
         {(!messages || messages.length === 0) ? (
           <div className="welcome">
-            <img src={bachAvatar} alt="ABC" className="welcome-avatar" onClick={() => onOpenPreviewUrl && onOpenPreviewUrl("https://abcyesno.cn")} style={{ cursor: "pointer" }} title="打开 Abcyesno 文档站" />
-            <h2>{assistant?.name || "Abcyesno"}</h2>
-            <p>{assistant?.description || "输入问题，AI 会帮你执行命令、读取文件、浏览网页"}</p>
-            <div className="welcome-hints">
-              <span className="hint" onClick={() => onSend && onSend("列出当前目录文件")}>“列出当前目录文件”</span>
-              <span className="hint" onClick={() => onSend && onSend("帮我做一条剪映视频")}>“帮我做一条剪映视频”</span>
-              <span className="hint" onClick={() => onSend && onSend("搜索最新 AI 新闻")}>“搜索最新 AI 新闻”</span>
-            </div>
+            <img src={bachAvatar} alt="Chaos" className="welcome-avatar" onClick={() => onOpenPreviewUrl && onOpenPreviewUrl("https://abcyesno.cn")} style={{ cursor: "pointer" }} title="打开 Abcyesno 文档站" />
+            <h2>{assistant?.name || "Chaos"}</h2>
+            {/* Description + quick-action chips intentionally hidden: the welcome
+                screen used to show a 1-line blurb and three canned prompts
+                ("列出当前目录文件" / "帮我做一条剪映视频" / "搜索最新 AI 新闻"),
+                which read as low-effort placeholder copy and cluttered the
+                empty state. The avatar + name is enough; type whatever you
+                want into the composer below. Re-enable by restoring the
+                <p> + <div className="welcome-hints"> block that used to live
+                here. */}
           </div>
         ) : (
           <MessageThread

@@ -33,11 +33,16 @@ class Storage {
     if (!data.assistants || data.assistants.length === 0) {
       return this._defaultAssistants();
     }
-    // Migrate the legacy default-assistant name to "ABC" for existing users.
+    // Migrate the legacy default-assistant name to the current abcyesno persona.
+    // The chain goes "通用助手" -> "ABC" (older) -> "Chaos" (current). Only the
+    // built-in default assistant (id='default') is touched — any assistant the
+    // user has since renamed to something else (or created themselves) is left
+    // alone, even if its name happens to collide with one of these.
     let migrated = false;
     for (const a of data.assistants) {
-      if (a.id === 'default' && a.name === '通用助手') {
-        a.name = 'ABC';
+      if (a.id !== 'default') continue;
+      if (a.name === '通用助手' || a.name === 'ABC') {
+        a.name = 'Chaos';
         migrated = true;
       }
     }
@@ -84,15 +89,20 @@ class Storage {
   }
 
   _defaultAssistants() {
-    // Only the default ABC assistant lives here. The legacy Manju Craft
+    // Only the default Chaos assistant lives here. The legacy Manju Craft
     // entry was removed when the bundled manju-craft LangGraph agent was
     // deleted (2026-08-15 cleanup) — its skillId pointed at a skill that
     // no longer exists. Workflow assistants (e.g. 短剧制片工作台) flow
     // through the manifest/codegen path, not this hardcoded list.
+    //
+    // 2026-08-24: renamed "ABC" → "Chaos" to match the new abcyesno agent
+    // persona (see hermes_cli/default_soul.py). The description is kept for
+    // the marketplace / settings views but the welcome screen in
+    // ChatLayout.jsx no longer renders it (cleaned up in the same pass).
     return [
       {
         id: 'default',
-        name: 'ABC',
+        name: 'Chaos',
         skillId: 'default',
         description: '默认助手，支持终端、文件、浏览器等工具',
         avatar: '',
