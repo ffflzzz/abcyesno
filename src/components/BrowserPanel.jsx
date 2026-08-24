@@ -36,6 +36,9 @@ export default function BrowserPanel({ progress = [], initialUrl = "", fullscree
   const webviewCleanupRef = useRef(null);
   const inputRef = useRef(null);
   const resizingRef = useRef(false);
+  // Track whether the address bar is focused so the 1 Hz URL poller doesn't
+  // overwrite the user's typed input with getURL() while they're typing.
+  const [addressFocused, setAddressFocused] = useState(false);
   // Latest-value refs to dodge the useEffect + setInterval closure trap.
   // Without these the 1 Hz poller would see stale `url`/`navigated` from the
   // first render and never re-sync after Playwright navigates the webview.
@@ -196,7 +199,7 @@ export default function BrowserPanel({ progress = [], initialUrl = "", fullscree
       } catch (_) {
         return;
       }
-      if (current && current !== urlRef.current) setUrl(current);
+      if (current && current !== urlRef.current && !addressFocused) setUrl(current);
       const onMarker = current === marker;
       if (onMarker && navigatedRef.current) setNavigated(false);
       if (!onMarker && !navigatedRef.current) setNavigated(true);
@@ -289,6 +292,8 @@ export default function BrowserPanel({ progress = [], initialUrl = "", fullscree
           value={url}
           onChange={(e) => setUrl(e.target.value)}
           onKeyDown={onKey}
+          onFocus={() => setAddressFocused(true)}
+          onBlur={() => setAddressFocused(false)}
         />
         <button className="bt-btn go" title="前往" onClick={go}>
           →
