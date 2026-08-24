@@ -1,66 +1,94 @@
 // Generate Apple-style launcher icons at 1024x1024 from inline SVG.
+// Foreground is designed DIRECTLY in 1024-space (no scale math), so each
+// element is properly centered inside the squircle.
 const sharp = require("sharp");
-const fs = require("fs");
 const path = require("path");
 
 const OUT = path.resolve(__dirname, "../src/assets");
-
-// Apple-style squircle icon template.
-// Each icon: same-size squircle container (243px rounded corners ~ iOS 14/16),
-// single top->bottom same-hue gradient, pure-white foreground, no stroke/decoration.
 const S = 1024;
-const R = 243; // corner radius
+const R = 243; // iOS-style squircle corner radius
 
-function squircleBg(gradId, top, bottom) {
+// Background squircle + same-hue vertical gradient.  Used by all three icons
+// so they share the same container language.
+function bg(id, top, bottom) {
   return `
     <defs>
-      <linearGradient id="${gradId}" x1="0" y1="0" x2="0" y2="1">
+      <linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1">
         <stop offset="0%" stop-color="${top}"/>
         <stop offset="100%" stop-color="${bottom}"/>
       </linearGradient>
     </defs>
-    <rect x="0" y="0" width="${S}" height="${S}" rx="${R}" fill="url(#${gradId})"/>`;
+    <rect width="${S}" height="${S}" rx="${R}" fill="url(#${id})"/>`;
 }
 
-// scale helper: preview used 160px box; multiply by 6.4 to reach 1024
-const k = 6.4;
-const sx = (n) => Math.round(n * k);
-const sy = (n) => Math.round(n * k);
-
-// --- 1. 对话 (Chat) — speech bubble on blue gradient ---
+// ── 1. 对话 (Chat) — speech bubble on blue gradient ────────────────────────
+// Bubble body: rounded rect 580×380, centered horizontally, vertically
+// shifted slightly up so the tail fits below.
+// Tail: triangle from the bottom of the body, pointing down-left.
 const chat = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${S} ${S}" width="${S}" height="${S}">
-  ${squircleBg("chat", "#34C8FF", "#007AFF")}
-  <path d="M ${sx(110)} ${sy(158)} Q ${sx(110)} ${sy(138)} ${sx(130)} ${sy(138)} L ${sx(170)} ${sy(138)} Q ${sx(190)} ${sy(138)} ${sx(190)} ${sy(158)} L ${sx(190)} ${sy(188)} Q ${sx(190)} ${sy(208)} ${sx(170)} ${sy(208)} L ${sx(144)} ${sy(208)} L ${sx(130)} ${sy(224)} L ${sx(134)} ${sy(208)} L ${sx(130)} ${sy(208)} Q ${sx(110)} ${sy(208)} ${sx(110)} ${sy(188)} Z" fill="#FFFFFF"/>
+  ${bg("g", "#34C8FF", "#007AFF")}
+  <path d="M 222 400
+           Q 222 320 302 320
+           L 722 320
+           Q 802 320 802 400
+           L 802 620
+           Q 802 700 722 700
+           L 462 700
+           L 332 808
+           L 380 700
+           L 302 700
+           Q 222 700 222 620 Z"
+        fill="#FFFFFF"/>
 </svg>`;
 
-// --- 2. 漫剧go (Drama) — clapperboard on red gradient ---
+// ── 2. 漫剧go (Drama) — clapperboard on red gradient ──────────────────────
+// Body: 664×320 at y=460–780
+// Hinge (clapper): 664×180 at y=280–460
+// Diagonal stripes: 5 parallelograms slanting down-right across the hinge,
+// clipped to the hinge rect via <clipPath>.
 const drama = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${S} ${S}" width="${S}" height="${S}">
-  ${squircleBg("drama", "#FF6B6B", "#C20A18")}
+  ${bg("g", "#FF6B6B", "#C20A18")}
+  <defs>
+    <clipPath id="hinge">
+      <rect x="180" y="280" width="664" height="180" rx="24"/>
+    </clipPath>
+  </defs>
   <g fill="#FFFFFF">
-    <rect x="${sx(288)}" y="${sy(158)}" width="${sx(104)}" height="${sx(78)}" rx="${sx(8)}"/>
-    <rect x="${sx(286)}" y="${sy(138)}" width="${sx(108)}" height="${sy(26)}" rx="${sx(6)}"/>
+    <rect x="180" y="460" width="664" height="320" rx="32"/>
+    <rect x="180" y="280" width="664" height="180" rx="24"/>
   </g>
-  <g fill="url(#drama)" opacity="0.95">
-    <polygon points="${sx(288)},${sy(138)} ${sx(308)},${sy(138)} ${sx(320)},${sy(164)} ${sx(300)},${sy(164)}"/>
-    <polygon points="${sx(324)},${sy(138)} ${sx(344)},${sy(138)} ${sx(356)},${sy(164)} ${sx(336)},${sy(164)}"/>
-    <polygon points="${sx(360)},${sy(138)} ${sx(380)},${sy(138)} ${sx(392)},${sy(164)} ${sx(372)},${sy(164)}"/>
+  <g fill="url(#g)" clip-path="url(#hinge)">
+    <polygon points="180,280 280,280 340,460 240,460"/>
+    <polygon points="321,280 421,280 481,460 381,460"/>
+    <polygon points="462,280 562,280 622,460 522,460"/>
+    <polygon points="603,280 703,280 763,460 663,460"/>
+    <polygon points="744,280 844,280 904,460 804,460"/>
   </g>
 </svg>`;
 
-// --- 3. 论文重写 (Paper Rewrite) — doc + pen on orange gradient ---
+// ── 3. 论文重写 (Paper Rewrite) — document + pen on orange gradient ──────
+// Document: pentagon with top-right corner cut (folded-paper silhouette)
+// Text lines: 3 rounded rects
+// Pen: white body + dark eraser + black clip, rotated -30°, bottom-right
 const paper = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${S} ${S}" width="${S}" height="${S}">
-  ${squircleBg("paper", "#FFD60A", "#FF8A00")}
+  ${bg("g", "#FFD60A", "#FF8A00")}
   <g fill="#FFFFFF">
-    <path d="M ${sx(478)} ${sy(140)} L ${sx(538)} ${sy(140)} L ${sx(562)} ${sy(164)} L ${sx(562)} ${sy(220)} L ${sx(478)} ${sy(220)} Z"/>
-    <rect x="${sx(490)}" y="${sy(160)}" width="${sx(50)}" height="${sx(6)}" rx="${sx(3)}"/>
-    <rect x="${sx(490)}" y="${sy(174)}" width="${sx(60)}" height="${sx(6)}" rx="${sx(3)}"/>
-    <rect x="${sx(490)}" y="${sy(188)}" width="${sx(40)}" height="${sx(6)}" rx="${sx(3)}"/>
+    <path d="M 240 240
+             L 620 240
+             L 760 380
+             L 760 790
+             L 240 790 Z"/>
   </g>
-  <g transform="translate(${sx(528)} ${sy(198)}) rotate(-30)">
-    <rect x="0" y="0" width="${sx(46)}" height="${sx(10)}" rx="${sx(3)}" fill="#FFFFFF"/>
-    <polygon points="${sx(46)},0 ${sx(60)},${sx(5)} ${sx(46)},${sx(10)}" fill="#FFFFFF"/>
-    <polygon points="0,0 ${sx(8)},${sx(5)} 0,${sx(10)}" fill="#3D3D3D"/>
-    <rect x="${sx(2)}" y="${sx(2)}" width="${sx(4)}" height="${sx(6)}" rx="${sx(1)}" fill="#1a1a1a"/>
+  <g fill="#FF8A00">
+    <rect x="290" y="440" width="380" height="32" rx="16"/>
+    <rect x="290" y="500" width="420" height="32" rx="16"/>
+    <rect x="290" y="560" width="320" height="32" rx="16"/>
+  </g>
+  <g transform="translate(620 700) rotate(-30)">
+    <rect x="0" y="0" width="280" height="60" rx="20" fill="#FFFFFF"/>
+    <polygon points="280,0 360,30 280,60" fill="#FFFFFF"/>
+    <polygon points="0,0 50,30 0,60" fill="#3D3D3D"/>
+    <rect x="20" y="10" width="16" height="40" rx="4" fill="#1a1a1a"/>
   </g>
 </svg>`;
 
