@@ -1,7 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App.jsx';
 import DetachedApp from './DetachedApp.jsx';
+import Onboarding, { isOnboardingDone } from './components/Onboarding.jsx';
 import bachAvatar from './assets/bach-avatar.png';
 import './styles/index.css';
 
@@ -40,6 +41,21 @@ function parseBootMode() {
 function Bootstrap() {
   const [aguiPort, setAguiPort] = useState(null);
   const [waitSeconds, setWaitSeconds] = useState(0);
+  const [needsOnboarding, setNeedsOnboarding] = useState(false);
+  const [onboardingComplete, setOnboardingComplete] = useState(false);
+  const onboardingDataRef = useRef(null);
+
+  useEffect(() => {
+    // One-time check: first launch?
+    if (!isOnboardingDone()) {
+      setNeedsOnboarding(true);
+    }
+  }, []);
+
+  const handleOnboardingComplete = useCallback((data) => {
+    onboardingDataRef.current = data;
+    setOnboardingComplete(true);
+  }, []);
 
   useEffect(() => {
     if (!window.hermes) {
@@ -80,6 +96,50 @@ function Bootstrap() {
     };
   }, []);
 
+  // ── Onboarding mode: first-launch questions while backend boots ──
+  if (needsOnboarding && !onboardingComplete) {
+    const isLongWait = waitSeconds > 15;
+    const stage = waitSeconds < 5 ? 'init'
+      : waitSeconds < 15 ? 'runtime'
+      : waitSeconds < 30 ? 'connecting'
+      : 'check';
+    const stageText = {
+      init:      '正在初始化环境…',
+      runtime:   '正在启动本地 runtime…',
+      connecting:'正在连接后端服务…',
+      check:     '启动时间较长，正在检查配置…',
+    };
+    return (
+      <div className="app flex-center">
+        <div className="welcome bootstrap-loading onboarding-container">
+          {/* Shared spinner + avatar */}
+          <div className="bootstrap-spinner">
+            <div className="spinner-ring" />
+            <img className="spinner-logo spinner-logo-img" src={bachAvatar} alt="" draggable="false" />
+          </div>
+
+          <Onboarding
+            ready={aguiPort !== null && aguiPort !== 0}
+            onComplete={handleOnboardingComplete}
+          />
+
+          {isLongWait && (
+            <p className="bootstrap-hint ob-init-hint">
+              已等待 <strong>{waitSeconds}</strong> 秒 · {stageText[stage]}
+            </p>
+          )}
+          <div className="bootstrap-progress">
+            <div
+              className="bootstrap-progress-bar"
+              style={{ width: `${Math.min(100, (waitSeconds / 60) * 100)}%` }}
+            />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Normal splash or App ──
   if (aguiPort === null || aguiPort === 0) {
     const isLongWait = waitSeconds > 15;
     const stage = waitSeconds < 5 ? 'init'
