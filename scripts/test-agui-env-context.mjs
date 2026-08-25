@@ -102,6 +102,21 @@ function streamReplay(chars) {
 }
 
 {
+  // 回归 v2：连续重复字符 "Windows 11" 的两个 "1" 都要保留。
+  // 之前的 endsWith 修复在末尾恰好是单字符时仍会误吞第二个。
+  const r = streamReplay([...'Windows 11 系统']);
+  check('duplicate chars like "11" both kept', r.text === 'Windows 11 系统', `got=${JSON.stringify(r.text)}`);
+}
+
+{
+  // 其他常见连续重复字符："00"、"22"、"33"。
+  const r00 = streamReplay([...'00']);
+  check('"00" both kept', r00.text === '00', `got=${JSON.stringify(r00.text)}`);
+  const r22 = streamReplay([...'22']);
+  check('"22" both kept', r22.text === '22', `got=${JSON.stringify(r22.text)}`);
+}
+
+{
   // 去重仍有效：delta 已经是 emitted 后缀时应被丢弃（防止重复打印）。
   let emittedText = '你好世界';
   let emittedPlain = normalizeForDedup(emittedText);
@@ -115,6 +130,15 @@ function streamReplay(chars) {
   let emittedPlain = normalizeForDedup(emittedText);
   const actual = computeAppendedDelta(emittedText, emittedPlain, '明天是 2026年08月26日');
   check('cumulative delta returns only tail', actual === '26日', `got=${JSON.stringify(actual)}`);
+}
+
+{
+  // 多字符末尾重复应被去重：emittedText 已经包含末尾 "星期三。" 时，
+  // 再 delta = "星期三。"（重复）应被丢弃（length=4 >= 2 命中 fast path）。
+  let emittedText = '今天星期三。';
+  let emittedPlain = normalizeForDedup(emittedText);
+  const dup = computeAppendedDelta(emittedText, emittedPlain, '星期三。');
+  check('multi-char suffix duplicate still dropped', dup === '', `got=${JSON.stringify(dup)}`);
 }
 
 {

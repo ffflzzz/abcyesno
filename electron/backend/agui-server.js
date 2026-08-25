@@ -1935,20 +1935,30 @@ function overlapLen(base, candidate) {
 function computeAppendedDelta(emittedText, emittedPlain, delta) {
   if (!delta || typeof delta !== 'string') return '';
   // Fast path: the entire delta is already the suffix of what we sent.
-  if (emittedText && emittedText.endsWith(delta)) return '';
+  // Length guard: a 1-char delta matching the last char is almost always the
+  // SECOND char of a duplicate run during char-stream output ("Windows 11"
+  // second "1", "00" second "0", etc.) — keep it. Single-char dedup has
+  // essentially no upside and a very real false-positive cost.
+  if (emittedText && delta.length >= 2 && emittedText.endsWith(delta)) return '';
   const overlap = overlapLen(emittedText, delta);
   let actual = delta;
   if (overlap >= MIN_OVERLAP_STRIP) {
     actual = delta.slice(overlap);
   }
   // Second line of defence: drop only if the normalized delta is already the
-  // SUFFIX of what we emitted (suffix, NOT substring — substring matching
-  // swallows repeated single digits in dates/numbers).
+  // SUFFIX of what we emitted. Two guards to avoid swallowing legit content:
+  //   (a) SUFFIX match, not substring — substring matching swallows any
+  //       single-character digit that already appeared earlier in the stream
+  //       (e.g. "2" inside "2026" → "2026年08月26日" → "206年8月日").
+  //   (b) Length ≥ 2 — single-char delta is almost certainly the SECOND
+  //       character of a run of duplicates during char-stream output
+  //       (e.g. "Windows 11" → second "1" must NOT be treated as a
+  //       duplicate of the first "1"; "00"、"33"、"22" same).
   const plainActual = normalizeForDedup(actual);
   const plainDelta = normalizeForDedup(delta);
-  if (plainActual && emittedPlain.endsWith(plainActual)) {
+  if (plainActual && plainActual.length >= 2 && emittedPlain.endsWith(plainActual)) {
     actual = '';
-  } else if (!actual && plainDelta && emittedPlain.endsWith(plainDelta)) {
+  } else if (!actual && plainDelta && plainDelta.length >= 2 && emittedPlain.endsWith(plainDelta)) {
     actual = '';
   }
   return actual;
