@@ -83,11 +83,37 @@ export default function AgentRunMonitor({ task, onStop, onOpenTaskDetail, onDism
 
         <div className="arm-current">
           {isActive ? (
-            <span className="arm-generating">
-              <span className="arm-spinner" />
-              {view.currentNodeLabel ? `生成中：${view.currentNodeLabel}` : "生成中…"}
-              {view.totalEpisodes > 1 ? ` · 第 ${(view.episode || 1)}/${view.totalEpisodes} 集` : ""}
-            </span>
+            <div className="arm-current-stack">
+              <div className="arm-current-row">
+                <span className="arm-spinner" />
+                <span className="arm-current-label">
+                  {view.currentNodeLabel ? `生成中：${view.currentNodeLabel}` : "生成中…"}
+                  {view.totalEpisodes > 1
+                    ? ` · 第 ${(view.episode || 1)}/${view.totalEpisodes} 集`
+                    : ""}
+                </span>
+              </div>
+              {view.progress && typeof view.progress.total === "number" && view.progress.total > 0 && (
+                <div className="arm-progress">
+                  <span className="arm-progress-bar">
+                    <span
+                      className="arm-progress-fill"
+                      style={{
+                        width: `${Math.min(100, (view.progress.completed / view.progress.total) * 100)}%`,
+                      }}
+                    />
+                  </span>
+                  <span className="arm-progress-count">
+                    {view.progress.completed}/{view.progress.total}
+                  </span>
+                  {view.progress.message && (
+                    <span className="arm-progress-message" title={view.progress.message}>
+                      {view.progress.message}
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
           ) : (
             <span className="arm-done-info">
               {task.artifacts && task.artifacts.length > 0
