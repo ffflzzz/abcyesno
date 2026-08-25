@@ -19,7 +19,14 @@ export interface QueryOptions {
   resume?: string;
   threadId?: string;
   model?: string;
-  /** Accepted but ignored: Hermes owns the session-level system prompt. */
+  /**
+   * Bridge-level system prompt (time injection, anti self-correction, number
+   * honesty). AG-UI does not carry a system role that survives agui-server —
+   * handleAgentRun only forwards the *user* message text to Hermes and drops
+   * any system role. So we prepend this to the user content so the model
+   * actually receives it. Without this the model has no real time source and
+   * invents dates like "206 年 8 月 5 日".
+   */
   systemPrompt?: string;
   images?: Array<{
     type: "image";
@@ -137,6 +144,7 @@ export async function claudeQuery(options: QueryOptions): Promise<QueryResult> {
     onText,
     onTurnEnd,
     abortController,
+    systemPrompt,
   } = options;
 
   const port = resolveAguiPort();
@@ -164,11 +172,18 @@ export async function claudeQuery(options: QueryOptions): Promise<QueryResult> {
     filename: `wechat_image_${i + 1}.${img.source.media_type.split('/')[1] || 'png'}`,
   }));
 
+  // agui-server's handleAgentRun only forwards the *user* message text to
+  // Hermes (it filters `role === 'user'`), so a real system role would be
+  // dropped. Prepend the bridge systemPrompt to the user content so the model
+  // actually sees the real clock time + anti self-correction + number-honesty
+  // instructions. This is the actual fix for the "206 年" date hallucination.
+  const userContent = systemPrompt ? `${systemPrompt}\n\n---\n\n${prompt}` : prompt;
+
   const body = {
     method: 'agent/run',
     threadId: agThreadId,
     runId,
-    messages: [{ id: randomUUID(), role: 'user', content: prompt }],
+    messages: [{ id: randomUUID(), role: 'user', content: userContent }],
     forwardedProps: {
       assistantId: process.env.WECHAT_BRIDGE_ASSISTANT_ID || 'default',
       ...(model ? { model } : {}),

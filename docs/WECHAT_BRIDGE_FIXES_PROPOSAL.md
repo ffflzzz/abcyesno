@@ -49,24 +49,36 @@ HTTP POST）稳定，但用户实测暴露三个问题：
 
 ### 根因诊断（结论）
 
-- **重复输出**：Agnes 2.5-flash 存在"自校正循环"——先回复，再附"哦我理解错了 /
+- **链路断裂（真正的根因）**：bridge 在 `main.ts` 里构造了一份 systemPrompt
+  （含真实时间注入 + 反自校正 + 数字诚实约束），但**它从未到达模型**：
+  1. `claude/provider.ts` 的 `claudeQuery` 解构 `options` 时没取 `systemPrompt`，
+     AG-UI body 里也没放它（旧的注释声称"Hermes 拥有 session system prompt"实为误导）；
+  2. 即便放进 body 的 system role，`agui-server.js` 的 `handleAgentRun` 在
+     `ctx.messages.filter(m => m.role === 'user')` 处**只抽 user 消息**，system role
+     被直接丢弃，最终只把 user text 转给 Hermes。
+  → 模型实际只收到 Hermes 的静态 assistant system prompt（无时间），所以"连日期都编造"。
+- **重复输出（次因）**：Agnes 2.5-flash 存在"自校正循环"——先回复，再附"哦我理解错了 /
   刚才那个回答确实…"的元评论并重写同一答案（两次文本仅头部措辞不同、正文近乎一致）。
-  因为两次文本**不全等**，原来的精确匹配去重漏掉了它。
-- **日期/数字编造**：模型没有真实时间源，遇到"今天几号 / 星期几"之类问题就凭印象
-  乱填（"206 年"、"8 月 25 号"），且相邻两次回答的日期还可能不一致。
+  因为两次文本**不全等**，原来的精确匹配去重漏掉了它。由于上面的反自校正指令也未送达，
+  模型无法自我收敛，循环更频繁。
+- **日期/数字编造（次因）**：在链路断裂的前提下，模型没有真实时间源，遇到"今天几号 /
+  星期几"之类问题就凭印象乱填（"206 年"、"8 月 25 号"），且相邻两次回答的日期还可能不一致。
 - **收敛验证**：`agui-server.js` 的 SSE 帧只发了一次，确认重复在**模型生成层**，
-  不在桥接层重发，因此桥接层加"自校正去重"即可兜底。
+  不在桥接层重发，因此桥接层加"自校正去重"可兜底，但**前提是约束真的送达模型**。
 
-### 实现要点（均在 `main.ts` 的 `sendToClaude` 内）
+### 实现要点
 
-- **自校正去重 `isSelfCorrectionDuplicate`**：维护 `lastEmitRecord`（文本 + 时间戳），
+- **（关键修复）`provider.ts` 让 systemPrompt 真正穿越链路**：`claudeQuery` 现在解构
+  `systemPrompt`，并把它**拼接到 user message 的 content 前面**（`${systemPrompt}\n\n---\n\n${prompt}`）
+  再发出。这样 agui-server 抽到的 user text 已包含真实时间与约束，模型 100% 收到。
+- **自校正去重 `isSelfCorrectionDuplicate`**（`main.ts`）：维护 `lastEmitRecord`（文本 + 时间戳），
   在 1500ms 窗口内，若新文本归一化后与上次：**完全相同**（归一化后）或**头部 70%
   的 bigram Jaccard ≥ 0.8**（容忍"我理解错了"式微改前缀），则丢弃并记 log
   `dropped self-correction duplicate`，不发微信。窗口期之外（如隔了几小时的合法重述）
   不误删。
-- **真实时间注入 `formatNowForModel()`**：用 `Intl.DateTimeFormat('zh-CN', …)` 取
-  宿主本地时区的"年月日 + 星期 + 时:分"注入 system prompt（`当前时间：…`）。
-- **约束追加**：
+- **真实时间注入 `formatNowForModel()`**（`main.ts`）：用 `Intl.DateTimeFormat('zh-CN', …)` 取
+  宿主本地时区的"年月日 + 星期 + 时:分"，经上面的 provider 拼接进入 user 消息（`当前时间：…`）。
+- **约束追加**（同样经 provider 拼接进入 user 消息）：
   - 反自校正："回复必须一次性给到最终答案，不要'我理解错了'式的自我反思重写…"。
   - 反编造："日期、时间、星期、电话号码、身份证号、版本号、引用的数字等…必须严格
     基于上文提供的'当前时间'或用户给出的真实数据；不知道就说不知道，不要凭印象编造。"
