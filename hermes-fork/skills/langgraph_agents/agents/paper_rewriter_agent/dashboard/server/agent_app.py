@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -256,6 +257,15 @@ async def run_detail(run_id: str):
     if os.path.exists(gp):
         original_chars = os.path.getsize(gp)
 
+    # 若尚未生成 PDF 但已有章节，则按需生成（让历史会话也能下载）
+    pdf_path = os.path.join(d, "output.pdf")
+    if not os.path.exists(pdf_path) and progress.get("chapters"):
+        try:
+            generate_pdf(run_id)
+        except Exception as e:
+            _log(f"[detail {run_id}] PDF 生成失败: {e}")
+    pdf_ready = os.path.exists(pdf_path)
+
     return {
         "run_id": run_id,
         "paper_title": meta.get("paper_title", run_id),
@@ -263,16 +273,182 @@ async def run_detail(run_id: str):
         "chapters": progress.get("chapters", {}),
         "outline": outline,
         "original_chars": original_chars,
-        "pdf_ready": os.path.exists(os.path.join(d, "output.pdf")),
+        "pdf_ready": pdf_ready,
     }
+
+
+# ─── PDF 导出（中文需嵌入 CJK 字体）───
+_CJK_FONT_CANDIDATES = [
+    r"C:/Windows/Fonts/simhei.ttf",
+    r"C:/Windows/Fonts/msyh.ttc",
+    r"C:/Windows/Fonts/simsun.ttc",
+    r"C:/Windows/Fonts/NotoSansSC-VF.ttf",
+    r"C:/Windows/Fonts/simhei.ttf",
+]
+
+
+def _find_cjk_font() -> str | None:
+    for p in _CJK_FONT_CANDIDATES:
+        if os.path.exists(p):
+            return p
+    # 兜底：在仓库内查找常见中文字体
+    for root, _dirs, files in os.walk(_PROJECT_ROOT):
+        for f in files:
+            if f.lower() in ("simhei.ttf", "msyh.ttc", "simsun.ttc", "notosanssc.ttf"):
+                return os.path.join(root, f)
+    return None
+
+
+def _natural_chapter_order(chapter_ids):
+    """按章节编号自然排序：Ch1, Ch2 ... Ch10（避免字典序 Ch10 < Ch2）"""
+    def key(cid):
+        m = re.search(r"(\d+)", str(cid))
+        return (0, int(m.group(1))) if m else (1, str(cid))
+    return sorted(chapter_ids, key=key)
+
+
+def _pdf_line(pdf, line: str, base_size: int = 11):
+    """按行渲染：# 标题加粗放大，## 次级标题，其余正文。"""
+    pdf.set_x(pdf.l_margin)
+    stripped = line.lstrip()
+    if stripped.startswith("# "):
+        pdf.set_font("CJK", size=base_size + 5)
+        pdf.set_x(pdf.l_margin)
+        pdf.multi_cell(0, base_size + 3, stripped[2:])
+        pdf.ln(2)
+        pdf.set_font("CJK", size=base_size)
+    elif stripped.startswith("## "):
+        pdf.set_font("CJK", size=base_size + 3)
+        pdf.set_x(pdf.l_margin)
+        pdf.multi_cell(0, base_size + 1, stripped[3:])
+        pdf.ln(1)
+        pdf.set_font("CJK", size=base_size)
+    else:
+        pdf.set_font("CJK", size=base_size)
+        pdf.set_x(pdf.l_margin)
+        pdf.multi_cell(0, base_size + 1, line)
+
+
+def generate_pdf(run_id: str) -> str | None:
+    """从已完成章节编译 output.pdf。无章节时返回 None。
+
+    重写后的论文为纯中文，因此必须嵌入 CJK 字体，否则 fpdf2 默认
+    Helvetica 无法渲染汉字（会留空或报错）。
+    """
+    run_dir = _get_run_dir(run_id)
+    if not os.path.isdir(run_dir):
+        return None
+    progress_path = os.path.join(run_dir, "progress.json")
+    chapters: dict = {}
+    if os.path.exists(progress_path):
+        try:
+            chapters = json.load(open(progress_path, "r", encoding="utf-8")).get("chapters", {})
+        except Exception:
+            chapters = {}
+    if not chapters:
+        return None
+
+    font_path = _find_cjk_font()
+    if not font_path:
+        _log(f"[pdf {run_id}] 未找到中文字体，跳过 PDF 生成")
+        return None
+
+    meta: dict = {}
+    meta_path = os.path.join(run_dir, "meta.json")
+    if os.path.exists(meta_path):
+        try:
+            meta = json.load(open(meta_path, "r", encoding="utf-8"))
+        except Exception:
+            meta = {}
+    title = meta.get("paper_title") or run_id
+
+    from fpdf import FPDF
+    pdf = FPDF()
+    pdf.set_margins(20, 20, 20)
+    pdf.set_auto_page_break(auto=True, margin=18)
+    pdf.add_font("CJK", "", font_path)
+
+    # 封面
+    pdf.add_page()
+    pdf.set_font("CJK", size=22)
+    pdf.set_x(pdf.l_margin)
+    pdf.multi_cell(0, 12, title, align="C")
+    pdf.ln(6)
+    pdf.set_font("CJK", size=13)
+    pdf.set_x(pdf.l_margin)
+    pdf.multi_cell(0, 8, "重写版 · 论文重写 Agent 生成", align="C")
+    created = meta.get("created_at")
+    if created:
+        try:
+            import datetime
+            ts = datetime.datetime.fromtimestamp(float(created)).strftime("%Y-%m-%d %H:%M")
+            pdf.ln(2)
+            pdf.set_x(pdf.l_margin)
+            pdf.multi_cell(0, 8, ts, align="C")
+        except Exception:
+            pass
+
+    # 大纲
+    outline_path = os.path.join(run_dir, "outline.txt")
+    if os.path.exists(outline_path):
+        outline = open(outline_path, "r", encoding="utf-8").read().strip()
+        if outline:
+            pdf.add_page()
+            pdf.set_font("CJK", size=16)
+            pdf.set_x(pdf.l_margin)
+            pdf.multi_cell(0, 10, "大纲")
+            pdf.ln(2)
+            for line in outline.split("\n"):
+                line = line.rstrip()
+                if not line:
+                    pdf.ln(2)
+                    continue
+                _pdf_line(pdf, line, base_size=11)
+
+    # 章节
+    for cid in _natural_chapter_order(chapters.keys()):
+        cpath = os.path.join(run_dir, "chapters", f"{cid}.txt")
+        if not os.path.exists(cpath):
+            continue
+        content = open(cpath, "r", encoding="utf-8").read()
+        pdf.add_page()
+        pdf.set_font("CJK", size=17)
+        pdf.set_x(pdf.l_margin)
+        pdf.multi_cell(0, 10, str(cid))
+        pdf.ln(2)
+        for line in content.split("\n"):
+            line = line.rstrip()
+            if not line:
+                pdf.ln(3)
+                continue
+            _pdf_line(pdf, line, base_size=11)
+
+    out_path = os.path.join(run_dir, "output.pdf")
+    pdf.output(out_path)
+    return out_path
 
 
 @app.get("/api/runs/{run_id}/pdf")
 async def run_pdf(run_id: str):
     from fastapi.responses import FileResponse
-    p = os.path.join(_get_run_dir(run_id), "output.pdf")
+    run_dir = _get_run_dir(run_id)
+    p = os.path.join(run_dir, "output.pdf")
     if not os.path.exists(p):
-        return JSONResponse({"error": "该运行尚未生成 PDF"}, status_code=404)
+        # 按需生成：存在章节就现场编译 PDF，避免历史会话无法下载
+        progress_path = os.path.join(run_dir, "progress.json")
+        has_chapters = False
+        if os.path.exists(progress_path):
+            try:
+                has_chapters = bool(json.load(open(progress_path, "r", encoding="utf-8")).get("chapters"))
+            except Exception:
+                has_chapters = False
+        if has_chapters:
+            try:
+                p = generate_pdf(run_id) or p
+            except Exception as e:
+                _log(f"[pdf {run_id}] 生成失败: {e}")
+        if not p or not os.path.exists(p):
+            return JSONResponse({"error": "该运行尚未生成章节，无法导出 PDF"}, status_code=404)
     return FileResponse(p, media_type="application/pdf", filename=f"{run_id}.pdf")
 
 
@@ -565,6 +741,16 @@ def _run_agent(run_id: str, paper_title: str, original_text: str,
             "chapters": chapters_info,
         })
         _log(f"[Agent {run_id}] 完成，{tool_call_count}次工具调用，{len(chapters_info)}章")
+
+        # 运行结束：尽量导出 PDF 产物（即使被手动停止，只要有章节就生成）
+        try:
+            if chapters_info:
+                gp = generate_pdf(run_id)
+                if gp:
+                    _log(f"[Agent {run_id}] 已生成 PDF: {gp}")
+                    _fire_sse("pdf_ready", {"run_id": run_id, "pdf": os.path.basename(gp)})
+        except Exception as e:
+            _log(f"[Agent {run_id}] PDF 生成失败: {e}")
 
     except Exception as e:
         current_run["status"] = "error"
