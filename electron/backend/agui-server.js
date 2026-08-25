@@ -801,6 +801,25 @@ function createAgUIServer(getGatewayClient, storage, options) {
           break;
         }
 
+        // Agent terminal tabs: Hermes tui_gateway wires process_registry.on_output
+        // → `agent.terminal.output` (raw ANSI chunks, keyed by process_id) and
+        // on_close → `terminal.close`. Relay both so the frontend can render a
+        // live xterm pane and drop a tab when the process is reaped.
+        case 'agent.terminal.output': {
+          const processId = (payload && (payload.process_id || payload.processId)) || '';
+          const chunk = payload && (payload.chunk || payload.text || '');
+          if (processId && chunk) {
+            send({ type: 'CUSTOM', name: 'agent.terminal.output', value: { process_id: processId, chunk } });
+          }
+          break;
+        }
+
+        case 'terminal.close': {
+          const processId = (payload && (payload.process_id || payload.processId)) || (params && (params.process_id || params.processId)) || '';
+          send({ type: 'CUSTOM', name: 'terminal.close', value: { process_id: processId } });
+          break;
+        }
+
         case 'message.complete':
         case 'message.end': {
           const text = payload && (payload.text || payload.rendered);

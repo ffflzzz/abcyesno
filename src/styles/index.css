@@ -4699,6 +4699,85 @@ body {
   animation: cursor-blink 0.5s step-end infinite;
 }
 
+/* ── TerminalToolCard：交互式 xterm 终端卡片 ── */
+.terminal-tool-card {
+  max-width: 80%;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.terminal-tool-card[data-status="running"] {
+  border-color: var(--warning);
+}
+.terminal-tool-card[data-status="error"] {
+  border-color: var(--error);
+}
+.terminal-tool-card-body {
+  padding: 0;
+  border-top: 1px solid var(--border);
+}
+.terminal-tool-statusbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+}
+.terminal-tool-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.terminal-tool-status.running {
+  color: var(--warning);
+}
+.terminal-tool-status.ended {
+  color: var(--success);
+}
+.terminal-tool-status .arm-status-icon {
+  display: inline-flex;
+}
+.terminal-tool-close {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  border-radius: var(--radius-xs);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.terminal-tool-close:hover:not(:disabled) {
+  color: var(--error);
+  border-color: var(--error);
+}
+.terminal-tool-close:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+/* xterm 宿主：固定深色终端语义，横向滚动留给 xterm 内部 */
+.xterm-host {
+  height: 260px;
+  padding: 6px 8px;
+  background: #0d1117;
+  overflow: hidden;
+}
+.terminal-tool-card-body .xterm-host .xterm {
+  height: 100%;
+}
+.terminal-tool-card-body .tool-card-section {
+  border-top: 1px solid var(--border);
+  padding: 10px 12px;
+}
+
 /* ── TypewriterText：打字机光标 ── */
 .typewriter-text { position: relative; }
 .typewriter-cursor {

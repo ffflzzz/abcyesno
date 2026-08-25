@@ -11098,6 +11098,61 @@ def _(rid, params: dict) -> dict:
         return _err(rid, 5010, str(e))
 
 
+@method("process.write")
+def _(rid, params: dict) -> dict:
+    """Feed keystrokes into a running background PTY/process — session-scoped
+    like process.kill. Used by the desktop's interactive terminal pane:
+    xterm onData → gatewayRequest("process.write", {process_id, data})."""
+    session, err = _sess(params, rid)
+    if err:
+        return err
+    proc_id = str(params.get("process_id") or "")
+    if not proc_id:
+        return _err(rid, 4012, "process_id required")
+    data = params.get("data")
+    if data is None:
+        return _err(rid, 4013, "data required")
+    try:
+        from tools.process_registry import process_registry
+
+        proc = process_registry.get(proc_id)
+        if proc is None or str(getattr(proc, "session_key", "") or "") != str(
+            session.get("session_key") or ""
+        ):
+            return _err(rid, 4044, f"no such process: {proc_id}")
+        return _ok(rid, process_registry.write_stdin(proc_id, str(data)))
+    except Exception as e:
+        return _err(rid, 5010, str(e))
+
+
+@method("process.resize")
+def _(rid, params: dict) -> dict:
+    """Resize a running background PTY's window (cols/rows). Only meaningful
+    for PTY sessions; Popen-mode processes accept and ignore it. Session-scoped
+    like process.kill/write so one window can't resize another's session."""
+    session, err = _sess(params, rid)
+    if err:
+        return err
+    proc_id = str(params.get("process_id") or "")
+    if not proc_id:
+        return _err(rid, 4012, "process_id required")
+    try:
+        cols = int(params.get("cols") or 0)
+        rows = int(params.get("rows") or 0)
+        if cols < 1 or rows < 1:
+            return _err(rid, 4014, "cols/rows must be positive")
+        from tools.process_registry import process_registry
+
+        proc = process_registry.get(proc_id)
+        if proc is None or str(getattr(proc, "session_key", "") or "") != str(
+            session.get("session_key") or ""
+        ):
+            return _err(rid, 4044, f"no such process: {proc_id}")
+        return _ok(rid, process_registry.resize_pty(proc_id, cols, rows))
+    except Exception as e:
+        return _err(rid, 5010, str(e))
+
+
 @method("reload.mcp")
 def _(rid, params: dict) -> dict:
     session = _sessions.get(params.get("session_id", ""))

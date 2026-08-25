@@ -60,6 +60,27 @@ function isKawaiiSpinnerPhrase(text) {
   return typeof text === "string" && KAWAII_SPINNER_RE.test(text.trim());
 }
 
+// Extract a background terminal process id from a tool result. Hermes'
+// terminal tool (pty=True, background=True) returns JSON like
+// { output, session_id, pid, exit_code } — session_id is the
+// process_registry id that agent.terminal.output events route by.
+function extractProcessId(result) {
+  if (!result) return null;
+  let obj = result;
+  if (typeof result === "string") {
+    const trimmed = result.trim();
+    if (!trimmed.startsWith("{")) return null;
+    try {
+      obj = JSON.parse(trimmed);
+    } catch {
+      return null;
+    }
+  }
+  if (typeof obj !== "object" || obj === null) return null;
+  const pid = obj.session_id || obj.process_id || obj.processId;
+  return typeof pid === "string" && pid ? pid : null;
+}
+
 // Resolve every inline reference to base64 bytes. `file://` needs a trip
 // through the main process (the renderer can't read cross-directory file://).
 async function resolveImagePayload(refs) {
@@ -136,6 +157,9 @@ function createSessionState(id) {
     runId: null,
     currentAssistantId: null,
     toolIndex: new Map(),
+    // process_id → tool message id：agent.terminal.output 按 process_id 路由到
+    // 对应的 terminal 工具卡片（后台 PTY 会话的实时 ANSI 输出）。
+    processIndex: new Map(),
     thinkingSince: null,
     hydrated: false,
   };
@@ -509,6 +533,31 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
           );
           publish(sess.id);
         }
+      } else if (name === "agent.terminal.output") {
+        // Live PTY output for a background terminal session (raw ANSI chunks,
+        // streamed by Hermes' process_registry.on_output → tui_gateway). Route
+        // by process_id to the owning tool message; rendered by TerminalToolCard.
+        const { process_id: pid, chunk } = value || {};
+        const id = pid && sess.processIndex.get(pid);
+        if (id && chunk) {
+          sess.messages = sess.messages.map((m) =>
+            m.id === id
+              ? { ...m, terminalChunks: [...(m.terminalChunks || []), chunk] }
+              : m
+          );
+          publish(sess.id);
+        }
+      } else if (name === "terminal.close") {
+        // PTY session was reaped server-side (request_close_terminal). Mark the
+        // owning terminal card as ended so the pane goes read-only.
+        const pid = (value && (value.process_id || value.processId)) || "";
+        const id = pid && sess.processIndex.get(pid);
+        if (id) {
+          sess.messages = sess.messages.map((m) =>
+            m.id === id ? { ...m, terminalClosed: true } : m
+          );
+          publish(sess.id);
+        }
       } else if (name && name.startsWith("workflow.")) {
         // Contract layer (L5): relay progress / artifact / approval / done events
         // into the eventBus keyed by the run's threadId. The generic workbenches
@@ -776,7 +825,19 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
 
         case "TOOL_CALL_RESULT": {
           const id = sess.toolIndex.get(ev.toolCallId);
-          if (id) patchMessage(sess, id, { result: ev.content, content: ev.content });
+          if (id) {
+            patchMessage(sess, id, { result: ev.content, content: ev.content });
+            // Background terminal (pty=True) returns a session_id in its tool
+            // result. Index it so agent.terminal.output chunks can be routed to
+            // this message's terminal pane.
+            const pid = extractProcessId(ev.content);
+            if (pid) {
+              sess.messages = sess.messages.map((m) =>
+                m.id === id ? { ...m, processId: pid } : m
+              );
+              sess.processIndex.set(pid, id);
+            }
+          }
           break;
         }
 

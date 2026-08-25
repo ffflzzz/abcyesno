@@ -1512,6 +1512,26 @@ class ProcessRegistry:
         """Send data + newline to a running process's stdin (like pressing Enter)."""
         return self.write_stdin(session_id, data + "\n")
 
+    def resize_pty(self, session_id: str, cols: int, rows: int) -> dict:
+        """Resize a PTY session's terminal window (cols/rows).
+
+        No-op for Popen-mode sessions (no pty handle). winpty.PtyProcess and
+        ptyprocess.PtyProcess both expose ``setwinsize(rows, cols)``.
+        """
+        session = self.get(session_id)
+        if session is None:
+            return {"status": "not_found", "error": f"No process with ID {session_id}"}
+        if session.exited:
+            return {"status": "already_exited", "error": "Process has already finished"}
+        pty = getattr(session, "_pty", None)
+        if not pty or not hasattr(pty, "setwinsize"):
+            return {"status": "ok", "note": "no-pty", "cols": cols, "rows": rows}
+        try:
+            pty.setwinsize(rows, cols)
+            return {"status": "ok", "cols": cols, "rows": rows}
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
+
     def request_close_terminal(self, session_id: str) -> dict:
         """Ask the desktop GUI to close the read-only terminal tab mirroring this
         background process.

@@ -8,6 +8,7 @@ import WorkflowGraphPanel from "./WorkflowGraphPanel.jsx";
 import ThinkingIndicator from "./ThinkingIndicator.jsx";
 import ArtifactPreview from "./ArtifactPreview.jsx";
 import ToolCard from "./ToolCard.jsx";
+import TerminalToolCard from "./TerminalToolCard.jsx";
 import TypewriterText from "./TypewriterText.jsx";
 import ApprovalBubble from "./ApprovalBubble.jsx";
 import GeneratedComponent from "./GeneratedComponent.jsx";
@@ -967,19 +968,41 @@ function ToolsRow({ items, assistantAvatar, loading, isLastRow, toolStatus = {},
         </div>
         {expanded && (
           <div className="tool-group expanded">
-              {items.map((m, i) => (
-              <ToolCard
-                key={m.id || `tool-${i}`}
-                toolName={m.toolName || "tool"}
-                args={m.args}
-                result={m.result !== undefined && m.result !== null ? m.result : m.content}
-                status={mapStatus(m.status)}
-                durationMs={m.durationMs}
-                inlineDiff={m.inlineDiff}
-                generating={toolStatus[m.toolName || "tool"]?.generating}
-                defaultExpanded={mapStatus(m.status) === "running" || mapStatus(m.status) === "in_progress"}
-              />
-            ))}
+              {items.map((m, i) => {
+                const mStatus = mapStatus(m.status);
+                // A terminal tool that launched a background PTY session gets a
+                // live interactive xterm pane (agent.terminal.output routed by
+                // process_id); plain terminal calls keep the classic ToolCard.
+                if ((m.toolName === "terminal" || m.toolName === "terminal_tool") && m.processId) {
+                  return (
+                    <TerminalToolCard
+                      key={m.id || `tool-${i}`}
+                      toolName={m.toolName || "terminal"}
+                      status={mStatus}
+                      result={m.result !== undefined && m.result !== null ? m.result : m.content}
+                      durationMs={m.durationMs}
+                      terminalChunks={m.terminalChunks || []}
+                      processId={m.processId}
+                      interactive
+                      terminalClosed={!!m.terminalClosed}
+                      defaultExpanded={mStatus === "running" || mStatus === "in_progress"}
+                    />
+                  );
+                }
+                return (
+                  <ToolCard
+                    key={m.id || `tool-${i}`}
+                    toolName={m.toolName || "tool"}
+                    args={m.args}
+                    result={m.result !== undefined && m.result !== null ? m.result : m.content}
+                    status={mStatus}
+                    durationMs={m.durationMs}
+                    inlineDiff={m.inlineDiff}
+                    generating={toolStatus[m.toolName || "tool"]?.generating}
+                    defaultExpanded={mStatus === "running" || mStatus === "in_progress"}
+                  />
+                );
+              })}
           </div>
         )}
         <ArtifactPreview toolMessages={items} compact onViewInSidebar={onViewInSidebar} />
