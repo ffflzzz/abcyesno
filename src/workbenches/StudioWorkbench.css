@@ -39,28 +39,57 @@
 .st-icon-btn { background: transparent; border: 1px solid var(--st-line); color: var(--st-muted); border-radius: var(--st-radius-xs); width: 28px; height: 28px; display: grid; place-items: center; cursor: pointer; transition: all .15s; }
 .st-icon-btn:hover { border-color: var(--st-accent); color: var(--st-text); background: var(--st-soft); }
 
-/* ── HITL approval gate overlay ── */
+/* ── HITL approval gate overlay ──
+   Centered modal with a dimmed backdrop so it's unambiguous that the
+   confirmation is blocking the rest of the workbench. The previous
+   bottom-floating bubble overlapped the right TaskPanel and the storyboard
+   previews with no visual cue that it was a blocking approval — users
+   reported "遮挡一部分内容" with no way to tell which surfaces were still
+   active. Same AVATAR-less rendering as the inline chat bubble (we keep
+   the bubble's title/buttons intact but drop the agent-avatar decoration
+   since the modal already owns the visual context). */
 .st-approval-overlay {
-  /* NO `transform: translateX(-50%)` here — when this overlay rendered the
-     <ApprovalBubble>'s `.approval-lightbox` (position:fixed; inset:0), the
-     transform trick made the lightbox use the overlay's box as its
-     containing block, so the close-X ended up at top-right of the 560x82vh
-     overlay instead of top-right of the viewport. Users clicked an image
-     thumb to preview and then could not dismiss it. Center via the
-     left:0/right:0/margin:auto trio so no ancestor has `transform`. */
+  /* Full-screen mask: covers the workbench viewport, dims background,
+     centers the bubble as a card. NO `transform` on this ancestor — the
+     <ApprovalBubble>'s `.approval-lightbox` (position:fixed; inset:0) needs
+     the viewport as containing block; adding `transform` here used to make
+     the close-X stick to top-right of the overlay instead of the viewport. */
   position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 24px;
-  margin: 0 auto;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
   z-index: 1000;
-  width: min(560px, 92vw);
-  max-height: 82vh;
-  overflow: auto;
-  padding: 4px;
-  pointer-events: auto;
 }
-.st-approval-overlay .message-row.assistant { margin-bottom: 0; }
+.st-approval-overlay .message-avatar {
+  /* Inside the modal: hide the agent-avatar column so the bubble reads as a
+     centered card, not an inline chat row. Keeping the rest of the bubble
+     markup intact means the existing lightbox/preview/buttons work without
+     duplication. */
+  display: none;
+}
+.st-approval-overlay .message-row.assistant {
+  /* Override .message-row's flex-row layout so the bubble becomes a single
+     centered card. The flex parent's gap (10px) would leave a phantom gap
+     where the avatar used to be; switching to block lets the col fill the
+     whole row. */
+  display: block;
+  width: min(560px, 96vw);
+  max-height: 82vh;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  background: var(--st-surface);
+  border: 1px solid var(--st-line);
+  border-radius: var(--st-radius-md);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
+}
+.st-approval-overlay .message-row.assistant .message-col {
+  max-width: 100%;
+  width: 100%;
+}
 
 /* ── Stepper ── */
 .st-stepper { display: flex; align-items: center; justify-content: center; gap: 0; flex: 1; min-width: 0; padding: 4px 0; }

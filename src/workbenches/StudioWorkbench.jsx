@@ -937,6 +937,16 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
   // we render our own overlay and route the decision through the file control
   // channel (window.hermes.sendWorkflowInterrupt).
   const [approval, setApprovalRaw] = useState(_readCache(cacheKey + ":approval", null));
+  // Gate IDs the user has already responded to (approved / rejected / steer /
+  // dismissed). The contract eventBus buffers events per runId and replays
+  // them in full on remount — without this filter, switching tabs (which
+  // unmounts StudioWorkbench) re-fires the original `workflow.approval` event
+  // and the same confirmation bubble pops up again even after the user
+  // already answered it. We persist the IDs into `_studioCache[cacheKey]`
+  // so they survive remounts and tab switches.
+  const respondedGateIdsRef = useRef(
+    new Set(_readCache(cacheKey + ":respondedGateIds", []) || [])
+  );
   // Live LangGraph node-trace (topology + per-node status map).
   const [topology, setTopologyRaw] = useState(_readCache(cacheKey + ":topology", null));
   const [trace, setTraceRaw] = useState(_readCache(cacheKey + ":trace", {}));
@@ -1018,6 +1028,17 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
   const setRunState = (v) => setRunStateRaw((prev) => { const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { runState: n }); return n; });
   const setRunId = (v) => setRunIdRaw((prev) => { const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { runId: n }); return n; });
   const setApproval = (v) => setApprovalRaw((prev) => { const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { approval: n }); return n; });
+  // Record a gate_id as "already responded", so the on-remount replay of the
+  // contract eventBus backlog won't re-fire a stale workflow.approval event.
+  // Called from handleWorkbenchApprove (approve / reject / steer / dismiss).
+  const markRespondedGate = useCallback((gateId) => {
+    if (!gateId) return;
+    if (respondedGateIdsRef.current.has(gateId)) return;
+    respondedGateIdsRef.current.add(gateId);
+    _writeCache(cacheKey, {
+      respondedGateIds: Array.from(respondedGateIdsRef.current),
+    });
+  }, [cacheKey]);
   const setTopology = (v) => setTopologyRaw((prev) => { const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { topology: n }); return n; });
   const setTrace = (v) => setTraceRaw((prev) => { const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { trace: n }); return n; });
   const setTraceEpisode = (v) => setTraceEpisodeRaw((prev) => { const n = typeof v === "function" ? v(prev) : v; _writeCache(cacheKey, { traceEpisode: n }); return n; });
@@ -1362,12 +1383,27 @@ useEffect(() => {
 
       if (type === "workflow.approval") {
         const p = ev.payload || {};
+        const gateId = p.gate_id;
+        // Drop replays of gates the user already answered in this workbench.
+        // The eventBus keeps the entire per-run backlog (line 1479 below) and
+        // replays it on remount — without this filter, every tab switch
+        // re-pops a confirmation bubble for an already-decided gate, and the
+        // orchestrator keeps waiting on `decision.json` (deadlock, since the
+        // backend already received the original decision).
+        if (gateId && respondedGateIdsRef.current.has(gateId)) return;
+        // The run is already terminal — don't surface stale approvals. The
+        // terminal-state overlays ("工作流运行出错" / "审批已超时" etc.)
+        // are rendered from `approval.ended` set in workflow.error /
+        // workflow.done branches above, so it's safe to ignore fresh
+        // approval events that arrive during a finished run.
+        const terminal = runStateRef.current === "done" || runStateRef.current === "error" || runStateRef.current === "interrupted" || runStateRef.current === "timeout";
+        if (terminal) return;
         setApproval({
-          id: p.gate_id || "workflow-approval",
-          operation: p.gate_id || "workflow-approval",
+          id: gateId || "workflow-approval",
+          operation: gateId || "workflow-approval",
           source: "workflow",
           runId: p.workflowRunId,
-          gateId: p.gate_id,
+          gateId,
           label: p.label,
           message: p.message || p.label || "工作流需要确认",
           artifacts: p.artifacts || [],
@@ -1612,9 +1648,15 @@ useEffect(() => {
   // (window.hermes.sendWorkflowInterrupt) directly and clear our local gate.
   async function handleWorkbenchApprove(choice, remember, steerText) {
     if (!approval) return;
+    // Snapshot gateId BEFORE clearing approval — we need it to mark the gate
+    // as "responded" so the eventBus backlog replay on next remount doesn't
+    // re-fire the same workflow.approval event (ref: contractHandler
+    // `workflow.approval` branch).
+    const respondedGateId = approval.gateId || null;
     // 失效态的「知道了」按钮传 choice === null：只关闭覆盖层，不再向后端发任何
     // 决策（run 已死，发了也是静默死锁）。
     if (choice === null || choice === undefined) {
+      markRespondedGate(respondedGateId);
       setApproval(null);
       return;
     }
@@ -1633,6 +1675,7 @@ useEffect(() => {
         // 告诉用户这个审批任务已经死了、需要重新发起。否则用户点确认毫无
         // 反应（旧 bug 根因之一）。
         if (resp && resp.status === "error") {
+          markRespondedGate(respondedGateId);
           setApproval((prev) => ({
             ...(prev || {}),
             id: "workflow-ended",
@@ -1649,6 +1692,9 @@ useEffect(() => {
     } catch (err) {
       console.error("workbench approval response failed", err);
     }
+    // Even if the IPC call threw, the user has made an explicit decision.
+    // Mark the gate so the next eventBus replay never re-pops this bubble.
+    markRespondedGate(respondedGateId);
     setApproval(null);
   }
 
@@ -1963,6 +2009,12 @@ useEffect(() => {
     setShotState({});
     setTimeline([]);
     setExportJson(null);
+    // Fresh run → forget prior responded gate_ids. Otherwise deterministic
+    // gate_ids from a previous run (e.g. "gate_each_scene_ep1_2") would
+    // silently swallow the next run's approvals, since the contract eventBus
+    // replay filter would skip them.
+    respondedGateIdsRef.current = new Set();
+    _writeCache(cacheKey, { respondedGateIds: [] });
 
     const input = {
       mode: project.mode,
@@ -2027,6 +2079,8 @@ useEffect(() => {
             className="st-icon-btn"
             onClick={() => {
               clearPersistedState();
+              respondedGateIdsRef.current = new Set();
+              _writeCache(cacheKey, { respondedGateIds: [] });
               setPhase("script");
               setDone({});
               setTasks([]);
