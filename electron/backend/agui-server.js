@@ -557,51 +557,12 @@ function createAgUIServer(getGatewayClient, storage, options) {
       }
     }
 
-    // Compute the longest suffix of `base` that matches a prefix of `candidate`.
-    // Returns the length of that overlap (0 if none). Tries longer overlaps first
-    // so small coincidental substrings don't steal real content.
-    function overlapLen(base, candidate) {
-      const max = Math.min(base.length, candidate.length);
-      for (let k = max; k > 0; k--) {
-        if (base.slice(-k) === candidate.slice(0, k)) return k;
-      }
-      return 0;
-    }
-
-    function normalizeForDedup(text) {
-      // Collapse whitespace but keep a single space so overlapping sentences still match.
-      return text.replace(/\s+/g, ' ').trim();
-    }
-
-    // Overlap stripping below this length is treated as coincidence, not as
-    // a cumulative/echoed resend. Without a floor, short CJK coincidences
-    // ("。", "确认了", …) stripped real leading characters from incremental
-    // deltas — garbling the streamed copy — which then also broke the
-    // finalize() prefix alignment and re-appended the entire answer.
-    const MIN_OVERLAP_STRIP = 10;
-
-    // Append `delta` to the emitted text, skipping any part that is already present
-    // at the end. This handles both true incremental deltas and accidental cumulative
-    // or partially-repeated deltas from downstream providers.
+    // Append `delta` to the emitted text, skipping any part that is already
+    // present at the end. Delegates to the module-level pure helper
+    // `computeAppendedDelta` (shared with the regression test) so the
+    // char-swallowing dedup fix is directly unit-testable.
     function appendDelta(delta) {
-      if (!delta || typeof delta !== 'string') return '';
-      // Fast path: the entire delta is already the suffix of what we sent.
-      if (emittedText && emittedText.endsWith(delta)) return '';
-      const overlap = overlapLen(emittedText, delta);
-      let actual = delta;
-      if (overlap >= MIN_OVERLAP_STRIP) {
-        actual = delta.slice(overlap);
-      }
-      // Second line of defence: if the whitespace-normalized version is fully
-      // contained, drop it. This catches cases where punctuation/spacing differ.
-      const plainActual = normalizeForDedup(actual);
-      const plainDelta = normalizeForDedup(delta);
-      if (plainActual && emittedPlain.includes(plainActual)) {
-        actual = '';
-      } else if (!actual && plainDelta && emittedPlain.includes(plainDelta)) {
-        actual = '';
-      }
-      return actual;
+      return computeAppendedDelta(emittedText, emittedPlain, delta);
     }
 
     function recordEmitted(delta) {
@@ -1951,4 +1912,54 @@ function prependEnvContext(ctx, rawText) {
   return `${env}\n---\n\n${rawText}`;
 }
 
-module.exports = { createAgUIServer, extractText, formatNowForModel, prependEnvContext };
+// ── Stream delta dedup ───────────────────────────────────────────────────
+// Pure helpers shared by createTurnTranslator and the regression test
+// (scripts/test-agui-env-context.mjs). Extracted from the translator closure
+// so the char-swallowing fix is directly unit-testable.
+const MIN_OVERLAP_STRIP = 10;
+
+function normalizeForDedup(text) {
+  // Collapse whitespace but keep a single space so overlapping sentences still match.
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+function overlapLen(base, candidate) {
+  // Longest suffix of `base` that matches a prefix of `candidate`.
+  const max = Math.min(base.length, candidate.length);
+  for (let k = max; k > 0; k--) {
+    if (base.slice(-k) === candidate.slice(0, k)) return k;
+  }
+  return 0;
+}
+
+function computeAppendedDelta(emittedText, emittedPlain, delta) {
+  if (!delta || typeof delta !== 'string') return '';
+  // Fast path: the entire delta is already the suffix of what we sent.
+  if (emittedText && emittedText.endsWith(delta)) return '';
+  const overlap = overlapLen(emittedText, delta);
+  let actual = delta;
+  if (overlap >= MIN_OVERLAP_STRIP) {
+    actual = delta.slice(overlap);
+  }
+  // Second line of defence: drop only if the normalized delta is already the
+  // SUFFIX of what we emitted (suffix, NOT substring — substring matching
+  // swallows repeated single digits in dates/numbers).
+  const plainActual = normalizeForDedup(actual);
+  const plainDelta = normalizeForDedup(delta);
+  if (plainActual && emittedPlain.endsWith(plainActual)) {
+    actual = '';
+  } else if (!actual && plainDelta && emittedPlain.endsWith(plainDelta)) {
+    actual = '';
+  }
+  return actual;
+}
+
+module.exports = {
+  createAgUIServer,
+  extractText,
+  formatNowForModel,
+  prependEnvContext,
+  computeAppendedDelta,
+  normalizeForDedup,
+  MIN_OVERLAP_STRIP,
+};
