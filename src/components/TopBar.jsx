@@ -1,5 +1,6 @@
 import React from "react";
 import TabBar from "./TabBar.jsx";
+import bachIcon from "../assets/bach-icon.png";
 
 // Custom window title bar. Replaces the native OS chrome (Electron
 // titleBarStyle: 'hidden'): the whole strip is a drag region, while the logo,
@@ -24,7 +25,7 @@ export default function TopBar({
       <div className={`topbar-left${isMac ? " topbar-left--mac" : ""}`}>
         {!isMac && (
           <div className="topbar-brand">
-            <span className="topbar-brand-mark" />
+            <img src={bachIcon} className="topbar-brand-mark" alt="Abcyesno" draggable={false} />
             <span className="topbar-brand-name">Abcyesno</span>
           </div>
         )}
