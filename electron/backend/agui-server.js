@@ -1374,7 +1374,7 @@ function createAgUIServer(getGatewayClient, storage, options) {
         client, hermesSessionId, ctx, res, encoder, turnTimeoutMs, waitOpts
       );
       await attachTurnImages(hermesSessionId);
-      await client.request('prompt.submit', { session_id: hermesSessionId, text }, 120000);
+      await client.request('prompt.submit', { session_id: hermesSessionId, text: prependEnvContext(ctx, text) }, 120000);
       await turnPromise;
       return translator;
     }
@@ -1912,4 +1912,43 @@ function extractText(content) {
   return '';
 }
 
-module.exports = { createAgUIServer };
+// ── Environment context prefill ──────────────────────────────────────────
+// Hermes' assistant-level system prompt is static, so the model has no real
+// time source and hallucinates dates ("206 年 8 月 5 日" ...) when asked.
+// agui-server only forwards the `text` payload to `prompt.submit`, so we
+// prepend a compact environment block (real current time + honesty rule +
+// anti self-correction) right before submission. The WeChat bridge already
+// injects a similar block in provider.ts; this is the canonical entry point
+// so the main-app session window also benefits.
+//
+// Idempotent: if the user text already starts with our marker, skip (so a
+// retry of the same message won't stack the prefix). Any client may opt
+// out via `forwardedProps.env_aware === false`.
+function formatNowForModel() {
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Shanghai';
+    const d = new Intl.DateTimeFormat('zh-CN', {
+      timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'long',
+    });
+    const t = new Intl.DateTimeFormat('zh-CN', {
+      timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false,
+    });
+    return `${d.format(new Date())} ${t.format(new Date())} (${tz})`;
+  } catch {
+    return new Date().toISOString();
+  }
+}
+function prependEnvContext(ctx, rawText) {
+  if (!rawText) return rawText;
+  if (/^\[环境上下文\]/.test(rawText)) return rawText;       // already injected
+  const enabled = !(ctx && ctx.forwardedProps && ctx.forwardedProps.env_aware === false);
+  if (!enabled) return rawText;
+  const env =
+    `[环境上下文] 当前时间：${formatNowForModel()}\n` +
+    `- 日期、时间、星期、电话号码、身份证号、版本号、引用的数字等必须是真实数据；` +
+    `不知道就说不知道，不要凭印象编造。\n` +
+    `- 一次性给出最终答案，不要"我理解错了 / 刚才那个回答确实…"式的自我反思重写。\n`;
+  return `${env}\n---\n\n${rawText}`;
+}
+
+module.exports = { createAgUIServer, extractText, formatNowForModel, prependEnvContext };
