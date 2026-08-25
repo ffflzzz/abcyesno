@@ -755,7 +755,13 @@ app.on('before-quit', () => {
 
 // IPC handlers
 ipcMain.handle('get-version', () => {
-  return `1.3.0`;
+  // Read the real version from the packaged package.json (app.getVersion
+  // prefers the version from app/package.json over process.env.npm_package_version).
+  try {
+    return app.getVersion();
+  } catch {
+    return '0.0.0';
+  }
 });
 
 // Settings-panel entry that used to live in the native 帮助 menu: toggle the

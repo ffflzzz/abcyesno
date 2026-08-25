@@ -48,6 +48,17 @@ export default function SettingsPanel({ apiKey = "", hasApiKey = false, model = 
     }
   }
 
+  // 检查更新：打开 GitHub Releases 页（当前分发方式 = win-unpacked 压缩包，
+  // 用户手动下载新版解压覆盖）。走系统浏览器而非内置 webview，便于下载。
+  function handleCheckUpdate() {
+    const url = "https://github.com/ffflzzz/abcyesno/releases";
+    if (window.hermes && window.hermes.openExternal) {
+      window.hermes.openExternal(url);
+    } else {
+      window.open(url, "_blank", "noopener");
+    }
+  }
+
   return (
     <div className="modal-mask" onClick={onClose}>
       <div className="modal settings-panel" onClick={(e) => e.stopPropagation()}>
@@ -219,7 +230,10 @@ export default function SettingsPanel({ apiKey = "", hasApiKey = false, model = 
           <div className="settings-item">
             <div className="settings-item-text">
               <div className="settings-item-name">关于 Abcyesno</div>
-              <div className="settings-item-desc">Abcyesno {version ? `v${version}` : "v1.3.0"} · 便携桌面 Agent 平台</div>
+              <div className="settings-item-desc">Abcyesno {version ? `v${version}` : "v-dev"} · 便携桌面 Agent 平台</div>
+            </div>
+            <div className="settings-item-control">
+              <button className="ghost" onClick={handleCheckUpdate}>检查更新</button>
             </div>
           </div>
           <div className="settings-item">
