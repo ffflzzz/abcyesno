@@ -4,7 +4,6 @@ import { Virtuoso } from "react-virtuoso";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import AgentVerboseTimeline from "./AgentVerboseTimeline.jsx";
-import SubagentTerminal from "./SubagentTerminal.jsx";
 import ThinkingIndicator from "./ThinkingIndicator.jsx";
 import ArtifactPreview from "./ArtifactPreview.jsx";
 import ToolCard from "./ToolCard.jsx";
@@ -1630,9 +1629,7 @@ function MessageFooter({ context }) {
           ))}
         </div>
       )}
-      {subagents?.length > 0 && (
-        <SubagentTerminal key="subagent-terminal" subagents={subagents} onOpenPreviewUrl={context.onOpenPreviewUrl} />
-      )}
+      {subagents?.length > 0 && null /* SubagentTerminal 移除：subagent 状态由 AgentRunMonitor（Composer 上方）承载，inner message 文本表达完成 */}
       {moaRefs?.length > 0 && (
         <MoaBlock key="moa-block" refs={moaRefs} aggregating={moaAggregating} />
       )}
