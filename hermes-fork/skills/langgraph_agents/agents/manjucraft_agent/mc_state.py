@@ -12,8 +12,33 @@ covers both per-episode resume and cross-episode resume).
 from __future__ import annotations
 
 import os
+import re
 from enum import Enum
 from typing import NotRequired, TypedDict
+
+# Windows-invalid filename characters: path separators, reserved chars and
+# control chars (incl. \n \r \t — a user-supplied theme line often leaks
+# newlines into project_name, which breaks os.makedirs with WinError 123).
+_INVALID_FILENAME_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+_MULTI_DASH_RE = re.compile(r'-{2,}')
+_MULTI_SPACE_RE = re.compile(r'\s{2,}')
+
+
+def _safe_dir_name(name: str, fallback: str = "manjucraft") -> str:
+    """Sanitize a user-supplied project name into a Windows-safe dir name.
+
+    Strips path separators / illegal chars / control chars (incl. newlines),
+    collapses runs of dashes and spaces, trims leading/trailing dashes,
+    spaces and dots (Windows forbids those), and caps the length so the full
+    path stays well under MAX_PATH.
+    """
+    s = str(name or "").strip()
+    s = _INVALID_FILENAME_RE.sub(" ", s)
+    s = _MULTI_DASH_RE.sub("-", s)
+    s = _MULTI_SPACE_RE.sub(" ", s).strip()
+    s = s.strip(" .-_")
+    s = s[:120].rstrip(" .-_")
+    return s or fallback
 
 
 class ShotStatus(str, Enum):
@@ -149,8 +174,11 @@ def _hermes_home() -> str:
 
 
 def project_root(state: AgentState) -> str:
-    """Base directory for a run, under HERMES_HOME (portable-data isolated)."""
-    name = (state.get("project_name") or "manjucraft").strip() or "manjucraft"
+    """Base directory for a run, under HERMES_HOME (portable-data isolated).
+
+    The name is sanitized so user-supplied themes with newlines / illegal
+    Windows filename chars cannot break directory creation (WinError 123)."""
+    name = _safe_dir_name(state.get("project_name"), "manjucraft")
     return os.path.join(_hermes_home(), "manjucraft_agent", "projects", name)
 
 
