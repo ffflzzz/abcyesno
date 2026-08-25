@@ -333,6 +333,24 @@ function createWindow() {
     const levelName = ['verbose', 'info', 'warning', 'error'][level] || level;
     log('renderer', `[${levelName}] ${message} (${sourceId}:${line})`);
   });
+  // Safety net: block the main BrowserWindow from ever navigating to an
+  // external URL. Markdown <a href> clicks would otherwise replace the whole
+  // app UI with the linked page (or a 404). The renderer-side custom <a>
+  // handler in MessageThread routes http(s) into the built-in browser
+  // (ResultPanel webview); this guard catches anything that slips past.
+  // Allow only same-origin file:// for the production bundle and
+  // localhost:5173 in dev.
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    const u = (url || "").toLowerCase();
+    const isDev = process.env.NODE_ENV === 'development' || process.argv.includes('--dev');
+    const allowed = isDev
+      ? (u.startsWith('file://') || u.startsWith('http://localhost:') || u.startsWith('http://127.0.0.1:'))
+      : u.startsWith('file://');
+    if (!allowed) {
+      event.preventDefault();
+      log('main', `blocked will-navigate to external url: ${url}`);
+    }
+  });
 
   if (process.env.NODE_ENV === 'development' || process.argv.includes('--dev')) {
     mainWindow.loadURL('http://localhost:5173');

@@ -396,7 +396,7 @@ function normalizeContentForTypewriter(content) {
   return String(content || "");
 }
 
-const MarkdownView = React.memo(function MarkdownView({ cleaned, onImageClick }) {
+const MarkdownView = React.memo(function MarkdownView({ cleaned, onImageClick, onOpenPreviewUrl }) {
   return (
     <MarkdownErrorBoundary raw={cleaned}>
       <ReactMarkdown
@@ -411,6 +411,24 @@ const MarkdownView = React.memo(function MarkdownView({ cleaned, onImageClick })
               onClick={() => onImageClick && onImageClick(props.src, props.alt)}
               alt={props.alt || ""}
             />
+          ),
+          // Intercept external links so they open in the built-in browser
+          // (ResultPanel webview via onOpenPreviewUrl) instead of navigating
+          // the entire app BrowserWindow, which would crash / replace the UI.
+          // Non-http(s) protocols (mailto, file, etc.) fall through to default.
+          a: ({ node, href, children, ...rest }) => (
+            <a
+              href={href}
+              onClick={(e) => {
+                if (href && /^https?:/i.test(href) && onOpenPreviewUrl) {
+                  e.preventDefault();
+                  onOpenPreviewUrl(href);
+                }
+              }}
+              {...rest}
+            >
+              {children}
+            </a>
           ),
           table: ({ node, children, ...props }) => {
             // Try to extract structured data for TableBlock (MVP component).
@@ -584,11 +602,11 @@ function detectAsciiArtBlocks(text) {
 // Render markdown with ASCII art blocks (box-drawing diagrams) collapsed into
 // individually toggleable sections. Normal text renders via MarkdownView;
 // detected ASCII art regions get wrapped in <pre> with max-height + scroll.
-function AsciiArtAwareMarkdown({ cleaned, onImageClick, asciiBlocks }) {
+function AsciiArtAwareMarkdown({ cleaned, onImageClick, onOpenPreviewUrl, asciiBlocks }) {
   const [expandedBlocks, setExpandedBlocks] = useState({});
 
   if (!asciiBlocks || asciiBlocks.length === 0) {
-    return <MarkdownView cleaned={cleaned} onImageClick={onImageClick} />;
+    return <MarkdownView cleaned={cleaned} onImageClick={onImageClick} onOpenPreviewUrl={onOpenPreviewUrl} />;
   }
 
   // Split content into segments: normal text and ASCII art blocks
@@ -628,7 +646,7 @@ function AsciiArtAwareMarkdown({ cleaned, onImageClick, asciiBlocks }) {
             )}
           </div>
         ) : (
-          <MarkdownView key={`text-${idx}`} cleaned={seg.content} onImageClick={onImageClick} />
+          <MarkdownView key={`text-${idx}`} cleaned={seg.content} onImageClick={onImageClick} onOpenPreviewUrl={onOpenPreviewUrl} />
         )
       )}
     </>
@@ -641,7 +659,7 @@ function AsciiArtAwareMarkdown({ cleaned, onImageClick, asciiBlocks }) {
 const COLLAPSE_CHAR_THRESHOLD = 2000;
 const COLLAPSE_LINE_THRESHOLD = 30;
 
-const CollapsibleMarkdown = React.memo(function CollapsibleMarkdown({ cleaned, onImageClick }) {
+const CollapsibleMarkdown = React.memo(function CollapsibleMarkdown({ cleaned, onImageClick, onOpenPreviewUrl }) {
   const [expanded, setExpanded] = useState(false);
   const asciiBlocks = useMemo(() => detectAsciiArtBlocks(cleaned), [cleaned]);
   const hasAsciiArt = asciiBlocks.length > 0;
@@ -649,7 +667,7 @@ const CollapsibleMarkdown = React.memo(function CollapsibleMarkdown({ cleaned, o
   const tooLong = cleaned.length > COLLAPSE_CHAR_THRESHOLD || lines.length > COLLAPSE_LINE_THRESHOLD;
 
   if (!tooLong && !hasAsciiArt) {
-    return <MarkdownView cleaned={cleaned} onImageClick={onImageClick} />;
+    return <MarkdownView cleaned={cleaned} onImageClick={onImageClick} onOpenPreviewUrl={onOpenPreviewUrl} />;
   }
 
   // ── Build preview: skip ASCII art lines so the user sees useful text ──
@@ -663,16 +681,16 @@ const CollapsibleMarkdown = React.memo(function CollapsibleMarkdown({ cleaned, o
   const needsCollapse = tooLong || hasAsciiArt;
 
   if (!needsCollapse) {
-    return <MarkdownView cleaned={cleaned} onImageClick={onImageClick} />;
+    return <MarkdownView cleaned={cleaned} onImageClick={onImageClick} onOpenPreviewUrl={onOpenPreviewUrl} />;
   }
 
   return (
     <div className={`collapsible-md ${expanded ? "expanded" : "collapsed"}`}>
       <div className="collapsible-md-content">
         {expanded ? (
-          <AsciiArtAwareMarkdown cleaned={cleaned} onImageClick={onImageClick} asciiBlocks={asciiBlocks} />
+          <AsciiArtAwareMarkdown cleaned={cleaned} onImageClick={onImageClick} onOpenPreviewUrl={onOpenPreviewUrl} asciiBlocks={asciiBlocks} />
         ) : (
-          <MarkdownView cleaned={previewText || cleaned.slice(0, 200)} onImageClick={onImageClick} />
+          <MarkdownView cleaned={previewText || cleaned.slice(0, 200)} onImageClick={onImageClick} onOpenPreviewUrl={onOpenPreviewUrl} />
         )}
       </div>
       {!expanded && <div className="collapsible-md-fade" />}
@@ -685,13 +703,13 @@ const CollapsibleMarkdown = React.memo(function CollapsibleMarkdown({ cleaned, o
   );
 });
 
-function formatContent(content, onImageClick) {
+function formatContent(content, onImageClick, onOpenPreviewUrl) {
   const cleaned = sanitizeMessageContent(content);
   if (typeof cleaned !== "string") {
     return <pre className="json-block">{JSON.stringify(content, null, 2)}</pre>;
   }
   if (!cleaned) return null;
-  return <CollapsibleMarkdown cleaned={cleaned} onImageClick={onImageClick} />;
+  return <CollapsibleMarkdown cleaned={cleaned} onImageClick={onImageClick} onOpenPreviewUrl={onOpenPreviewUrl} />;
 }
 
 function mapStatus(s) {
@@ -1346,7 +1364,7 @@ function MessageThread({ messages = [], loading, streamPhase, thinkingText, reas
                     streaming={isLast && loading}
                   />
                 )}
-                {formatContent(displayContent, handleImageClick)}
+                {formatContent(displayContent, handleImageClick, onOpenPreviewUrl)}
               </>
             )}
           </div>
