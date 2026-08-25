@@ -973,6 +973,122 @@ body {
   padding: 2px 6px;
 }
 
+/* Error indicator: replaces the old chat-wide error banner. Sits on the
+   peeking Bach avatar in the composer (top-right corner). Red dot on the
+   avatar, small bubble above showing the error text, dismiss button. */
+.composer-bach-peek.has-error {
+  animation: bach-error-pulse 1.4s ease-in-out infinite;
+}
+@keyframes bach-error-pulse {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-2px) scale(1.04); }
+}
+.composer-error-dot {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 12px;
+  height: 12px;
+  background: var(--error, #f85149);
+  border: 2px solid var(--bg, #0d1117);
+  border-radius: 50%;
+  pointer-events: none;
+  box-shadow: 0 0 0 2px var(--panel, #161b22);
+}
+.composer-error-bubble {
+  position: absolute;
+  /* Anchor to the top-right (where Bach peeks) and float above the avatar. */
+  top: -84px;
+  right: 0;
+  max-width: 360px;
+  min-width: 220px;
+  background: var(--surface, #1f262e);
+  border: 1px solid var(--error, #f85149);
+  border-radius: var(--radius-md, 12px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.32);
+  padding: 10px 12px;
+  z-index: 5;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text, #e6edf3);
+  animation: composer-error-bubble-in 0.2s ease-out;
+}
+@keyframes composer-error-bubble-in {
+  from { transform: translateY(4px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+.composer-error-bubble::after {
+  /* tiny tail pointing down at Bach */
+  content: "";
+  position: absolute;
+  bottom: -6px;
+  right: 14px;
+  width: 10px;
+  height: 10px;
+  background: var(--surface, #1f262e);
+  border-right: 1px solid var(--error, #f85149);
+  border-bottom: 1px solid var(--error, #f85149);
+  transform: rotate(45deg);
+}
+.composer-error-bubble-title {
+  font-weight: 600;
+  color: var(--error, #f85149);
+  margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.composer-error-bubble-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text, #e6edf3);
+  max-height: 160px;
+  overflow-y: auto;
+  margin-bottom: 8px;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 11.5px;
+}
+.composer-error-bubble-dismiss {
+  background: transparent;
+  border: 1px solid var(--border, #21262d);
+  color: var(--text, #e6edf3);
+  border-radius: var(--radius-xs, 4px);
+  padding: 3px 12px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.composer-error-bubble-dismiss:hover {
+  background: var(--hover, rgba(255, 255, 255, 0.06));
+}
+.composer-error-close {
+  /* Top-right X to dismiss without opening the bubble. */
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  z-index: 6;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface, #1f262e);
+  border: 1px solid var(--border, #21262d);
+  border-radius: 50%;
+  color: var(--muted, #8b949e);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.composer-shell:hover .composer-error-close,
+.composer-error-close:focus {
+  opacity: 1;
+}
+.composer-error-close:hover {
+  color: var(--error, #f85149);
+  border-color: var(--error, #f85149);
+}
+
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }

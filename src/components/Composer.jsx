@@ -184,6 +184,8 @@ export default function Composer({
   onRemoveQueued,
   mentionables = [],
   onOpenPreviewUrl,
+  runError = null,
+  onClearRunError,
 }) {
   const [empty, setEmpty] = useState(true);
   const [dragOver, setDragOver] = useState(false);
@@ -612,14 +614,41 @@ export default function Composer({
       onDragLeave={() => setDragOver(false)}
       onDrop={handleDrop}
     >
-      {/* ── Bach peeking over the composer ── */}
+      {/* ── Bach peeking over the composer ──
+         Error state: red dot on the avatar + a small bubble above showing a
+         one-line summary. Click the bubble (or the avatar) to expand the full
+         error text; close button clears it. Replaces the old chat-wide
+         error-banner that spanned the whole top of the chat (too alarming). */}
+      {runError && (
+        <button
+          className="composer-error-close"
+          onClick={() => onClearRunError && onClearRunError()}
+          title="关闭错误"
+          aria-label="关闭错误"
+        >
+          <Icon name="close" size={11} />
+        </button>
+      )}
       <div
-        className="composer-bach-peek"
-        onClick={() => onOpenPreviewUrl?.('https://abcyesno.cn')}
-        title={busy ? "巴赫正在工作中… 点击访问官网" : "巴赫在等你~ 点击访问官网"}
+        className={`composer-bach-peek ${runError ? "has-error" : ""}`}
+        onClick={runError ? () => onClearRunError && onClearRunError() : () => onOpenPreviewUrl?.('https://abcyesno.cn')}
+        title={runError ? `有错误：${runError.slice(0, 60)}…` : (busy ? "巴赫正在工作中… 点击访问官网" : "巴赫在等你~ 点击访问官网")}
       >
         <img src={bachPeek} alt="Bach" draggable={false} />
+        {runError && <span className="composer-error-dot" aria-hidden="true" />}
       </div>
+      {runError && (
+        <div className="composer-error-bubble" role="status">
+          <div className="composer-error-bubble-title">⚠ 出错了</div>
+          <div className="composer-error-bubble-text">{runError}</div>
+          <button
+            className="composer-error-bubble-dismiss"
+            onClick={() => onClearRunError && onClearRunError()}
+          >
+            知道了
+          </button>
+        </div>
+      )}
       {/* ── File attachment chip (non-image files still go through upload) ── */}
       {attachment && attachment.type !== "image" && (
         <div className="composer-attachment-row">

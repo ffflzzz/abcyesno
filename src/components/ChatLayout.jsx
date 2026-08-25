@@ -209,14 +209,7 @@ export default function ChatLayout({
         </div>
       </div>
 
-      {runError && (
-        <div className="error-banner">
-          <span className="error-banner-text">错误：{runError}</span>
-          <button className="error-banner-close" onClick={onClearRunError} title="关闭">
-            <Icon name="close" size={14} />
-          </button>
-        </div>
-      )}
+      {runError && null /* error-banner 移除：错误改为 Composer 内小 bach 头像上的气泡（更克制，不占满顶部） */}
 
       {approvalPending && null /* banner 移除：审批提示已由消息流内的 ApprovalBubble 承载，避免顶部 toast + 中部 banner + 卡片三层重复通知 */}
 
@@ -296,6 +289,8 @@ export default function ChatLayout({
           onRemoveQueued={onRemoveQueued}
           onOpenPreviewUrl={onOpenPreviewUrl}
           onOpenBrowser={onOpenBrowser}
+          runError={runError}
+          onClearRunError={onClearRunError}
           placeholder={
             approvalPending
               ? "请先在审批弹窗中选择批准或拒绝…"
