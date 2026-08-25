@@ -68,7 +68,7 @@ def gate_first_frame(state: AgentState) -> dict:
             "gate_id": "first_frame",
             "node": "gate_first_frame",
             "label": "首帧确认",
-            "message": "角色风格已生成，请确认风格方向后开始生成分镜首帧（此确认将锁定跨集角色圣经）。",
+            "message": "分镜首帧已生成，请确认画面风格后进入一致性检查（此确认将锁定跨集角色圣经）。",
             "allowSteer": True,
         })
         update = _apply_decision(decision)
@@ -76,12 +76,13 @@ def gate_first_frame(state: AgentState) -> dict:
         update["character_bible"] = list(state.get("characters", []))
         return update
 
-    # Later episodes: lightweight confirmation of this episode's plan.
+    # Later episodes: lightweight confirmation of this episode's keyframes
+    # (characters reuse the locked bible; keyframes were just generated).
     decision = interrupt({
         "gate_id": "episode_ready",
         "node": "gate_first_frame",
         "label": "本集确认",
-        "message": f"第 {ep + 1} 集脚本与分镜已就绪（角色沿用首集圣经），确认后开始生成。",
+        "message": f"第 {ep + 1} 集分镜首帧已生成（角色沿用首集圣经），确认后进入一致性检查与视频生成。",
         "allowSteer": True,
     })
     return _apply_decision(decision)

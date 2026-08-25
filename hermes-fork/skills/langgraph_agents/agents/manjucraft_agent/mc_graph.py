@@ -77,9 +77,14 @@ def build_graph():
     builder.add_edge(START, "plan_episodes")
     builder.add_edge("plan_episodes", "parse_script")
     builder.add_edge("parse_script", "generate_characters")
-    builder.add_edge("generate_characters", "gate_first_frame")
-    builder.add_edge("gate_first_frame", "batch_generate_keyframes")
-    builder.add_edge("batch_generate_keyframes", "consistency_check")
+    # First-frame gate AFTER keyframe generation so the user reviews an actual
+    # shot-0 keyframe (previously the gate ran before batch_generate_keyframes,
+    # so the approval bubble had nothing to show and the message was misleading).
+    # Side effect: steering notes entered at this gate no longer feed the
+    # keyframe prompts (they were consumed by batch_generate_keyframes).
+    builder.add_edge("generate_characters", "batch_generate_keyframes")
+    builder.add_edge("batch_generate_keyframes", "gate_first_frame")
+    builder.add_edge("gate_first_frame", "consistency_check")
     builder.add_edge("consistency_check", "gate_each_scene")
     builder.add_edge("gate_each_scene", "fix_drift")
     builder.add_edge("fix_drift", "batch_generate_video")
