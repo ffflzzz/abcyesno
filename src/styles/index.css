@@ -122,7 +122,6 @@ body {
   display: flex;
   align-items: center;
   flex-shrink: 0;
-  -webkit-app-region: no-drag;
 }
 .topbar-left--mac { width: 72px; }
 .topbar-brand {
@@ -150,7 +149,6 @@ body {
   min-width: 0;
   display: flex;
   align-items: center;
-  -webkit-app-region: no-drag;
 }
 .topbar-controls {
   display: flex;
@@ -226,6 +224,7 @@ body {
   user-select: none;
   font-size: 13px;
   white-space: nowrap;
+  -webkit-app-region: no-drag;
   transition: background 0.12s, color 0.12s;
 }
 .tabbar-tab:hover {
@@ -257,6 +256,7 @@ body {
   color: inherit;
   border-radius: var(--radius-xs);
   cursor: pointer;
+  -webkit-app-region: no-drag;
 }
 .tabbar-tab-close:hover {
   background: rgba(248, 113, 113, 0.18);
@@ -278,6 +278,7 @@ body {
   border-radius: var(--radius-sm);
   cursor: pointer;
   flex-shrink: 0;
+  -webkit-app-region: no-drag;
 }
 .tabbar-add:hover {
   background: var(--panel-2);
