@@ -21,7 +21,18 @@ import "./StudioWorkbench.css";
 const _studioCache = {}; // { [workflowId]: { phase, runState, runId, project, ... } }
 
 function _readCache(key, fallback) {
-  return _studioCache[key] !== undefined ? _studioCache[key] : fallback;
+  // Reads use a "<workflowId>:<field>" key (e.g. "manjucraft_agent:phase"),
+  // but _writeCache stores a NESTED object under "<workflowId>". Split the
+  // key to recover the field from that nested object. (A bare key with no
+  // ":" is treated as a top-level entry for backward safety.)
+  const idx = key.indexOf(":");
+  if (idx === -1) {
+    return _studioCache[key] !== undefined ? _studioCache[key] : fallback;
+  }
+  const base = key.slice(0, idx);
+  const field = key.slice(idx + 1);
+  const obj = _studioCache[base];
+  return obj && obj[field] !== undefined ? obj[field] : fallback;
 }
 
 function _writeCache(key, patch) {
