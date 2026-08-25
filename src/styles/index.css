@@ -330,10 +330,13 @@ body {
 
 /* ── Narrow vertical icon rail (left of the sidebar) ──
    Hosts the controls that used to live in the ChatLayout header's right
-   cluster. 48px wide; icons stack vertically; active state highlights like
-   the old header did. Tonal step (--bg-elevated) from the --panel sidebar. */
+   cluster (result panel / browser panel / context usage / TTS play+mute)
+   and the Sidebar footer (skills / wechat / settings), plus a bottom
+   sidebar collapse toggle. 40px wide; icons stack vertically; active
+   state highlights like the old header did. Tonal step (--bg-elevated)
+   from the --panel sidebar. */
 .icon-rail {
-  width: 48px;
+  width: 40px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -345,8 +348,8 @@ body {
 }
 .rail-btn {
   position: relative;
-  width: 36px;
-  height: 36px;
+  width: 32px;
+  height: 32px;
   display: inline-flex;
   align-items: center;
   justify-content: center;

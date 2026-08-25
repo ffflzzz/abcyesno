@@ -120,9 +120,10 @@ export default function ChatLayout({
   );
 
   // ── Global TTS (edge-tts) controls ──
-  // Single <audio> lives in TtsProvider; this surface only reflects state and
-  // triggers auto-read when a generation finishes.
-  const { speak, stop, isPlaying, mute, setMuted, ttsSettings } = useTts();
+  // Auto-read effect only: the mute / play / stop buttons live on the left
+  // IconRail (state lifted to App.jsx). The two callers share context state
+  // so the rail stays in sync.
+  const { speak, mute, ttsSettings } = useTts();
   const lastAssistant = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
       if (messages[i].role === "assistant") return messages[i];
@@ -149,16 +150,6 @@ export default function ChatLayout({
     const text = stripMarkdownToText(lastAssistant.content || "");
     if (text) speak(text, lastAssistant.id);
   }, [isLoading, lastAssistant, ttsSettings.autoRead, mute, speak]);
-
-  function handleGlobalPlay() {
-    if (isPlaying) {
-      stop();
-      return;
-    }
-    if (!lastAssistant) return;
-    const text = stripMarkdownToText(lastAssistant.content || "");
-    if (text) speak(text, lastAssistant.id);
-  }
 
   useEffect(() => {
     // Virtuoso handles scroll-to-bottom via followOutput; no manual scroll needed.
@@ -215,31 +206,6 @@ export default function ChatLayout({
               <span className="header-title">{assistant?.name || "对话"}</span>
             </div>
           </div>
-        </div>
-        <div className="header-right">
-          <button
-            className="header-icon"
-            onClick={() => setMuted(!mute)}
-            title={mute ? "取消静音" : "静音（自动朗读开启时生效）"}
-            aria-label={mute ? "取消静音" : "静音"}
-            style={{ color: mute ? "var(--accent)" : undefined }}
-          >
-            <Icon name={mute ? "volume-x" : "audio"} size={16} />
-          </button>
-          <button
-            className="header-icon"
-            onClick={handleGlobalPlay}
-            title={isPlaying ? "停止朗读" : "朗读最新回复"}
-            aria-label={isPlaying ? "停止朗读" : "朗读最新回复"}
-            disabled={!isPlaying && !lastAssistant}
-            style={{
-              color: isPlaying ? "var(--accent)" : undefined,
-              opacity: (!isPlaying && !lastAssistant) ? 0.4 : 1,
-              cursor: (!isPlaying && !lastAssistant) ? "default" : "pointer",
-            }}
-          >
-            <Icon name={isPlaying ? "stop-circle" : "play"} size={16} />
-          </button>
         </div>
       </div>
 

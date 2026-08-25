@@ -19,6 +19,8 @@ import WechatBindModal from "./components/WechatBindModal.jsx";
 import { initContract, listManifests } from "./contract/registry.js";
 import { launcherApps } from "./contract/manifests.generated.js";
 import { subscribeContractEvents } from "./contract/eventBus.js";
+import { useTts } from "./hooks/useTts.jsx";
+import { stripMarkdownToText } from "./utils/stripMarkdown.js";
 import excalidrawIcon from "./assets/excalidraw.png";
 import appChatIcon from "./assets/app-chat.png";
 import appManjuIcon from "./assets/app-manju.png";
@@ -340,6 +342,37 @@ function ChatShell({
   // Context-usage modal: lifted here so the IconRail (chat-header replacement)
   // can open it while ChatLayout still owns the modal render.
   const [showContextUsage, setShowContextUsage] = useState(false);
+
+  // ── TTS (edge-tts) controls — lifted here so the IconRail (left vertical
+  //    bar) can host the mute / play buttons. ChatLayout still owns the
+  //    auto-read effect and calls useTts() independently; the two share
+  //    context state. We also compute `lastAssistant` here (instead of in
+  //    ChatLayout) so the rail's play button can decide enabled/disabled
+  //    without an extra callback. ──
+  const {
+    speak: ttsSpeak,
+    stop: ttsStop,
+    isPlaying: ttsIsPlaying,
+    mute: ttsMute,
+    setMuted: setTtsMuted,
+  } = useTts();
+  const lastAssistant = useMemo(() => {
+    if (!visibleMessages) return null;
+    for (let i = visibleMessages.length - 1; i >= 0; i--) {
+      if (visibleMessages[i].role === "assistant") return visibleMessages[i];
+    }
+    return null;
+  }, [visibleMessages]);
+  const ttsCanPlay = !!lastAssistant;
+  function handleTtsPlayToggle() {
+    if (ttsIsPlaying) {
+      ttsStop();
+      return;
+    }
+    if (!lastAssistant) return;
+    const text = stripMarkdownToText(lastAssistant.content || "");
+    if (text) ttsSpeak(text, lastAssistant.id);
+  }
   async function handlePermissionChange(mode) {
     setPermissionMode(mode);
     if (!selectedSessionId || !hermes || !hermes.setPermissionMode) return;
@@ -724,6 +757,11 @@ function ChatShell({
         onOpenSkills={onToggleSkills}
         onOpenWechatBind={onOpenWechatBind}
         wechatStatus={wechatStatus}
+        ttsMute={ttsMute}
+        onToggleTtsMute={() => setTtsMuted(!ttsMute)}
+        ttsIsPlaying={ttsIsPlaying}
+        ttsCanPlay={ttsCanPlay}
+        onToggleTtsPlay={handleTtsPlayToggle}
         onOpenSettings={() => setShowSettings(true)}
         sidebarOpen={sidebarOpen}
         onToggleSidebar={() => setSidebarOpen((o) => !o)}

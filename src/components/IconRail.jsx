@@ -25,6 +25,11 @@ export default function IconRail({
   onOpenSkills = () => {},
   onOpenWechatBind = () => {},
   wechatStatus = { state: "idle", bound: false },
+  ttsMute = false,
+  onToggleTtsMute = () => {},
+  ttsIsPlaying = false,
+  ttsCanPlay = false,
+  onToggleTtsPlay = () => {},
   onOpenSettings = () => {},
   sidebarOpen = true,
   onToggleSidebar = () => {},
@@ -74,6 +79,28 @@ export default function IconRail({
       >
         <Icon name="wechat" size={18} />
         <span className={`rail-status-dot ${wechatDot}`} />
+      </button>
+      <button
+        className={`rail-btn ${ttsIsPlaying ? "active" : ""}`}
+        onClick={onToggleTtsPlay}
+        title={ttsIsPlaying ? "停止朗读" : "朗读最新回复"}
+        aria-label={ttsIsPlaying ? "停止朗读" : "朗读最新回复"}
+        disabled={!ttsIsPlaying && !ttsCanPlay}
+        style={{
+          opacity: (!ttsIsPlaying && !ttsCanPlay) ? 0.4 : 1,
+          cursor: (!ttsIsPlaying && !ttsCanPlay) ? "default" : "pointer",
+        }}
+      >
+        <Icon name={ttsIsPlaying ? "stop-circle" : "play"} size={18} />
+      </button>
+      <button
+        className={`rail-btn ${ttsMute ? "active" : ""}`}
+        onClick={onToggleTtsMute}
+        title={ttsMute ? "取消静音" : "静音（自动朗读开启时生效）"}
+        aria-label={ttsMute ? "取消静音" : "静音"}
+        style={{ color: ttsMute ? "var(--accent)" : undefined }}
+      >
+        <Icon name={ttsMute ? "volume-x" : "audio"} size={18} />
       </button>
 
       <div className="rail-spacer" />
