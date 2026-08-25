@@ -338,6 +338,7 @@ body {
   border-right: 1px solid var(--border);
 }
 .rail-btn {
+  position: relative;
   width: 36px;
   height: 36px;
   display: inline-flex;
@@ -353,6 +354,23 @@ body {
 .rail-btn:hover { background: var(--panel-2); color: var(--text); }
 .rail-btn.active { background: var(--panel-2); color: var(--accent); }
 .rail-spacer { flex: 1; }
+
+/* Status dot badge on rail buttons (e.g. WeChat bind state). Anchored to the
+   button's top-right; border matches the rail surface so it reads as a ring. */
+.rail-status-dot {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1.5px solid var(--bg-elevated);
+  box-sizing: border-box;
+  pointer-events: none;
+}
+.rail-status-dot.online { background: #3fb950; }
+.rail-status-dot.connecting { background: #d29922; }
+.rail-status-dot.offline { background: #6e7681; }
 
 .sidebar-toggle {
   position: fixed;

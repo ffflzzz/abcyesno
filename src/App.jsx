@@ -721,7 +721,10 @@ function ChatShell({
         browserPanelOpen={browserPanelOpen}
         onToggleBrowserPanel={onToggleBrowserPanel}
         onShowContextUsage={() => setShowContextUsage(true)}
-        onOpenKey={() => setShowKeyModal(true)}
+        onOpenSkills={onToggleSkills}
+        onOpenWechatBind={onOpenWechatBind}
+        wechatStatus={wechatStatus}
+        onOpenSettings={() => setShowSettings(true)}
         sidebarOpen={sidebarOpen}
         onToggleSidebar={() => setSidebarOpen((o) => !o)}
       />

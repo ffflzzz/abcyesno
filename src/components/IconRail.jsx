@@ -3,9 +3,17 @@ import Icon from "./Icon.jsx";
 
 // Narrow vertical icon rail on the far left of the chat surface. Hosts the
 // controls that used to live in the ChatLayout header's right cluster
-// (result panel / browser panel / context usage / API key) plus a bottom
-// sidebar collapse toggle. 48px wide, icons stack vertically, active state
-// highlights like the old header did.
+// (result panel / browser panel / context usage) and the Sidebar footer
+// (skills / wechat / settings), plus a bottom sidebar collapse toggle.
+// 48px wide, icons stack vertically, active state highlights like the
+// old header did.
+function getWechatDotClass(ws) {
+  if (!ws) return "offline";
+  if (ws.state === "connected") return "online";
+  if (["awaiting_qr", "qr_expired", "connecting", "reconnecting"].includes(ws.state)) return "connecting";
+  return "offline";
+}
+
 export default function IconRail({
   resultPanelOpen = false,
   onToggleResultPanel = () => {},
@@ -14,11 +22,15 @@ export default function IconRail({
   browserPanelOpen = false,
   onToggleBrowserPanel = () => {},
   onShowContextUsage = () => {},
-  onOpenKey = () => {},
+  onOpenSkills = () => {},
+  onOpenWechatBind = () => {},
+  wechatStatus = { state: "idle", bound: false },
+  onOpenSettings = () => {},
   sidebarOpen = true,
   onToggleSidebar = () => {},
 }) {
   const resultActive = resultPanelOpen && !resultPanelCollapsed;
+  const wechatDot = getWechatDotClass(wechatStatus);
 
   function handleResultClick() {
     if (!resultPanelOpen) onToggleResultPanel();
@@ -50,14 +62,29 @@ export default function IconRail({
       </button>
       <button
         className="rail-btn"
-        onClick={onOpenKey}
-        title="设置 API Key"
+        onClick={onOpenSkills}
+        title="技能"
       >
-        <Icon name="settings" size={18} />
+        <Icon name="skills" size={18} />
+      </button>
+      <button
+        className="rail-btn"
+        onClick={onOpenWechatBind}
+        title="微信绑定"
+      >
+        <Icon name="wechat" size={18} />
+        <span className={`rail-status-dot ${wechatDot}`} />
       </button>
 
       <div className="rail-spacer" />
 
+      <button
+        className="rail-btn"
+        onClick={onOpenSettings}
+        title="设置"
+      >
+        <Icon name="settings" size={18} />
+      </button>
       <button
         className="rail-btn"
         onClick={onToggleSidebar}
