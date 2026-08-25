@@ -6422,8 +6422,9 @@ body[--resizing="1"] .result-panel-resize-handle::before {
 /* ── Tab bar (replaces old search row) ── */
 .sidebar-tabs {
   display: flex;
+  align-items: center;
   gap: 4px;
-  padding: 6px 10px 8px;
+  padding: 8px 10px;
   flex-shrink: 0;
 }
 .sidebar-tab {
@@ -6438,6 +6439,7 @@ body[--resizing="1"] .result-panel-resize-handle::before {
   border-radius: var(--radius-pill);
   color: var(--muted);
   font-size: 13px;
+  line-height: 1;
   cursor: pointer;
   transition: all 0.15s ease;
   position: relative;
