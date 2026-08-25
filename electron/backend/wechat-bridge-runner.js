@@ -21,9 +21,23 @@ function maskId(id) {
   return `${id.slice(0, 4)}****${id.slice(-4)}`;
 }
 
-function createWechatBridgeRunner({ onStatus } = {}) {
+function createWechatBridgeRunner({ onStatus, getStorage, onSessionsUpdated } = {}) {
   let started = false;
   let unsub = null;
+
+  // Wire the bridge's optional abcyesno-Storage hook so WeChat turns
+  // show up in the main-app session list. setAbcStorage is a no-op if
+  // getStorage() returns null (e.g. in standalone test mode).
+  try {
+    const storage = getStorage && getStorage();
+    if (storage && typeof bridge.setAbcStorage === 'function') {
+      bridge.setAbcStorage(storage, () => {
+        try { onSessionsUpdated && onSessionsUpdated(); } catch { /* ignore */ }
+      });
+    }
+  } catch (err) {
+    console.warn('[wechat-bridge] inject storage failed:', err?.message || err);
+  }
 
   function emit(status) {
     try {
@@ -67,6 +81,41 @@ function createWechatBridgeRunner({ onStatus } = {}) {
   }
 
   /**
+   * Lookup the abcyesno sessionId previously registered for this WeChat user.
+   * If none exists, call storage.createSession (injected by main.js) to make
+   * one and persist the mapping. Returns {sessionId, created}.
+   *
+   * The bridge itself doesn't import Storage — it only owns the mapping.
+   * Main.js injects the storage instance so the bridge stays decoupled
+   * from the Electron-side schema.
+   */
+  async function ensureSession(fromUserId, fromUserMasked) {
+    if (!fromUserId) throw new Error('ensureSession: fromUserId required');
+    const existing = bridge.getSessionIdForFromUser(fromUserId);
+    if (existing) return { sessionId: existing, created: false };
+    const storage = getStorage && getStorage();
+    if (!storage || typeof storage.createSession !== 'function') {
+      throw new Error('ensureSession: storage not injected');
+    }
+    const label = fromUserMasked || fromUserId.slice(0, 8);
+    const session = await storage.createSession('default', `微信 · ${label}`);
+    bridge.setSessionIdForFromUser(fromUserId, session.id);
+    onSessionsUpdated && onSessionsUpdated();
+    return { sessionId: session.id, created: true };
+  }
+
+  async function appendMessage(sessionId, role, content) {
+    if (!sessionId) throw new Error('appendMessage: sessionId required');
+    const storage = getStorage && getStorage();
+    if (!storage || typeof storage.appendSessionMessage !== 'function') {
+      throw new Error('appendMessage: storage not injected');
+    }
+    await storage.appendSessionMessage(sessionId, role, String(content || ''));
+    onSessionsUpdated && onSessionsUpdated();
+    return { ok: true };
+  }
+
+  /**
    * IPC action dispatch — mirrors the studio-call pattern.
    * Returns plain JSON-serializable values.
    */
@@ -103,6 +152,13 @@ function createWechatBridgeRunner({ onStatus } = {}) {
         return { lines: bridge.tailLogs(Number(params.lines) || 120) };
       case 'sendTestMessage':
         return bridge.sendTestMessage(String(params.text || '来自 Abcyesno 的测试消息 ✅'));
+      case 'ensureSession':
+        return ensureSession(params.fromUserId, params.fromUserMasked);
+      case 'appendMessage':
+        return appendMessage(params.sessionId, params.role, params.content);
+      case 'getSessionIdByFromUser': {
+        return { sessionId: bridge.getSessionIdForFromUser(params.fromUserId) };
+      }
       default:
         throw new Error(`Unknown wechat-call action: ${action}`);
     }

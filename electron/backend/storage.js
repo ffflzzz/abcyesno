@@ -179,6 +179,36 @@ class Storage {
     return data.sessions[idx];
   }
 
+  /**
+   * Append a single message to a session in a read-modify-write pass and
+   * refresh preview/updatedAt. Used by the WeChat bridge so each inbound/
+   * outbound turn shows up in the main-program session list without going
+   * through the full ChatShell create-flow. Caps the stored messages at
+   * MAX_MESSAGES_PER_SESSION to keep the JSON file bounded.
+   */
+  async appendSessionMessage(id, role, content) {
+    const MAX_MESSAGES_PER_SESSION = 200;
+    let data;
+    try {
+      const raw = await fs.readFile(this.sessionsFile, 'utf-8');
+      data = JSON.parse(raw);
+    } catch {
+      return null;
+    }
+    const idx = (data.sessions || []).findIndex((s) => s.id === id);
+    if (idx === -1) return null;
+    const session = data.sessions[idx];
+    session.messages = Array.isArray(session.messages) ? session.messages : [];
+    session.messages.push({ role, content, ts: Date.now() });
+    if (session.messages.length > MAX_MESSAGES_PER_SESSION) {
+      session.messages = session.messages.slice(-MAX_MESSAGES_PER_SESSION);
+    }
+    session.preview = String(content || '').slice(0, 100).replace(/\s+/g, ' ').trim();
+    session.updatedAt = Date.now();
+    await fs.writeFile(this.sessionsFile, JSON.stringify(data, null, 2), 'utf-8');
+    return session;
+  }
+
   async getThreadMapping(threadId) {
     if (!threadId) return null;
     try {

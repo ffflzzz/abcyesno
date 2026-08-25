@@ -1,14 +1,165 @@
 import { join } from 'node:path';
-import { readdirSync, readFileSync, mkdirSync, rmSync, existsSync } from 'node:fs';
+import { readdirSync, readFileSync, mkdirSync, rmSync, existsSync, writeFileSync } from 'node:fs';
 
 import { loadLatestAccount, type AccountData } from './wechat/accounts.js';
 import { startQrLogin, waitForQrScan } from './wechat/login.js';
-import { createDaemonRuntime, type DaemonRuntime } from './main.js';
+import { createDaemonRuntime, setAbcSessionHelper, type DaemonRuntime } from './main.js';
 import { DATA_DIR } from './constants.js';
 import { logger } from './logger.js';
 import { claudeQuery } from './claude/provider.js';
 
 export { claudeQuery };
+
+// ---------------------------------------------------------------------------
+// WeChat user -> abcyesno sessionId mapping
+// ---------------------------------------------------------------------------
+//
+// One WeChat user maps to one stable abcyesno session. The bridge only owns
+// the mapping (persisted to wx_session_map.json); actual storage.createSession
+// and storage.appendSessionMessage are called by the runner/main process
+// since the bridge is a backend module that doesn't import the Electron-side
+// Storage class. This keeps the bridge in-process & framework-free.
+
+const SESSION_MAP_FILE = join(DATA_DIR, 'wx_session_map.json');
+const sessionMapCache = new Map<string, string>();
+
+function loadSessionMap(): Record<string, string> {
+  try {
+    if (existsSync(SESSION_MAP_FILE)) {
+      return JSON.parse(readFileSync(SESSION_MAP_FILE, 'utf-8'));
+    }
+  } catch (err: any) {
+    logger.warn('loadSessionMap failed', { error: err instanceof Error ? err.message : String(err) });
+  }
+  return {};
+}
+
+function saveSessionMap(map: Record<string, string>): void {
+  try {
+    mkdirSync(DATA_DIR, { recursive: true });
+    writeFileSync(SESSION_MAP_FILE, JSON.stringify(map, null, 2), 'utf-8');
+  } catch (err: any) {
+    logger.warn('saveSessionMap failed', { error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+/** Look up the abcyesno sessionId previously registered for a WeChat user. */
+export function getSessionIdForFromUser(fromUserId: string): string | null {
+  if (!fromUserId) return null;
+  if (sessionMapCache.has(fromUserId)) return sessionMapCache.get(fromUserId) || null;
+  const map = loadSessionMap();
+  const sid = map[fromUserId];
+  if (sid) sessionMapCache.set(fromUserId, sid);
+  return sid || null;
+}
+
+/** Persist a new mapping. Called by the runner after storage.createSession. */
+export function setSessionIdForFromUser(fromUserId: string, sessionId: string): void {
+  if (!fromUserId || !sessionId) return;
+  sessionMapCache.set(fromUserId, sessionId);
+  const map = loadSessionMap();
+  map[fromUserId] = sessionId;
+  saveSessionMap(map);
+}
+
+/** Clear the mapping — invoked on unbind so a re-bind gets a fresh session. */
+export function clearSessionMap(): void {
+  sessionMapCache.clear();
+  try { rmSync(SESSION_MAP_FILE, { force: true }); } catch { /* ignore */ }
+}
+
+/** Stable Hermes threadId for a WeChat user (one thread per user, persistent). */
+export function makeWechatThreadId(fromUserId: string): string {
+  return `wx-${fromUserId}`;
+}
+
+// ---------------------------------------------------------------------------
+// Optional Storage injection (set by wechat-bridge-runner.js on boot)
+// ---------------------------------------------------------------------------
+//
+// The bridge can call into the abcyesno Storage so WeChat turns show up in
+// the main-app sidebar. Storage is injected lazily via setAbcStorage() to
+// avoid a hard import (bridge is built standalone by esbuild and Storage
+// pulls uuid + native fs; this keeps the bridge vendorable as a unit).
+
+type AbcStorageLike = {
+  createSession: (assistantId: string, title: string) => Promise<{ id: string; [k: string]: any }>;
+  appendSessionMessage: (id: string, role: string, content: string) => Promise<any>;
+};
+
+let abcStorage: AbcStorageLike | null = null;
+let abcNotifySessionsUpdated: (() => void) | null = null;
+
+export function setAbcStorage(
+  storage: AbcStorageLike,
+  notifySessionsUpdated: () => void,
+): void {
+  abcStorage = storage;
+  abcNotifySessionsUpdated = notifySessionsUpdated || null;
+  // Hand the helpers to main.ts so handleMessage / sendToClaude can mirror
+  // turns to the abcyesno session. Static import (no runtime require) keeps
+  // the wiring unambiguous after esbuild bundles everything into one file.
+  try {
+    if (typeof setAbcSessionHelper === 'function') {
+      setAbcSessionHelper({
+        ensureSession: ensureAbcSessionForWechatUser,
+        appendMessage: appendAbcMessage,
+      });
+    }
+  } catch (err: any) {
+    logger.warn('setAbcStorage: failed to wire main.ts helper', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+function notifySessionsUpdated(): void {
+  try { abcNotifySessionsUpdated?.(); } catch { /* ignore */ }
+}
+
+/**
+ * Idempotent: returns the abcyesno sessionId bound to a WeChat user,
+ * creating a new storage session on first sight. Returns null if storage
+ * was not injected (e.g. bridge is running standalone for tests).
+ */
+export async function ensureAbcSessionForWechatUser(
+  fromUserId: string,
+  fromUserMasked: string,
+): Promise<string | null> {
+  if (!abcStorage) return null;
+  if (!fromUserId) return null;
+  const existing = getSessionIdForFromUser(fromUserId);
+  if (existing) return existing;
+  const label = (fromUserMasked && String(fromUserMasked).trim()) || String(fromUserId).slice(0, 8);
+  const session = await abcStorage.createSession('default', `微信 · ${label}`);
+  setSessionIdForFromUser(fromUserId, session.id);
+  notifySessionsUpdated();
+  return session.id;
+}
+
+/**
+ * Append a single message to the WeChat user's abcyesno session. Safe no-op
+ * when storage/sessionId are missing.
+ */
+export async function appendAbcMessage(
+  sessionId: string | null,
+  role: 'user' | 'assistant',
+  content: string,
+): Promise<void> {
+  if (!abcStorage || !sessionId) return;
+  if (!content || !String(content).trim()) return;
+  try {
+    await abcStorage.appendSessionMessage(sessionId, role, String(content));
+    notifySessionsUpdated();
+  } catch (err: any) {
+    // Never let a storage write kill the bridge loop; just log and move on.
+    logger.warn('appendAbcMessage failed', {
+      sessionId,
+      role,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -229,6 +380,10 @@ export function unbindAccount(): void {
     // Reset sync buffer so a future bind starts clean.
     const bufPath = join(DATA_DIR, 'get_updates_buf');
     if (existsSync(bufPath)) rmSync(bufPath, { force: true });
+    // Clear wx user -> abcyesno session mapping so a re-bind registers fresh
+    // sessions instead of reviving the old one (otherwise the old session
+    // title would survive, which is misleading after the user unbinded).
+    clearSessionMap();
     logger.info('Account unbound');
   } catch (err: any) {
     logger.error('unbindAccount failed', { error: err instanceof Error ? err.message : String(err) });

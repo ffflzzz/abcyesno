@@ -145,8 +145,15 @@ export async function claudeQuery(options: QueryOptions): Promise<QueryResult> {
   }
 
   // Stable per-WeChat-user thread so agui-server maps it to one persistent
-  // Hermes session (server-side history). Callers pass e.g. `wx-<accountId>`.
-  const agThreadId = threadId || options.resume || 'wx-bridge';
+  // Hermes session (server-side history). Callers MUST pass `threadId`; the
+  // historical `'wx-bridge'` fallback was removed because it merged all
+  // WeChat users into a single shared session (causing context confusion
+  // and the early "206 年 8 月 5 日 vs 2026 年 8 月 25 日" date hallucination
+  // — the model was replying to a different user's prior turn).
+  if (!threadId) {
+    return { text: '', sessionId: '', error: 'claudeQuery: threadId is required (one Hermes thread per WeChat user)' };
+  }
+  const agThreadId = threadId;
   const runId = randomUUID();
 
   // Convert anthropic-style image blocks to the wire format the agui-server

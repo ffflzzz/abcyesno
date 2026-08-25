@@ -1316,6 +1316,17 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
     };
     if (hermes.onWechatStatus) hermes.onWechatStatus(onWechatStatus);
 
+    // Sessions-list invalidation: emitted by main after the WeChat bridge
+    // mutates storage (ensureSession / appendMessage). We re-pull the
+    // session list so the WeChat conversation surfaces in the sidebar
+    // even if the user is currently on a different assistant.
+    const onSessionsUpdated = () => {
+      if (selectedAssistantId) {
+        loadSessions(selectedAssistantId);
+      }
+    };
+    if (hermes.onSessionsUpdated) hermes.onSessionsUpdated(onSessionsUpdated);
+
     hermes.getStatus().then((status) => {
       // Only downgrade if we started as not-ready; never flip from ready→not-ready
       // after Bootstrap has already confirmed the backend is up (aguiPort != null).
@@ -1375,6 +1386,7 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
       hermes.off("clarify-request", onClarifyRequest);
       hermes.off("gateway-status", onGatewayStatus);
       if (hermes.offWechatStatus) hermes.offWechatStatus(onWechatStatus);
+      if (hermes.offSessionsUpdated) hermes.offSessionsUpdated(onSessionsUpdated);
       unsubContract && unsubContract();
     };
   }, [hermes]);

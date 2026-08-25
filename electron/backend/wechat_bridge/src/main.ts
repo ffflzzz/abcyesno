@@ -23,6 +23,23 @@ import { MessageType, type WeixinMessage } from './wechat/types.js';
 import { loadPendingQueue, savePendingQueue, type PendingItem } from './pending-queue.js';
 
 // ---------------------------------------------------------------------------
+// Optional abcyesno-Session bridge (injected by bridge.ts via setAbcStorage)
+// ---------------------------------------------------------------------------
+// Lets WeChat turns show up in the main-app sidebar. Null when running
+// standalone (no storage injected), which is fine — the bridge still works
+// for WeChat <-> agent, the difference is only the sidebar mirror.
+
+type AbcSessionHelper = {
+  ensureSession: (fromUserId: string, fromUserMasked: string) => Promise<string | null>;
+  appendMessage: (sessionId: string | null, role: 'user' | 'assistant', content: string) => Promise<void>;
+};
+
+let abcSessionHelper: AbcSessionHelper | null = null;
+export function setAbcSessionHelper(h: AbcSessionHelper): void {
+  abcSessionHelper = h;
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -128,6 +145,35 @@ function splitMessage(text: string, maxLen: number = MAX_MESSAGE_LENGTH): string
   }
   if (current) chunks.push(current);
   return chunks;
+}
+
+/**
+ * Wall-clock snapshot used to anchor the model's replies. The small flash
+ * model will otherwise invent dates ("206 年 8 月 5 日") because it has no
+ * real time source. We render in the host's local timezone (CST for our
+ * users) — `Intl.DateTimeFormat` handles DST/region correctly so the model
+ * gets a concrete, defensible string to quote.
+ */
+function formatNowForModel(now: Date = new Date()): string {
+  try {
+    const fmtDate = new Intl.DateTimeFormat('zh-CN', {
+      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      weekday: 'long',
+    });
+    const fmtTime = new Intl.DateTimeFormat('zh-CN', {
+      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
+    return `${fmtDate.format(now)} ${fmtTime.format(now)}`;
+  } catch {
+    // Fallback if Intl is unavailable for some reason
+    return now.toISOString();
+  }
 }
 
 function promptUser(question: string, defaultValue?: string): Promise<string> {
@@ -426,6 +472,21 @@ async function handleMessage(
   const fromUserId = msg.from_user_id;
   sharedCtx.lastContextToken = contextToken;
 
+  // Mirror to the main-app sidebar: ensure an abcyesno session exists for
+  // this WeChat user (idempotent — one session per user, stable across
+  // app restarts via wx_session_map.json). No-op when running standalone.
+  let abcSessionId: string | null = null;
+  if (abcSessionHelper && fromUserId) {
+    try {
+      const masked = fromUserId.length > 8
+        ? `${fromUserId.slice(0, 4)}****${fromUserId.slice(-4)}`
+        : fromUserId.slice(0, 2) + '****';
+      abcSessionId = await abcSessionHelper.ensureSession(fromUserId, masked);
+    } catch (err: any) {
+      logger.warn('ensureAbcSession failed', { error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
   // Flush any pending messages from prior rate-limit windows. User's new
   // message brings a fresh context_token, which resets the iLink 11-msg quota.
   await flushPending(account.accountId, fromUserId, contextToken, sender);
@@ -489,9 +550,18 @@ async function handleMessage(
     return;
   }
 
+  // Mirror the inbound turn to the abcyesno session so the sidebar reflects
+  // real activity. Use a compact placeholder when the message has only
+  // media so the preview line still moves.
+  if (abcSessionHelper && abcSessionId) {
+    const userDisplay = userText || (imageItem ? '（图片）' : (fileItem ? '（文件）' : '（语音/其他）'));
+    await abcSessionHelper.appendMessage(abcSessionId, 'user', userDisplay);
+  }
+
   await sendToClaude(
     userText, imageItem, fileItem, fromUserId, contextToken,
     account, session, sessionStore, sender, config, activeControllers,
+    abcSessionHelper, abcSessionId,
   );
 }
 
@@ -556,6 +626,8 @@ async function sendToClaude(
   sender: ReturnType<typeof createSender>,
   config: ReturnType<typeof loadConfig>,
   activeControllers: Map<string, AbortController>,
+  abcSessionHelper: AbcSessionHelper | null = null,
+  abcSessionId: string | null = null,
 ): Promise<void> {
   // Set state to processing
   session.state = 'processing';
@@ -615,8 +687,82 @@ async function sendToClaude(
     // Serial promise chain — each emit appends to the chain, no flags needed
     let flushChain: Promise<void> = Promise.resolve();
 
+    // ── Self-correction dedup ────────────────────────────────────────
+    // When the small model (Agnes 2.5-flash) gets confused it loops on
+    // "哦我理解错了" / "刚才那个回答确实..." and ends up sending the same
+    // answer twice with cosmetic edits. Filter out an emit that overlaps
+    // heavily with the very recent prior emit — but only inside a short
+    // window so we don't drop legit re-statements hours later.
+    const DEDUP_WINDOW_MS = 1500;
+    const DEDUP_SIMILARITY = 0.8;
+    let lastEmitRecord: { text: string; ts: number } | null = null;
+
+    function normalizeForSim(s: string): string {
+      return s.replace(/\s+/g, '').toLowerCase();
+    }
+
+    function bigramJaccard(a: string, b: string): number {
+      if (a === b) return 1;
+      if (a.length < 2 || b.length < 2) return 0;
+      const aCounts = new Map<string, number>();
+      for (let i = 0; i < a.length - 1; i++) {
+        const k = a.slice(i, i + 2);
+        aCounts.set(k, (aCounts.get(k) || 0) + 1);
+      }
+      let inter = 0;
+      for (let i = 0; i < b.length - 1; i++) {
+        const k = b.slice(i, i + 2);
+        const c = aCounts.get(k);
+        if (c && c > 0) {
+          inter++;
+          if (c === 1) aCounts.delete(k);
+          else aCounts.set(k, c - 1);
+        }
+      }
+      const aSet = a.length - 1;
+      const bSet = b.length - 1;
+      const denom = aSet + bSet - inter;
+      return denom > 0 ? inter / denom : 0;
+    }
+
+    function isSelfCorrectionDuplicate(text: string): boolean {
+      if (!lastEmitRecord) return false;
+      const now = Date.now();
+      if (now - lastEmitRecord.ts > DEDUP_WINDOW_MS) return false;
+      const a = normalizeForSim(lastEmitRecord.text);
+      const b = normalizeForSim(text);
+      if (!a || !b) return false;
+      if (a === b) return true;
+      // Strong prefix match: new text is a near-cousin of prior (model
+      // self-corrected and rewrote the head with a minor meta-comment).
+      const minLen = Math.min(a.length, b.length);
+      const maxLen = Math.max(a.length, b.length);
+      if (minLen >= 16 && maxLen / minLen < 1.4) {
+        const headLen = Math.floor(minLen * 0.7);
+        if (headLen >= 16) {
+          const aHead = a.slice(0, headLen);
+          const bHead = b.slice(0, headLen);
+          if (bigramJaccard(aHead, bHead) >= DEDUP_SIMILARITY) return true;
+        }
+      }
+      // Generic fallback: high overall bigram overlap
+      return bigramJaccard(a, b) >= DEDUP_SIMILARITY;
+    }
+
     function emitText(text: string, role: 'interstitial' | 'final'): void {
       if (!text.trim()) return;
+
+      // Drop self-correction duplicates BEFORE we commit to flushing.
+      // Logged so it's visible in bridge-*.log when investigating.
+      if (isSelfCorrectionDuplicate(text)) {
+        logger.info('dropped self-correction duplicate', {
+          role,
+          length: text.length,
+          preview: text.slice(0, 60),
+        });
+        return;
+      }
+      lastEmitRecord = { text, ts: Date.now() };
 
       // 若上一次发送失败留下了 pendingRetry，先用它原本的 role 单独补发，
       // 不要和当前 role 的文本合并（避免 interstitial 内容混进 final 答案）。
@@ -678,10 +824,22 @@ async function sendToClaude(
     const queryOptions: QueryOptions = {
       prompt,
       cwd: (session.workingDirectory || config.workingDirectory).replace(/^~/, homedir()),
+      // One stable Hermes thread per WeChat user, so each user gets their
+      // own conversation history (and the abcyesno sidebar can group them).
+      threadId: `wx-${fromUserId}`,
       resume: session.sdkSessionId,
       model: session.model,
       systemPrompt: [
+        // Inject the real wall clock so the model can answer date/time
+        // questions honestly. Without this it invents dates like "206 年
+        // 8 月 5 日" or "8 月 25 号" because it has no real source.
+        `当前时间：${formatNowForModel()}`,
         '你正在通过微信与用户对话，不是在终端里。不要让用户去终端操作。如果用户需要文件，直接输出文件地址就行，会自动识别解析推送文件到用户的微信中。',
+        // Anti self-correction loop: the small model likes to reply, then
+        // criticize its own reply, then reply again. Tell it to send the
+        // final answer only — no meta-commentary on the previous draft.
+        '回复必须一次性给到最终答案，不要"我理解错了"式的自我反思重写，不要在答案前后追加"刚才那个回答确实..."的元评论。',
+        '日期、时间、星期、电话号码、身份证号、版本号、引用的数字等一切需要精确性的内容，必须严格基于上文提供的"当前时间"或用户给出的真实数据；不知道就说不知道，不要凭印象编造。',
         config.systemPrompt,
       ].filter(Boolean).join('\n'),
       abortController,
@@ -775,6 +933,13 @@ async function sendToClaude(
         logger.warn('Claude query had error but returned text, using text', { error: result.error });
       }
       sessionStore.addChatMessage(session, 'assistant', result.text);
+      // Mirror the assistant turn to the abcyesno session. Use the full
+      // result.text (not just the streamed chunks) so the sidebar preview
+      // reflects the complete answer. This is the same content that was
+      // either streamed as deltas or sent verbatim in the !anySent branch.
+      if (abcSessionHelper && abcSessionId) {
+        await abcSessionHelper.appendMessage(abcSessionId, 'assistant', result.text);
+      }
       // If nothing was streamed at all (e.g. streaming not supported), send full text now
       if (!anySent) {
         const chunks = splitMessage(result.text);

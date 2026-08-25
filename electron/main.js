@@ -496,6 +496,18 @@ async function doStartBackend() {
           mainWindow.webContents.send('wechat-status', payload);
         }
       },
+      // Inject the same Storage instance used by ChatShell so the bridge can
+      // create / append sessions that show up in the main-app sidebar. The
+      // bridge module itself stays decoupled from the Storage schema — it
+      // just calls runner actions and the runner talks to storage.
+      getStorage: () => storage,
+      // Broadcast sessions-updated after a session mutation so App.jsx can
+      // re-call loadSessions() and surface the WeChat conversation.
+      onSessionsUpdated: () => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('sessions-updated');
+        }
+      },
     });
     wechatBridgeRunner.start().then((r) => {
       if (!r.ok) log('wechat-bridge', `failed to start (non-fatal): ${r.error}`);
@@ -774,6 +786,14 @@ ipcMain.handle('wechat-call', async (_event, payload) => {
     const action = (payload && payload.action) || '';
     const params = (payload && payload.params) || {};
     const result = await wechatBridgeRunner.call(action, params);
+    // After a session-affecting action, broadcast to the renderer so the
+    // main-app sidebar refreshes its session list (the WeChat bridge writes
+    // to the same storage as ChatShell's createSession flow).
+    if (action === 'ensureSession' || action === 'appendMessage') {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('sessions-updated');
+      }
+    }
     return { ok: true, result };
   } catch (err) {
     log('wechat-bridge', `call failed: ${err.message}`);

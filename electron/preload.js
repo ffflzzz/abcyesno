@@ -135,9 +135,14 @@ contextBridge.exposeInMainWorld('hermes', {
   studioCall: (action, params) => ipcRenderer.invoke('studio-call', { action, params }),
 
   // WeChat bridge: {action,params} dispatch to wechat-bridge-runner.
-  // Actions: getStatus/start/stop/restart/getQrCode/refreshQrCode/unbind/getLogs/sendTestMessage
+  // Actions: getStatus/start/stop/restart/getQrCode/refreshQrCode/unbind/getLogs/sendTestMessage/ensureSession/appendMessage
   wechatCall: (action, params) => ipcRenderer.invoke('wechat-call', { action, params }),
   // Status pushes from the bridge: {state,bound,accountMasked,detail,ts}
   onWechatStatus: (cb) => on('wechat-status', cb),
   offWechatStatus: (cb) => off('wechat-status', cb),
+  // Sessions-list invalidation: emitted by main after the WeChat bridge
+  // mutates storage (ensureSession / appendMessage). App.jsx should
+  // subscribe and re-call loadSessions() to refresh the sidebar.
+  onSessionsUpdated: (cb) => on('sessions-updated', cb),
+  offSessionsUpdated: (cb) => off('sessions-updated', cb),
 });
