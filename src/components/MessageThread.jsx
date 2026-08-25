@@ -1452,21 +1452,21 @@ function MessageThread({ messages = [], loading, streamPhase, thinkingText, reas
  * the user scrolls up.
  */
 function ReasoningBlock({ text, streaming = false }) {
-  const [open, setOpen] = useState(streaming);
+  // Default folded so the thinking card never dominates the chat surface.
+  // Users can click the toggle to inspect it; their choice is preserved.
+  const [open, setOpen] = useState(false);
   const bubbleRef = useRef(null);
   const userScrolledRef = useRef(false);
   const userToggledRef = useRef(false);
   const display = text || "";
 
-  // Sync open state with the streaming lifecycle. Manual user toggles are
-  // preserved across the rest of the same non-streaming window.
+  // When streaming ends, auto-fold unless the user explicitly opened it.
+  // When a brand-new streaming cycle starts, reset the manual override so
+  // each fresh reply starts folded by default.
   useEffect(() => {
     if (streaming) {
-      // New streaming cycle: reset the user-override flag and open.
       userToggledRef.current = false;
-      setOpen(true);
     } else if (!userToggledRef.current) {
-      // Streaming just ended and the user hasn't clicked -> collapse.
       setOpen(false);
     }
   }, [streaming]);
@@ -1492,10 +1492,11 @@ function ReasoningBlock({ text, streaming = false }) {
   }, []);
 
   return (
-    <div className="reasoning-block">
+    <div className={`reasoning-block ${streaming ? "is-streaming" : ""}`}>
       <button className="reasoning-toggle" onClick={toggle}>
         <Icon name="lightbulb" size={13} />
         <span>深度推理</span>
+        {streaming && <span className="reasoning-pulse" aria-hidden />}
         <span className="reasoning-count">{display.length} 字符</span>
         <Icon name="chevron" size={12} style={{ transform: open ? "rotate(90deg)" : "rotate(0deg)" }} />
       </button>

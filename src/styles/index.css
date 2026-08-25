@@ -7749,7 +7749,11 @@ body[--resizing="1"] .result-panel-resize-handle::before {
   transition: max-height 0.2s ease;
 }
 .reasoning-bubble.collapsed {
-  max-height: 54px;
+  max-height: 0;
+  padding: 0;
+  margin: 0;
+  opacity: 0;
+  pointer-events: none;
   overflow: hidden;
 }
 [data-theme="dark"] .reasoning-block {
@@ -7759,6 +7763,20 @@ body[--resizing="1"] .result-panel-resize-handle::before {
 [data-theme="dark"] .reasoning-bubble {
   background: rgba(30, 31, 48, 0.72);
   border-color: rgba(255, 255, 255, 0.10);
+}
+.reasoning-pulse {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #f59e0b;
+  animation: reasoning-pulse-anim 1.6s ease-in-out infinite;
+}
+[data-theme="dark"] .reasoning-pulse {
+  background: #fbbf24;
+}
+@keyframes reasoning-pulse-anim {
+  0%, 100% { opacity: 0.35; transform: scale(0.8); }
+  50% { opacity: 1; transform: scale(1.1); }
 }
 .reasoning-bubble::-webkit-scrollbar {
   width: 5px;
