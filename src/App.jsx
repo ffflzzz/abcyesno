@@ -21,6 +21,7 @@ import excalidrawIcon from "./assets/excalidraw.png";
 import appChatIcon from "./assets/app-chat.png";
 import appManjuIcon from "./assets/app-manju.png";
 import appPaperIcon from "./assets/app-paper.png";
+import aihotIcon from "./assets/aihot.png";
 
 // Map of manifest id / special key → vite-imported PNG so the same launcher
 // art shows in BOTH the homepage grid AND the browser-style tab strip.
@@ -1197,6 +1198,25 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
           title: "Excalidraw",
           iconSrc: excalidrawIcon,
           browserUrl: "https://excalidraw.com/",
+        });
+      },
+    },
+    // AI 热点 — opens the aihot.virxact.com AI-news aggregator in the
+    // built-in browser tab (Electron <webview> via BrowserPanel), mirroring
+    // the Excalidraw pattern. Icon is the site's own cyan radar mark on a
+    // dark navy squircle (see src/assets/aihot.png).
+    {
+      key: "aihot",
+      title: "AI 热点",
+      icon: "default",
+      iconSrc: aihotIcon,
+      color: "#3FD9D6",
+      onClick: () => {
+        createTab({
+          type: "browser",
+          title: "AI 热点",
+          iconSrc: aihotIcon,
+          browserUrl: "https://aihot.virxact.com/",
         });
       },
     },
