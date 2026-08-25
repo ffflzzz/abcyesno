@@ -393,12 +393,27 @@ class HermesRunner {
     if (this.port !== PORT) {
       log('hermes-runner', `port ${PORT} busy, using ${this.port}`);
     }
-    const hermesCommand = fs.existsSync(HERMES_PYTHON)
-      ? { exe: HERMES_PYTHON, args: ['-m', 'hermes_cli.main', 'serve', '--port', String(this.port), '--host', this.host, '--skip-build'] }
-      : { exe: HERMES_EXE, args: ['serve', '--port', String(this.port), '--host', this.host, '--skip-build'] };
-    if (!fs.existsSync(hermesCommand.exe)) {
-      throw new Error(`Hermes runtime not found: ${hermesCommand.exe}`);
+    // Portable builds rely on the bundled venv Python. If it is missing, the
+    // most common cause on a fresh Windows machine is antivirus quarantine
+    // (Windows Defender / 360 / Huorong) deleting python.exe right after
+    // install. Report that explicitly so the user does not chase hermes.exe.
+    log('hermes-runner', `runtime check: python=${fs.existsSync(HERMES_PYTHON)} hermes=${fs.existsSync(HERMES_EXE)} venv=${HERMES_VENV}`);
+    if (!fs.existsSync(HERMES_PYTHON)) {
+      throw new Error(
+        `Hermes Python runtime not found: ${HERMES_PYTHON}\n\n` +
+          `The bundled Python interpreter is missing. This usually means an antivirus program ` +
+          `(Windows Defender / 360 / Huorong) quarantined or deleted it during/after installation.\n\n` +
+          `To fix:\n` +
+          `1. Check your antivirus quarantine / protection history.\n` +
+          `2. Restore python.exe and add this folder to the whitelist:\n` +
+          `   ${path.join(HERMES_VENV, 'Scripts')}\n` +
+          `3. Re-run Abcyesno. If the file is still missing, reinstall from the installer/ZIP.`
+      );
     }
+    const hermesCommand = {
+      exe: HERMES_PYTHON,
+      args: ['-m', 'hermes_cli.main', 'serve', '--port', String(this.port), '--host', this.host, '--skip-build'],
+    };
 
     // Refresh API key from disk in case it was set before start.
     this._syncBuiltinSkills();
