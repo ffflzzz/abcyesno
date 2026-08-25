@@ -1,6 +1,6 @@
 {
   "name": "abcyesno",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Abcyesno - Agent OS based on Hermes harness",
   "main": "electron/main.js",
   "scripts": {
