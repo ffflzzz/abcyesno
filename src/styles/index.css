@@ -7707,17 +7707,126 @@ body[--resizing="1"] .result-panel-resize-handle::before {
   cursor: pointer;
 }
 
-/* ReasoningBlock — translucent rounded bubble with constrained scroll */
 .reasoning-block {
-  margin: 8px 20px;
-  border-radius: var(--radius-lg);
-  background: rgba(230, 237, 243, 0.10);
-  border: 1px solid rgba(230, 237, 243, 0.22);
-  backdrop-filter: blur(10px);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.05);
+  /* Wrapper only clips the expanding bubble; the visible bar styling
+     lives on .reasoning-toggle (mirrors .tool-summary-bar). */
+  overflow: hidden;
+  max-width: 86%;
+}
+/* Detach from shared selector so we can match .tool-summary-bar exactly
+   without affecting .subagent-toggle / .moa-toggle / .review-toggle. */
+.reasoning-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text);
+  transition: background 0.15s ease;
+  user-select: none;
+  text-align: left;
+}
+.reasoning-toggle:hover {
+  background: var(--panel-hover, rgba(128,128,128,0.08));
+}
+.reasoning-icon { font-size: 14px; flex-shrink: 0; }
+.reasoning-text { color: var(--text); white-space: nowrap; }
+.reasoning-detail {
+  color: var(--muted);
+  font-size: 11.5px;
+  opacity: 0.75;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.reasoning-status {
+  margin-left: auto;
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: var(--radius-xs);
+  background: rgba(80,200,120,0.12);
+  color: var(--success, #50c878);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.reasoning-status.complete {
+  background: rgba(80,200,120,0.12);
+  color: var(--success, #50c878);
+}
+.reasoning-status.running {
+  background: rgba(210,153,34,0.14);
+  color: var(--warning, #d29922);
+  position: relative;
+  overflow: hidden;
+  animation: status-running-pulse 1.5s ease-in-out infinite;
+}
+.reasoning-status.running::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(210,153,34,0.35),
+    transparent
+  );
+  animation: status-sweep 1.8s ease-in-out infinite;
+}
+.reasoning-chevron {
+  font-size: 11px;
+  transition: transform 0.2s ease;
+  color: var(--muted);
+}
+.reasoning-chevron.expanded {
+  transform: rotate(90deg);
+}
+.reasoning-bubble {
+  margin: 6px 10px 10px;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+  /* Fixed max-height forces the inner content to scroll instead of stretching
+     the whole message thread. */
+  max-height: 260px;
+  overflow-y: auto;
+  transition: max-height 0.2s ease, padding 0.2s ease, margin 0.2s ease;
+}
+.reasoning-bubble.collapsed {
+  max-height: 0;
+  padding: 0;
+  margin: 0;
+  opacity: 0;
+  pointer-events: none;
   overflow: hidden;
 }
-.reasoning-toggle,
+.reasoning-bubble::-webkit-scrollbar {
+  width: 5px;
+}
+.reasoning-bubble::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.16);
+  border-radius: var(--radius-xs);
+}
+[data-theme="dark"] .reasoning-bubble::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+/* Shared bar styles for subagent / moa / review blocks (kept separate from
+   .reasoning-toggle which now mirrors .tool-summary-bar for unification). */
 .subagent-toggle,
 .moa-toggle,
 .review-toggle {
@@ -7733,7 +7842,6 @@ body[--resizing="1"] .result-panel-resize-handle::before {
   font-size: 13px;
   font-weight: 500;
 }
-.reasoning-count,
 .subagent-count,
 .moa-count {
   margin-left: auto;
@@ -7742,63 +7850,6 @@ body[--resizing="1"] .result-panel-resize-handle::before {
   background: rgba(0, 0, 0, 0.06);
   border-radius: var(--radius-sm);
   padding: 1px 8px;
-}
-.reasoning-bubble {
-  margin: 0 10px 10px;
-  padding: 12px 14px;
-  border-radius: var(--radius-md);
-  background: rgba(255, 255, 255, 0.62);
-  border: 1px solid rgba(255, 255, 255, 0.55);
-  color: var(--text);
-  font-size: 13px;
-  line-height: 1.7;
-  white-space: pre-wrap;
-  word-break: break-word;
-  /* Fixed max-height forces the inner content to scroll instead of stretching
-     the whole message thread. */
-  max-height: 260px;
-  overflow-y: auto;
-  transition: max-height 0.2s ease;
-}
-.reasoning-bubble.collapsed {
-  max-height: 0;
-  padding: 0;
-  margin: 0;
-  opacity: 0;
-  pointer-events: none;
-  overflow: hidden;
-}
-[data-theme="dark"] .reasoning-block {
-  background: rgba(139, 148, 158, 0.14);
-  border-color: rgba(129, 140, 248, 0.25);
-}
-[data-theme="dark"] .reasoning-bubble {
-  background: rgba(30, 31, 48, 0.72);
-  border-color: rgba(255, 255, 255, 0.10);
-}
-.reasoning-pulse {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #f59e0b;
-  animation: reasoning-pulse-anim 1.6s ease-in-out infinite;
-}
-[data-theme="dark"] .reasoning-pulse {
-  background: #fbbf24;
-}
-@keyframes reasoning-pulse-anim {
-  0%, 100% { opacity: 0.35; transform: scale(0.8); }
-  50% { opacity: 1; transform: scale(1.1); }
-}
-.reasoning-bubble::-webkit-scrollbar {
-  width: 5px;
-}
-.reasoning-bubble::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.16);
-  border-radius: var(--radius-xs);
-}
-[data-theme="dark"] .reasoning-bubble::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.18);
 }
 
 /* SubagentPanel */

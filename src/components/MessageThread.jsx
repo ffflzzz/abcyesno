@@ -1492,13 +1492,23 @@ function ReasoningBlock({ text, streaming = false }) {
   }, []);
 
   return (
-    <div className={`reasoning-block ${streaming ? "is-streaming" : ""}`}>
+    <div className={`reasoning-block ${streaming ? "is-streaming" : "is-done"}`}>
       <button className="reasoning-toggle" onClick={toggle}>
-        <Icon name="lightbulb" size={13} />
-        <span>深度推理</span>
-        {streaming && <span className="reasoning-pulse" aria-hidden />}
-        <span className="reasoning-count">{display.length} 字符</span>
-        <Icon name="chevron" size={12} style={{ transform: open ? "rotate(90deg)" : "rotate(0deg)" }} />
+        <span className="reasoning-icon"><Icon name="lightbulb" size={14} /></span>
+        <span className="reasoning-text">深度推理</span>
+        <span className="reasoning-detail">{display.length} 字符</span>
+        <span
+          className={`reasoning-status ${streaming ? "running" : "complete"}`}
+          style={streaming ? {
+            color: "#d29922",
+            animation: "status-running-pulse 1.5s ease-in-out infinite",
+          } : undefined}
+        >
+          {streaming ? "思考中…" : "已完成"}
+        </span>
+        <span className={`reasoning-chevron ${open ? "expanded" : ""}`}>
+          <Icon name="chevron" size={12} style={{ transform: open ? "rotate(90deg)" : "rotate(0deg)" }} />
+        </span>
       </button>
       <div
         ref={bubbleRef}
