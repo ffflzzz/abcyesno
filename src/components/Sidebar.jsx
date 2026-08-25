@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef, useMemo } from "react";
 import DetailModal from "./DetailModal.jsx";
 import TaskPanel from "./TaskPanel.jsx";
 import bachAvatar from "../assets/bach-avatar.png";
-import bachIcon from "../assets/bach-icon.png";
 import Icon from "./Icon.jsx";
 
 function getStatusDotClass(backendStatus) {
@@ -307,22 +306,9 @@ export default function Sidebar({
   // ── Main render ──
   return (
     <>
-      {!open && (
-        <button className="sidebar-toggle" onClick={onToggle} title="展开侧边栏">
-          <Icon name="panel" size={16} />
-        </button>
-      )}
       <aside className={`sidebar ${open ? "open" : "closed"}`}>
-        {/* Header */}
-        <div className="sidebar-header">
-          <div className="brand-small">
-            <img src={bachIcon} alt="Abcyesno" className="logo-small" />
-            <span className="brand-name">Abcyesno</span>
-          </div>
-          <button className="sidebar-close" onClick={onToggle}><Icon name="close" size={16} /></button>
-        </div>
-
-        {/* Tab bar (replaces old search bar) */}
+        {/* Tab bar (replaces old search bar) — sits at the very top now that
+            the sidebar header is gone (header chrome moved to the app TopBar). */}
         <div className="sidebar-tabs">
           {TABS.map((t) => (
             <button

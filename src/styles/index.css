@@ -101,6 +101,79 @@ body {
   overflow: hidden;
 }
 
+/* ── Custom window title bar (Electron titleBarStyle: hidden) ──
+   The whole strip is a drag region (-webkit-app-region: drag); only the
+   logo, the app TabBar, and the window controls are individually marked
+   no-drag so they stay clickable. On macOS the system traffic lights sit
+   in the top-left, so TopBar renders a wider left spacer and hides our
+   own controls instead. */
+.topbar {
+  display: flex;
+  align-items: center;
+  height: 46px;
+  flex-shrink: 0;
+  background: var(--bg-elevated);
+  padding: 0 6px 0 12px;
+  gap: 6px;
+  -webkit-app-region: drag;
+  user-select: none;
+}
+.topbar-left {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  -webkit-app-region: no-drag;
+}
+.topbar-left--mac { width: 72px; }
+.topbar-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.topbar-brand-mark {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  background: var(--accent);
+  box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.18);
+}
+.topbar-brand-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+}
+.topbar-tabs {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  -webkit-app-region: no-drag;
+}
+.topbar-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  margin-left: 4px;
+  -webkit-app-region: no-drag;
+}
+.win-btn {
+  width: 36px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: 6px;
+  transition: background 0.12s, color 0.12s;
+}
+.win-btn:hover { background: rgba(255, 255, 255, 0.08); color: var(--text); }
+.win-btn--close:hover { background: #e0483e; color: #fff; }
+
 /* ── Browser-style tab bar ── */
 /* Browser-style tabbar: outer container stays rectangular (acts as the
    "wall" behind active tab). Inner .tabbar-tabs reserves a 6px top gap
@@ -109,24 +182,28 @@ body {
    the bar. */
 /* Zone separation strategy (no hard 1px borders between regions — tonal
    steps carry the hierarchy):
-     L2 (top chrome)  .tabbar + .chat-header   → --bg-elevated  #1c2128
-     L1 (nav rail)    .sidebar (all parts)     → --panel        #161b22
-     L0 (page)        .chat-body + .composer   → --bg           #0f1419
+   L2 (top chrome)  .topbar + .tabbar        → --bg-elevated  #1c2128
+   L1 (nav rail)    .sidebar + .icon-rail    → --panel        #161b22
+   L0 (page)        .chat-body + .composer   → --bg           #0f1419
    Wherever a border used to be we just removed it; where a softer cue is
    needed (e.g. composer floating above body) we use a directional shadow. */
 .tabbar {
   display: flex;
-  align-items: stretch;
-  height: 40px;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  height: auto;
   flex-shrink: 0;
-  background: var(--bg-elevated);
-  padding: 0 8px;
+  background: transparent;
+  padding: 0;
 }
 .tabbar-tabs {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   gap: 4px;
-  padding-top: 6px;
+  flex: 1;
+  min-width: 0;
+  padding: 0;
   overflow-x: auto;
   scrollbar-width: thin;
 }
@@ -140,7 +217,7 @@ body {
   height: 34px;
   padding: 0 12px;
   max-width: 200px;
-  border-radius: 10px 10px 0 0;
+  border-radius: var(--radius-md);
   background: var(--panel-2);
   color: var(--muted);
   cursor: pointer;
@@ -244,6 +321,38 @@ body {
 .sidebar.closed {
   margin-left: -260px;
 }
+
+/* ── Narrow vertical icon rail (left of the sidebar) ──
+   Hosts the controls that used to live in the ChatLayout header's right
+   cluster. 48px wide; icons stack vertically; active state highlights like
+   the old header did. Tonal step (--bg-elevated) from the --panel sidebar. */
+.icon-rail {
+  width: 48px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 0;
+  background: var(--bg-elevated);
+  border-right: 1px solid var(--border);
+}
+.rail-btn {
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.rail-btn:hover { background: var(--panel-2); color: var(--text); }
+.rail-btn.active { background: var(--panel-2); color: var(--accent); }
+.rail-spacer { flex: 1; }
 
 .sidebar-toggle {
   position: fixed;

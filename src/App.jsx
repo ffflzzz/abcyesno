@@ -8,6 +8,8 @@ import CreateAssistantModal from "./components/CreateAssistantModal.jsx";
 import SettingsPanel from "./components/SettingsPanel.jsx";
 import Launcher from "./components/Launcher.jsx";
 import TabBar from "./components/TabBar.jsx";
+import TopBar from "./components/TopBar.jsx";
+import IconRail from "./components/IconRail.jsx";
 import ResultPanel from "./components/ResultPanel.jsx";
 import StudioWorkbench from "./workbenches/StudioWorkbench.jsx";
 import BrowserPanel from "./components/BrowserPanel.jsx";
@@ -335,6 +337,9 @@ function ChatShell({
   // Queue of user messages typed while the agent is busy. Flushed FIFO when
   // the current run finishes (see effect below).
   const [queuedMessages, setQueuedMessages] = useState([]);
+  // Context-usage modal: lifted here so the IconRail (chat-header replacement)
+  // can open it while ChatLayout still owns the modal render.
+  const [showContextUsage, setShowContextUsage] = useState(false);
   async function handlePermissionChange(mode) {
     setPermissionMode(mode);
     if (!selectedSessionId || !hermes || !hermes.setPermissionMode) return;
@@ -708,6 +713,18 @@ function ChatShell({
 
   return (
     <>
+      <IconRail
+        resultPanelOpen={resultPanelOpen}
+        onToggleResultPanel={onToggleResultPanel}
+        onToggleResultPanelCollapse={onToggleResultPanelCollapse}
+        resultPanelCollapsed={resultPanelCollapsed}
+        browserPanelOpen={browserPanelOpen}
+        onToggleBrowserPanel={onToggleBrowserPanel}
+        onShowContextUsage={() => setShowContextUsage(true)}
+        onOpenKey={() => setShowKeyModal(true)}
+        sidebarOpen={sidebarOpen}
+        onToggleSidebar={() => setSidebarOpen((o) => !o)}
+      />
       <Sidebar
         open={sidebarOpen}
         assistants={assistants}
@@ -760,6 +777,8 @@ function ChatShell({
         onSend={handleSend}
         onStop={handleStop}
         onOpenKey={() => setShowKeyModal(true)}
+        showContextUsage={showContextUsage}
+        setShowContextUsage={setShowContextUsage}
         onModelChange={onModelChange}
         permission={permissionMode}
         onPermissionChange={handlePermissionChange}
@@ -1638,13 +1657,16 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
 
   const activeTab = tabs.find((t) => t.id === activeTabId) || tabs[0];
 
-  const tabBar = (
-    <TabBar
+  const topBar = (
+    <TopBar
       tabs={tabs}
       activeTabId={activeTabId}
       onActivate={activateExisting}
       onClose={closeTab}
       onAdd={() => createTab({ type: "homepage" })}
+      onMinimize={() => window.hermes?.windowControls?.minimize?.()}
+      onToggleMaximize={() => window.hermes?.windowControls?.toggleMaximize?.()}
+      onCloseWindow={() => window.hermes?.windowControls?.close?.()}
     />
   );
 
@@ -1694,7 +1716,7 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
     return (
       <ErrorBoundary>
         <div className="app">
-          {tabBar}
+          {topBar}
           <div className="tab-content">
             <div className="browser-tab-host">
               <BrowserPanel fullscreen initialUrl={activeTab.browserUrl || ""} />
@@ -1710,7 +1732,7 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
     return (
       <ErrorBoundary>
         <div className="app">
-          {tabBar}
+          {topBar}
           <div className="tab-content">
             <div className="workbench-host">
               <StudioWorkbench
@@ -1732,7 +1754,7 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
   return (
     <ErrorBoundary>
       <div className="app">
-        {tabBar}
+        {topBar}
         <div className="tab-content">
           <>
               <div className="chat-host" style={{ display: activeTab.type === "homepage" ? "none" : "flex" }}>

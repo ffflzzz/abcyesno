@@ -37,6 +37,17 @@ contextBridge.exposeInMainWorld('hermes', {
   openDevTools: () => ipcRenderer.invoke('open-devtools'),
   quitApp: () => ipcRenderer.invoke('quit-app'),
 
+  // Static platform string so the renderer can branch mac/win chrome.
+  platform: process.platform,
+
+  // Custom title bar window controls (own window, resolved in main via sender).
+  windowControls: {
+    minimize: () => ipcRenderer.send('win:minimize'),
+    toggleMaximize: () => ipcRenderer.send('win:toggle-maximize'),
+    close: () => ipcRenderer.send('win:close'),
+    isMaximized: () => ipcRenderer.invoke('win:is-maximized'),
+  },
+
   // Workflow intent parser (smart input → structured inputObj)
   parseWorkflowIntent: (nlText, manifestId) => ipcRenderer.invoke('parse-workflow-intent', nlText, manifestId),
 

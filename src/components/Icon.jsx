@@ -30,6 +30,7 @@ import {
   RotateCw,         // refresh
   Volume2,         // audio / mic
   Mic,              // mic
+  VolumeX,         // volume-x (mute)
   Palette,          // palette / design
   Wrench,           // tools
   Shield,           // shield / secure
@@ -37,7 +38,8 @@ import {
   Monitor,          // desktop / monitor
   Heart,            // heart / like
   NotebookPen,      // note / memo
-  PanelRight,       // panel toggle
+  PanelRight,       // panel toggle (result panel)
+  PanelLeft,        // sidebar toggle
   ArrowDown,        // arrow-down
   CircleDot,        // dot (filled)
   Circle,           // circle (outline)
@@ -116,6 +118,7 @@ const MAP = {
   refresh: RotateCw,
   audio: Volume2,
   mic: Mic,
+  "volume-x": VolumeX,
   palette: Palette,
   tools: Wrench,
   wrench: Wrench,
@@ -130,6 +133,7 @@ const MAP = {
   note: NotebookPen,
   memo: NotebookPen,
   panel: PanelRight,
+  sidebar: PanelLeft,
   "arrow-down": ArrowDown,
   down: ArrowDown,
 

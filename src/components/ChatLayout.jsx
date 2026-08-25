@@ -89,10 +89,13 @@ export default function ChatLayout({
   onStopLiveTask = () => {},
   onOpenLiveTaskDetail = () => {},
   onDismissLiveTask = () => {},
+  // Context-usage modal state is owned by ChatShell (so the IconRail can open
+  // it); ChatLayout only renders the modal from these props.
+  showContextUsage = false,
+  setShowContextUsage = () => {},
 }) {
   const bottomRef = useRef(null);
   const [attachment, setAttachment] = useState(null);
-  const [showContextUsage, setShowContextUsage] = useState(false);
 
   const approvalPending = !!approval;
 
@@ -162,59 +165,6 @@ export default function ChatLayout({
 
   return (
     <main className={`chat-layout ${sidebarOpen ? "" : "full"}`}>
-      <header className="chat-header">
-        <div className="header-left">
-          {!sidebarOpen && (
-            <button className="header-icon" onClick={onToggleSidebar} title="展开侧边栏">
-              <Icon name="panel" size={16} />
-            </button>
-          )}
-          <div className="header-assistant">
-            <div className="header-title-row">
-              <span className={`header-status-dot ${getStatusLabel(backendStatus, phase).dot}`} />
-              <span className="header-title">
-                {session?.title && session.title !== "新会话"
-                  ? session.title
-                  : (assistant?.name || "Abcyesno")}
-              </span>
-            </div>
-          </div>
-        </div>
-        <div className="header-center" />
-        <div className="header-right">
-          <button
-            className={`header-icon ${resultPanelOpen && !resultPanelCollapsed ? "active" : ""}`}
-            onClick={() => {
-              if (!resultPanelOpen) {
-                onToggleResultPanel(); // closed → open
-              } else {
-                onToggleResultPanelCollapse(); // open ↔ collapsed
-              }
-            }}
-            title={resultPanelCollapsed ? "展开结果区" : resultPanelOpen ? "收起结果区" : "打开结果区"}
-          >
-            <Icon name="panel" size={16} />
-          </button>
-          <button
-            className={`header-icon ${browserPanelOpen ? "active" : ""}`}
-            onClick={onToggleBrowserPanel}
-            title={browserPanelOpen ? "关闭浏览器" : "打开浏览器"}
-          >
-            <Icon name="globe" size={16} />
-          </button>
-            <button
-            className="header-icon"
-            onClick={() => setShowContextUsage(true)}
-            title="上下文用量"
-          >
-            <Icon name="activity" size={16} />
-          </button>
-          <button className="header-icon" onClick={onOpenKey} title="设置 API Key">
-              <Icon name="settings" size={16} />
-            </button>
-        </div>
-      </header>
-
       {runError && (
         <div className="error-banner">
           <span className="error-banner-text">错误：{runError}</span>

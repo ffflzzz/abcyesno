@@ -305,6 +305,9 @@ function createWindow() {
     minHeight: 480,
     backgroundColor: '#0f1419',
     show: false,
+    // Custom title bar: hide the native chrome so the renderer's TopBar
+    // (logo + app TabBar + window controls) owns the whole top strip.
+    titleBarStyle: 'hidden',
     icon: path.join(__dirname, 'bach-icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -411,6 +414,29 @@ ipcMain.handle('detach-result-panel', (_event, opts) => {
   const win = createDetachedPanelWindow(opts || {});
   win.__detachKey = target;
   return { success: true, reused: false };
+});
+
+// ── Custom title bar window controls ──
+// Each renderer TopBar owns its own window's controls. We resolve the target
+// window from the IPC event sender so the same handlers work for the main
+// window and the detached result-panel window.
+ipcMain.on('win:minimize', (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (win) win.minimize();
+});
+ipcMain.on('win:toggle-maximize', (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win) return;
+  if (win.isMaximized()) win.unmaximize();
+  else win.maximize();
+});
+ipcMain.on('win:close', (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (win) win.close();
+});
+ipcMain.handle('win:is-maximized', (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  return !!(win && win.isMaximized());
 });
 
 function findAvailablePort(host, startPort) {
