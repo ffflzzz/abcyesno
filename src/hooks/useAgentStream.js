@@ -639,20 +639,6 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
           sess.backgroundRun = false;
         }
 
-        // Also notify the user when a workflow gate pauses execution, because
-        // in chat mode the inline ApprovalBubble lives in the message footer
-        // and may be below the fold.
-        if (name === "workflow.approval") {
-          const label = value?.label || value?.gate_id || "工作流确认";
-          emitToastShow({
-            key: `wf-approval-${value?.workflowRunId || sess.id}`,
-            level: "warning",
-            text: `⏸ ${label} 需要确认，请在对话底部审批`,
-            kind: "ttl",
-            ttlMs: 0, // persistent until user interacts
-          });
-        }
-
         // Surface workflow errors in the chat stream so they are not swallowed
         // when the workbench is not visible (e.g. chat-mode langgraph_agent).
         if (name === "workflow.error") {

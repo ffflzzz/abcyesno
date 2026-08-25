@@ -218,11 +218,7 @@ export default function ChatLayout({
         </div>
       )}
 
-      {approvalPending && (
-        <div className="approval-banner">
-          <Icon name="pause" size={14} /> 等待用户确认：操作需要批准后才会继续
-        </div>
-      )}
+      {approvalPending && null /* banner 移除：审批提示已由消息流内的 ApprovalBubble 承载，避免顶部 toast + 中部 banner + 卡片三层重复通知 */}
 
       <div className="chat-body">
         {(!messages || messages.length === 0) ? (

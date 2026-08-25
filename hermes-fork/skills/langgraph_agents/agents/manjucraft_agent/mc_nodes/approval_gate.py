@@ -44,6 +44,36 @@ def _current_episode(state: AgentState) -> int:
     return int(state.get("current_episode", 0) or 0)
 
 
+def _keyframe_artifacts(state: AgentState) -> list[dict]:
+    """Collect first-frame / keyframe image descriptors from the latest
+    batch_generate_keyframes result so the chat-side ApprovalBubble can
+    render a thumbnail without an extra round-trip. Each entry matches the
+    shape ApprovalBubble expects (``type === "image"`` and a resolvable
+    ``path``); ApprovalBubble's useResolvedArtifacts hook reads the path
+    via the main-process readLocalImage IPC and turns it into a data: URL
+    the sandboxed renderer can load. Keep the payload minimal — no
+    abcyesno-local:// url, since ApprovalBubble's localPathOf only
+    recognises http:/data: as remote and would otherwise try (and fail) to
+    IPC-resolve the URL."""
+    out: list[dict] = []
+    for sr in state.get("shot_results", []) or []:
+        p = sr.get("keyframe_path")
+        if not p:
+            continue
+        idx = sr.get("index")
+        label = f"分镜 {idx + 1} 首帧" if isinstance(idx, int) else "首帧"
+        out.append({
+            "type": "image",
+            "path": p,
+            "label": label,
+        })
+        # first-frame gate is one approval per episode; cap the inline
+        # thumbnail grid so the chat bubble stays compact.
+        if len(out) >= 4:
+            break
+    return out
+
+
 def gate_first_frame(state: AgentState) -> dict:
     """First-frame approval (episode 0) OR lightweight per-episode ready gate.
 
@@ -53,12 +83,21 @@ def gate_first_frame(state: AgentState) -> dict:
     """
     ep = _current_episode(state)
     if ep == 0:
+        # Pull the first keyframe path out of state so the chat-side
+        # ApprovalBubble has something to render as a thumbnail — the gate
+        # interrupt payload flows through workflow.approval → Abcyesno
+        # front-end, where ApprovalBubble reads approval.artifacts (with
+        # toolMessages/fallbackImages fallbacks that don't apply here since
+        # first_frame images live in shot_results, not in adjacent tool
+        # messages).
+        first_frame_artifacts = _keyframe_artifacts(state)
         decision = interrupt({
             "gate_id": "first_frame",
             "node": "gate_first_frame",
             "label": "首帧确认",
             "message": "角色首帧与分镜风格已生成，确认后继续生成分镜图（此确认将锁定跨集角色圣经）。",
             "allowSteer": True,
+            "artifacts": first_frame_artifacts,
         })
         update = _apply_decision(decision)
         # Lock the character bible from this episode's generated characters.
