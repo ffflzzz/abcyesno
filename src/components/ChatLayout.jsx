@@ -256,7 +256,6 @@ export default function ChatLayout({
             onRegenerate={onRegenerate}
             assistant={assistant}
             manifests={manifests}
-            onUpgradeToWorkbench={onSelectWorkflow}
             onOpenPreviewUrl={onOpenPreviewUrl}
             approval={approval}
             onRespondApproval={onRespondApproval}

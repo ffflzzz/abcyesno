@@ -4,7 +4,7 @@ import { Virtuoso } from "react-virtuoso";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import AgentVerboseTimeline from "./AgentVerboseTimeline.jsx";
-import WorkflowGraphPanel from "./WorkflowGraphPanel.jsx";
+import SubagentTerminal from "./SubagentTerminal.jsx";
 import ThinkingIndicator from "./ThinkingIndicator.jsx";
 import ArtifactPreview from "./ArtifactPreview.jsx";
 import ToolCard from "./ToolCard.jsx";
@@ -1011,7 +1011,7 @@ function ToolsRow({ items, assistantAvatar, loading, isLastRow, toolStatus = {},
   );
 }
 
-function MessageThread({ messages = [], loading, streamPhase, thinkingText, reasoningText = "", uiBlocks = [], stalled = false, subagents = [], moaRefs = [], moaAggregating = null, toolStatus = {}, reviewSummary = null, onRetry, onRegenerate, assistant, manifests = [], onUpgradeToWorkbench, onOpenPreviewUrl, approval, onRespondApproval, sessionId, onEditMessage, onDeleteMessage, editingMessageId, onSaveEdit, onCancelEdit, onSend }) {
+function MessageThread({ messages = [], loading, streamPhase, thinkingText, reasoningText = "", uiBlocks = [], stalled = false, subagents = [], moaRefs = [], moaAggregating = null, toolStatus = {}, reviewSummary = null, onRetry, onRegenerate, assistant, manifests = [], onOpenPreviewUrl, approval, onRespondApproval, sessionId, onEditMessage, onDeleteMessage, editingMessageId, onSaveEdit, onCancelEdit, onSend }) {
   const [lightbox, setLightbox] = useState(null);
   // Stable image-click handler so memoized markdown bubbles (React.memo on
   // CollapsibleMarkdown/MarkdownView) don't re-render on every stream token.
@@ -1405,17 +1405,6 @@ function MessageThread({ messages = [], loading, streamPhase, thinkingText, reas
               onDelete={onDeleteMessage}
             />
           )}
-          {isInner && onUpgradeToWorkbench && !isError && !isStreamingText && !isThinkingInline && !isEditing && !mctx.inner.unknown && (
-            <button
-              className="message-action-btn upgrade-standalone"
-              onClick={() => onUpgradeToWorkbench(mctx.inner.id)}
-              title="把这次子调用升级为独立工作台会话"
-            >
-              <Icon name="workflow" size={12} />
-              <span>在 {mctx.inner.name} 工作台打开</span>
-              <Icon name="external" size={11} />
-            </button>
-          )}
         </div>
       </div>
     );
@@ -1445,6 +1434,7 @@ function MessageThread({ messages = [], loading, streamPhase, thinkingText, reas
             approval,
             onRespondApproval,
             currentTurnToolMessages,
+            onOpenPreviewUrl,
           }}
         />
       </div>
@@ -1563,54 +1553,6 @@ function ReasoningBlock({ text, streaming = false }) {
 }
 
 /**
- * SubagentPanel — 子 agent 实时镜像列表（subagent.* / 镜像的 workflow.* 驱动）。
- * 每个子 agent 一行：目标 / 状态 / 当前动作 / token 与 cost；带拓扑的 workflow
- * 条目展开时渲染节点级 loop 动画（WorkflowGraphPanel）。
- */
-function SubagentPanel({ subagents }) {
-  const [open, setOpen] = useState(true);
-  return (
-    <div className="subagent-panel">
-      <button className="subagent-toggle" onClick={() => setOpen((o) => !o)}>
-        <Icon name="users" size={13} />
-        <span>子智能体</span>
-        <span className="subagent-count">{subagents.length}</span>
-        <Icon name="chevron" size={12} style={{ transform: open ? "rotate(90deg)" : "rotate(0deg)" }} />
-      </button>
-      {open && (
-        <div className="subagent-list">
-          {subagents.map((s) => {
-            const status = s.status || (s.event || "").replace("subagent.", "");
-            const tokens = (s.input_tokens || 0) + (s.output_tokens || 0);
-            const hasGraph = s.topology && Array.isArray(s.topology.nodes) && s.topology.nodes.length > 0;
-            return (
-              <div className="subagent-row" key={s.key}>
-                <span className={`subagent-status subagent-status-${status}`}>{status}</span>
-                <span className="subagent-goal" title={s.goal}>{s.goal || s.key}</span>
-                {s.tool_name && <span className="subagent-tool">🔧 {s.tool_name}</span>}
-                {tokens > 0 && <span className="subagent-tokens">{tokens} tok</span>}
-                {s.cost_usd != null && <span className="subagent-cost">${Number(s.cost_usd).toFixed(4)}</span>}
-                {hasGraph && (
-                  <div className="subagent-graph">
-                    <WorkflowGraphPanel
-                      topology={s.topology}
-                      trace={s.trace || {}}
-                      runState={status}
-                      episode={s.episode || 0}
-                      total={s.total || 1}
-                    />
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/**
  * MoaBlock — MOA 多模型聚合参考（moa.reference / moa.aggregating）。
  */
 function MoaBlock({ refs, aggregating }) {
@@ -1689,7 +1631,7 @@ function MessageFooter({ context }) {
         </div>
       )}
       {subagents?.length > 0 && (
-        <SubagentPanel key="subagent-panel" subagents={subagents} />
+        <SubagentTerminal key="subagent-terminal" subagents={subagents} onOpenPreviewUrl={context.onOpenPreviewUrl} />
       )}
       {moaRefs?.length > 0 && (
         <MoaBlock key="moa-block" refs={moaRefs} aggregating={moaAggregating} />

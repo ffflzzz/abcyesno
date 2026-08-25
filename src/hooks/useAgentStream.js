@@ -575,7 +575,27 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
           if (_i >= 0) {
             sess.subagents = sess.subagents.map((s, idx) => (idx === _i ? { ...s, ...patch } : s));
           } else {
-            sess.subagents = [...sess.subagents, { key: _wfKey, ...patch }];
+            sess.subagents = [...sess.subagents, { key: _wfKey, log: [], artifacts: [], ...patch }];
+          }
+          publish(sess.id);
+        };
+        // Append-only 终端日志行：SubagentTerminal 按文本流渲染，替代旧的
+        // SubagentPanel 大列表 + WorkflowGraphPanel 节点动画。
+        const _wfLog = (line) => {
+          const _i = sess.subagents.findIndex((s) => s.key === _wfKey);
+          if (_i >= 0) {
+            sess.subagents = sess.subagents.map((s, idx) =>
+              idx === _i ? { ...s, log: [...(s.log || []), line].slice(-500) } : s
+            );
+          }
+          publish(sess.id);
+        };
+        const _wfArt = (a) => {
+          const _i = sess.subagents.findIndex((s) => s.key === _wfKey);
+          if (_i >= 0) {
+            sess.subagents = sess.subagents.map((s, idx) =>
+              idx === _i ? { ...s, artifacts: [...(s.artifacts || []), a].slice(-50) } : s
+            );
           }
           publish(sess.id);
         };
@@ -586,6 +606,7 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
             tool_name: value?.agent,
             event: "subagent.start",
           });
+          _wfLog(`$ 启动 ${value?.agent || value?.workflowId || "工作流"}`);
         } else if (name === "workflow.graph") {
           // 拓扑 + 总集数，供 WorkflowGraphPanel 渲染节点 DAG。
           _upsertWf({
@@ -596,6 +617,7 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
             total: value?.totalEpisodes || 1,
             event: "subagent.start",
           });
+          _wfLog(`· 拓扑 ${(value?.nodes || []).length} 节点 · 共 ${value?.totalEpisodes || 1} 集`);
         } else if (name === "workflow.trace") {
           // 累积 node -> status 映射（running/done/pending/error），供
           // WorkflowGraphPanel 高亮当前节点与 loop 边。
@@ -610,6 +632,8 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
               ...(typeof value?.episode === "number" ? { episode: value.episode } : {}),
               event: "subagent.thinking",
             });
+            const _ep = typeof value?.episode === "number" ? ` · 第 ${value.episode} 集` : "";
+            _wfLog(`→ ${value?.stage || value?.step_id || _node} [${value?.status}]${_ep}`);
           }
         } else if (name === "workflow.progress") {
           const _tn = value?.stage || value?.step_id;
@@ -619,17 +643,30 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
             ...(value?.message ? { goal: value.message } : {}),
             event: "subagent.thinking",
           });
+          _wfLog(`▸ ${_tn || "…"}${value?.message ? ` · ${value.message}` : ""}`);
+        } else if (name === "workflow.artifact") {
+          // 产物累积：SubagentTerminal 以紧凑 chip 展示（用户偏好，非大图网格）。
+          const _art = {
+            id: value?.id || `art-${(sess.subagents.find((s) => s.key === _wfKey)?.artifacts || []).length}`,
+            label: value?.label || value?.type || value?.id || "产物",
+            url: value?.url || value?.src || "",
+            type: value?.type || "artifact",
+          };
+          _wfArt(_art);
+          _wfLog(`✓ 产物：${_art.label}`);
         } else if (name === "workflow.done") {
           _upsertWf({
             status: (!value?.status || value.status === "done") ? "complete" : value.status,
             event: "subagent.complete",
           });
+          _wfLog("✔ 完成");
         } else if (name === "workflow.error") {
           _upsertWf({
             status: "error",
             ...(value?.message ? { goal: value.message } : {}),
             event: "subagent.error",
           });
+          _wfLog(`✘ 失败：${value?.message || "未知错误"}`);
         }
 
         // B 方案：后台长任务已开始/结束，切换 reader 静默超时放宽开关。
