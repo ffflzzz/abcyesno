@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import App from './App.jsx';
 import DetachedApp from './DetachedApp.jsx';
 import Onboarding, { isOnboardingDone } from './components/Onboarding.jsx';
+import { TtsProvider } from './hooks/useTts.jsx';
 import bachAvatar from './assets/bach-avatar.png';
 import './styles/index.css';
 
@@ -189,6 +190,8 @@ const Root =
     : <Bootstrap />;
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
-    {Root}
+    <TtsProvider>
+      {Root}
+    </TtsProvider>
   </React.StrictMode>
 );

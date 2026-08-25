@@ -8,6 +8,8 @@ const { EventEncoder } = require('@ag-ui/encoder');
 const { v4: uuidv4 } = require('uuid');
 const { log } = require('./logger');
 const agnes = require('./agnes');
+// edge-tts 云端语音客户端（自带 GEC 鉴权，替换坏的 edge-tts npm 包）。
+const { synth: edgeTtsSynth } = require('./edgeTtsClient');
 
 function findAvailablePort(host, startPort) {
   return new Promise((resolve, reject) => {
@@ -1676,6 +1678,55 @@ function createAgUIServer(getGatewayClient, storage, options) {
       return res.json({ text: String(text) });
     } catch (err) {
       log('agui-server', `transcribe failed: ${err.message}`);
+      return res.json({ error: err.message });
+    }
+  });
+
+  // ── TTS: generate speech via edge-tts (Microsoft cloud), return mp3 base64 ──
+  // Mirrors /api/transcribe: frontend calls window.hermes.synthesizeSpeech →
+  // this route → edge-tts → mp3 buffer (base64). No API key needed (free
+  // Microsoft Edge endpoint), but requires network access.
+  function splitTextForTts(text, max) {
+    const out = [];
+    let cur = '';
+    const parts = text.split(/(?<=[。！？!?；;\n])/);
+    for (const p of parts) {
+      if ((cur + p).length > max && cur) {
+        out.push(cur);
+        cur = '';
+      }
+      cur += p;
+    }
+    if (cur) out.push(cur);
+    return out.length ? out : [text.slice(0, max)];
+  }
+
+  app.post('/api/tts', async (req, res) => {
+    try {
+      const body = req.body || {};
+      const text = typeof body.text === 'string' ? body.text : '';
+      if (!text.trim()) {
+        return res.json({ error: 'text is required' });
+      }
+      const voice = body.voice || 'zh-CN-XiaoxiaoNeural';
+      const rate = Number(body.rate);
+      // edge-tts rate is a percentage string: "+0%" (default), "-50%" (half),
+      // "+100%" (double). Map our 0.5–2.0 multiplier onto that range.
+      let rateStr = '+0%';
+      if (Number.isFinite(rate) && rate > 0) {
+        const pct = Math.round((rate - 1) * 100);
+        rateStr = (pct >= 0 ? '+' : '') + pct + '%';
+      }
+      const chunks = splitTextForTts(text, 7000);
+      const buffers = [];
+      for (const c of chunks) {
+        const b = await edgeTtsSynth(c, voice, rateStr);
+        buffers.push(Buffer.isBuffer(b) ? b : Buffer.from(b));
+      }
+      const buf = Buffer.concat(buffers);
+      return res.json({ audio: buf.toString('base64'), mime: 'audio/mpeg' });
+    } catch (err) {
+      log('agui-server', `tts failed: ${err.message}`);
       return res.json({ error: err.message });
     }
   });

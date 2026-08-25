@@ -7,6 +7,8 @@ import ContextUsage from "./ContextUsage.jsx";
 import Toasts from "./Toasts.jsx";
 import AgentRunMonitor from "./AgentRunMonitor.jsx";
 import { inferStreamingPhase } from "../utils/streamingPhase.js";
+import { useTts } from "../hooks/useTts.jsx";
+import { stripMarkdownToText } from "../utils/stripMarkdown.js";
 import bachAvatar from "../assets/bach-avatar.png";
 
 function getStatusLabel(backendStatus, phase) {
@@ -117,6 +119,47 @@ export default function ChatLayout({
     [assistants, manifests]
   );
 
+  // ── Global TTS (edge-tts) controls ──
+  // Single <audio> lives in TtsProvider; this surface only reflects state and
+  // triggers auto-read when a generation finishes.
+  const { speak, stop, isPlaying, mute, setMuted, ttsSettings } = useTts();
+  const lastAssistant = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === "assistant") return messages[i];
+    }
+    return null;
+  }, [messages]);
+
+  // Auto-read: fire once when the run transitions from loading → done, for the
+  // newest assistant message only. Track read ids so history / re-renders never
+  // re-read; reset on session switch.
+  const readMsgIdsRef = useRef(new Set());
+  const prevLoadingRef = useRef(false);
+  useEffect(() => {
+    if (selectedSessionId) readMsgIdsRef.current = new Set();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedSessionId]);
+  useEffect(() => {
+    const justFinished = prevLoadingRef.current && !isLoading;
+    prevLoadingRef.current = isLoading;
+    if (!justFinished) return;
+    if (!ttsSettings.autoRead || mute) return;
+    if (!lastAssistant || readMsgIdsRef.current.has(lastAssistant.id)) return;
+    readMsgIdsRef.current.add(lastAssistant.id);
+    const text = stripMarkdownToText(lastAssistant.content || "");
+    if (text) speak(text, lastAssistant.id);
+  }, [isLoading, lastAssistant, ttsSettings.autoRead, mute, speak]);
+
+  function handleGlobalPlay() {
+    if (isPlaying) {
+      stop();
+      return;
+    }
+    if (!lastAssistant) return;
+    const text = stripMarkdownToText(lastAssistant.content || "");
+    if (text) speak(text, lastAssistant.id);
+  }
+
   useEffect(() => {
     // Virtuoso handles scroll-to-bottom via followOutput; no manual scroll needed.
   }, [messages, status]);
@@ -165,6 +208,41 @@ export default function ChatLayout({
 
   return (
     <main className={`chat-layout ${sidebarOpen ? "" : "full"}`}>
+      <div className="chat-header">
+        <div className="header-left">
+          <div className="header-assistant">
+            <div className="header-title-row">
+              <span className="header-title">{assistant?.name || "对话"}</span>
+            </div>
+          </div>
+        </div>
+        <div className="header-right">
+          <button
+            className="header-icon"
+            onClick={() => setMuted(!mute)}
+            title={mute ? "取消静音" : "静音（自动朗读开启时生效）"}
+            aria-label={mute ? "取消静音" : "静音"}
+            style={{ color: mute ? "var(--accent)" : undefined }}
+          >
+            <Icon name={mute ? "volume-x" : "audio"} size={16} />
+          </button>
+          <button
+            className="header-icon"
+            onClick={handleGlobalPlay}
+            title={isPlaying ? "停止朗读" : "朗读最新回复"}
+            aria-label={isPlaying ? "停止朗读" : "朗读最新回复"}
+            disabled={!isPlaying && !lastAssistant}
+            style={{
+              color: isPlaying ? "var(--accent)" : undefined,
+              opacity: (!isPlaying && !lastAssistant) ? 0.4 : 1,
+              cursor: (!isPlaying && !lastAssistant) ? "default" : "pointer",
+            }}
+          >
+            <Icon name={isPlaying ? "stop-circle" : "play"} size={16} />
+          </button>
+        </div>
+      </div>
+
       {runError && (
         <div className="error-banner">
           <span className="error-banner-text">错误：{runError}</span>

@@ -94,6 +94,19 @@ contextBridge.exposeInMainWorld('hermes', {
     return res.json();
   },
 
+  // TTS: forward text + voice + rate to the agui-server /api/tts proxy, which
+  // calls edge-tts server-side. Returns { audio: base64, mime } or { error }.
+  synthesizeSpeech: async (text, voice, rate) => {
+    const port = await ipcRenderer.invoke('get-agui-port');
+    if (!port) throw new Error('agui port unknown');
+    const res = await fetch(`http://localhost:${port}/api/tts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: String(text || ''), voice, rate }),
+    });
+    return res.json();
+  },
+
   // File upload
   selectFile: (options) => ipcRenderer.invoke('select-file', options),
   // Folder picker for per-session workspace binding.

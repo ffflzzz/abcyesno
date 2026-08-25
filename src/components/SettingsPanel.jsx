@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import Icon from "./Icon.jsx";
+import { useTts } from "../hooks/useTts.jsx";
 
 function maskKey(key) {
   if (!key) return "";
@@ -9,6 +10,8 @@ function maskKey(key) {
 
 export default function SettingsPanel({ apiKey = "", hasApiKey = false, model = "", theme = "dark", onThemeChange, onEditApiKey, onClose, version = "", onOpenWechatBind }) {
   const [openDirStatus, setOpenDirStatus] = useState("");
+  const { ttsSettings, updateTtsSettings, voiceOptions } = useTts();
+  const { autoRead, voice, rate } = ttsSettings;
 
   useEffect(() => {
     setOpenDirStatus("");
@@ -110,6 +113,64 @@ export default function SettingsPanel({ apiKey = "", hasApiKey = false, model = 
                   </button>
                 ))}
               </div>
+            </div>
+          </div>
+        </div>
+
+        {/* 语音朗读 */}
+        <div className="settings-group">
+          <div className="settings-group-title">语音朗读</div>
+          <div className="settings-item">
+            <div className="settings-item-text">
+              <div className="settings-item-name">自动朗读</div>
+              <div className="settings-item-desc">收到助手回复后自动朗读（需联网；云端 edge-tts 中文语音）。</div>
+            </div>
+            <div className="settings-item-control">
+              <div className="settings-seg">
+                <button
+                  className={`settings-seg-btn ${!autoRead ? "active" : ""}`}
+                  onClick={() => updateTtsSettings({ autoRead: false })}
+                >关闭</button>
+                <button
+                  className={`settings-seg-btn ${autoRead ? "active" : ""}`}
+                  onClick={() => updateTtsSettings({ autoRead: true })}
+                >开启</button>
+              </div>
+            </div>
+          </div>
+          <div className="settings-item">
+            <div className="settings-item-text">
+              <div className="settings-item-name">音色</div>
+              <div className="settings-item-desc">微软云端中文神经语音（晓晓 / 云希 等）。</div>
+            </div>
+            <div className="settings-item-control">
+              <select
+                className="modal-select"
+                value={voice}
+                onChange={(e) => updateTtsSettings({ voice: e.target.value })}
+              >
+                {voiceOptions.map((v) => (
+                  <option key={v.value} value={v.value}>{v.label}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div className="settings-item">
+            <div className="settings-item-text">
+              <div className="settings-item-name">语速</div>
+              <div className="settings-item-desc">朗读速度，1.0 为正常语速。</div>
+            </div>
+            <div className="settings-item-control" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <input
+                type="range"
+                min="0.5"
+                max="2"
+                step="0.1"
+                value={rate}
+                onChange={(e) => updateTtsSettings({ rate: Number(e.target.value) })}
+                style={{ flex: 1, accentColor: "var(--accent, #4f7cff)" }}
+              />
+              <span className="settings-value" style={{ minWidth: 36, textAlign: "right" }}>{rate.toFixed(1)}×</span>
             </div>
           </div>
         </div>

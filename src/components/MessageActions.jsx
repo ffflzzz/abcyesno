@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import Icon from "./Icon.jsx";
+import { useTts } from "../hooks/useTts.jsx";
+import { stripMarkdownToText } from "../utils/stripMarkdown.js";
 
 /**
  * MessageActions — ChatGPT-style toolbar under each chat bubble.
@@ -34,27 +36,6 @@ function saveRatings(map) {
   } catch {
     /* noop */
   }
-}
-
-function stripMarkdownToText(md) {
-  if (typeof md !== "string") return "";
-  return md
-    .replace(/```[\s\S]*?```/g, (m) => m.replace(/```[a-zA-Z]*\n?|```/g, ""))
-    .replace(/`([^`]+)`/g, "$1")
-    .replace(/!\[([^\]]*)\]\([^)]+\)/g, "$1")
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-    .replace(/^>\s?/gm, "")
-    .replace(/^#+\s*/gm, "")
-    .replace(/\*\*([^*]+)\*\*/g, "$1")
-    .replace(/__([^_]+)__/g, "$1")
-    .replace(/\*([^*]+)\*/g, "$1")
-    .replace(/_([^_]+)_/g, "$1")
-    .replace(/~~([^~]+)~~/g, "$1")
-    .replace(/\|/g, " ")
-    .replace(/^[-*+]\s+/gm, "")
-    .replace(/^\d+\.\s+/gm, "")
-    .replace(/\n{2,}/g, "\n")
-    .trim();
 }
 
 function formatRelative(ts) {
@@ -96,25 +77,16 @@ export default function MessageActions({
 }) {
   const [ratings, setRatings] = useState(() => loadRatings());
   const [copied, setCopied] = useState(false);
-  const [speaking, setSpeaking] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const [toast, setToast] = useState("");
   const moreRef = useRef(null);
   const copyTimerRef = useRef(null);
   const toastTimerRef = useRef(null);
 
-  // TTS cleanup on unmount / message change
-  useEffect(() => {
-    return () => {
-      try {
-        if (typeof window !== "undefined" && window.speechSynthesis) {
-          window.speechSynthesis.cancel();
-        }
-      } catch {
-        /* noop */
-      }
-    };
-  }, [message?.id]);
+  // Global TTS controller — single <audio> in TtsProvider, so a message bubble
+  // unmounting (Virtuoso virtual list) must NOT cancel playback. State lives in
+  // the provider; this component only reflects highlight via currentMsgId.
+  const { speak, stop, isPlaying, currentMsgId } = useTts();
 
   // Close "more" on outside click
   useEffect(() => {
@@ -175,13 +147,9 @@ export default function MessageActions({
   };
 
   const handleSpeak = () => {
-    if (typeof window === "undefined" || !window.speechSynthesis) {
-      showToast("当前环境不支持朗读");
-      return;
-    }
-    if (speaking) {
-      window.speechSynthesis.cancel();
-      setSpeaking(false);
+    const isThisSpeaking = isPlaying && currentMsgId === message?.id;
+    if (isThisSpeaking) {
+      stop();
       return;
     }
     const text = stripMarkdownToText(cleanedText || rawText || "");
@@ -189,18 +157,11 @@ export default function MessageActions({
       showToast("没有可朗读的内容");
       return;
     }
-    try {
-      const u = new SpeechSynthesisUtterance(text);
-      u.lang = "zh-CN";
-      u.rate = 1.0;
-      u.onend = () => setSpeaking(false);
-      u.onerror = () => setSpeaking(false);
-      window.speechSynthesis.speak(u);
-      setSpeaking(true);
-    } catch (err) {
-      console.error("speak failed", err);
-      showToast("朗读失败");
+    if (!window.hermes || !window.hermes.synthesizeSpeech) {
+      showToast("当前环境不支持朗读");
+      return;
     }
+    speak(text, message?.id);
   };
 
   const handleShare = async () => {
@@ -308,12 +269,12 @@ export default function MessageActions({
             </button>
 
             <button
-              className={`msg-action-btn ${speaking ? "is-active speaking" : ""}`}
+              className={`msg-action-btn ${isPlaying && currentMsgId === message?.id ? "is-active speaking" : ""}`}
               onClick={handleSpeak}
-              title={speaking ? "停止朗读" : "朗读"}
-              aria-label={speaking ? "停止朗读" : "朗读"}
+              title={isPlaying && currentMsgId === message?.id ? "停止朗读" : "朗读"}
+              aria-label={isPlaying && currentMsgId === message?.id ? "停止朗读" : "朗读"}
             >
-              <Icon name={speaking ? "stop-circle" : "audio"} size={15} />
+              <Icon name={isPlaying && currentMsgId === message?.id ? "stop-circle" : "audio"} size={15} />
             </button>
 
             {onRegenerate && (
