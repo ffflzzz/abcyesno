@@ -1,16 +1,16 @@
 /**
  * test-agui-env-context.mjs — agui-server 回归
  *
- * 覆盖两类修复：
+ * 覆盖两类逻辑：
  *
  * (1) prependEnvContext —— 时间注入（根因：主程序 handleAgentRun 只转发裸
  *     user text，Hermes 静态 system prompt 无时间 → 模型编造日期）。
  *
- * (2) computeAppendedDelta —— 流式 delta 去重的"吃字"修复（根因：appendDelta
- *     第二道防线误用 `includes`（任意子串），导致流式输出日期/数字时，单字符
- *     数字 "2"/"0"/"6" 因已在前文出现过而被误判为"已发出"并丢弃，
- *     把 "2026年08月26日" 吃成 "206年8月日"；随后 finalize() 因头部不对齐又
- *     重发完整文本，造成"残缺+完整"两段并存。修复：改 endsWith（后缀）判断）。
+ * (2) 流式 delta 根本解 —— 已验证 Agnes 流式 content 是纯增量（数字逐字符
+ *     "2026"→"2","0","2","6"；"11"→"1","1"，见 scripts/agnes_delta_probe.py）。
+ *     因此 appendStreamDelta 直接透传（零去重、零阈值），finalizeRemainder
+ *     用前缀/后缀精确判断补发。这替代了之前"去重误吞单字符数字"的补丁式
+ *     修复（includes→endsWith→length>=2），彻底消除吃字 + 重复打印。
  */
 import { createRequire } from 'node:module';
 
@@ -18,8 +18,8 @@ const require = createRequire(import.meta.url);
 const {
   prependEnvContext,
   formatNowForModel,
-  computeAppendedDelta,
-  normalizeForDedup,
+  appendStreamDelta,
+  finalizeRemainder,
 } = require('../electron/backend/agui-server.js');
 
 let pass = 0;
@@ -70,81 +70,77 @@ function check(name, cond, extra = '') {
   check('formatNowForModel returns non-empty string', typeof s === 'string' && s.length > 0, `got=${JSON.stringify(s)}`);
 }
 
-// ── (2) computeAppendedDelta 吃字回归 ────────────────────────────────────
-// 模拟 createTurnTranslator 的增量累积：逐字符喂 delta，维护 emittedText/emittedPlain。
-function streamReplay(chars) {
+// ── (2) appendStreamDelta：纯增量透传，零去重 ─────────────────────────────
+{
+  check('appendStreamDelta passes single char', appendStreamDelta('2') === '2');
+  check('appendStreamDelta passes duplicate char', appendStreamDelta('1') === '1');
+  check('appendStreamDelta passes word', appendStreamDelta('Windows') === 'Windows');
+  check('appendStreamDelta empty → empty', appendStreamDelta('') === '');
+  check('appendStreamDelta null → empty', appendStreamDelta(null) === '');
+  check('appendStreamDelta non-string → empty', appendStreamDelta(123) === '');
+}
+
+// ── (3) 端到端：逐字符流式 + finalize，验证不吞字、不重复 ────────────────
+// 模拟 createTurnTranslator 的完整流程：逐 delta appendStreamDelta 累积，
+// 最后 message.complete 的完整文本走 finalizeRemainder 补发剩余。
+function streamThenFinalize(target) {
   let emittedText = '';
-  let emittedPlain = '';
-  const out = [];
-  for (const ch of chars) {
-    const actual = computeAppendedDelta(emittedText, emittedPlain, ch);
-    if (actual) {
-      emittedText += actual;
-      emittedPlain = normalizeForDedup(emittedText);
-      out.push(actual);
-    }
+  for (const ch of [...target]) {
+    const actual = appendStreamDelta(ch);
+    if (actual) emittedText += actual;
   }
-  return { text: emittedText, deltas: out };
+  // message.complete 带完整文本
+  const remainder = finalizeRemainder(emittedText, target);
+  if (remainder) emittedText += remainder;
+  return emittedText;
 }
 
 {
-  // 回归核心：逐字符流式输出 "明天是 2026年08月26日，星期三。"，
-  // 数字 "2"/"0"/"6" 多次出现，之前被 includes 吃掉。
+  // 日期（数字逐字符，之前被 includes/endsWith 吃字）
   const target = '明天是 2026年08月26日，星期三。';
-  const r = streamReplay([...target]);
-  check('char-stream keeps full date', r.text === target, `got=${JSON.stringify(r.text)}`);
+  check('date streamed intact (no swallow, no dup)', streamThenFinalize(target) === target, `got=${JSON.stringify(streamThenFinalize(target))}`);
+}
+{
+  // 连续重复字符 "11"（之前被 endsWith 单字符匹配吞第二个）
+  const target = 'Windows 11 系统';
+  check('duplicate chars "11" intact', streamThenFinalize(target) === target, `got=${JSON.stringify(streamThenFinalize(target))}`);
+}
+{
+  const t00 = streamThenFinalize('00');
+  check('"00" intact', t00 === '00', `got=${JSON.stringify(t00)}`);
+  const t22 = streamThenFinalize('22');
+  check('"22" intact', t22 === '22', `got=${JSON.stringify(t22)}`);
+}
+{
+  // 纯数字串
+  const target = '2026年08月26日';
+  check('pure digits intact', streamThenFinalize(target) === target, `got=${JSON.stringify(streamThenFinalize(target))}`);
 }
 
+// ── (4) finalizeRemainder：前缀/后缀精确判断 ─────────────────────────────
 {
-  // 精确复现 bug 输入：单独喂 "2" 多次，不应丢。
-  const r = streamReplay([...'2026']);
-  check('2026 not swallowed', r.text === '2026', `got=${JSON.stringify(r.text)}`);
+  // 已完整流式发出（emittedText == text）→ 不补发
+  check('fully streamed → empty', finalizeRemainder('你好世界', '你好世界') === '');
+  // text 是 emittedText 结尾（emittedText 末尾正是 text）→ 不补发
+  check('text is tail of emitted → empty', finalizeRemainder('啊你好世界', '你好世界') === '');
 }
-
 {
-  // 回归 v2：连续重复字符 "Windows 11" 的两个 "1" 都要保留。
-  // 之前的 endsWith 修复在末尾恰好是单字符时仍会误吞第二个。
-  const r = streamReplay([...'Windows 11 系统']);
-  check('duplicate chars like "11" both kept', r.text === 'Windows 11 系统', `got=${JSON.stringify(r.text)}`);
+  // 流式发了前缀（emittedText 是 text 前缀）→ 补发剩余
+  check('partial stream → remainder', finalizeRemainder('明天是 2026年08月', '明天是 2026年08月26日') === '26日');
+  check('partial stream 2 → remainder', finalizeRemainder('你好', '你好世界') === '世界');
 }
-
 {
-  // 其他常见连续重复字符："00"、"22"、"33"。
-  const r00 = streamReplay([...'00']);
-  check('"00" both kept', r00.text === '00', `got=${JSON.stringify(r00.text)}`);
-  const r22 = streamReplay([...'22']);
-  check('"22" both kept', r22.text === '22', `got=${JSON.stringify(r22.text)}`);
+  // 完全没流式（emittedText 空）→ 补发完整
+  check('nothing streamed → full text', finalizeRemainder('', '完整文本') === '完整文本');
 }
-
 {
-  // 去重仍有效：delta 已经是 emitted 后缀时应被丢弃（防止重复打印）。
-  let emittedText = '你好世界';
-  let emittedPlain = normalizeForDedup(emittedText);
-  const dup = computeAppendedDelta(emittedText, emittedPlain, '你好世界');
-  check('full-suffix duplicate dropped', dup === '', `got=${JSON.stringify(dup)}`);
+  // drift（emittedText 和 text 头部不一致）→ 补发完整 text
+  check('drift → full text', finalizeRemainder('错的头部', '正确全文') === '正确全文');
 }
-
 {
-  // 去重仍有效：cumulative delta（带前文重复）应只返回新增部分。
-  let emittedText = '明天是 2026年08月';
-  let emittedPlain = normalizeForDedup(emittedText);
-  const actual = computeAppendedDelta(emittedText, emittedPlain, '明天是 2026年08月26日');
-  check('cumulative delta returns only tail', actual === '26日', `got=${JSON.stringify(actual)}`);
-}
-
-{
-  // 多字符末尾重复应被去重：emittedText 已经包含末尾 "星期三。" 时，
-  // 再 delta = "星期三。"（重复）应被丢弃（length=4 >= 2 命中 fast path）。
-  let emittedText = '今天星期三。';
-  let emittedPlain = normalizeForDedup(emittedText);
-  const dup = computeAppendedDelta(emittedText, emittedPlain, '星期三。');
-  check('multi-char suffix duplicate still dropped', dup === '', `got=${JSON.stringify(dup)}`);
-}
-
-{
-  // 空 delta 安全。
-  check('empty delta → empty', computeAppendedDelta('abc', 'abc', '') === '');
-  check('non-string delta → empty', computeAppendedDelta('abc', 'abc', null) === '');
+  // 空 text 安全
+  check('empty text → empty', finalizeRemainder('abc', '') === '');
+  check('non-string text → empty', finalizeRemainder('abc', null) === '');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

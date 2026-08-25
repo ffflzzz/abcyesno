@@ -511,7 +511,6 @@ function createAgUIServer(getGatewayClient, storage, options) {
     let hasTextDelta = false;
     let hasRunError = false;
     let emittedText = '';
-    let emittedPlain = ''; // whitespace-normalized, for overlap checks
     let reasoningDeltaSeen = false; // true once we've streamed real reasoning.delta this round
     const activeToolCalls = new Set();
     const toolStartTimes = new Map(); // toolCallId -> timestamp, for duration_ms
@@ -542,7 +541,6 @@ function createAgUIServer(getGatewayClient, storage, options) {
       round += 1;
       messageId = nextMessageId();
       emittedText = '';
-      emittedPlain = '';
       reasoningDeltaSeen = false;
       hasTextDelta = false;
       activeToolCalls.clear();
@@ -557,17 +555,16 @@ function createAgUIServer(getGatewayClient, storage, options) {
       }
     }
 
-    // Append `delta` to the emitted text, skipping any part that is already
-    // present at the end. Delegates to the module-level pure helper
-    // `computeAppendedDelta` (shared with the regression test) so the
-    // char-swallowing dedup fix is directly unit-testable.
+    // Stream deltas are pure increments (Agnes streams digits char-wise).
+    // Forward them verbatim — no dedup, no overlap stripping. Dedup here
+    // would swallow legitimate single-char digits / duplicate runs and
+    // garble dates & numbers. See appendStreamDelta (module-level).
     function appendDelta(delta) {
-      return computeAppendedDelta(emittedText, emittedPlain, delta);
+      return appendStreamDelta(delta);
     }
 
     function recordEmitted(delta) {
       emittedText += delta;
-      emittedPlain = normalizeForDedup(emittedText);
     }
 
     function emitTextDelta(delta) {
@@ -625,28 +622,12 @@ function createAgUIServer(getGatewayClient, storage, options) {
     }
 
     function finalize(text) {
-      // Always run the complete text through the same incremental deduplication
-      // so a cumulative `message.complete` cannot re-emit content that was
-      // already streamed as deltas (including repeated thinking prefixes).
+      // message.complete carries the full text. Stream deltas are pure
+      // increments, so emittedText is already the correct prefix of the final
+      // answer; finalizeRemainder sends only whatever is still missing (if
+      // anything). This is a precise prefix/suffix check — no heuristics.
       if (text && typeof text === 'string') {
-        // Belt-and-braces: if deltas already streamed this message but drifted
-        // (so prefix alignment fails), do NOT treat the full text as a
-        // "remainder" — that duplicated the whole answer. Detect by comparing
-        // normalized heads: same message start + no structural overlap ⇒ skip.
-        const fullPlain = normalizeForDedup(text);
-        const guardLen = Math.min(40, fullPlain.length);
-        const sameHead =
-          hasTextDelta &&
-          guardLen >= 12 &&
-          normalizeForDedup(emittedText).slice(0, guardLen) === fullPlain.slice(0, guardLen);
-        const aligned = overlapLen(emittedText, text) >= MIN_OVERLAP_STRIP;
-        let actual;
-        if (sameHead && !aligned) {
-          log('agui-server', `[translator] finalize drift guard: dropped re-delivered text (len=${text.length}, emitted=${emittedText.length})`);
-          actual = '';
-        } else {
-          actual = appendDelta(text);
-        }
+        const actual = finalizeRemainder(emittedText, text);
         if (actual) {
           ensureMessageStarted();
           hasTextDelta = true;
@@ -663,7 +644,6 @@ function createAgUIServer(getGatewayClient, storage, options) {
         round += 1;
         messageId = nextMessageId();
         emittedText = '';
-        emittedPlain = '';
         hasTextDelta = false;
         activeToolCalls.clear();
         messageStarted = false;
@@ -693,7 +673,6 @@ function createAgUIServer(getGatewayClient, storage, options) {
             round += 1;
             messageId = nextMessageId();
             emittedText = '';
-            emittedPlain = '';
             hasTextDelta = false;
             activeToolCalls.clear();
           }
@@ -1931,56 +1910,33 @@ function prependEnvContext(ctx, rawText) {
   return `${env}\n---\n\n${rawText}`;
 }
 
-// ── Stream delta dedup ───────────────────────────────────────────────────
-// Pure helpers shared by createTurnTranslator and the regression test
-// (scripts/test-agui-env-context.mjs). Extracted from the translator closure
-// so the char-swallowing fix is directly unit-testable.
-const MIN_OVERLAP_STRIP = 10;
+// ── Stream delta handling ────────────────────────────────────────────────
+// Agnes (custom provider) streams `content` as PURE INCREMENTAL deltas —
+// words split word-wise, digits split char-wise ("11" → "1","1";
+// "2026" → "2","0","2","6"). Verified live in scripts/agnes_delta_probe.py.
+// Therefore agui-server must NOT dedup stream deltas: any dedup (substring
+// or suffix matching) will swallow legitimate single-char digits and
+// duplicate runs, garbling dates/numbers ("2026年08月26日" → "206年8月日").
+// The only place a "repeat" can occur is message.complete re-delivering the
+// full text — handled precisely by finalizeRemainder below (prefix/suffix
+// based, no heuristics, no thresholds).
 
-function normalizeForDedup(text) {
-  // Collapse whitespace but keep a single space so overlapping sentences still match.
-  return text.replace(/\s+/g, ' ').trim();
-}
-
-function overlapLen(base, candidate) {
-  // Longest suffix of `base` that matches a prefix of `candidate`.
-  const max = Math.min(base.length, candidate.length);
-  for (let k = max; k > 0; k--) {
-    if (base.slice(-k) === candidate.slice(0, k)) return k;
-  }
-  return 0;
-}
-
-function computeAppendedDelta(emittedText, emittedPlain, delta) {
+function appendStreamDelta(delta) {
+  // Stream deltas are pure increments: forward them verbatim.
   if (!delta || typeof delta !== 'string') return '';
-  // Fast path: the entire delta is already the suffix of what we sent.
-  // Length guard: a 1-char delta matching the last char is almost always the
-  // SECOND char of a duplicate run during char-stream output ("Windows 11"
-  // second "1", "00" second "0", etc.) — keep it. Single-char dedup has
-  // essentially no upside and a very real false-positive cost.
-  if (emittedText && delta.length >= 2 && emittedText.endsWith(delta)) return '';
-  const overlap = overlapLen(emittedText, delta);
-  let actual = delta;
-  if (overlap >= MIN_OVERLAP_STRIP) {
-    actual = delta.slice(overlap);
-  }
-  // Second line of defence: drop only if the normalized delta is already the
-  // SUFFIX of what we emitted. Two guards to avoid swallowing legit content:
-  //   (a) SUFFIX match, not substring — substring matching swallows any
-  //       single-character digit that already appeared earlier in the stream
-  //       (e.g. "2" inside "2026" → "2026年08月26日" → "206年8月日").
-  //   (b) Length ≥ 2 — single-char delta is almost certainly the SECOND
-  //       character of a run of duplicates during char-stream output
-  //       (e.g. "Windows 11" → second "1" must NOT be treated as a
-  //       duplicate of the first "1"; "00"、"33"、"22" same).
-  const plainActual = normalizeForDedup(actual);
-  const plainDelta = normalizeForDedup(delta);
-  if (plainActual && plainActual.length >= 2 && emittedPlain.endsWith(plainActual)) {
-    actual = '';
-  } else if (!actual && plainDelta && plainDelta.length >= 2 && emittedPlain.endsWith(plainDelta)) {
-    actual = '';
-  }
-  return actual;
+  return delta;
+}
+
+function finalizeRemainder(emittedText, text) {
+  // Compute the part of the message.complete full text that still needs to
+  // be sent. Precise prefix/suffix check, zero heuristics:
+  //   - text is already the tail of emittedText  → ''   (fully streamed)
+  //   - emittedText is a prefix of text          → text.slice(emittedText.length)
+  //   - otherwise (drift / nothing streamed)     → text (send in full)
+  if (!text || typeof text !== 'string') return '';
+  if (emittedText && emittedText.endsWith(text)) return '';
+  if (emittedText && text.startsWith(emittedText)) return text.slice(emittedText.length);
+  return text;
 }
 
 module.exports = {
@@ -1988,7 +1944,6 @@ module.exports = {
   extractText,
   formatNowForModel,
   prependEnvContext,
-  computeAppendedDelta,
-  normalizeForDedup,
-  MIN_OVERLAP_STRIP,
+  appendStreamDelta,
+  finalizeRemainder,
 };
