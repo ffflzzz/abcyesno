@@ -1906,7 +1906,15 @@ function prependEnvContext(ctx, rawText) {
     `[环境上下文] 当前时间：${formatNowForModel()}\n` +
     `- 日期、时间、星期、电话号码、身份证号、版本号、引用的数字等必须是真实数据；` +
     `不知道就说不知道，不要凭印象编造。\n` +
-    `- 一次性给出最终答案，不要"我理解错了 / 刚才那个回答确实…"式的自我反思重写。\n`;
+    `- 一次性给出最终答案，不要"我理解错了 / 刚才那个回答确实…"式的自我反思重写。\n` +
+    `- 运行环境：Windows 桌面（Electron 便携应用）。` +
+    `执行命令时注意：\n` +
+    `  · 没有全局 \`python3\`/python 命令（Windows 应用执行别名会报 "Python was not found"）。` +
+    `执行 Python 用 \`python\`（Hermes 已把自带 venv 的 Scripts 目录加进 PATH），` +
+    `或完整路径 \`hermes-fork\\.venv\\Scripts\\python.exe\`。\n` +
+    `  · 终端工具的执行环境是 Windows cmd，不是 Git Bash/POSIX：` +
+    `\`/tmp/xxx\`、heredoc（\`cat > x << EOF\`）、\`python3\` 这类写法不可用。` +
+    `临时脚本写到项目目录下的绝对路径，再用 \`python\` 执行。\n`;
   return `${env}\n---\n\n${rawText}`;
 }
 

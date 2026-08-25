@@ -465,6 +465,16 @@ class HermesRunner {
       // prompt.
       HERMES_TUI_SKILLS: process.env.HERMES_TUI_SKILLS || 'langgraph-agents,browser-pw',
       PYTHONPATH: HERMES_FORK + (process.env.PYTHONPATH ? path.delimiter + process.env.PYTHONPATH : ''),
+      // Make the bundled venv Python reachable from terminal/file tools.
+      // Windows has NO global `python`/`python3` (the App Execution Alias
+      // errors "Python was not found" when the agent runs `python3 ...`), so
+      // prepending the venv Scripts/bin dir lets the agent execute `python` /
+      // `pip` directly instead of guessing a path. The venv is hermetic —
+      // shadowing the system PATH here only affects tools the agent spawns.
+      PATH:
+        path.join(HERMES_FORK, '.venv', process.platform === 'win32' ? 'Scripts' : 'bin') +
+        path.delimiter +
+        (process.env.PATH || ''),
     };
 
     // Network proxy — configurable, defaults to DIRECT (no proxy).
