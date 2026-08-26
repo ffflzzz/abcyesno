@@ -131,7 +131,10 @@ export async function ensureAbcSessionForWechatUser(
   const existing = getSessionIdForFromUser(fromUserId);
   if (existing) return existing;
   const label = (fromUserMasked && String(fromUserMasked).trim()) || String(fromUserId).slice(0, 8);
-  const session = await abcStorage.createSession('default', `微信 · ${label}`);
+  // source: 'wechat' marks this session as bridge-managed: the renderer must
+  // NOT flush its (stale) in-memory snapshot back over the messages the bridge
+  // keeps appending — that clobbered the on-disk history (92 msgs → 8).
+  const session = await abcStorage.createSession('default', `微信 · ${label}`, { source: 'wechat' });
   setSessionIdForFromUser(fromUserId, session.id);
   notifySessionsUpdated();
   return session.id;

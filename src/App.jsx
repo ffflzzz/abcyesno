@@ -134,6 +134,15 @@ function toStorageMessage(m) {
   };
 }
 
+/** 判断会话是否由微信 bridge（后端进程）独占写入。renderer 对这些会话只读不写，
+ *  否则会把内存里的过期快照 flush 回 storage，冲掉 bridge 后续追加的消息。 */
+function isWechatManaged(s) {
+  if (!s) return false;
+  if (s.source === 'wechat') return true;
+  // 兼容存量会话：早期 bridge 创建时未写 source 字段，靠标题前缀兜底。
+  return typeof s.title === 'string' && s.title.startsWith('微信');
+}
+
 function ChatShell({
   assistant,
   session,
@@ -227,11 +236,15 @@ function ChatShell({
   const handleSessionSettled = useCallback((sid, msgs) => {
     const h = hermesRef.current;
     if (!sid || !h || !Array.isArray(msgs) || msgs.length === 0) return;
+    const stored = (sessionsListRef.current || []).find((s) => s.id === sid);
+    // WeChat sessions are written exclusively by the bridge (backend process).
+    // The renderer's in-memory snapshot is stale and would clobber the newer
+    // messages the bridge keeps appending — never flush back over it.
+    if (isWechatManaged(stored)) return;
     const uiMessages = msgs.map(toStorageMessage);
     const userMsg = uiMessages.find((m) => m.role === "user");
     const assistantMsg = [...uiMessages].reverse().find((m) => m.role === "assistant");
     const patch = { messages: uiMessages };
-    const stored = (sessionsListRef.current || []).find((s) => s.id === sid);
     if (assistantMsg) {
       const clean = sanitizeMessageContent(assistantMsg.content || "");
       patch.preview = clean.slice(0, 45).replace(/\n/g, " ") || "(新对话)";
@@ -469,6 +482,10 @@ function ChatShell({
     const sid = selectedSessionId;
     return () => {
       if (!sid || !hermes) return;
+      // WeChat sessions are bridge-managed: never flush the renderer's stale
+      // snapshot back over the bridge's on-disk messages.
+      const stored = (sessionsListRef.current || []).find((s) => s.id === sid);
+      if (isWechatManaged(stored)) return;
       const msgs = getSessionMessages(sid);
       if (!msgs || msgs.length === 0) return;
       const ui = msgs.map(toStorageMessage);
@@ -720,6 +737,9 @@ function ChatShell({
     // Persist immediately — deletion doesn't trigger a streaming cycle so the
     // auto-save effect (which fires on isStreaming false→true→false) won't run.
     if (selectedSessionId && hermes) {
+      // WeChat sessions are bridge-managed: skip the full-messages write-back.
+      const stored = (sessionsListRef.current || []).find((s) => s.id === selectedSessionId);
+      if (isWechatManaged(stored)) return;
       const ui = newMsgs.map(toStorageMessage);
       try {
         await hermes.updateSession(selectedSessionId, { messages: ui });

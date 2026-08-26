@@ -125,7 +125,7 @@ class Storage {
     }
   }
 
-  async createSession(assistantId, title) {
+  async createSession(assistantId, title, extra) {
     await fs.mkdir(this.baseDir, { recursive: true });
     let data;
     try {
@@ -141,6 +141,7 @@ class Storage {
       preview: '',
       updatedAt: Date.now(),
       messages: [],
+      ...(extra && typeof extra === 'object' ? extra : {}),
     };
     data.sessions.push(session);
     await fs.writeFile(this.sessionsFile, JSON.stringify(data, null, 2), 'utf-8');
