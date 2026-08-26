@@ -66,6 +66,18 @@ function formatRelativeTime(ts) {
   return `${d.getMonth() + 1}/${d.getDate()}`;
 }
 
+// Last-message timestamp drives the sidebar label so the user sees
+// "when did I actually talk to the agent" rather than "when did I last
+// rename / change workspace". updatedAt gets bumped by metadata ops
+// (storage.updateSession unconditionally sets it to Date.now()), so using
+// it for display would show "20 分钟前" for a session whose conversation
+// is actually days old but was just renamed.
+function lastMessageTime(s) {
+  const msgs = s.messages || [];
+  if (msgs.length === 0) return s.updatedAt;
+  return msgs[msgs.length - 1].createdAt || s.updatedAt;
+}
+
 function isDefaultTitle(title) {
   const t = (title || "").trim();
   return !t || t === "新会话";
@@ -92,8 +104,11 @@ function getSessionDisplayPreview(s) {
 }
 
 // Bucket a session into a date group for the sectioned list. Order is
-// the same as the returned array — most-recent bucket first.
-function getSessionBucket(ts) {
+// the same as the returned array — most-recent bucket first. Uses the
+// last-message timestamp (not updatedAt) so the bucket reflects when the
+// conversation actually happened.
+function getSessionBucket(s) {
+  const ts = lastMessageTime(s);
   if (!ts) return "更早";
   const now = new Date();
   const d = new Date(ts);
@@ -249,7 +264,7 @@ export default function Sidebar({
               const order = ["今天", "昨天", "前天", "3-7 天前", "更早"];
               const groups = {};
               for (const s of sessions) {
-                const b = getSessionBucket(s.updatedAt);
+                const b = getSessionBucket(s);
                 (groups[b] = groups[b] || []).push(s);
               }
               const visible = order.filter((b) => groups[b] && groups[b].length);
@@ -259,6 +274,7 @@ export default function Sidebar({
                   {groups[bucket].map((s) => {
                     const active = s.id === selectedSessionId;
                     const running = runningSessionIds.includes(s.id);
+                    const t = lastMessageTime(s);
                     return (
                       <div
                         key={s.id}
@@ -271,7 +287,7 @@ export default function Sidebar({
                             {running && <span className="session-running-dot" title="正在生成" />}
                             {getSessionDisplayTitle(s)}
                           </div>
-                          <div className="session-time">{formatRelativeTime(s.updatedAt)}</div>
+                          <div className="session-time">{formatRelativeTime(t)}</div>
                         </div>
                         {(() => {
                           const preview = getSessionDisplayPreview(s);
