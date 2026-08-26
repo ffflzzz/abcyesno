@@ -298,6 +298,42 @@ function ChatShell({
     browserProgress,
   } = useAgentStream(aguiPort, selectedSessionId, { onSettled: handleSessionSettled });
 
+  // Auto-open the embedded browser panel when agent uses browser_* / pw_browser_*
+  // tools. 必须在 ChatShell 函数体内：visibleMessages 来自本函数的
+  // useAgentStream 解构（line 274），openBrowserPanel 由 App 通过 props 传入
+  // （App.jsx line 1966 <ChatShell onOpenBrowserPanel={openBrowserPanel}>）。
+  // 历史坑：本 useEffect 曾被放在 App 函数体内 → visibleMessages 不可见
+  // （ReferenceError）；也曾被误删（误判 ChatShell 孤儿）。ChatShell 在
+  // App.jsx line 1966 被渲染，不是孤儿。
+  const browserNotifiedRef = useRef(new Set());
+  const seenBrowserToolIdsRef = useRef(new Set());
+  useEffect(() => {
+    const msgs = visibleMessages || [];
+    msgs.forEach((m) => {
+      if (
+        typeof m.toolName === "string" &&
+        (m.toolName.startsWith("browser_") || m.toolName.startsWith("pw_browser_")) &&
+        m.id
+      ) {
+        seenBrowserToolIdsRef.current.add(m.id);
+      }
+    });
+    if (msgs.length === 0) return;
+    const freshBrowserTools = msgs.filter(
+      (m) =>
+        typeof m.toolName === "string" &&
+        (m.toolName.startsWith("browser_") || m.toolName.startsWith("pw_browser_")) &&
+        m.id &&
+        !seenBrowserToolIdsRef.current.has(m.id)
+    );
+    if (freshBrowserTools.length === 0) return;
+    freshBrowserTools.forEach((m) => seenBrowserToolIdsRef.current.add(m.id));
+    const sid = selectedSessionId || "";
+    if (browserNotifiedRef.current.has(sid)) return;
+    browserNotifiedRef.current.add(sid);
+    onOpenBrowserPanel();
+  }, [visibleMessages, onOpenBrowserPanel, isStreaming, selectedSessionId]);
+
   // Permission mode: default (backend "ask") or yolo (session approval bypass).
 
   // Permission mode: default (backend "ask") or yolo (session approval bypass).
@@ -957,41 +993,6 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
   const [browserPanelOpen, setBrowserPanelOpen] = useState(false);
   const toggleBrowserPanel = useCallback(() => setBrowserPanelOpen((o) => !o), []);
   const openBrowserPanel = useCallback(() => setBrowserPanelOpen(true), []);
-
-  // Auto-open the embedded browser panel when agent uses browser_* / pw_browser_*
-  // tools. c4abc83 修复写在孤儿 ChatShell 函数内（永不被渲染）→ useEffect 死
-  // 代码，所以"自动开浏览器面板从来就没工作过"。本 commit 把 useEffect 移到
-  // App 函数体内（openBrowserPanel/visibleMessages/selectedSessionId/isStreaming
-  // 都在 App scope 可用）真正生效。
-  const browserNotifiedRef = useRef(new Set());
-  const seenBrowserToolIdsRef = useRef(new Set());
-  useEffect(() => {
-    const msgs = visibleMessages || [];
-    msgs.forEach((m) => {
-      if (
-        typeof m.toolName === "string" &&
-        (m.toolName.startsWith("browser_") || m.toolName.startsWith("pw_browser_")) &&
-        m.id
-      ) {
-        seenBrowserToolIdsRef.current.add(m.id);
-      }
-    });
-    if (browserPanelOpen) return;
-    if (msgs.length === 0) return;
-    const freshBrowserTools = msgs.filter(
-      (m) =>
-        typeof m.toolName === "string" &&
-        (m.toolName.startsWith("browser_") || m.toolName.startsWith("pw_browser_")) &&
-        m.id &&
-        !seenBrowserToolIdsRef.current.has(m.id)
-    );
-    if (freshBrowserTools.length === 0) return;
-    freshBrowserTools.forEach((m) => seenBrowserToolIdsRef.current.add(m.id));
-    const sid = selectedSessionId || "";
-    if (browserNotifiedRef.current.has(sid)) return;
-    browserNotifiedRef.current.add(sid);
-    openBrowserPanel();
-  }, [visibleMessages, browserPanelOpen, isStreaming, selectedSessionId, openBrowserPanel]);
 
 
   // 论文重写 dashboard 产物（单例轮询，传给 ResultPanel 的「论文产物」tab）。
