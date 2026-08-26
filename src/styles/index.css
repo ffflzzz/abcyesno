@@ -508,7 +508,24 @@ body {
 .session-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 10px;
+}
+.session-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.session-group-header {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+  text-transform: none;
+  letter-spacing: 0;
+  padding: 8px 12px 2px;
+  position: sticky;
+  top: 0;
+  background: var(--bg-elevated, #fff);
+  z-index: 1;
 }
 
 .assistant-item {

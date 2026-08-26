@@ -81,12 +81,30 @@ function getSessionDisplayTitle(s) {
   return "新会话";
 }
 
-/** Sidebar subtitle: show the user's rename if present, otherwise nothing
- *  (we don't echo message previews here per UX request). */
+/** Sidebar subtitle: show a short message preview only when the session
+ *  still has the default title. If the user renamed it, the title is
+ *  already the displayed primary — repeating it as a subtitle just makes
+ *  the list look duplicated / busy (UX: "侧边栏只显示主标题"). */
 function getSessionDisplayPreview(s) {
-  const t = (s.title || "").trim();
-  if (!isDefaultTitle(t)) return stripMd(t, 50);
-  return "";
+  if (!isDefaultTitle((s.title || "").trim())) return "";
+  const p = stripMd(s.preview || "", 30);
+  return p && p !== "无消息" ? p : "";
+}
+
+// Bucket a session into a date group for the sectioned list. Order is
+// the same as the returned array — most-recent bucket first.
+function getSessionBucket(ts) {
+  if (!ts) return "更早";
+  const now = new Date();
+  const d = new Date(ts);
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startOfDay = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const diffDays = Math.floor((startOfToday - startOfDay) / (1000 * 60 * 60 * 24));
+  if (diffDays === 0) return "今天";
+  if (diffDays === 1) return "昨天";
+  if (diffDays === 2) return "前天";
+  if (diffDays >= 3 && diffDays <= 7) return "3-7 天前";
+  return "更早";
 }
 
 // ── Tab constants ──
@@ -223,43 +241,59 @@ export default function Sidebar({
             </button>
           </div>
           <div className="session-list">
-            {sessions.map((s) => {
-              const active = s.id === selectedSessionId;
-              // Sessions keep streaming in the background after you switch
-              // away — surface that so the list doesn't look frozen.
-              const running = runningSessionIds.includes(s.id);
-              return (
-                <div
-                  key={s.id}
-                  className={`session-item ${active ? "active" : ""} ${running ? "running" : ""}`}
-                  onClick={() => onSelectSession(s.id)}
-                  onContextMenu={(e) => openMenu(e, "session", s.id, s.title)}
-                >
-                  <div className="session-row">
-                    <div className="session-title">
-                      {running && <span className="session-running-dot" title="正在生成" />}
-                      {getSessionDisplayTitle(s)}
-                    </div>
-                    <div className="session-time">{formatRelativeTime(s.updatedAt)}</div>
-                  </div>
-                  {(() => {
-                    const preview = getSessionDisplayPreview(s);
-                    return preview ? (
-                      <div className="session-preview" title={preview}>
-                        {running ? "正在生成…" : preview}
+            {(() => {
+              // Group sessions by date bucket (今天/昨天/前天/3-7天前/更早) so
+              // the list reads as sectioned chapters instead of a dense wall of
+              // rows. The active session always wins its group, and buckets
+              // are rendered in newest-first order.
+              const order = ["今天", "昨天", "前天", "3-7 天前", "更早"];
+              const groups = {};
+              for (const s of sessions) {
+                const b = getSessionBucket(s.updatedAt);
+                (groups[b] = groups[b] || []).push(s);
+              }
+              const visible = order.filter((b) => groups[b] && groups[b].length);
+              return visible.map((bucket) => (
+                <div className="session-group" key={bucket}>
+                  <div className="session-group-header">{bucket}</div>
+                  {groups[bucket].map((s) => {
+                    const active = s.id === selectedSessionId;
+                    const running = runningSessionIds.includes(s.id);
+                    return (
+                      <div
+                        key={s.id}
+                        className={`session-item ${active ? "active" : ""} ${running ? "running" : ""}`}
+                        onClick={() => onSelectSession(s.id)}
+                        onContextMenu={(e) => openMenu(e, "session", s.id, s.title)}
+                      >
+                        <div className="session-row">
+                          <div className="session-title">
+                            {running && <span className="session-running-dot" title="正在生成" />}
+                            {getSessionDisplayTitle(s)}
+                          </div>
+                          <div className="session-time">{formatRelativeTime(s.updatedAt)}</div>
+                        </div>
+                        {(() => {
+                          const preview = getSessionDisplayPreview(s);
+                          return preview ? (
+                            <div className="session-preview" title={preview}>
+                              {running ? "正在生成…" : preview}
+                            </div>
+                          ) : null;
+                        })()}
+                        <button
+                          className="session-menu"
+                          onClick={(e) => { e.stopPropagation(); onDeleteSession(s.id); }}
+                          title="删除"
+                        >
+                          <Icon name="trash" size={12} />
+                        </button>
                       </div>
-                    ) : null;
-                  })()}
-                  <button
-                    className="session-menu"
-                    onClick={(e) => { e.stopPropagation(); onDeleteSession(s.id); }}
-                    title="删除"
-                  >
-                    <Icon name="trash" size={12} />
-                  </button>
+                    );
+                  })}
                 </div>
-              );
-            })}
+              ));
+            })()}
             {sessions.length === 0 && (
               <div className="empty-hint">暂无会话，点击上方创建</div>
             )}
