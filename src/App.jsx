@@ -214,13 +214,6 @@ function ChatShell({
   const onSessionUpdatedRef = useRef(onSessionUpdated);
   onSessionUpdatedRef.current = onSessionUpdated;
 
-  // 浏览器面板打开控制：内部 useState 接管，props 链断裂时（App.jsx 顶层无
-  // 父组件传 onOpenBrowserPanel，会话级"自动开浏览器面板"逻辑依赖的 setter
-  // 永远空操作）兜底生效。effective = props || internal，渲染取 OR。
-  const [internalBrowserPanelOpen, setBrowserPanelOpen] = useState(false);
-  const handleOpenBrowserPanel = useCallback(() => setBrowserPanelOpen(true), []);
-  const effectiveBrowserPanelOpen = browserPanelOpen || internalBrowserPanelOpen;
-
   // Generate a short summarized session title via the backend summarizer.
   // Fire-and-forget: caller decides what to do with the result.
   const generateSessionTitle = useCallback(async (sid, userText, assistantText) => {
@@ -304,53 +297,6 @@ function ChatShell({
     reviewSummary,
     browserProgress,
   } = useAgentStream(aguiPort, selectedSessionId, { onSettled: handleSessionSettled });
-
-  // Auto-open the embedded browser panel when the agent uses a browser_* tool,
-  // so the user sees the agent operate the in-app Chromium live (spec §5.5).
-  // Hermes exposes tool names as "browser_navigate" (without pw_ prefix) in events.
-  //
-  // Only fires ONCE per session (tracked via browserNotifiedRef) and only while
-  // streaming — so switching sessions or re-rendering history does NOT re-open
-  // a panel the user explicitly closed.
-  //
-  // We only react to browser tool messages that are NEWLY added this render
-  // (tracked via seenBrowserToolIdsRef). Scanning the whole history made the
-  // panel pop open on every message once ANY browser tool had ever appeared in
-  // the conversation — exactly the "every message opens the browser" bug.
-  const browserNotifiedRef = useRef(new Set());
-  const seenBrowserToolIdsRef = useRef(new Set());
-  useEffect(() => {
-    const msgs = visibleMessages || [];
-    // Always mark any browser tool messages as seen, even when not streaming.
-    // Otherwise history loaded while idle never gets recorded, and the next
-    // user message (isStreaming becomes true) treats all historical browser
-    // tools as "fresh", popping the panel open for every ordinary message.
-    msgs.forEach((m) => {
-      if (
-        typeof m.toolName === "string" &&
-        (m.toolName.startsWith("browser_") || m.toolName.startsWith("pw_browser_")) &&
-        m.id
-      ) {
-        seenBrowserToolIdsRef.current.add(m.id);
-      }
-    });
-    if (effectiveBrowserPanelOpen) return;
-    if (msgs.length === 0) return;
-    // Only consider browser tool messages we have NOT seen before.
-    const freshBrowserTools = msgs.filter(
-      (m) =>
-        typeof m.toolName === "string" &&
-        (m.toolName.startsWith("browser_") || m.toolName.startsWith("pw_browser_")) &&
-        m.id &&
-        !seenBrowserToolIdsRef.current.has(m.id)
-    );
-    if (freshBrowserTools.length === 0) return;
-    freshBrowserTools.forEach((m) => seenBrowserToolIdsRef.current.add(m.id));
-    const sid = selectedSessionId || "";
-    if (browserNotifiedRef.current.has(sid)) return;
-    browserNotifiedRef.current.add(sid);
-    handleOpenBrowserPanel();
-  }, [visibleMessages, effectiveBrowserPanelOpen, isStreaming, selectedSessionId, handleOpenBrowserPanel]);
 
   // Permission mode: default (backend "ask") or yolo (session approval bypass).
 
@@ -781,7 +727,7 @@ function ChatShell({
         onToggleResultPanel={onToggleResultPanel}
         onToggleResultPanelCollapse={onToggleResultPanelCollapse}
         resultPanelCollapsed={resultPanelCollapsed}
-        browserPanelOpen={effectiveBrowserPanelOpen}
+        browserPanelOpen={browserPanelOpen}
         onToggleBrowserPanel={onToggleBrowserPanel}
         onShowContextUsage={() => setShowContextUsage(true)}
         onOpenSkills={onToggleSkills}
@@ -876,7 +822,7 @@ function ChatShell({
         onOpenPreviewUrl={onOpenPreviewUrl}
         resultPanelCollapsed={resultPanelCollapsed}
         onToggleResultPanelCollapse={onToggleResultPanelCollapse}
-        browserPanelOpen={effectiveBrowserPanelOpen}
+        browserPanelOpen={browserPanelOpen}
         onToggleBrowserPanel={onToggleBrowserPanel}
         onOpenBrowser={onOpenBrowserPanel}
         selectedSessionId={selectedSessionId}
@@ -1011,6 +957,43 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
   const [browserPanelOpen, setBrowserPanelOpen] = useState(false);
   const toggleBrowserPanel = useCallback(() => setBrowserPanelOpen((o) => !o), []);
   const openBrowserPanel = useCallback(() => setBrowserPanelOpen(true), []);
+
+  // Auto-open the embedded browser panel when the agent uses a browser_* tool
+  // (browser_navigate / pw_browser_navigate), so the user sees the agent
+  // operate the in-app Chromium live. Fires ONCE per session (browserNotifiedRef)
+  // and only for newly-added tools (seenBrowserToolIdsRef) to avoid re-opening on
+  // history reload. c4abc83 + cd8fc37 (之前) 的版本把这段 useEffect 放在
+  // ChatShell 函数体内，但 ChatShell 永不被渲染（App 实际渲染 <ChatLayout>）→
+  // useEffect 是死代码。必须放在 App 函数体内才能生效。
+  const browserNotifiedRef = useRef(new Set());
+  const seenBrowserToolIdsRef = useRef(new Set());
+  useEffect(() => {
+    const msgs = visibleMessages || [];
+    msgs.forEach((m) => {
+      if (
+        typeof m.toolName === "string" &&
+        (m.toolName.startsWith("browser_") || m.toolName.startsWith("pw_browser_")) &&
+        m.id
+      ) {
+        seenBrowserToolIdsRef.current.add(m.id);
+      }
+    });
+    if (browserPanelOpen) return;
+    if (msgs.length === 0) return;
+    const freshBrowserTools = msgs.filter(
+      (m) =>
+        typeof m.toolName === "string" &&
+        (m.toolName.startsWith("browser_") || m.toolName.startsWith("pw_browser_")) &&
+        m.id &&
+        !seenBrowserToolIdsRef.current.has(m.id)
+    );
+    if (freshBrowserTools.length === 0) return;
+    freshBrowserTools.forEach((m) => seenBrowserToolIdsRef.current.add(m.id));
+    const sid = selectedSessionId || "";
+    if (browserNotifiedRef.current.has(sid)) return;
+    browserNotifiedRef.current.add(sid);
+    openBrowserPanel();
+  }, [visibleMessages, browserPanelOpen, isStreaming, selectedSessionId, openBrowserPanel]);
 
   // 论文重写 dashboard 产物（单例轮询，传给 ResultPanel 的「论文产物」tab）。
   // 服务未就绪时静默降级，不干扰其它会话。
@@ -1871,7 +1854,7 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
       onToggleResultPanel={() => setResultPanelOpen((o) => !o)}
       onToggleResultPanelCollapse={() => setResultPanelCollapsed((o) => !o)}
       resultPanelCollapsed={resultPanelCollapsed}
-      browserPanelOpen={effectiveBrowserPanelOpen}
+      browserPanelOpen={browserPanelOpen}
       onToggleBrowserPanel={toggleBrowserPanel}
       onOpenSettings={() => setShowSettings(true)}
       sidebarOpen={sidebarOpen}
@@ -2032,7 +2015,7 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
           onToggleResultPanelCollapse={() => setResultPanelCollapsed((c) => !c)}
           resultPanelWidth={resultPanelWidth}
           setResultPanelWidth={setResultPanelWidth}
-          browserPanelOpen={effectiveBrowserPanelOpen}
+          browserPanelOpen={browserPanelOpen}
           onToggleBrowserPanel={toggleBrowserPanel}
           onOpenBrowserPanel={openBrowserPanel}
           onDetachResultPanel={handleDetachResultPanel}
