@@ -214,6 +214,13 @@ function ChatShell({
   const onSessionUpdatedRef = useRef(onSessionUpdated);
   onSessionUpdatedRef.current = onSessionUpdated;
 
+  // 浏览器面板打开控制：内部 useState 接管，props 链断裂时（App.jsx 顶层无
+  // 父组件传 onOpenBrowserPanel，会话级"自动开浏览器面板"逻辑依赖的 setter
+  // 永远空操作）兜底生效。effective = props || internal，渲染取 OR。
+  const [internalBrowserPanelOpen, setBrowserPanelOpen] = useState(false);
+  const handleOpenBrowserPanel = useCallback(() => setBrowserPanelOpen(true), []);
+  const effectiveBrowserPanelOpen = browserPanelOpen || internalBrowserPanelOpen;
+
   // Generate a short summarized session title via the backend summarizer.
   // Fire-and-forget: caller decides what to do with the result.
   const generateSessionTitle = useCallback(async (sid, userText, assistantText) => {
@@ -327,7 +334,7 @@ function ChatShell({
         seenBrowserToolIdsRef.current.add(m.id);
       }
     });
-    if (browserPanelOpen) return;
+    if (effectiveBrowserPanelOpen) return;
     if (msgs.length === 0) return;
     // Only consider browser tool messages we have NOT seen before.
     const freshBrowserTools = msgs.filter(
@@ -342,8 +349,8 @@ function ChatShell({
     const sid = selectedSessionId || "";
     if (browserNotifiedRef.current.has(sid)) return;
     browserNotifiedRef.current.add(sid);
-    onOpenBrowserPanel();
-  }, [visibleMessages, browserPanelOpen, isStreaming, selectedSessionId, onOpenBrowserPanel]);
+    handleOpenBrowserPanel();
+  }, [visibleMessages, effectiveBrowserPanelOpen, isStreaming, selectedSessionId, handleOpenBrowserPanel]);
 
   // Permission mode: default (backend "ask") or yolo (session approval bypass).
 
@@ -774,7 +781,7 @@ function ChatShell({
         onToggleResultPanel={onToggleResultPanel}
         onToggleResultPanelCollapse={onToggleResultPanelCollapse}
         resultPanelCollapsed={resultPanelCollapsed}
-        browserPanelOpen={browserPanelOpen}
+        browserPanelOpen={effectiveBrowserPanelOpen}
         onToggleBrowserPanel={onToggleBrowserPanel}
         onShowContextUsage={() => setShowContextUsage(true)}
         onOpenSkills={onToggleSkills}
@@ -869,7 +876,7 @@ function ChatShell({
         onOpenPreviewUrl={onOpenPreviewUrl}
         resultPanelCollapsed={resultPanelCollapsed}
         onToggleResultPanelCollapse={onToggleResultPanelCollapse}
-        browserPanelOpen={browserPanelOpen}
+        browserPanelOpen={effectiveBrowserPanelOpen}
         onToggleBrowserPanel={onToggleBrowserPanel}
         onOpenBrowser={onOpenBrowserPanel}
         selectedSessionId={selectedSessionId}
@@ -1864,7 +1871,7 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
       onToggleResultPanel={() => setResultPanelOpen((o) => !o)}
       onToggleResultPanelCollapse={() => setResultPanelCollapsed((o) => !o)}
       resultPanelCollapsed={resultPanelCollapsed}
-      browserPanelOpen={browserPanelOpen}
+      browserPanelOpen={effectiveBrowserPanelOpen}
       onToggleBrowserPanel={toggleBrowserPanel}
       onOpenSettings={() => setShowSettings(true)}
       sidebarOpen={sidebarOpen}
@@ -2025,7 +2032,7 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
           onToggleResultPanelCollapse={() => setResultPanelCollapsed((c) => !c)}
           resultPanelWidth={resultPanelWidth}
           setResultPanelWidth={setResultPanelWidth}
-          browserPanelOpen={browserPanelOpen}
+          browserPanelOpen={effectiveBrowserPanelOpen}
           onToggleBrowserPanel={toggleBrowserPanel}
           onOpenBrowserPanel={openBrowserPanel}
           onDetachResultPanel={handleDetachResultPanel}
