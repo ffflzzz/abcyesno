@@ -772,8 +772,15 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
           if (ev.messageId) {
             // 把本轮累积的深度推理文本绑定到这条 assistant 消息上，
             // 这样历史消息再次渲染时显示的是它自己的 reasoning，而不是当前全局的。
+            const target = sess.messages.find((m) => m.id === ev.messageId);
+            const hasContent = !!(target && target.content && target.content.trim());
             patchMessage(sess, ev.messageId, {
               streaming: false,
+              // 空内容兜底：TEXT_MESSAGE_START 后 CONTENT 从未到达（如工具
+              // 卡死/被中断）时留一条占位，避免永久空气泡（2026-08-26）。
+              ...(hasContent
+                ? {}
+                : { content: "（未收到模型输出，任务可能已被中断）" }),
               reasoning: sess.reasoningText || "",
             });
           }
@@ -960,6 +967,7 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
+        let lastReadAt = Date.now();
 
         for (;;) {
           const readPromise = reader.read();
@@ -967,17 +975,43 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
           // GIL pressure), abort instead of hanging forever so the user can retry.
           // 后台长任务（B 方案）期间不因节点静默 abort；agui-server 的
           // 60 分钟超时负责兜底关闭 SSE。
-          const timer = setTimeout(() => {
+          // Visibility-aware（2026-08-26 "切 tab 回来 agent 死掉"修复）：
+          // tab 切到后台/切到其他 native 应用时渲染进程 timer 仍按真实时间
+          // 推进，后台资源紧张叠加会让 30 分钟 timeout 在用户切回时集中触发
+          // → 看似"切 tab 立刻死"。隐藏期间延长 timeout，切回时重置为基础值。
+          const HIDDEN_TIMEOUT_MS = Number(process.env.ABC_READ_TIMEOUT_HIDDEN_MS || 6 * 60 * 60 * 1000);
+          // 测试环境（mini-react）无 document，必须判空
+          const hasDoc = typeof document !== "undefined" && !!document;
+          let timer = setTimeout(() => {
             if (!sess.backgroundRun) controller.abort();
-          }, READ_TIMEOUT_MS);
+          }, hasDoc && document.hidden ? HIDDEN_TIMEOUT_MS : READ_TIMEOUT_MS);
+          const onVisibilityChange = () => {
+            // 旧 controller 已被新一轮替换时不操作
+            if (sess.controller !== controller) return;
+            // 切回前台时若 run 仍在推理中，打诊断日志（复现"切 tab 死掉"用）
+            if (hasDoc && !document.hidden && sess.phase && sess.phase !== "idle") {
+              const sinceMs = sess.thinkingSince ? Date.now() - sess.thinkingSince : 0;
+              console.warn(
+                `[useAgentStream] tab visible while run active: phase=${sess.phase} ` +
+                  `sinceThinking=${Math.round(sinceMs / 1000)}s readIdle=${Math.round((Date.now() - lastReadAt) / 1000)}s`
+              );
+            }
+            clearTimeout(timer);
+            timer = setTimeout(() => {
+              if (!sess.backgroundRun) controller.abort();
+            }, hasDoc && document.hidden ? HIDDEN_TIMEOUT_MS : READ_TIMEOUT_MS);
+          };
+          if (hasDoc) document.addEventListener("visibilitychange", onVisibilityChange);
           let done;
           let value;
           try {
             ({ done, value } = await readPromise);
           } finally {
             clearTimeout(timer);
+            if (hasDoc) document.removeEventListener("visibilitychange", onVisibilityChange);
           }
           if (done) break;
+          lastReadAt = Date.now();
           buffer += decoder.decode(value, { stream: true });
 
           // SSE 帧以 \n\n 分隔

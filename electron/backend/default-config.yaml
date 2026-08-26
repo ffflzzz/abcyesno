@@ -11,11 +11,20 @@ providers:
     default_model: agnes-2.5-flash
     models:
       - agnes-2.5-flash
+    # Agnes 2.5 Flash Thinking 模式默认关闭，需显式开启（OpenAI 兼容格式）：
+    # https://www.agnes-ai.com/zh-Hans/docs/agnes-25-flash#thinking-%E6%A8%A1%E5%BC%8F
+    # 开启后流式 delta 返回 reasoning_content，Hermes 转发后前端才能渲染「深度推理」块。
+    extra_body:
+      chat_template_kwargs:
+        enable_thinking: true
 model:
   default: agnes-2.5-flash
   provider: custom
   base_url: https://apihub.agnes-ai.com/v1
   api_key: cpk-REPLACE_WITH_YOUR_AGNES_API_KEY
+  # Thinking 消耗输出预算，必须给足，否则推理模型在正文前耗尽 max_tokens 会
+  # incomplete / content 空（「看不到 thinking / 空气泡」同源问题）。
+  max_tokens: 8192
 # Keep context files tiny so agent startup stays fast and prompts don't
 # blow up with the bundled hermes-fork/AGENTS.md.
 context_file_max_chars: 1000

@@ -1,25 +1,33 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ResultPanel from "./components/ResultPanel.jsx";
+import BrowserPanel from "./components/BrowserPanel.jsx";
+import StudioWorkbench from "./workbenches/StudioWorkbench.jsx";
+import App from "./App.jsx";
 import { ErrorBoundary } from "./ErrorBoundary.jsx";
 import { initContract, listManifests } from "./contract/registry.js";
 import { subscribeContractEvents } from "./contract/eventBus.js";
 import bachAvatar from "./assets/bach-avatar.png";
 
 // ──────────────────────────────────────────────────────────────────────────
-// DetachedApp — standalone window entry point for the detached result panel:
+// DetachedApp — standalone window entry point for the detached result panel
+// and torn-off tabs:
 //
 //  mode="result" (`index.html?panel=result`)
 //    Renders ONLY the ResultPanel (no Sidebar / ChatLayout). Shares the same
 //    backend as the main window; just waits for it to come up.
 //
+//  mode="tab" (`index.html?panel=tab&type=browser&browserUrl=...`)
+//    Renders a single torn-off tab (Phase 1: browser only) in its own window.
+//    Same backend sharing, same wait-for-main-window logic.
+//
 // (The "studio" standalone-window mode was removed — 漫剧go now opens as a
-// normal in-app tab. This component now only serves the result panel.)
+// normal in-app tab. This component now serves the result panel + torn-off tabs.)
 //
 // Re-uses window.hermes preloaded by electron/preload.js and polls the main
 // window's backend (the main window already started Hermes).
 // ──────────────────────────────────────────────────────────────────────────
 
-export default function DetachedApp({ mode = "result", workflowId = "" }) {
+export default function DetachedApp({ mode = "result", workflowId = "", type = "browser", browserUrl = "", assistantId = "" }) {
   const params = useMemo(() => new URLSearchParams(window.location.search), []);
   const initialWorkflowId = workflowId || params.get("workflow") || params.get("workflowId") || "";
   const initialTab = params.get("tab") || "overview";
@@ -87,7 +95,59 @@ export default function DetachedApp({ mode = "result", workflowId = "" }) {
     initContract(aguiPort).then(setManifests);
   }, [aguiPort]);
 
+  // mode="tab": torn-off tabs. browser → webview (no backend needed);
+  // studio → renders a mini App with the given workflowId so the workbench
+  // loads the right manifest. Note this DOES load the full App component
+  // for studio tabs — see docs/TAB_TEAROFF_SPEC.md §6 for the historical
+  // black-screen risk; if it recurs we'll need to debug.
+  if (mode === "tab") {
+    if (type === "browser") {
+      return (
+        <div className="app" style={{ position: "relative" }}>
+          <ErrorBoundary>
+            <div className="browser-tab-host">
+              <BrowserPanel fullscreen initialUrl={browserUrl || ""} />
+            </div>
+          </ErrorBoundary>
+        </div>
+      );
+    }
+    if (type === "studio") {
+      if (!aguiPort) {
+        // Wait for backend like the result-panel mode — the studio App
+        // depends on the AG-UI bridge to enumerate manifests.
+        return (
+          <div className="app flex-center">
+            <div className="welcome bootstrap-loading">
+              <div className="bootstrap-spinner">
+                <div className="spinner-ring" />
+                <img className="spinner-logo spinner-logo-img" src={bachAvatar} alt="" draggable="false" />
+              </div>
+              <h2>{initialWorkflowId || "工作台"}</h2>
+              <p className="bootstrap-status">
+                {waitSeconds < 5 ? "等待主窗口启动后端…" : waitSeconds < 20 ? "正在连接到本地后端…" : "等待中 — 请确认主窗口已打开。"}
+              </p>
+            </div>
+          </div>
+        );
+      }
+      return (
+        <div className="app" style={{ position: "relative" }}>
+          <ErrorBoundary>
+            <App
+              aguiPort={aguiPort}
+              initialWorkflowId={initialWorkflowId || workflowId}
+              studioEntry
+            />
+          </ErrorBoundary>
+        </div>
+      );
+    }
+  }
+
   // Loading screen while the main window's backend is booting.
+  // NOTE: torn-off browser tabs don't need the backend (the <webview> loads
+  // its own URL), so render them BEFORE the backend wait below.
   if (!aguiPort) {
     return (
       <div className="app flex-center">

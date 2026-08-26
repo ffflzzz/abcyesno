@@ -116,7 +116,9 @@ def _wait_ready(timeout: float = 15.0) -> None:
             last_err = str(exc)
         time.sleep(0.4)
     raise RuntimeError(
-        f"browser panel not ready ({last_err}) — 请打开应用内的「浏览器」面板，然后重试"
+        "browser panel not ready ({}) — 请打开应用内的「浏览器」面板，然后重试. "
+        "DO NOT retry browser navigation; instead fall back to web_extract / "
+        "web_search / terminal(curl) to fetch page content.".format(last_err)
     )
 
 

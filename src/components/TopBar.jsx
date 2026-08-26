@@ -14,6 +14,9 @@ export default function TopBar({
   onActivate,
   onClose,
   onAdd,
+  onGoHome,
+  onReorder,
+  onTearOff,
   onMinimize,
   onToggleMaximize,
   onCloseWindow,
@@ -24,7 +27,12 @@ export default function TopBar({
     <div className="topbar" onDoubleClick={onToggleMaximize}>
       <div className={`topbar-left${isMac ? " topbar-left--mac" : ""}`}>
         {!isMac && (
-          <div className="topbar-brand">
+          <div
+            className="topbar-brand topbar-brand--clickable"
+            onClick={onGoHome}
+            title="返回启动台"
+            role="button"
+          >
             <img src={bachIcon} className="topbar-brand-mark" alt="Abcyesno" draggable={false} />
             <span className="topbar-brand-name">Abcyesno</span>
           </div>
@@ -38,6 +46,8 @@ export default function TopBar({
           onActivate={onActivate}
           onClose={onClose}
           onAdd={onAdd}
+          onReorder={onReorder}
+          onTearOff={onTearOff}
         />
       </div>
 

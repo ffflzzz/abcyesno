@@ -965,7 +965,14 @@ function createAgUIServer(getGatewayClient, storage, options) {
   }
 
   function waitForHermesTurn(client, hermesSessionId, ctx, res, encoder, timeoutMs = 120000, opts = {}) {
-    const { goalMode = false, idleMs = 5000 } = opts;
+    // goal mode: the gateway emits multiple message.start/complete cycles.
+    // The idle timer resets on EVERY hermes event, so it must comfortably
+    // cover the longest gap with no events — the model's first-round thinking
+    // and slow tool executions (e.g. browser navigation). 5s was too short:
+    // a goal kickoff that spent >5s before the first event was misjudged as
+    // "loop ended", closing SSE and leaving the agent running headless
+    // (2026-08-26 "agent 莫名中断" root cause).
+    const { goalMode = false, idleMs = Number(process.env.ABC_AGUI_GOAL_IDLE_MS || 30000) } = opts;
     const translator = createTurnTranslator(res, encoder, { ...ctx, hermesSessionId }, { multiRound: goalMode });
 
     const promise = new Promise((resolve, reject) => {
@@ -1327,7 +1334,7 @@ function createAgUIServer(getGatewayClient, storage, options) {
       // must NOT resolve on the first `message.complete` — use an idle timer
       // instead so subsequent rounds keep flowing into SSE.
       const waitOpts = goalMode
-        ? { goalMode: true, idleMs: Number(process.env.ABC_AGUI_GOAL_IDLE_MS || 5000) }
+        ? { goalMode: true, idleMs: Number(process.env.ABC_AGUI_GOAL_IDLE_MS || 30000) }
         : undefined;
       const { promise: turnPromise, translator } = waitForHermesTurn(
         client, hermesSessionId, ctx, res, encoder, turnTimeoutMs, waitOpts

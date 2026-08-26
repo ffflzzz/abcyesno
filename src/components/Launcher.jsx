@@ -2,14 +2,15 @@ import React from "react";
 import Icon from "./Icon.jsx";
 
 // Launcher — the app's homepage (启动台). Compact app grid inspired by the
-// reference design: a small "应用" heading and a row of colored rounded-square
-// icons with labels underneath. Each click opens a dedicated browser-style tab.
+// reference design: a small "应用" heading and a row of icons with labels
+// underneath. Each click opens a dedicated browser-style tab.
 //
-// 所有图标统一视觉尺寸的关键：每个 .launcher-app-icon 容器永远是 56×56 的
-// 带圆角的彩色方形（app.color 背景），img 在内部用 object-fit: contain 显示。
-// 图标源 PNG 周围留约 5-6% 透明 padding，所以彩色容器会从四周露出，形成
-// 视觉上的「同尺寸彩色方块 + 居中图标」效果。这样不论每个图标的内部画面
-// 大小、笔触粗细如何，三个 launcher 图标看起来都是同尺寸的。
+// Icon rendering: app.iconSrc is an ALPHA MASK (transparent bg + white shape).
+// The .launcher-app-icon container paints itself with `var(--icon-color)` and
+// uses the mask as a cutout, so the same PNG works in both themes:
+//   light mode → --icon-color: dark text → dark icon on white
+//   dark  mode → --icon-color: white       → light icon on dark
+// No per-theme PNG set needed; one mask asset adapts to both.
 export default function Launcher({ apps = [] }) {
   return (
     <div className="launcher launcher--simple">
@@ -18,13 +19,9 @@ export default function Launcher({ apps = [] }) {
         <div className="launcher-grid">
           {apps.map((app) => (
             <button key={app.key} className="launcher-app" onClick={app.onClick}>
-              <span className="launcher-app-icon" style={{ background: app.color }}>
+              <span className="launcher-app-icon">
                 {app.iconSrc ? (
-                  <img
-                    src={app.iconSrc}
-                    alt={app.title}
-                    draggable={false}
-                  />
+                  <img src={app.iconSrc} alt={app.title} draggable={false} />
                 ) : (
                   <Icon name={app.icon} size={28} />
                 )}

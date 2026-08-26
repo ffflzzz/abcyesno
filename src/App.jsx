@@ -203,6 +203,7 @@ function ChatShell({
   paperRuns,
   onOpenWechatBind = () => {},
   wechatStatus = { state: "idle", bound: false },
+  onOpenLiveStudio = () => {},
 }) {
   // Keep a live ref to the session list so the settle callback (which is
   // identity-stable by design) can look up titles without going stale.
@@ -326,7 +327,7 @@ function ChatShell({
         seenBrowserToolIdsRef.current.add(m.id);
       }
     });
-    if (browserPanelOpen || !isStreaming) return;
+    if (browserPanelOpen) return;
     if (msgs.length === 0) return;
     // Only consider browser tool messages we have NOT seen before.
     const freshBrowserTools = msgs.filter(
@@ -880,6 +881,7 @@ function ChatShell({
         liveTask={visibleLiveTask}
         onStopLiveTask={taskManager.stopTask}
         onOpenLiveTaskDetail={(id) => { setSidebarTab("tasks"); taskManager.onSelectTask(id); }}
+        onOpenLiveStudio={onOpenLiveStudio}
         onDismissLiveTask={() => liveTask && setDismissedRunId(liveTask.runId)}
       />
       {/* ResultPanel wrapped in own ErrorBoundary so a sidebar crash never kills the main chat */}
@@ -1030,6 +1032,8 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
   const hermes = window.hermes;
 
   // Global shortcut: F10 opens the Settings panel from anywhere in the app.
+
+  // Global shortcut: F10 opens the Settings panel from anywhere in the app.
   useEffect(() => {
     if (!hermes || !hermes.onOpenSettings) return;
     const cb = () => setShowSettings(true);
@@ -1141,6 +1145,40 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
     return id;
   }, [activeTabId, persistActiveInto, applyTabState]);
 
+  // Open a StudioWorkbench tab bound to a running background langgraph_agent
+  // task. The workbench subscribes to the task's workflow.* events and renders
+  // node progress / artifacts inline; the launcher-grid open path doesn't
+  // carry a taskId so it stays untouched.
+  const openLiveStudio = useCallback((task) => {
+    if (!task) return;
+    const wf = task.workflowId || task.workflowName;
+    if (!wf) return;
+    const assistant = assistants.find((a) => a.id === task.assistantId) || null;
+    const launcherKey = wf; // manifest key in LAUNCHER_ICONS
+    const iconSrc = LAUNCHER_ICONS[launcherKey] || appManjuIcon;
+    const tabKey = `${wf}::${task.id}`;
+    const existing = tabsRef.current.find(
+      (t) => t.type === "studio" && t.studioKey === tabKey
+    );
+    if (existing) {
+      activateExisting(existing.id);
+      return;
+    }
+    createTab({
+      type: "studio",
+      title: `${assistant?.name || "工作台"} · ${task.workflowName || wf}`,
+      icon: "default",
+      iconSrc,
+      workflowId: wf,
+      studioKey: tabKey,
+      taskId: task.id,
+      runId: task.runId,
+      resultOpen: true,
+      resultCollapsed: false,
+      assistantId: task.assistantId || selectedAssistantId || "",
+    });
+  }, [assistants, selectedAssistantId, createTab, activateExisting]);
+
   // Convert the current homepage tab into an app tab instead of opening a new
   // tab. The user can press "+" if they actually want a fresh homepage.
   const openApp = useCallback((partial) => {
@@ -1168,6 +1206,68 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
       }
     }
   }, [tabs, activeTabId, applyTabState]);
+
+  // Click on the top-bar brand area → jump to a homepage tab. Reuses an
+  // existing one if there is one; otherwise creates a fresh homepage tab
+  // (which is also what the "+" button does, so the behaviour stays
+  // consistent). Uses tabsRef so the lookup is fresh without re-creating
+  // the callback on every tabs change.
+  const goHome = useCallback(() => {
+    const home = tabsRef.current.find((t) => t.type === "homepage");
+    if (home) {
+      activateExisting(home.id);
+    } else {
+      createTab({ type: "homepage" });
+    }
+  }, [activateExisting, createTab]);
+
+  // Tear a tab out of the main window into its own BrowserWindow.
+  //   browser → webview in detached window (Phase 1, fully shipped)
+  //   studio  → detached workbench window (workflowId/manifest carry over)
+  //   homepage / chat → dropped for now (require App state reconstruction
+  //                          that's not yet wired — see TAB_TEAROFF_SPEC §5)
+  // The tab is removed from the main window's list; the detached window
+  // owns its own lifecycle from then on.
+  const tearOffTab = useCallback(async (tab) => {
+    if (!tab) return;
+    if (tabs.length <= 1) return; // keep at least one tab, like closeTab
+    if (tab.type !== "browser" && tab.type !== "studio") return;
+    try {
+      const payload = {
+        type: tab.type,
+        title: tab.title,
+      };
+      if (tab.type === "browser") {
+        payload.browserUrl = tab.browserUrl || "";
+      } else if (tab.type === "studio") {
+        payload.workflowId = tab.workflowId || "";
+        payload.assistantId = tab.assistantId || "";
+      }
+      const res = await window.hermes?.tearOffTab?.(payload);
+      if (res && res.success !== false) {
+        closeTab(tab.id);
+      }
+    } catch (err) {
+      console.error("tear-off-tab failed", err);
+    }
+  }, [tabs.length, closeTab]);
+
+  // Reorder tabs in response to TabBar drag. `from` is the original index of
+  // the dragged tab, `to` is the destination index in the post-move array
+  // (TabBar normalizes to/drop-side, so we don't have to do arithmetic here).
+  // If the dragged tab was the active one, `activeTabId` doesn't need to
+  // change because we reorder by id, not by tracking position.
+  const reorderTabs = useCallback((from, to) => {
+    setTabs((prev) => {
+      if (from === to || from < 0 || from >= prev.length) return prev;
+      const clampedTo = Math.max(0, Math.min(to, prev.length));
+      if (clampedTo === from) return prev;
+      const next = prev.slice();
+      const [moved] = next.splice(from, 1);
+      next.splice(clampedTo, 0, moved);
+      return next;
+    });
+  }, []);
 
   // Full workbench tab: clicking the workbench's "exit" button turns the
   // current studio tab back into a homepage tab.
@@ -1231,7 +1331,6 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
       title: "对话",
       icon: "chat",
       iconSrc: LAUNCHER_ICONS.chat,
-      color: "#111827",
       onClick: () => openApp({
         type: "chat",
         title: "对话",
@@ -1263,7 +1362,7 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
               resultCollapsed: false,
               assistantId: selectedAssistantId || "",
             });
-      return { key: app.key, title: app.title, icon: app.icon, iconSrc, color: app.color, onClick };
+      return { key: app.key, title: app.title, icon: app.icon, iconSrc, onClick };
     }),
     // Excalidraw online whiteboard — opens as a NEW in-app tab with the
     // built-in browser (Electron <webview>), NOT the system browser. The
@@ -1273,7 +1372,6 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
       title: "Excalidraw",
       icon: "default",
       iconSrc: excalidrawIcon,
-      color: "#8b949e",
       onClick: () => {
         createTab({
           type: "browser",
@@ -1291,7 +1389,6 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
       title: "Anatomy Atelier",
       icon: "default",
       iconSrc: anatomyIcon,
-      color: "#6b7280",
       onClick: () => {
         createTab({
           type: "browser",
@@ -1310,7 +1407,6 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
       title: "AI 热点",
       icon: "default",
       iconSrc: aihotIcon,
-      color: "#3FD9D6",
       onClick: () => {
         createTab({
           type: "browser",
@@ -1745,9 +1841,34 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
       onActivate={activateExisting}
       onClose={closeTab}
       onAdd={() => createTab({ type: "homepage" })}
+      onGoHome={goHome}
+      onReorder={reorderTabs}
+      onTearOff={tearOffTab}
       onMinimize={() => window.hermes?.windowControls?.minimize?.()}
       onToggleMaximize={() => window.hermes?.windowControls?.toggleMaximize?.()}
       onCloseWindow={() => window.hermes?.windowControls?.close?.()}
+    />
+  );
+
+  // App-level IconRail — used by the studio / browser early returns (those
+  // branches never go through ChatShell, which is where the chat-side
+  // IconRail lives with TTS / context-usage buttons driven by ChatShell
+  // state). All panel states (sidebar / result / browser) are owned by App
+  // (lines 996–1004), so this version is fully functional in every tab
+  // that renders it — not a no-op placeholder. Buttons that need ChatShell
+  // state (TTS / context-usage / skills / wechat-bind) are still left out;
+  // they live on the chat-side IconRail inside ChatShell.
+  const iconRail = (
+    <IconRail
+      resultPanelOpen={resultPanelOpen}
+      onToggleResultPanel={() => setResultPanelOpen((o) => !o)}
+      onToggleResultPanelCollapse={() => setResultPanelCollapsed((o) => !o)}
+      resultPanelCollapsed={resultPanelCollapsed}
+      browserPanelOpen={browserPanelOpen}
+      onToggleBrowserPanel={toggleBrowserPanel}
+      onOpenSettings={() => setShowSettings(true)}
+      sidebarOpen={sidebarOpen}
+      onToggleSidebar={() => setSidebarOpen((o) => !o)}
     />
   );
 
@@ -1798,6 +1919,9 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
       <ErrorBoundary>
         <div className="app">
           {topBar}
+          {/* Browser tabs are fullscreen <webview>; the global IconRail
+              (result panel / browser panel / sidebar / settings) is
+              irrelevant in that context — hide it. */}
           <div className="tab-content">
             <div className="browser-tab-host">
               <BrowserPanel fullscreen initialUrl={activeTab.browserUrl || ""} />
@@ -1814,6 +1938,10 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
       <ErrorBoundary>
         <div className="app">
           {topBar}
+          {/* Workbench tabs (漫剧工作台 / 论文重写) own their own nav
+              (剧本/资产/分镜/成片 + 角色/场景/道具 etc.) — the global
+              IconRail (result panel / browser panel / skills / settings)
+              is irrelevant in that creative context. */}
           <div className="tab-content">
             <div className="workbench-host">
               <StudioWorkbench
@@ -1823,6 +1951,7 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
                 model={model}
                 backendStatus={backendStatus}
                 onRun={runStudioWorkflow}
+                liveRunId={activeTab.runId || null}
               />
             </div>
           </div>
@@ -1836,7 +1965,13 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
     <ErrorBoundary>
       <div className="app">
         {topBar}
+        {/* ChatShell path renders its own full IconRail (with TTS / context
+            buttons driven by ChatShell state). On the launcher (homepage)
+            path, ChatShell is hidden via chat-host display:none — so we
+            render the App-level simplified iconRail here too, otherwise
+            the launcher page has no left chrome. */}
         <div className="tab-content">
+          {activeTab.type === "homepage" && iconRail}
           <>
               <div className="chat-host" style={{ display: activeTab.type === "homepage" ? "none" : "flex" }}>
         <ChatShell
@@ -1898,6 +2033,7 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
           paperRuns={paperRuns}
           onOpenWechatBind={() => setShowWechatBind(true)}
           wechatStatus={wechatStatus}
+          onOpenLiveStudio={openLiveStudio}
         />
               </div>
               {activeTab.type === "homepage" && (

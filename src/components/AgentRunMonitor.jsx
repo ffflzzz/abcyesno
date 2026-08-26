@@ -63,7 +63,7 @@ function useLiveView(task) {
  * artifacts" without switching to the tasks tab. Collapsible; expands to the
  * full node timeline + artifact grid inline.
  */
-export default function AgentRunMonitor({ task, onStop, onOpenTaskDetail, onDismiss }) {
+export default function AgentRunMonitor({ task, onStop, onOpenTaskDetail, onOpenStudio, onDismiss }) {
   const [expanded, setExpanded] = useState(false);
   const view = useLiveView(task);
   const si = statusInfo(task.status);
@@ -124,6 +124,15 @@ export default function AgentRunMonitor({ task, onStop, onOpenTaskDetail, onDism
         </div>
 
         <div className="arm-actions" onClick={(e) => e.stopPropagation()}>
+          {onOpenStudio && task.workflowId && (
+            <button
+              className="arm-btn"
+              title="在 StudioWorkbench 里查看节点/产物"
+              onClick={() => onOpenStudio(task)}
+            >
+              <Icon name="monitor" size={13} /> 工作台
+            </button>
+          )}
           {isActive && onStop && (
             <button className="arm-btn" title="停止任务" onClick={() => onStop(task.id)}>
               <Icon name="stop" size={13} /> 停止

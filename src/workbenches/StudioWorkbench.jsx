@@ -914,7 +914,7 @@ function EditConsole({ timeline, shotCfg, shots, shotState, selectedClip, totalD
   );
 }
 
-export default function StudioWorkbench({ manifest, session, onExit, model, backendStatus, onRun }) {
+export default function StudioWorkbench({ manifest, session, onExit, model, backendStatus, onRun, liveRunId = null }) {
   // Module-level cache key: every workflowId gets its own persistent state.
   const cacheKey = manifest?.id || "__default_studio__";
 
@@ -1166,6 +1166,20 @@ export default function StudioWorkbench({ manifest, session, onExit, model, back
 // tasks can be re-run — instead of being silently stuck on "运行中" (Bug 2).
 useEffect(() => {
     const saved = loadPersistedState();
+    // Opening via the chat AgentRunMonitor「工作台」button passes liveRunId
+    // pointing at a background task that is already streaming workflow.*
+    // events into the contract eventBus. On a first open the local cache has
+    // NO record of this runId (saved.runId is null or a different run), so
+    // without this branch the workbench misses RUN_STARTED (already emitted)
+    // and never renders node progress / artifacts. Route the runId into
+    // pendingReplayRef so the dedicated remount-replay effect drains
+    // getContractEvents(liveRunId) and rebuilds topology/trace/tasks/artifacts.
+    if (liveRunId) {
+      setRunId(liveRunId);
+      setRunState("running");
+      pendingReplayRef.current = liveRunId;
+      return;
+    }
     if (!saved) return;
     if (saved.project) setProject(saved.project);
     if (saved.phase) setPhase(saved.phase);

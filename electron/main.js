@@ -439,6 +439,71 @@ ipcMain.handle('detach-result-panel', (_event, opts) => {
   return { success: true, reused: false };
 });
 
+// ── Tab tear-off (Phase 1: browser + Phase 2: studio) ──
+// Renders a single torn-off tab in its own BrowserWindow, reusing the same
+// backend as the main window. browser → webview; studio → workbench (with
+// workflowId forwarded). See docs/TAB_TEAROFF_SPEC.md.
+function createTearOffWindow(payload = {}) {
+  const { type = 'browser', title = '', browserUrl = '', workflowId = '', assistantId = '' } = payload;
+  const params = new URLSearchParams({
+    panel: 'tab',
+    type,
+    browserUrl: browserUrl || '',
+    workflowId: workflowId || '',
+    assistantId: assistantId || '',
+  });
+  const url = `file:///${path.join(__dirname, '..', 'dist', 'index.html').replace(/\\/g, '/')}?${params.toString()}`;
+  const win = new BrowserWindow({
+    width: 1100,
+    height: 800,
+    minWidth: 480,
+    minHeight: 360,
+    backgroundColor: '#0f1419',
+    title: title || 'Abcyesno',
+    show: false,
+    icon: path.join(__dirname, 'bach-icon.png'),
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      webviewTag: true,
+      backgroundThrottling: false,
+    },
+  });
+  wireDevToolsHotkey(win);
+  win.once('ready-to-show', () => {
+    win.center();
+    win.show();
+  });
+  win.webContents.on('render-process-gone', (_e, details) => {
+    log('main', `tear-off render-process-gone: reason=${details.reason} exitCode=${details.exitCode}`);
+  });
+  win.on('closed', () => allWindows.delete(win));
+  allWindows.add(win);
+  win.loadURL(url);
+  return win;
+}
+
+ipcMain.handle('tear-off-tab', (_event, payload) => {
+  const { type = 'browser', browserUrl = '', workflowId = '' } = payload || {};
+  // Only http(s) URLs are allowed for browser tabs — a `file://` payload
+  // could otherwise be injected into the detached window's address.
+  if (type === 'browser' && browserUrl && !/^https?:\/\//i.test(browserUrl)) {
+    return { success: false, error: 'invalid browser url' };
+  }
+  const key = `tab=${type}|url=${browserUrl || ''}|wf=${workflowId || ''}`;
+  for (const w of allWindows) {
+    if (w.__detachKey === key) {
+      if (w.isMinimized()) w.restore();
+      w.focus();
+      return { success: true, reused: true };
+    }
+  }
+  const win = createTearOffWindow(payload || {});
+  win.__detachKey = key;
+  return { success: true, reused: false };
+});
+
 // ── Custom title bar window controls ──
 // Each renderer TopBar owns its own window's controls. We resolve the target
 // window from the IPC event sender so the same handlers work for the main

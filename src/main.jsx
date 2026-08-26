@@ -35,6 +35,17 @@ function parseBootMode() {
     if (panel === 'result') {
       return { mode: 'result', workflowId: '' };
     }
+    if (panel === 'tab') {
+      // Torn-off tab window. Phase 1: browser. Phase 2: studio (carries
+      // workflowId so the workbench can load the right manifest).
+      return {
+        mode: 'tab',
+        type: p.get('type') || 'browser',
+        browserUrl: p.get('browserUrl') || '',
+        workflowId: p.get('workflowId') || '',
+        assistantId: p.get('assistantId') || '',
+      };
+    }
   } catch (_) {}
   return { mode: 'main', workflowId: '' };
 }
@@ -187,7 +198,9 @@ const boot = parseBootMode();
 const Root =
   boot.mode === 'result'
     ? <DetachedApp mode="result" />
-    : <Bootstrap />;
+    : boot.mode === 'tab'
+      ? <DetachedApp mode="tab" type={boot.type} browserUrl={boot.browserUrl} workflowId={boot.workflowId} assistantId={boot.assistantId} />
+      : <Bootstrap />;
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <TtsProvider>

@@ -135,6 +135,9 @@ contextBridge.exposeInMainWorld('hermes', {
   // window" gesture.
   detachResultPanel: (opts) => ipcRenderer.invoke('detach-result-panel', opts || {}),
 
+  // Tear-off a tab into its own window (Phase 1: browser tabs only).
+  tearOffTab: (payload) => ipcRenderer.invoke('tear-off-tab', payload || {}),
+
   // Event subscriptions
   on,
   off,

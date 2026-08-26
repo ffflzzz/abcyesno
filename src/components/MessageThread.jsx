@@ -3,10 +3,8 @@ import Icon from "./Icon.jsx";
 import { Virtuoso } from "react-virtuoso";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import AgentVerboseTimeline from "./AgentVerboseTimeline.jsx";
 import ThinkingIndicator from "./ThinkingIndicator.jsx";
 import ArtifactPreview from "./ArtifactPreview.jsx";
-import ToolCard from "./ToolCard.jsx";
 import TerminalToolCard from "./TerminalToolCard.jsx";
 import TypewriterText from "./TypewriterText.jsx";
 import ApprovalBubble from "./ApprovalBubble.jsx";
@@ -737,7 +735,9 @@ function isKawaiiSpinnerPhrase(text) {
 /**
  * ThinkingTranscript — shows the model's real reasoning tokens (thinkingText)
  * streamed from the backend. Renders as inline streaming text (no card/bubble).
- * Auto-collapses when the agent moves past the thinking phase.
+ * Default expanded so reasoning is visible during thinking AND during/after
+ * the text-generation phase (click to collapse when you don't want it taking
+ * vertical space).
  */
 function ThinkingTranscript({ text, collapsed = false }) {
   const ref = useRef(null);
@@ -750,21 +750,15 @@ function ThinkingTranscript({ text, collapsed = false }) {
 
   if (!text || !text.trim()) return null;
 
-  // When collapsed, show a small expandable hint line
-  if (collapsed) {
-    return (
-      <div className="thinking-inline-collapsed">
-        <span className="thinking-dim-icon">💭</span>
-        <span className="thinking-dim-text">思考过程已折叠</span>
-      </div>
-    );
-  }
-
   return (
-    <div className="thinking-inline" ref={ref} onScroll={(e) => {
-      const el = e.currentTarget;
-      pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
-    }}>
+    <div
+      className={`thinking-inline ${collapsed ? "collapsed" : ""}`}
+      ref={ref}
+      onScroll={(e) => {
+        const el = e.currentTarget;
+        pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+      }}
+    >
       <div className="thinking-inline-text">{text}</div>
     </div>
   );
@@ -907,6 +901,40 @@ function estimatedHeight(row) {
   return 80; // message
 }
 
+// ProgressLine — WorkBuddy / Codex style blockquote for a single tool call.
+// Replaces the old ToolCard list inside ToolsRow's expanded view: each tool
+// becomes one inline line with a status marker, the tool name, the args
+// preview, and a short result summary — readable as plain text rather than
+// a structured timeline card.
+function ProgressLine({ m, status }) {
+  const marker =
+    status === "running" ? "…" :
+    status === "error" || status === "interrupted" ? "✗" :
+    "✓";
+  const args = (m.args || "").replace(/\n+/g, " ").trim();
+  const argsPreview = args.length > 80 ? args.slice(0, 80) + "…" : args;
+  const hasResult = m.result !== undefined && m.result !== null;
+  const resultText = hasResult
+    ? (typeof m.result === "string" ? m.result : JSON.stringify(m.result)).replace(/\n+/g, " ").trim()
+    : "";
+  const resultPreview = resultText.length > 200 ? resultText.slice(0, 200) + "…" : resultText;
+  return (
+    <div className={`progress-line progress-${status}`}>
+      <span className="progress-marker">{marker}</span>
+      <span className="progress-text">
+        <span className="progress-tool">{m.toolName || "tool"}</span>
+        {argsPreview && <code className="progress-args">{argsPreview}</code>}
+        {m.durationMs !== undefined && m.durationMs !== null && (
+          <span className="progress-meta">{m.durationMs}ms</span>
+        )}
+        {resultPreview && (
+          <div className="progress-result">{resultPreview}</div>
+        )}
+      </span>
+    </div>
+  );
+}
+
 function ToolsRow({ items, assistantAvatar, loading, isLastRow, toolStatus = {}, onImageClick, onViewInSidebar }) {
   const toolsRunning = loading && isLastRow;
   const hasRunning = items.some(m => mapStatus(m.status) === "running");
@@ -966,41 +994,31 @@ function ToolsRow({ items, assistantAvatar, loading, isLastRow, toolStatus = {},
           <span className={`tool-summary-chevron ${expanded ? "expanded" : ""}`}><Icon name="chevron" size={12} style={{ transform: expanded ? "rotate(90deg)" : "rotate(0deg)" }} /></span>
         </div>
         {expanded && (
-          <div className="tool-group expanded">
+          <div className="progress-stream">
               {items.map((m, i) => {
                 const mStatus = mapStatus(m.status);
-                // A terminal tool that launched a background PTY session gets a
-                // live interactive xterm pane (agent.terminal.output routed by
-                // process_id); plain terminal calls keep the classic ToolCard.
+                // A terminal tool that launched a background PTY session keeps
+                // its live interactive xterm pane; the inline blockquote-style
+                // progress line below it shows the call/result summary.
                 if ((m.toolName === "terminal" || m.toolName === "terminal_tool") && m.processId) {
                   return (
-                    <TerminalToolCard
-                      key={m.id || `tool-${i}`}
-                      toolName={m.toolName || "terminal"}
-                      status={mStatus}
-                      result={m.result !== undefined && m.result !== null ? m.result : m.content}
-                      durationMs={m.durationMs}
-                      terminalChunks={m.terminalChunks || []}
-                      processId={m.processId}
-                      interactive
-                      terminalClosed={!!m.terminalClosed}
-                      defaultExpanded={mStatus === "running" || mStatus === "in_progress"}
-                    />
+                    <div key={m.id || `term-${i}`}>
+                      <TerminalToolCard
+                        toolName={m.toolName || "terminal"}
+                        status={mStatus}
+                        result={m.result !== undefined && m.result !== null ? m.result : m.content}
+                        durationMs={m.durationMs}
+                        terminalChunks={m.terminalChunks || []}
+                        processId={m.processId}
+                        interactive
+                        terminalClosed={!!m.terminalClosed}
+                        defaultExpanded={mStatus === "running" || mStatus === "in_progress"}
+                      />
+                      <ProgressLine m={m} status={mStatus} />
+                    </div>
                   );
                 }
-                return (
-                  <ToolCard
-                    key={m.id || `tool-${i}`}
-                    toolName={m.toolName || "tool"}
-                    args={m.args}
-                    result={m.result !== undefined && m.result !== null ? m.result : m.content}
-                    status={mStatus}
-                    durationMs={m.durationMs}
-                    inlineDiff={m.inlineDiff}
-                    generating={toolStatus[m.toolName || "tool"]?.generating}
-                    defaultExpanded={mStatus === "running" || mStatus === "in_progress"}
-                  />
-                );
+                return <ProgressLine key={m.id || `line-${i}`} m={m} status={mStatus} />;
               })}
           </div>
         )}
@@ -1228,7 +1246,10 @@ function MessageThread({ messages = [], loading, streamPhase, thinkingText, reas
                   </div>
                 )}
                 {!spinnerText && (
-                  <ThinkingTranscript text={thinkingText} collapsed={!isLastRow || streamPhase === "text_generating"} />
+                  <ThinkingTranscript
+                    text={thinkingText}
+                    collapsed={!isLastRow}
+                  />
                 )}
                 {stalled && (
                   <div className="btc-stall-warning">
@@ -1315,8 +1336,11 @@ function MessageThread({ messages = [], loading, streamPhase, thinkingText, reas
                 onCancel={onCancelEdit}
               />
             ) : isThinkingInline ? (
-              // Inline thinking: compact indicator only. No TPP/ST — those
-              // belong in the header bar and workflow sidebar, not chat bubbles.
+              // Inline thinking: compact spinner + workflow progress AND the
+              // full ThinkingTranscript (previously only the spinner showed,
+              // making the thinking text invisible once text_generating kicked
+              // in). Both rows stay mounted so the user can watch reasoning
+              // accumulate while the typed reply streams in below.
               <>
                 <div className="bubble-thinking-compact">
                   <div className="btc-line">
@@ -1336,6 +1360,7 @@ function MessageThread({ messages = [], loading, streamPhase, thinkingText, reas
                     </div>
                   )}
                 </div>
+                <ThinkingTranscript text={thinkingText} collapsed={false} />
                 <ArtifactPreview toolMessages={toolMessages} compact onViewInSidebar={() => onOpenPreviewUrl && onOpenPreviewUrl("tab:artifacts")} />
               </>
             ) : isStreamingText ? (

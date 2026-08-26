@@ -90,6 +90,7 @@ export default function ChatLayout({
   liveTask = null,
   onStopLiveTask = () => {},
   onOpenLiveTaskDetail = () => {},
+  onOpenLiveStudio = () => {},
   onDismissLiveTask = () => {},
   // Context-usage modal state is owned by ChatShell (so the IconRail can open
   // it); ChatLayout only renders the modal from these props.
@@ -265,6 +266,7 @@ export default function ChatLayout({
           task={liveTask}
           onStop={onStopLiveTask}
           onOpenTaskDetail={onOpenLiveTaskDetail}
+          onOpenStudio={onOpenLiveStudio}
           onDismiss={onDismissLiveTask}
         />
       )}
