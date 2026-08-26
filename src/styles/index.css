@@ -787,6 +787,14 @@ body {
   min-height: 0;
   background: var(--bg);
 }
+/* The chat-layout surface (background behind the composer + message area)
+   must match the chat-body/composer white in light mode. With the default
+   var(--bg) = #f5f7fa it shows up as a faint gray seam around the composer
+   (and below it, around AgentRunMonitor) — exactly the "输入框后面的
+   chatlayout 背景有色差" the user reported. Dark mode keeps var(--bg). */
+[data-theme="light"] .chat-layout {
+  background: var(--bg-elevated);
+}
 
 .chat-header {
   display: flex;
