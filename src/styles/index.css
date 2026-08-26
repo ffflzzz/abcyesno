@@ -5292,6 +5292,15 @@ body {
   background: var(--panel-2);
   border-color: var(--border);
 }
+/* Light-mode pill highlight: keep the background transparent so the
+   composer reads as one flat white surface; only swap text + border color
+   (hover/active states). Without this, the .panel-2 hover background
+   shows up as a gray patch under the toolbar pills, breaking the
+   "all-one-color" composer. */
+[data-theme="light"] .composer-pill-btn:hover:not(:disabled) {
+  background: transparent;
+  border-color: var(--border);
+}
 .composer-pill-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
