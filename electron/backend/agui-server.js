@@ -991,7 +991,11 @@ function createAgUIServer(getGatewayClient, storage, options) {
     // died mid-loop ("goal 会中断"). The gateway now emits status.update
     // heartbeats during judging plus explicit goal.continue / goal.complete
     // signals; 180s here is only the last-resort backstop for a wedged loop.
-    const { goalMode = false, idleMs = Number(process.env.ABC_AGUI_GOAL_IDLE_MS || 180000) } = opts;
+    //
+    // 2026-08-27 (third incident): 实测回合内静默——单 API 调用 49.9s、单
+    // terminal 工具 167.9s —— 180s 兜底仍会误杀长命令。循环正常结束由
+    // goal.complete 显式信号驱动，idle 抬到 600s 纯粹防脱轨。
+    const { goalMode = false, idleMs = Number(process.env.ABC_AGUI_GOAL_IDLE_MS || 600000) } = opts;
     const translator = createTurnTranslator(res, encoder, { ...ctx, hermesSessionId }, { multiRound: goalMode });
 
     const promise = new Promise((resolve, reject) => {
@@ -1357,14 +1361,27 @@ function createAgUIServer(getGatewayClient, storage, options) {
       // The turn can stay open for a long time when a workflow pauses at a
       // human-in-the-loop approval gate (the graph waits on the control-file
       // channel until the user decides). Default to 30 min; override via env.
-      const turnTimeoutMs = Number(process.env.ABC_AGUI_TURN_TIMEOUT || 1800000);
+      //
+      // /goal 模式的硬超时必须按"整个 Ralph 循环"计量而不是单回合：
+      // 2026-08-26 实测一个 20-turn 预算的 goal 跑了 42 分钟（23:09→23:51），
+      // 30 分钟硬超时会在循环中段把 SSE 掐掉。goal 的优雅收尾由显式
+      // goal.complete 信号负责，硬超时只是防脱轨兜底，给到 6 小时。
+      const turnTimeoutMs = goalMode
+        ? Number(process.env.ABC_AGUI_GOAL_TURN_TIMEOUT || 6 * 60 * 60 * 1000)
+        : Number(process.env.ABC_AGUI_TURN_TIMEOUT || 1800000);
       // Phase 2: when a /goal kickoff is in flight, the gateway recurses into
       // multiple message.start/complete cycles (Ralph-style loop). The
       // translator must mint a fresh messageId each round and the turn waiter
       // must NOT resolve on the first `message.complete` — use an idle timer
       // instead so subsequent rounds keep flowing into SSE.
       const waitOpts = goalMode
-        ? { goalMode: true, idleMs: Number(process.env.ABC_AGUI_GOAL_IDLE_MS || 30000) }
+        // idleMs 必须与 waitForHermesTurn 的默认值保持一致。
+        // 2026-08-27 两连击：① 这里曾硬编码 30000，覆盖了函数内改过的
+        // 180000 默认值；② 实测 goal 回合内的真实静默间隔：单个 API 调用
+        // 49.9s（reasoning 不流式时）、单个 terminal 工具 167.9s（长命令
+        // 无 chunk）——180s 兜底仍可能误杀，抬到 600s。循环的正常结束
+        // 由 goal.complete / goal.continue 显式信号驱动，idle 只是兜底。
+        ? { goalMode: true, idleMs: Number(process.env.ABC_AGUI_GOAL_IDLE_MS || 600000) }
         : undefined;
       const { promise: turnPromise, translator } = waitForHermesTurn(
         client, hermesSessionId, ctx, res, encoder, turnTimeoutMs, waitOpts
