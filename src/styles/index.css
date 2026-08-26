@@ -5020,6 +5020,22 @@ body {
 .composer-shell:focus-within {
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.24), 0 0 0 2px rgba(230, 237, 243, 0.18);
 }
+
+/* In light mode the heavy box-shadow makes the composer look like a
+   floating card against the white chat body, creating a visible gray seam.
+   Drop the shadow and use a thin border so the composer blends into the
+   surrounding chrome (consistent with sidebar / topbar). Keep the focus
+   state (slightly stronger shadow + accent ring) so the user can still
+   tell when the input is active. */
+[data-theme="light"] .composer-shell {
+  background: var(--bg-elevated);
+  box-shadow: none;
+  border: 1px solid var(--border);
+}
+[data-theme="light"] .composer-shell:focus-within {
+  box-shadow: none;
+  border-color: var(--accent);
+}
 .composer-shell.drag-over {
   background: rgba(230, 237, 243, 0.06);
   border-style: dashed;
