@@ -1763,6 +1763,8 @@ function createAgUIServer(getGatewayClient, storage, options) {
         height: body.height || 768,
         num_frames: body.num_frames || 81,
         frame_rate: body.frame_rate || 24,
+        seconds: body.seconds || undefined,
+        aspect_ratio: body.aspect_ratio || undefined,
       });
       return res.json({ ok: true, url });
     } catch (e) {

@@ -1860,15 +1860,27 @@ useEffect(() => {
           if (raw) charRefs.push(raw);
         }
       }
+      // agnes-video-2.5-flash: 竖屏/横屏由 project.res 决定 aspect_ratio，时长
+      // 由该镜 shotCfg 决定（clamp 到 flash 的 "4"-"12"）。首尾帧以数组形式传
+      // [first, last]，后端据此走 keyframe 模式做端点锚定（修复旧版单字符串
+      // 传 keyframes 被 Array.isArray 判定丢弃、尾帧从未生效的问题）。
+      const resMatch = (project.res || "1080x1920").match(/(\d+)\s*[x×*]\s*(\d+)/);
+      let aspectRatio = "9:16";
+      if (resMatch) {
+        const rw = parseInt(resMatch[1], 10);
+        const rh = parseInt(resMatch[2], 10);
+        aspectRatio = rh > rw ? "9:16" : "16:9";
+      }
+      const first = st.firstFrameUrl || st.imgPath || st.imgUrl || undefined;
+      const last = st.lastFrameUrl || undefined;
+      const durSec = Math.min(12, Math.max(4, Math.round(shotCfg[k]?.dur || project.sec || 4)));
       const j = await api("generate-video", {
         prompt,
-        image: st.firstFrameUrl || st.imgPath || st.imgUrl || undefined,
-        keyframes: st.lastFrameUrl || undefined,
+        image: first,
+        keyframes: first && last ? [first, last] : undefined,
         reference_images: charRefs.length ? charRefs : undefined,
-        width: 1152,
-        height: 768,
-        num_frames: 81,
-        frame_rate: 24,
+        seconds: String(durSec),
+        aspect_ratio: aspectRatio,
       });
       setShotState((prev) => ({
         ...prev,
@@ -1880,7 +1892,7 @@ useEffect(() => {
         },
       }));
     },
-    [api, shotState, project.style, project.scenes, assetImgs.characterViews]
+    [api, shotState, project.style, project.scenes, assetImgs.characterViews, shotCfg, project.res, project.sec]
   );
 
   const onScriptChange = useCallback((k, val, field = "script") => {

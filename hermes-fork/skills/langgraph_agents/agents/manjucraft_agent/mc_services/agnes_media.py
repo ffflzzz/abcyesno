@@ -14,13 +14,22 @@ import httpx
 
 BASE_URL = os.environ.get("AGNES_BASE_URL", "https://apihub.agnes-ai.com/v1").rstrip("/")
 IMAGE_MODEL = "agnes-image-2.1-flash"
-VIDEO_MODEL = "agnes-video-v2.0"
+# agnes-video-2.5-flash (https://www.agnes-ai.com/zh-Hans/docs/agnes-video-25-flash):
+#   mode in {"text","keyframe","reference"}, seconds "4"-"12", size fixed "720P",
+#   aspect_ratio in {21:9,16:9,4:3,1:1,3:4,9:16}. keyframe mode takes
+#   first_frame/last_frame (endpoint-pinned, native support); reference mode
+#   takes images (<=5). The old agnes-video-v2.0 width/height/num_frames/
+#   frame_rate knobs are mapped inside create_video() so call sites stay stable.
+VIDEO_MODEL = "agnes-video-2.5-flash"
 MOCK = bool(os.environ.get("MANJUCRAFT_AGENT_MOCK"))
 
-# Whether the Agnes video model accepts ``reference_images`` (character/identity
-# anchors). Currently FALSE — the model ignores them, so we plumb the param
-# through but do NOT send it. Flip to True once a video model supports it; no
-# other code change is then required for multi-view character consistency.
+# Whether the video model accepts ``reference_images`` (character/identity
+# anchors) via mode="reference". flash DOES support images (<=5), BUT reference
+# mode is mutually exclusive with first/last-frame anchoring: a shot already
+# carries a character-bible keyframe as first_frame, and that first frame IS
+# the identity anchor. Switching to reference mode would drop the endpoint
+# anchor, so we keep this False for the normal per-shot path. Left as a
+# forward-compat hook for a future "no-keyframe, character-driven" mode.
 VIDEO_SUPPORTS_REFERENCE_IMAGES = False
 
 # ---------------------------------------------------------------------------
@@ -205,6 +214,45 @@ def _data_uri_from_file(path: str) -> str:
     return f"data:{mime};base64,{b64}"
 
 
+# Standard aspect ratios supported by agnes-video-2.5-flash (size is fixed at
+# "720P"; the aspect_ratio picks the output pixel dimensions).
+_ASPECT_RATIOS: dict[str, float] = {
+    "21:9": 21 / 9,
+    "16:9": 16 / 9,
+    "4:3": 4 / 3,
+    "1:1": 1.0,
+    "3:4": 3 / 4,
+    "9:16": 9 / 16,
+}
+
+
+def _aspect_ratio_for_dims(width: int, height: int) -> str:
+    """Map video width/height to the closest flash aspect_ratio."""
+    if width <= 0 or height <= 0:
+        return "16:9"
+    ratio = width / height
+    best = min(_ASPECT_RATIOS.items(), key=lambda kv: abs(kv[1] - ratio))
+    return best[0]
+
+
+def _seconds_for_duration(num_frames: int, frame_rate: int) -> str:
+    """Map num_frames/frame_rate to the flash ``seconds`` string ("4"-"12")."""
+    fps = max(1, frame_rate)
+    seconds = int(round(num_frames / fps))
+    seconds = max(4, min(12, seconds))
+    return str(seconds)
+
+
+def _frame_ref(p: str) -> str:
+    """Normalize a frame/media reference to a value the flash API accepts.
+
+    flash expects media reachable by the Agnes service; local keyframes are
+    only available as files, so pass them as data URIs (same as the v2.0 path).
+    http(s) and data: URLs pass through untouched.
+    """
+    return p if p.startswith("http") or p.startswith("data:") else _data_uri_from_file(p)
+
+
 def _mock_gray_png(path: str) -> str:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -341,7 +389,19 @@ async def create_video(
     timeout: float = 60.0,
     api_key: str | None = None,
 ) -> str:
-    """Create an async video task. Returns video_id.
+    """Create an async video task with agnes-video-2.5-flash. Returns video_id.
+
+    flash drops the old width/height/num_frames/frame_rate knobs in favor of
+    ``mode`` + ``seconds`` + ``size`` + ``aspect_ratio``. We keep the legacy
+    call signature (so batch_generate_video / the Node bridge keep passing the
+    same args) and map to the flash contract here:
+
+      * keyframes [first, last] -> mode="keyframe", first_frame + last_frame
+      * keyframes [first]        -> mode="keyframe", first_frame only
+      * image (single frame)     -> mode="keyframe", first_frame only
+      * neither                  -> mode="text"
+      * (width, height)          -> aspect_ratio
+      * (num_frames, frame_rate) -> seconds (clamped to "4"-"12")
 
     ``api_key`` lets callers pick the primary (Token Plan) or fallback (public)
     key. When omitted, the primary AGNES_API_KEY is used.
@@ -349,36 +409,33 @@ async def create_video(
     body: dict = {
         "model": VIDEO_MODEL,
         "prompt": prompt,
-        "width": width,
-        "height": height,
-        "num_frames": num_frames,
-        "frame_rate": frame_rate,
+        "seconds": _seconds_for_duration(num_frames, frame_rate),
+        "size": "720P",
+        "aspect_ratio": _aspect_ratio_for_dims(width, height),
     }
-    if keyframes:
-        # 关键帧动画：文档参数表声明顶层 `mode` 可取 "keyframes"，示例又把
-        # mode 与 image 数组放在 extra_body 里。两种写法都发出去，确保网关
-        # 无论读顶层还是 extra_body 都能识别。image 数组始终走 extra_body
-        # （文档示例如此；顶层 image 是单图图生视频字段）。
-        kf_images = [
-            p if p.startswith("http") or p.startswith("data:") else _data_uri_from_file(p)
-            for p in keyframes
-        ]
-        body["mode"] = "keyframes"
-        body["extra_body"] = {"image": kf_images, "mode": "keyframes"}
+    if keyframes and len(keyframes) >= 2:
+        # Endpoint-pinned transition: first+last frames (native flash support).
+        body["mode"] = "keyframe"
+        body["first_frame"] = _frame_ref(keyframes[0])
+        body["last_frame"] = _frame_ref(keyframes[1])
+    elif keyframes and len(keyframes) == 1:
+        body["mode"] = "keyframe"
+        body["first_frame"] = _frame_ref(keyframes[0])
     elif image:
-        body["image"] = image if image.startswith("http") or image.startswith("data:") else _data_uri_from_file(image)
-        body["mode"] = "ti2vid"
+        # Single first-frame anchor (img2vid equivalent).
+        body["mode"] = "keyframe"
+        body["first_frame"] = _frame_ref(image)
+    else:
+        body["mode"] = "text"
 
-    # Character/identity reference anchors for consistency. No-op while the
-    # Agnes video model does not accept them (VIDEO_SUPPORTS_REFERENCE_IMAGES).
-    # Plumbed now so a future model can consume multi-view character refs
-    # without rewiring the call sites.
+    # Character/identity reference anchors. flash supports mode="reference" +
+    # images (<=5), but that mode is mutually exclusive with first/last-frame
+    # anchoring — and every shot already carries a character-bible keyframe as
+    # first_frame, which IS the identity anchor. Keep this a no-op (see
+    # VIDEO_SUPPORTS_REFERENCE_IMAGES) so we never lose the endpoint anchor.
     if reference_images and VIDEO_SUPPORTS_REFERENCE_IMAGES:
-        body.setdefault("extra_body", {})
-        body["extra_body"]["reference_images"] = [
-            p if p.startswith("http") or p.startswith("data:") else _data_uri_from_file(p)
-            for p in reference_images
-        ]
+        body["mode"] = "reference"
+        body["images"] = [_frame_ref(p) for p in reference_images[:5]]
 
     auth_key = api_key or _primary_api_key()
     async with httpx.AsyncClient(timeout=timeout) as client:
@@ -392,14 +449,18 @@ async def create_video(
 
 
 async def poll_video(video_id: str, *, timeout: float = 600.0, interval: float = 5.0, api_key: str | None = None) -> dict:
-    """Poll until the video task completes or fails (endpoint derived from BASE_URL)."""
+    """Poll until the video task completes or fails (endpoint derived from BASE_URL).
+
+    flash requires ``model_name`` on the poll for keyframe/reference tasks (a
+    bare video_id lookup only works for mode="text"); we always send it.
+    """
     auth_key = api_key or _primary_api_key()
     deadline = time.time() + timeout
     async with httpx.AsyncClient(timeout=30) as client:
         while time.time() < deadline:
             resp = await client.get(
                 _poll_base(),
-                params={"video_id": video_id},
+                params={"video_id": video_id, "model_name": VIDEO_MODEL},
                 headers={"Authorization": f"Bearer {auth_key}"},
             )
             resp.raise_for_status()

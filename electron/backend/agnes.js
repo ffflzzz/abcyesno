@@ -91,6 +91,33 @@ function fileToDataUri(src) {
   return `data:${mime};base64,${buf.toString('base64')}`;
 }
 
+// agnes-video-2.5-flash (https://www.agnes-ai.com/zh-Hans/docs/agnes-video-25-flash)
+const VIDEO_MODEL = 'agnes-video-2.5-flash';
+
+function aspectRatioForDims(width, height) {
+  const ratios = [
+    ['21:9', 21 / 9],
+    ['16:9', 16 / 9],
+    ['4:3', 4 / 3],
+    ['1:1', 1],
+    ['3:4', 3 / 4],
+    ['9:16', 9 / 16],
+  ];
+  if (!width || !height) return '16:9';
+  const r = width / height;
+  let best = ratios[0];
+  for (const [label, val] of ratios) {
+    if (Math.abs(val - r) < Math.abs(best[1] - r)) best = [label, val];
+  }
+  return best[0];
+}
+
+function secondsForDuration(numFrames, frameRate) {
+  const fps = Math.max(1, frameRate || 24);
+  const s = Math.max(4, Math.min(12, Math.round((numFrames || 0) / fps)));
+  return String(s);
+}
+
 // ── Image 2.1 Flash ──────────────────────────────────────────────────────
 // POST {IMAGE_BASE}/images/generations
 //   body: { model, prompt, size, ratio, extra_body:{ response_format:"url" } }
@@ -128,50 +155,57 @@ async function generateImage({ prompt, size = '2K', ratio = '1:1' }, key) {
 // 429 / quota-exceeded, transparently retry with AGNES_FALLBACK_API_KEY (the
 // public key, unlimited seconds but 1 RPM). See generateVideo() below.
 async function _generateVideoWithKey(
-  { prompt, image, keyframes, reference_images, width = 1152, height = 768, num_frames = 81, frame_rate = 24 },
+  { prompt, image, keyframes, reference_images, width = 1152, height = 768, num_frames = 81, frame_rate = 24, seconds, aspect_ratio },
   apiKey
 ) {
   if (!apiKey) throw new Error('AGNES_API_KEY 未配置');
   if (!prompt) throw new Error('prompt 必填');
   // Agnes video API only accepts http(s) URLs or base64 image data. Convert
   // local workspace paths / file:// / abcyesno-local:// before sending.
+  const frameRef = (p) => (/^https?:/i.test(p) || /^data:/i.test(p) ? p : fileToDataUri(p));
   let resolvedImage = image;
   if (resolvedImage && !/^https?:/i.test(resolvedImage) && !/^data:/i.test(resolvedImage)) {
     resolvedImage = fileToDataUri(resolvedImage);
   }
-  // Keyframes (multi-frame) mode: mirror the Python create_video contract --
-  // when both first+last frames are supplied, send them as extra_body image
-  // list with mode:"keyframes" (the top-level `image` is then ignored).
+  // Keyframes: accept either a [first, last] array (Python/agent contract) or a
+  // single URL string (legacy frontend single-shot pass-through).
   let resolvedKeyframes = null;
   if (Array.isArray(keyframes) && keyframes.length) {
-    resolvedKeyframes = keyframes.map((p) =>
-      /^https?:/i.test(p) || /^data:/i.test(p) ? p : fileToDataUri(p)
-    );
+    resolvedKeyframes = keyframes.map(frameRef);
+  } else if (typeof keyframes === 'string' && keyframes) {
+    resolvedKeyframes = [frameRef(keyframes)];
   }
+
+  // agnes-video-2.5-flash drops width/height/num_frames/frame_rate in favor of
+  // mode + seconds + size("720P") + aspect_ratio. Accept explicit seconds/
+  // aspect_ratio when the caller supplies them, else map from the legacy knobs.
   const body = {
-    model: 'agnes-video-v2.0',
+    model: VIDEO_MODEL,
     prompt,
-    width,
-    height,
-    num_frames,
-    frame_rate,
+    seconds: seconds || secondsForDuration(num_frames, frame_rate),
+    size: '720P',
+    aspect_ratio: aspect_ratio || aspectRatioForDims(width, height),
   };
-  if (resolvedKeyframes) {
-    body.extra_body = { image: resolvedKeyframes, mode: 'keyframes' };
+  if (resolvedKeyframes && resolvedKeyframes.length >= 2) {
+    // Endpoint-pinned transition: first + last frames (native flash support).
+    body.mode = 'keyframe';
+    body.first_frame = resolvedKeyframes[0];
+    body.last_frame = resolvedKeyframes[1];
+  } else if (resolvedKeyframes && resolvedKeyframes.length === 1) {
+    body.mode = 'keyframe';
+    body.first_frame = resolvedKeyframes[0];
   } else if (resolvedImage) {
-    body.image = resolvedImage;
+    // Single first-frame anchor (img2vid equivalent).
+    body.mode = 'keyframe';
+    body.first_frame = resolvedImage;
+  } else {
+    body.mode = 'text';
   }
-  // Character/identity reference anchors for consistency. No-op while the Agnes
-  // video model does not accept them (VIDEO_SUPPORTS_REFERENCE_IMAGES=false);
-  // plumbed now so a future model can consume multi-view character refs
-  // without rewiring the call site.
-  const VIDEO_SUPPORTS_REFERENCE_IMAGES = false;
-  if (VIDEO_SUPPORTS_REFERENCE_IMAGES && Array.isArray(reference_images) && reference_images.length) {
-    body.extra_body = body.extra_body || {};
-    body.extra_body.reference_images = reference_images.map((p) =>
-      /^https?:/i.test(p) || /^data:/i.test(p) ? p : fileToDataUri(p)
-    );
-  }
+  // Character/identity reference: flash supports mode="reference" + images
+  // (<=5), but reference mode is mutually exclusive with first/last-frame
+  // anchoring — the per-shot first frame IS the identity anchor. No-op.
+  // (reference_images intentionally unused on the keyframe/text paths.)
+
   const res = await fetch(`${IMAGE_BASE}/videos`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
@@ -182,7 +216,8 @@ async function _generateVideoWithKey(
   const videoId = data && data.video_id;
   if (!videoId) throw new Error('VIDEO 响应缺少 video_id: ' + JSON.stringify(data).slice(0, 300));
 
-  const statusUrl = `${VIDEO_STATUS_BASE}/agnesapi?video_id=${encodeURIComponent(videoId)}`;
+  // flash requires model_name on the poll for keyframe/reference tasks.
+  const statusUrl = `${VIDEO_STATUS_BASE}/agnesapi?video_id=${encodeURIComponent(videoId)}&model_name=${VIDEO_MODEL}`;
   const deadline = Date.now() + 1000 * 60 * 10; // 10 min safety cap
   while (Date.now() < deadline) {
     await sleep(4000);
