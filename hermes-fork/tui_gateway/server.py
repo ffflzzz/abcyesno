@@ -8817,11 +8817,45 @@ def _run_prompt_submit(rid, sid: str, session: dict, text: Any) -> None:
                                 _bg_procs = _gather_bg()
                             except Exception:
                                 _bg_procs = None
-                            decision = goal_mgr.evaluate_after_turn(
-                                raw,
-                                user_initiated=True,
-                                background_processes=_bg_procs,
+                            # 2026-08-26 "goal 中断" fix: the judge call below is
+                            # a synchronous LLM round-trip that can take 30-120s+
+                            # on a reasoning model with a large conversation —
+                            # during which the session emits NOTHING. The AG-UI
+                            # bridge's goal-mode idle timer then closes the SSE
+                            # mid-loop and the frontend thinks the run died.
+                            # Emit a pre-judge status (also resets that idle
+                            # timer) and keep a heartbeat going for the whole
+                            # judge call so long evaluations stay observable.
+                            _emit(
+                                "status.update",
+                                sid,
+                                {"kind": "goal", "text": "⊙ Goal judge 评估目标进度…"},
                             )
+                            _judge_done = threading.Event()
+
+                            def _judge_heartbeat():
+                                while not _judge_done.wait(20.0):
+                                    try:
+                                        _emit(
+                                            "status.update",
+                                            sid,
+                                            {"kind": "goal", "text": "⊙ Goal judge 仍在评估…"},
+                                        )
+                                    except Exception:
+                                        return
+
+                            _judge_hb = threading.Thread(
+                                target=_judge_heartbeat, daemon=True
+                            )
+                            _judge_hb.start()
+                            try:
+                                decision = goal_mgr.evaluate_after_turn(
+                                    raw,
+                                    user_initiated=True,
+                                    background_processes=_bg_procs,
+                                )
+                            finally:
+                                _judge_done.set()
                             verdict_msg = decision.get("message") or ""
                             if verdict_msg:
                                 _emit(
@@ -8833,6 +8867,22 @@ def _run_prompt_submit(rid, sid: str, session: dict, text: Any) -> None:
                                 cont_prompt = decision.get("continuation_prompt") or ""
                                 if cont_prompt:
                                     goal_followup = cont_prompt
+                                    # Terminal/continuation signals let the
+                                    # AG-UI bridge distinguish "loop continues"
+                                    # from "loop ended" instead of guessing via
+                                    # an idle timeout (which both killed live
+                                    # loops AND left completed goals hanging).
+                                    _emit(
+                                        "goal.continue",
+                                        sid,
+                                        {"text": cont_prompt[:200]},
+                                    )
+                            else:
+                                _emit(
+                                    "goal.complete",
+                                    sid,
+                                    {"text": verdict_msg},
+                                )
                 except Exception as _goal_exc:
                     print(
                         f"[tui_gateway] goal continuation hook failed: "

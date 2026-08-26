@@ -143,6 +143,7 @@ function createSessionState(id) {
     stalled: false,
     // ── P1 新增可见状态（深度推理 / 状态行 / 工具进度 / 子 agent / MOA / 用量 / 评审）──
     reasoningText: "",
+    roundReasoningBase: 0,     // /goal 多轮：当前 assistant 轮在 reasoningText 中的起始偏移
     statusLine: "",
     statusKind: "",
     toolStatus: {},            // { [toolName]: { generating, preview } }
@@ -430,13 +431,24 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
         // distinct from the shallow thinking indicator.
         const text = value?.text || "";
         if (!text) return;
-        // Dedup: skip if the new delta is already a suffix of what we have.
-        // Some upstream paths replay the last few tokens (reconnect / duplicate
-        // emit) and without this we'd render the same trailing text twice.
-        if (sess.reasoningText.endsWith(text)) return;
+        // Dedup 只挡多字符重放（reconnect/duplicate emit 会整段重发最后几个
+        // token）；单字符 delta 放行 —— Agnes reasoning_content 是逐字纯增量
+        // （2026-08-26 活体探针实测），无差别 endsWith 去重会吃掉合法的重复
+        // 字符（"9.11"→"9.1"，与 message delta 吃字坑同型）。
+        if (text.length > 1 && sess.reasoningText.endsWith(text)) return;
         sess.phase = "thinking";
         sess.reasoningText += text;
-        publish(sess.id);
+        // 同步绑定到当前 assistant 消息（只取本轮 slice）：这样工具执行阶段
+        // （该消息已不是最后一行，isLast=false 的实时分支不生效）以及历史回看
+        // 时，ReasoningBlock 都能显示本轮推理，而不是等 TEXT_MESSAGE_END 才
+        // 一次性挂上。
+        if (sess.currentAssistantId) {
+          patchMessage(sess, sess.currentAssistantId, {
+            reasoning: sess.reasoningText.slice(sess.roundReasoningBase || 0),
+          });
+        } else {
+          publish(sess.id);
+        }
       } else if (name === "reasoning.snapshot") {
         // Complete reasoning snapshot from the model_progress callback.
         // Only use it as a FALLBACK when we haven't already streamed real
@@ -449,6 +461,21 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
         if (sess.reasoningText && sess.reasoningText.trim()) return;
         sess.phase = "thinking";
         sess.reasoningText = text;
+        sess.roundReasoningBase = 0; // snapshot 是全量替换，本轮偏移归零
+        if (sess.currentAssistantId) {
+          patchMessage(sess, sess.currentAssistantId, { reasoning: sess.reasoningText });
+        } else {
+          publish(sess.id);
+        }
+      } else if (name === "goal.continue") {
+        // /goal judge 判定未达成，下一轮循环已入队 —— 在 judge 空窗期给用户
+        // 明确的"还在跑"反馈（此前这段静默期看起来像 agent 死了）。
+        sess.statusLine = "⊙ Goal 未达成 — 进入下一轮循环…";
+        sess.statusKind = "goal";
+        publish(sess.id);
+      } else if (name === "goal.complete") {
+        sess.statusLine = value?.text || "✓ Goal 完成";
+        sess.statusKind = "goal";
         publish(sess.id);
       } else if (name === "status.update") {
         sess.statusLine = value?.text || "";
@@ -733,6 +760,7 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
           sess.error = null;
           // 复位上一轮残留的 P1 状态
           sess.reasoningText = "";
+          sess.roundReasoningBase = 0;
           sess.statusLine = "";
           sess.statusKind = "";
           sess.toolStatus = {};
@@ -748,6 +776,12 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
         case "TEXT_MESSAGE_START":
           if (ev.role === "assistant") {
             sess.currentAssistantId = ev.messageId;
+            // /goal 多轮模式每轮一个新的 messageId。记录本轮推理在全局
+            // reasoningText 里的起始偏移：reasoningText 本身跨轮保留
+            // （测试与历史回看依赖它不清空），但绑定到消息的 m.reasoning
+            // 只取 slice(roundReasoningBase) —— 否则第 N 轮会累积成
+            // R1+R2+…+RN（2026-08-26 goal 多轮 reasoning 膨胀 bug）。
+            sess.roundReasoningBase = (sess.reasoningText || "").length;
             appendMessage(sess, {
               id: ev.messageId,
               role: "assistant",
@@ -772,6 +806,7 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
           if (ev.messageId) {
             // 把本轮累积的深度推理文本绑定到这条 assistant 消息上，
             // 这样历史消息再次渲染时显示的是它自己的 reasoning，而不是当前全局的。
+            // /goal 多轮：只取 TEXT_MESSAGE_START 之后累积的本轮 slice。
             const target = sess.messages.find((m) => m.id === ev.messageId);
             const hasContent = !!(target && target.content && target.content.trim());
             patchMessage(sess, ev.messageId, {
@@ -781,7 +816,7 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
               ...(hasContent
                 ? {}
                 : { content: "（未收到模型输出，任务可能已被中断）" }),
-              reasoning: sess.reasoningText || "",
+              reasoning: (sess.reasoningText || "").slice(sess.roundReasoningBase || 0),
             });
           }
           sess.currentAssistantId = null;

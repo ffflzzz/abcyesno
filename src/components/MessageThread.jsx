@@ -1298,6 +1298,16 @@ function MessageThread({ messages = [], loading, streamPhase, thinkingText, reas
     const isLast = isLastRow;
     const isStreamingText = isLast && !isUser && loading && streamPhase === "text_generating";
     const isThinkingInline = !isUser && row._thinking; // inline thinking inside this bubble
+    // Live deep-reasoning stream: reasoning.delta 实时 patch 到 m.reasoning
+    // （2026-08-26 起），所以优先用 m.reasoning；reasoningText 仅作兜底。
+    // 此前 ReasoningBlock 只在完成态分支渲染 —— 思考阶段（_thinking 行）和
+    // 文字生成阶段（isStreamingText 行）都看不到推理流，用户反馈"看不到
+    // thinking 的过程"。现在三个分支都能流式显示。
+    const liveReasoning = !isUser
+      ? (m.reasoning && m.reasoning.trim()
+          ? m.reasoning
+          : (isLast && loading && reasoningText && reasoningText.trim() ? reasoningText : ""))
+      : "";
     const isEditing = editingMessageId && m.id === editingMessageId;
     const mctx = mentionCtx[m.id];
     const isMentionUser = isUser && !!mctx?.self;
@@ -1361,14 +1371,22 @@ function MessageThread({ messages = [], loading, streamPhase, thinkingText, reas
                   )}
                 </div>
                 <ThinkingTranscript text={thinkingText} collapsed={false} />
+                {liveReasoning && !isDuplicateReasoning(liveReasoning, "") && (
+                  <ReasoningBlock text={liveReasoning} streaming={true} />
+                )}
                 <ArtifactPreview toolMessages={toolMessages} compact onViewInSidebar={() => onOpenPreviewUrl && onOpenPreviewUrl("tab:artifacts")} />
               </>
             ) : isStreamingText ? (
-              <TypewriterText
-                content={sanitizeMessageContent(normalizeContentForTypewriter(displayContent))}
-                isStreaming={true}
-                onImageClick={handleImageClick}
-              />
+              <>
+                {liveReasoning && !isDuplicateReasoning(liveReasoning, typeof displayContent === "string" ? displayContent : "") && (
+                  <ReasoningBlock text={liveReasoning} streaming={true} />
+                )}
+                <TypewriterText
+                  content={sanitizeMessageContent(normalizeContentForTypewriter(displayContent))}
+                  isStreaming={true}
+                  onImageClick={handleImageClick}
+                />
+              </>
             ) : (
               <>
                 {/* Standalone data-URL images for user messages — rendered as
@@ -1391,26 +1409,15 @@ function MessageThread({ messages = [], loading, streamPhase, thinkingText, reas
                     the model "thinks out loud" first, then the answer follows.
                     `streaming` tells the block whether to auto-collapse once
                     the answer is done (the block itself implements that). */}
-                {!isUser && (
-                  (m.reasoning &&
-                    m.reasoning.trim() &&
-                    !isDuplicateReasoning(m.reasoning, displayContent)) ||
-                  (isLast &&
-                    loading &&
-                    reasoningText &&
-                    reasoningText.trim() &&
-                    !isDuplicateReasoning(reasoningText, displayContent))
-                ) && (
-                  <ReasoningBlock
-                    key="reasoning-block"
-                    text={
-                      m.reasoning && m.reasoning.trim()
-                        ? m.reasoning
-                        : reasoningText
-                    }
-                    streaming={isLast && loading}
-                  />
-                )}
+                {!isUser &&
+                  liveReasoning &&
+                  !isDuplicateReasoning(liveReasoning, displayContent) && (
+                    <ReasoningBlock
+                      key="reasoning-block"
+                      text={liveReasoning}
+                      streaming={isLast && loading}
+                    />
+                  )}
                 {formatContent(displayContent, handleImageClick, onOpenPreviewUrl)}
               </>
             )}

@@ -820,6 +820,18 @@ function createAgUIServer(getGatewayClient, storage, options) {
           break;
         }
 
+        // Explicit /goal loop signals from the tui_gateway judge hook.
+        // goal.continue → another round is queued (also resets the idle
+        // timer naturally); goal.complete → judge said done/paused — the
+        // waitForHermesTurn handler ends the SSE turn on this signal.
+        case 'goal.continue':
+          send({ type: 'CUSTOM', name: 'goal.continue', value: payload || {} });
+          break;
+
+        case 'goal.complete':
+          send({ type: 'CUSTOM', name: 'goal.complete', value: payload || {} });
+          break;
+
         case 'status.update': {
           const kind = payload && typeof payload.kind === 'string' ? payload.kind : '';
           let text = payload && typeof payload.text === 'string' ? payload.text : '';
@@ -972,7 +984,14 @@ function createAgUIServer(getGatewayClient, storage, options) {
     // a goal kickoff that spent >5s before the first event was misjudged as
     // "loop ended", closing SSE and leaving the agent running headless
     // (2026-08-26 "agent 莫名中断" root cause).
-    const { goalMode = false, idleMs = Number(process.env.ABC_AGUI_GOAL_IDLE_MS || 30000) } = opts;
+    //
+    // 2026-08-26 (second incident): 30s was ALSO too short — the /goal judge
+    // (evaluate_after_turn) is a synchronous reasoning-model LLM call between
+    // rounds that can stay silent for 30-120s+ on large histories, so the SSE
+    // died mid-loop ("goal 会中断"). The gateway now emits status.update
+    // heartbeats during judging plus explicit goal.continue / goal.complete
+    // signals; 180s here is only the last-resort backstop for a wedged loop.
+    const { goalMode = false, idleMs = Number(process.env.ABC_AGUI_GOAL_IDLE_MS || 180000) } = opts;
     const translator = createTurnTranslator(res, encoder, { ...ctx, hermesSessionId }, { multiRound: goalMode });
 
     const promise = new Promise((resolve, reject) => {
@@ -1031,6 +1050,17 @@ function createAgUIServer(getGatewayClient, storage, options) {
 
         if (!goalMode && (type === 'message.complete' || type === 'message.end')) {
           cleanup();
+          resolve();
+          return;
+        }
+        if (goalMode && type === 'goal.complete') {
+          // Judge declared the goal done/paused — end the turn gracefully
+          // right away instead of letting the SSE hang until the idle
+          // backstop fires (the gateway emits nothing further in that case,
+          // so the frontend would sit at "工作中…" for minutes otherwise).
+          log('agui-server', 'goal.complete received, ending goal turn');
+          cleanup();
+          translator.finalize('');
           resolve();
           return;
         }
