@@ -958,13 +958,11 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
   const toggleBrowserPanel = useCallback(() => setBrowserPanelOpen((o) => !o), []);
   const openBrowserPanel = useCallback(() => setBrowserPanelOpen(true), []);
 
-  // Auto-open the embedded browser panel when the agent uses a browser_* tool
-  // (browser_navigate / pw_browser_navigate), so the user sees the agent
-  // operate the in-app Chromium live. Fires ONCE per session (browserNotifiedRef)
-  // and only for newly-added tools (seenBrowserToolIdsRef) to avoid re-opening on
-  // history reload. c4abc83 + cd8fc37 (之前) 的版本把这段 useEffect 放在
-  // ChatShell 函数体内，但 ChatShell 永不被渲染（App 实际渲染 <ChatLayout>）→
-  // useEffect 是死代码。必须放在 App 函数体内才能生效。
+  // Auto-open the embedded browser panel when agent uses browser_* / pw_browser_*
+  // tools. c4abc83 修复写在孤儿 ChatShell 函数内（永不被渲染）→ useEffect 死
+  // 代码，所以"自动开浏览器面板从来就没工作过"。本 commit 把 useEffect 移到
+  // App 函数体内（openBrowserPanel/visibleMessages/selectedSessionId/isStreaming
+  // 都在 App scope 可用）真正生效。
   const browserNotifiedRef = useRef(new Set());
   const seenBrowserToolIdsRef = useRef(new Set());
   useEffect(() => {
@@ -994,6 +992,7 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
     browserNotifiedRef.current.add(sid);
     openBrowserPanel();
   }, [visibleMessages, browserPanelOpen, isStreaming, selectedSessionId, openBrowserPanel]);
+
 
   // 论文重写 dashboard 产物（单例轮询，传给 ResultPanel 的「论文产物」tab）。
   // 服务未就绪时静默降级，不干扰其它会话。
