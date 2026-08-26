@@ -26,6 +26,7 @@ import appChatIcon from "./assets/app-chat.png";
 import appManjuIcon from "./assets/app-manju.png";
 import appPaperIcon from "./assets/app-paper.png";
 import aihotIcon from "./assets/aihot.png";
+import anatomyIcon from "./assets/anatomy.png";
 
 // Map of manifest id / special key → vite-imported PNG so the same launcher
 // art shows in BOTH the homepage grid AND the browser-style tab strip.
@@ -37,6 +38,7 @@ const LAUNCHER_ICONS = {
   chat: appChatIcon,
   manjucraft_agent: appManjuIcon,
   paper_rewriter_agent: appPaperIcon,
+  anatomyatelier: anatomyIcon,
 };
 import { sanitizeMessageContent } from "./components/MessageThread.jsx";
 import { useAgentStream } from "./hooks/useAgentStream.js";
@@ -1278,6 +1280,24 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
           title: "Excalidraw",
           iconSrc: excalidrawIcon,
           browserUrl: "https://excalidraw.com/",
+        });
+      },
+    },
+    // Anatomy Atelier — external site opened as an in-app browser tab
+    // (same pattern as Excalidraw: <webview> pinned to the URL, not the
+    // system browser).
+    {
+      key: "anatomyatelier",
+      title: "Anatomy Atelier",
+      icon: "default",
+      iconSrc: anatomyIcon,
+      color: "#6b7280",
+      onClick: () => {
+        createTab({
+          type: "browser",
+          title: "Anatomy Atelier",
+          iconSrc: anatomyIcon,
+          browserUrl: "https://anatomyatelier.vercel.app/zh",
         });
       },
     },
