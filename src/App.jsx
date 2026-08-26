@@ -1904,52 +1904,16 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
     </>
   );
 
-  if (activeTab.type === "browser") {
-    return (
-      <ErrorBoundary>
-        <div className="app">
-          {topBar}
-          {/* Browser tabs are fullscreen <webview>; the global IconRail
-              (result panel / browser panel / sidebar / settings) is
-              irrelevant in that context — hide it. */}
-          <div className="tab-content">
-            <div className="browser-tab-host">
-              <BrowserPanel fullscreen initialUrl={activeTab.browserUrl || ""} />
-            </div>
-          </div>
-        </div>
-        {overlayModals}
-      </ErrorBoundary>
-    );
-  }
-
-  if (activeTab.type === "studio" && activeManifest) {
-    return (
-      <ErrorBoundary>
-        <div className="app">
-          {topBar}
-          {/* Workbench tabs (漫剧工作台 / 论文重写) own their own nav
-              (剧本/资产/分镜/成片 + 角色/场景/道具 etc.) — the global
-              IconRail (result panel / browser panel / skills / settings)
-              is irrelevant in that creative context. */}
-          <div className="tab-content">
-            <div className="workbench-host">
-              <StudioWorkbench
-                manifest={activeManifest}
-                session={session}
-                onExit={exitToHome}
-                model={model}
-                backendStatus={backendStatus}
-                onRun={runStudioWorkflow}
-                liveRunId={activeTab.runId || null}
-              />
-            </div>
-          </div>
-        </div>
-        {overlayModals}
-      </ErrorBoundary>
-    );
-  }
+  // Studio / browser surfaces render as siblings of the ALWAYS-MOUNTED
+  // ChatShell. 2026-08-26 bug: these used to be early `return` branches,
+  // which unmounted ChatShell on every tab switch — useAgentStream's
+  // unmount cleanup then aborted ALL in-flight session streams (agent
+  // "died"), and the concurrent persist storm that followed tore
+  // abcyesno_sessions.json on disk. ChatShell now stays mounted for every
+  // tab type and is only hidden via display:none.
+  const showWorkbench = activeTab.type === "studio" && activeManifest;
+  const showBrowser = activeTab.type === "browser";
+  const chatHostHidden = activeTab.type === "homepage" || showWorkbench || showBrowser;
 
   return (
     <ErrorBoundary>
@@ -1959,11 +1923,13 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
             buttons driven by ChatShell state). On the launcher (homepage)
             path, ChatShell is hidden via chat-host display:none — so we
             render the App-level simplified iconRail here too, otherwise
-            the launcher page has no left chrome. */}
+            the launcher page has no left chrome. Browser tabs (fullscreen
+            <webview>) and workbench tabs (own nav) similarly hide the
+            ChatShell chrome via the hidden chat-host. */}
         <div className="tab-content">
           {activeTab.type === "homepage" && iconRail}
           <>
-              <div className="chat-host" style={{ display: activeTab.type === "homepage" ? "none" : "flex" }}>
+              <div className="chat-host" style={{ display: chatHostHidden ? "none" : "flex" }}>
         <ChatShell
           assistant={assistant}
           session={session}
@@ -2028,6 +1994,24 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
               </div>
               {activeTab.type === "homepage" && (
                 <Launcher apps={homepageApps} />
+              )}
+              {showBrowser && (
+                <div className="browser-tab-host">
+                  <BrowserPanel fullscreen initialUrl={activeTab.browserUrl || ""} />
+                </div>
+              )}
+              {showWorkbench && (
+                <div className="workbench-host">
+                  <StudioWorkbench
+                    manifest={activeManifest}
+                    session={session}
+                    onExit={exitToHome}
+                    model={model}
+                    backendStatus={backendStatus}
+                    onRun={runStudioWorkflow}
+                    liveRunId={activeTab.runId || null}
+                  />
+                </div>
               )}
           </>
         </div>

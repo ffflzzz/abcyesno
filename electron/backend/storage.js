@@ -9,6 +9,61 @@ class Storage {
     this.sessionsFile = path.join(baseDir, 'abcyesno_sessions.json');
     this.threadsFile = path.join(baseDir, 'abcyesno_threads.json');
     this._cache = null;
+    // Per-file promise chains serializing read-modify-write cycles.
+    // 2026-08-26 corruption incident: concurrent fs.writeFile calls on
+    // abcyesno_sessions.json interleaved (flush-on-unmount + onSettled
+    // persist + title updates during a tab-switch unmount storm) and tore
+    // the file — a shorter doc overwrote the head of a longer one, leaving
+    // trailing garbage that broke JSON.parse and blanked the session list.
+    this._locks = new Map();
+  }
+
+  /** Serialize async read-modify-write operations per file. */
+  _withLock(file, fn) {
+    const prev = this._locks.get(file) || Promise.resolve();
+    const run = prev.then(() => fn());
+    this._locks.set(file, run.catch(() => {}));
+    return run;
+  }
+
+  /**
+   * Atomic JSON write: write to a temp file, then rename over the target.
+   * A crash mid-write can never leave a torn target file, and the rename
+   * is a single filesystem op so concurrent readers see old or new, never
+   * a mix. (libuv uses MOVEFILE_REPLACE_EXISTING on Windows.)
+   */
+  async _atomicWriteJson(file, data) {
+    const tmp = `${file}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    await fs.writeFile(tmp, JSON.stringify(data, null, 2), 'utf-8');
+    await fs.rename(tmp, file);
+  }
+
+  /**
+   * Read + parse JSON, tolerating legacy torn files: if the raw content has
+   * extra data after a complete document (the 2026-08-26 corruption shape),
+   * recover by parsing just the first complete document instead of
+   * returning the fallback and losing everything.
+   */
+  async _readJsonSafe(file, fallback) {
+    let raw;
+    try {
+      raw = await fs.readFile(file, 'utf-8');
+    } catch {
+      return fallback;
+    }
+    try {
+      return JSON.parse(raw);
+    } catch (err) {
+      const m = /position (\d+)/.exec(err && err.message || '');
+      if (m) {
+        try {
+          const recovered = JSON.parse(raw.slice(0, Number(m[1])));
+          console.warn(`[storage] recovered torn JSON file ${path.basename(file)} at position ${m[1]}`);
+          return recovered;
+        } catch { /* fall through */ }
+      }
+      return fallback;
+    }
   }
 
   async _ensure() {
@@ -25,7 +80,7 @@ class Storage {
 
   async _save() {
     const data = await this._ensure();
-    await fs.writeFile(this.assistantsFile, JSON.stringify(data, null, 2), 'utf-8');
+    await this._atomicWriteJson(this.assistantsFile, data);
   }
 
   async listAssistants() {
@@ -115,49 +170,39 @@ class Storage {
   }
 
   async listSessions(assistantId) {
-    try {
-      const raw = await fs.readFile(this.sessionsFile, 'utf-8');
-      const data = JSON.parse(raw);
-      const sessions = data.sessions || [];
-      return assistantId ? sessions.filter((s) => s.assistantId === assistantId) : sessions;
-    } catch {
-      return [];
-    }
+    const data = await this._readJsonSafe(this.sessionsFile, null);
+    if (!data) return [];
+    const sessions = data.sessions || [];
+    return assistantId ? sessions.filter((s) => s.assistantId === assistantId) : sessions;
   }
 
   async createSession(assistantId, title, extra) {
-    await fs.mkdir(this.baseDir, { recursive: true });
-    let data;
-    try {
-      const raw = await fs.readFile(this.sessionsFile, 'utf-8');
-      data = JSON.parse(raw);
-    } catch {
-      data = { sessions: [] };
-    }
-    const session = {
-      id: uuidv4(),
-      assistantId,
-      title: title || '新会话',
-      preview: '',
-      updatedAt: Date.now(),
-      messages: [],
-      ...(extra && typeof extra === 'object' ? extra : {}),
-    };
-    data.sessions.push(session);
-    await fs.writeFile(this.sessionsFile, JSON.stringify(data, null, 2), 'utf-8');
-    return session;
+    return this._withLock(this.sessionsFile, async () => {
+      await fs.mkdir(this.baseDir, { recursive: true });
+      const data = (await this._readJsonSafe(this.sessionsFile, null)) || { sessions: [] };
+      if (!Array.isArray(data.sessions)) data.sessions = [];
+      const session = {
+        id: uuidv4(),
+        assistantId,
+        title: title || '新会话',
+        preview: '',
+        updatedAt: Date.now(),
+        messages: [],
+        ...(extra && typeof extra === 'object' ? extra : {}),
+      };
+      data.sessions.push(session);
+      await this._atomicWriteJson(this.sessionsFile, data);
+      return session;
+    });
   }
 
   async deleteSession(id) {
-    let data;
-    try {
-      const raw = await fs.readFile(this.sessionsFile, 'utf-8');
-      data = JSON.parse(raw);
-    } catch {
-      return;
-    }
-    data.sessions = data.sessions.filter((s) => s.id !== id);
-    await fs.writeFile(this.sessionsFile, JSON.stringify(data, null, 2), 'utf-8');
+    return this._withLock(this.sessionsFile, async () => {
+      const data = await this._readJsonSafe(this.sessionsFile, null);
+      if (!data) return;
+      data.sessions = (data.sessions || []).filter((s) => s.id !== id);
+      await this._atomicWriteJson(this.sessionsFile, data);
+    });
   }
 
   async getSession(id) {
@@ -166,18 +211,15 @@ class Storage {
   }
 
   async updateSession(id, patch) {
-    let data;
-    try {
-      const raw = await fs.readFile(this.sessionsFile, 'utf-8');
-      data = JSON.parse(raw);
-    } catch {
-      data = { sessions: [] };
-    }
-    const idx = data.sessions.findIndex((s) => s.id === id);
-    if (idx === -1) return null;
-    data.sessions[idx] = { ...data.sessions[idx], ...patch, updatedAt: Date.now() };
-    await fs.writeFile(this.sessionsFile, JSON.stringify(data, null, 2), 'utf-8');
-    return data.sessions[idx];
+    return this._withLock(this.sessionsFile, async () => {
+      const data = (await this._readJsonSafe(this.sessionsFile, null)) || { sessions: [] };
+      if (!Array.isArray(data.sessions)) data.sessions = [];
+      const idx = data.sessions.findIndex((s) => s.id === id);
+      if (idx === -1) return null;
+      data.sessions[idx] = { ...data.sessions[idx], ...patch, updatedAt: Date.now() };
+      await this._atomicWriteJson(this.sessionsFile, data);
+      return data.sessions[idx];
+    });
   }
 
   /**
@@ -189,54 +231,42 @@ class Storage {
    */
   async appendSessionMessage(id, role, content) {
     const MAX_MESSAGES_PER_SESSION = 200;
-    let data;
-    try {
-      const raw = await fs.readFile(this.sessionsFile, 'utf-8');
-      data = JSON.parse(raw);
-    } catch {
-      return null;
-    }
-    const idx = (data.sessions || []).findIndex((s) => s.id === id);
-    if (idx === -1) return null;
-    const session = data.sessions[idx];
-    session.messages = Array.isArray(session.messages) ? session.messages : [];
-    session.messages.push({ role, content, ts: Date.now() });
-    if (session.messages.length > MAX_MESSAGES_PER_SESSION) {
-      session.messages = session.messages.slice(-MAX_MESSAGES_PER_SESSION);
-    }
-    session.preview = String(content || '').slice(0, 100).replace(/\s+/g, ' ').trim();
-    session.updatedAt = Date.now();
-    await fs.writeFile(this.sessionsFile, JSON.stringify(data, null, 2), 'utf-8');
-    return session;
+    return this._withLock(this.sessionsFile, async () => {
+      const data = await this._readJsonSafe(this.sessionsFile, null);
+      if (!data) return null;
+      const idx = (data.sessions || []).findIndex((s) => s.id === id);
+      if (idx === -1) return null;
+      const session = data.sessions[idx];
+      session.messages = Array.isArray(session.messages) ? session.messages : [];
+      session.messages.push({ role, content, ts: Date.now() });
+      if (session.messages.length > MAX_MESSAGES_PER_SESSION) {
+        session.messages = session.messages.slice(-MAX_MESSAGES_PER_SESSION);
+      }
+      session.preview = String(content || '').slice(0, 100).replace(/\s+/g, ' ').trim();
+      session.updatedAt = Date.now();
+      await this._atomicWriteJson(this.sessionsFile, data);
+      return session;
+    });
   }
 
   async getThreadMapping(threadId) {
     if (!threadId) return null;
-    try {
-      const raw = await fs.readFile(this.threadsFile, 'utf-8');
-      const data = JSON.parse(raw);
-      return data[threadId] || null;
-    } catch {
-      return null;
-    }
+    const data = await this._readJsonSafe(this.threadsFile, null);
+    return data ? data[threadId] || null : null;
   }
 
   async setThreadMapping(threadId, hermesSessionId) {
     if (!threadId) return;
-    await fs.mkdir(this.baseDir, { recursive: true });
-    let data;
-    try {
-      const raw = await fs.readFile(this.threadsFile, 'utf-8');
-      data = JSON.parse(raw);
-    } catch {
-      data = {};
-    }
-    if (!hermesSessionId) {
-      delete data[threadId];
-    } else {
-      data[threadId] = hermesSessionId;
-    }
-    await fs.writeFile(this.threadsFile, JSON.stringify(data, null, 2), 'utf-8');
+    return this._withLock(this.threadsFile, async () => {
+      await fs.mkdir(this.baseDir, { recursive: true });
+      const data = (await this._readJsonSafe(this.threadsFile, null)) || {};
+      if (!hermesSessionId) {
+        delete data[threadId];
+      } else {
+        data[threadId] = hermesSessionId;
+      }
+      await this._atomicWriteJson(this.threadsFile, data);
+    });
   }
 }
 
