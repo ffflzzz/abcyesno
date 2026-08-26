@@ -15,11 +15,16 @@ const { log } = require('./backend/logger');
 // Hermes Python backend location (relative to electron/main.js -> project root)
 const HERMES_FORK = path.join(__dirname, '..', 'hermes-fork');
 
-// Improve compatibility on some Windows GPUs / sandbox configs.
-// GPU acceleration can be re-enabled via env ABC_GPU=1 (e.g. low-end machines
-// that stutter on CPU-composited scrolling/animations with the virtualized
-// message list). Defaults to disabled for maximum compatibility.
-if (process.env.ABC_GPU !== '1' && process.env.ABC_GPU !== 'true') {
+// GPU acceleration is ON by default so WebGL/Three.js sites (Anatomy
+// Atelier 3D models, Excalidraw, any in-app browser tab) render with
+// hardware acceleration instead of CPU SwiftShader software rendering,
+// which makes 3D scenes stutter badly.
+//
+// A handful of Windows GPU / sandbox combos misbehave with GPU on (black
+// screen / renderer crashes). For those, set ABC_GPU=0 (or 'false') to
+// fall back to the old always-disabled behaviour:
+//   setx ABC_GPU 0   # then restart Abcyesno
+if (process.env.ABC_GPU === '0' || process.env.ABC_GPU === 'false') {
   app.commandLine.appendSwitch('disable-gpu');
 }
 app.commandLine.appendSwitch('no-sandbox');
