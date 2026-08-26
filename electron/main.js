@@ -299,7 +299,7 @@ function wireDevToolsHotkey(win) {
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1200,
+    width: 1350,
     height: 800,
     minWidth: 640,
     minHeight: 480,
