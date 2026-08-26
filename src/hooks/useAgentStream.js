@@ -884,6 +884,15 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
   const sendMessage = useCallback(
     async (text, { threadId, assistantId, skillId, model, history, mentions, workspaceDir } = {}) => {
       const sess = getSession(threadId);
+      // 串行化：等上一轮 sendMessage 完全退出（fetch 循环 + finally cleanup），
+      // 避免"按了暂停立即发消息"时旧 reader 还在 background 收 events 与新 run
+      // 撞，导致消息状态错乱 → 空气泡。hermes 端 interrupt 由 stop() 触发。
+      if (sess.sendMutex) {
+        try { await sess.sendMutex; } catch (_) {}
+      }
+      let release;
+      sess.sendMutex = new Promise((r) => { release = r; });
+      try {
       if (!aguiPort) {
         sess.error = "aguiPort 未就绪";
         publish(sess.id);
@@ -1055,6 +1064,9 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
         }
         syncRunning();
       }
+      } finally {
+        release();
+      }
     },
     [aguiPort, getSession, publish, publishNow, handleEvent, settle, syncRunning, resetRunningTools]
   );
@@ -1074,6 +1086,11 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
       if (sess.controller) {
         sess.controller.abort();
         sess.controller = null;
+      }
+      // 通知 hermes 端中断旧 turn（fire-and-forget；后端 10s timeout）。
+      // 不 await：避免 stop 阻塞用户 UI；hermes 端会按 timeout 自动恢复。
+      if (typeof window !== "undefined" && window.hermes && window.hermes.interruptSession && sid) {
+        try { window.hermes.interruptSession(sid); } catch (_) {}
       }
       sess.phase = "idle";
       sess.thinkingText = "";
