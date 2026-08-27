@@ -122,26 +122,8 @@ export default function BrowserPanel({ progress = [], initialUrl = "", fullscree
       return;
     }
     webviewRef.current = wv;
-    // ── 高 DPI 缩放补偿（2026-08-27「页面显示不全，每次手动调比例」）──
-    // Windows 显示缩放 ≠100% 时，<webview> 内容按物理像素渲染再被系统放大
-    // 一次 → 页面整体超大（150% 缩放下约 1.5~2 倍），只能手动 Ctrl-缩小。
-    // 在 dom-ready / did-navigate 按 devicePixelRatio 补偿；用户此后仍可
-    // Ctrl+滚轮微调（per-origin 持久化不受影响）。
-    let zoomCompensated = false;
-    const applyZoomCompensation = () => {
-      if (zoomCompensated) return;
-      const dpr = window.devicePixelRatio || 1;
-      if (dpr <= 1.01) { zoomCompensated = true; return; } // 100% 缩放无需处理
-      try {
-        if (typeof wv.setZoomFactor === 'function') {
-          wv.setZoomFactor(1 / dpr);
-          zoomCompensated = true;
-        }
-      } catch (_) {}
-    };
     const onDomReady = () => {
       setReady(true);
-      applyZoomCompensation();
       syncNavState();
       try {
         if (typeof wv.getWebContentsId === 'function') {
@@ -159,9 +141,6 @@ export default function BrowserPanel({ progress = [], initialUrl = "", fullscree
     const onEvent = (e) => {
       if (e.type === "did-start-loading" || e.type === "did-navigate") {
         setNavigated(true);
-      }
-      if (e.type === "did-navigate") {
-        applyZoomCompensation(); // 每个新导航源都补一次（webview 会在导航后重置缩放）
       }
       if (e.type === "did-navigate" || e.type === "did-navigate-in-page") {
         try {
