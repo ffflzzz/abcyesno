@@ -329,6 +329,15 @@ export default function BrowserPanel({ progress = [], initialUrl = "", fullscree
               partition={partition}
               webpreferences="contextIsolation=true"
               allowpopups
+              /* 2026-08-27「网页显示不全」根因：guest 页面尺寸在创建瞬间被定格
+                 （实测 innerWidth=1078=整窗宽度，面板只有 ~590px），之后元素
+                 CSS 变化不再传导 → 右侧布局被裁、拖手柄"无效"。autosize 让
+                 guest 跟随元素实际尺寸（min/max 给足余量）。 */
+              autosize="on"
+              minwidth="280"
+              minheight="200"
+              maxwidth="4000"
+              maxheight="4000"
             />
             {showHint && (
               <div className="bp-hint">
