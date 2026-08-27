@@ -1975,6 +1975,17 @@ body {
   line-height: 1.4;
 }
 
+/* Backend-silence health line (stream.heartbeat, 2026-08-27): shown when the
+   backend has emitted no events for >45s while the turn is still open. Distinguishes
+   "healthy but quiet" (long terminal command / slow reasoning call) from a dead stream. */
+.btc-health {
+  padding-left: 26px; /* align past spinner */
+  font-size: 12px;
+  color: #d29922;
+  opacity: 0.85;
+  line-height: 1.5;
+}
+
 /* Workflow step progress inside thinking bubble */
 .btc-progress {
   display: inline-flex;

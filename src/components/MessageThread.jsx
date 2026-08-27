@@ -243,6 +243,12 @@ function formatTime(ts) {
  * thinking; hiding every such case made the thinking block disappear entirely
  * (the user reported "看不到模型的thinking 过程"). See #thinking-visible.
  */
+function formatSilentMs(ms) {
+  if (!(ms > 0)) return "0 秒";
+  if (ms >= 60000) return `${Math.floor(ms / 60000)} 分 ${Math.round((ms % 60000) / 1000)} 秒`;
+  return `${Math.round(ms / 1000)} 秒`;
+}
+
 function isDuplicateReasoning(reasoning, content) {
   const r = String(reasoning || "").replace(/\s+/g, " ").trim();
   const c = String(content || "").replace(/\s+/g, " ").trim();
@@ -1028,7 +1034,7 @@ function ToolsRow({ items, assistantAvatar, loading, isLastRow, toolStatus = {},
   );
 }
 
-function MessageThread({ messages = [], loading, streamPhase, thinkingText, reasoningText = "", uiBlocks = [], stalled = false, subagents = [], moaRefs = [], moaAggregating = null, toolStatus = {}, reviewSummary = null, onRetry, onRegenerate, assistant, manifests = [], onOpenPreviewUrl, approval, onRespondApproval, sessionId, onEditMessage, onDeleteMessage, editingMessageId, onSaveEdit, onCancelEdit, onSend }) {
+function MessageThread({ messages = [], loading, streamPhase, thinkingText, reasoningText = "", backendSilentMs = 0, turnElapsedMs = 0, uiBlocks = [], stalled = false, subagents = [], moaRefs = [], moaAggregating = null, toolStatus = {}, reviewSummary = null, onRetry, onRegenerate, assistant, manifests = [], onOpenPreviewUrl, approval, onRespondApproval, sessionId, onEditMessage, onDeleteMessage, editingMessageId, onSaveEdit, onCancelEdit, onSend }) {
   const [lightbox, setLightbox] = useState(null);
   // Stable image-click handler so memoized markdown bubbles (React.memo on
   // CollapsibleMarkdown/MarkdownView) don't re-render on every stream token.
@@ -1219,6 +1225,11 @@ function MessageThread({ messages = [], loading, streamPhase, thinkingText, reas
                     <span className="btc-text">{spinnerText || phaseLabel}</span>
                   </div>
                 )}
+                {backendSilentMs > 45000 && (
+                  <div className="btc-health">
+                    ⏳ 后端已静默 {formatSilentMs(backendSilentMs)} —— 通常是长命令执行或模型思考中（SSE 连接正常）
+                  </div>
+                )}
                 {progressStages.length > 0 && (
                   <div className="btc-workflow-progress">
                     <div className="btc-stage-bar">
@@ -1361,6 +1372,11 @@ function MessageThread({ messages = [], loading, streamPhase, thinkingText, reas
                       : "正在思考…"
                     }</span>
                   </div>
+                  {backendSilentMs > 45000 && (
+                    <div className="btc-health">
+                      ⏳ 后端已静默 {formatSilentMs(backendSilentMs)} —— 通常是长命令执行或模型思考中（SSE 连接正常）
+                    </div>
+                  )}
                   {latestProgress && (
                     <div className="btc-progress">
                       <span className="btc-stage">{latestProgress.stage || latestProgress.step_id}</span>

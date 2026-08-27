@@ -31,6 +31,8 @@ export default function ChatLayout({
   stalled = false,
   // ── P1 新增 ──
   reasoningText = "",
+  backendSilentMs = 0,
+  turnElapsedMs = 0,
   statusLine = "",
   statusKind = "",
   toolStatus = {},
@@ -235,6 +237,8 @@ export default function ChatLayout({
             streamPhase={phase}
             thinkingText={thinkingText}
             reasoningText={reasoningText}
+            backendSilentMs={backendSilentMs}
+            turnElapsedMs={turnElapsedMs}
             uiBlocks={uiBlocks}
             stalled={stalled}
             subagents={subagents}

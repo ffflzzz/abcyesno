@@ -144,6 +144,8 @@ function createSessionState(id) {
     // ── P1 新增可见状态（深度推理 / 状态行 / 工具进度 / 子 agent / MOA / 用量 / 评审）──
     reasoningText: "",
     roundReasoningBase: 0,     // /goal 多轮：当前 assistant 轮在 reasoningText 中的起始偏移
+    backendSilentMs: 0,        // agui 心跳：后端真实事件静默时长（0=未知/刚有事件）
+    turnElapsedMs: 0,          // agui 心跳：当前 turn 已运行时长
     statusLine: "",
     statusKind: "",
     toolStatus: {},            // { [toolName]: { generating, preview } }
@@ -175,6 +177,8 @@ function snapshotOf(s) {
     uiBlocks: s.uiBlocks,
     stalled: s.stalled,
     reasoningText: s.reasoningText,
+    backendSilentMs: s.backendSilentMs,
+    turnElapsedMs: s.turnElapsedMs,
     statusLine: s.statusLine,
     statusKind: s.statusKind,
     toolStatus: s.toolStatus,
@@ -477,6 +481,15 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
         sess.statusLine = value?.text || "✓ Goal 完成";
         sess.statusKind = "goal";
         publish(sess.id);
+      } else if (name === "stream.heartbeat") {
+        // agui 桥 30s 一次的存活心跳（2026-08-27"卡住不知健不健康"）。
+        // sinceLastEventMs = 后端真实事件静默时长：长 terminal 命令（600s
+        // 上限）和慢 reasoning 调用会产生数分钟零事件 —— 有了这个数，前端
+        // 就能区分"健康但安静"和"真的挂了"。
+        sess.backendSilentMs = typeof value?.sinceLastEventMs === "number" ? value.sinceLastEventMs : 0;
+        sess.turnElapsedMs = typeof value?.elapsedMs === "number" ? value.elapsedMs : 0;
+        sess.lastHeartbeatAt = Date.now();
+        publish(sess.id);
       } else if (name === "status.update") {
         sess.statusLine = value?.text || "";
         sess.statusKind = value?.kind || "";
@@ -761,6 +774,8 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
           // 复位上一轮残留的 P1 状态
           sess.reasoningText = "";
           sess.roundReasoningBase = 0;
+          sess.backendSilentMs = 0;
+          sess.turnElapsedMs = 0;
           sess.statusLine = "";
           sess.statusKind = "";
           sess.toolStatus = {};
@@ -1308,6 +1323,8 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
     stalled: snapshot.stalled,
     // ── P1 新增 ──
     reasoningText: snapshot.reasoningText,
+    backendSilentMs: snapshot.backendSilentMs,
+    turnElapsedMs: snapshot.turnElapsedMs,
     statusLine: snapshot.statusLine,
     statusKind: snapshot.statusKind,
     toolStatus: snapshot.toolStatus,

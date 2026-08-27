@@ -287,6 +287,8 @@ function ChatShell({
     dropSession,
     // ── P1 新增 ──
     reasoningText,
+    backendSilentMs,
+    turnElapsedMs,
     statusLine,
     statusKind,
     toolStatus,
@@ -814,6 +816,8 @@ function ChatShell({
         uiBlocks={uiBlocks}
         stalled={stalled}
         reasoningText={reasoningText}
+        backendSilentMs={backendSilentMs}
+        turnElapsedMs={turnElapsedMs}
         statusLine={statusLine}
         statusKind={statusKind}
         toolStatus={toolStatus}
