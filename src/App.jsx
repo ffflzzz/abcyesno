@@ -307,34 +307,37 @@ function ChatShell({
   // 历史坑：本 useEffect 曾被放在 App 函数体内 → visibleMessages 不可见
   // （ReferenceError）；也曾被误删（误判 ChatShell 孤儿）。ChatShell 在
   // App.jsx line 1966 被渲染，不是孤儿。
-  const browserNotifiedRef = useRef(new Set());
   const seenBrowserToolIdsRef = useRef(new Set());
+  const seededBrowserSessionRef = useRef(null);
+  const browserPanelOpenRef = useRef(browserPanelOpen);
+  browserPanelOpenRef.current = browserPanelOpen;
   useEffect(() => {
     const msgs = visibleMessages || [];
-    msgs.forEach((m) => {
-      if (
-        typeof m.toolName === "string" &&
-        (m.toolName.startsWith("browser_") || m.toolName.startsWith("pw_browser_")) &&
-        m.id
-      ) {
-        seenBrowserToolIdsRef.current.add(m.id);
-      }
-    });
-    if (msgs.length === 0) return;
+    const isBrowserTool = (m) =>
+      typeof m?.toolName === "string" &&
+      (m.toolName.startsWith("browser_") || m.toolName.startsWith("pw_browser_")) &&
+      !!m.id;
+    // 会话首次加载/切换：把已有历史里的 browser 工具一次性标记为已见，
+    // 这样 hydrate 回来的旧消息不会误触发弹面板。
+    // 历史坑（2026-08-27）：这段 seed 原来写在每次渲染的无条件 forEach 里，
+    // 把"当前新出现的工具"也立刻标已见 → fresh 过滤永远为空 → 面板从不弹出。
+    if (seededBrowserSessionRef.current !== (selectedSessionId || "")) {
+      seededBrowserSessionRef.current = selectedSessionId || "";
+      seenBrowserToolIdsRef.current = new Set(
+        msgs.filter(isBrowserTool).map((m) => m.id)
+      );
+      return;
+    }
     const freshBrowserTools = msgs.filter(
-      (m) =>
-        typeof m.toolName === "string" &&
-        (m.toolName.startsWith("browser_") || m.toolName.startsWith("pw_browser_")) &&
-        m.id &&
-        !seenBrowserToolIdsRef.current.has(m.id)
+      (m) => isBrowserTool(m) && !seenBrowserToolIdsRef.current.has(m.id)
     );
     if (freshBrowserTools.length === 0) return;
     freshBrowserTools.forEach((m) => seenBrowserToolIdsRef.current.add(m.id));
-    const sid = selectedSessionId || "";
-    if (browserNotifiedRef.current.has(sid)) return;
-    browserNotifiedRef.current.add(sid);
+    // 面板开着就不动；关着（或从没开过）则弹开。用户手动关掉后 agent 再次
+    // 用浏览器时也会重新弹出——比旧版"每会话只弹一次"更符合直觉。
+    if (browserPanelOpenRef.current) return;
     onOpenBrowserPanel();
-  }, [visibleMessages, onOpenBrowserPanel, isStreaming, selectedSessionId]);
+  }, [visibleMessages, onOpenBrowserPanel, selectedSessionId]);
 
   // Permission mode: default (backend "ask") or yolo (session approval bypass).
 
