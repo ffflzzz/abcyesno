@@ -895,6 +895,9 @@ function renderGrouped(messages) {
 function rowKey(row, index) {
   if (row.type === "message") return row.data.id || `msg-${index}`;
   if (row.type === "tools") return `tools-${row.items[0]?.id || index}`;
+  // 运行期拆分行：推理与正文同源一条消息，key 必须区分（2026-08-27）
+  if (row.type === "reasoning-only") return `reasoning-${row.data?.id || index}`;
+  if (row.type === "text-only") return `text-${row.data?.id || index}`;
   return "thinking";
 }
 
@@ -904,6 +907,8 @@ function rowKey(row, index) {
 function estimatedHeight(row) {
   if (row.type === "tools") return 120;
   if (row.type === "thinking") return 48;
+  if (row.type === "reasoning-only") return 140;
+  if (row.type === "text-only") return 100;
   return 80; // message
 }
 
@@ -1190,6 +1195,29 @@ function MessageThread({ messages = [], loading, streamPhase, thinkingText, reas
         r.push({ type: "thinking", phase: streamPhase || "tool_executing" });
       }
     }
+
+    // 2026-08-27「过程展示、结束收纳」补全：回合进行中，若 assistant 消息
+    // （含已流出的正文）后面还跟着工具行，把该消息拆成两行——
+    //   推理行留在原位（时序：先思考），正文行追加到最后（时序：后回答）。
+    // 否则回复文本夹在 thinking 与 tool call 之间，阅读顺序混乱。
+    // 回合结束（loading=false）自动还原为单条完整消息。
+    if (loading) {
+      let lastMsgIdx = -1;
+      r.forEach((row, i) => {
+        if (row.type === "message" && row.data && row.data.role === "assistant") lastMsgIdx = i;
+      });
+      const toolsAfter = lastMsgIdx >= 0 && r.some((row, i) => i > lastMsgIdx && row.type === "tools");
+      if (toolsAfter) {
+        const msgRow = r[lastMsgIdx];
+        const hasText = String(sanitizeMessageContent(msgRow.data.content) || "").trim().length > 0;
+        if (hasText) {
+          r.splice(lastMsgIdx, 1);
+          r.splice(lastMsgIdx, 0, { type: "reasoning-only", data: msgRow.data });
+          r.push({ type: "text-only", data: msgRow.data, _splitText: true });
+        }
+      }
+    }
+
     return r;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages, loading, streamPhase]);
@@ -1344,6 +1372,23 @@ function MessageThread({ messages = [], loading, streamPhase, thinkingText, reas
       );
     }
 
+    if (row.type === "reasoning-only") {
+      // 运行期拆分行：只渲染推理块（正文行被移到工具行之后，时序正确）
+      const m = row.data;
+      return (
+        <div className="message-row assistant">
+          <div className="message-avatar agent-avatar thinking">{assistantAvatar}</div>
+          <div className="message-col">
+            <div className="assistant-body">
+              {m.reasoning && m.reasoning.trim() ? (
+                <ReasoningBlock text={m.reasoning} streaming={loading} />
+              ) : null}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     if (row.type === "tools") {
       // If the only (or last) tool is "clarify", render the interactive
       // question UI instead of the generic tool card.
@@ -1371,6 +1416,8 @@ function MessageThread({ messages = [], loading, streamPhase, thinkingText, reas
 
     // Regular message
     const m = row.data;
+    // 运行期拆分出来的正文行：不再渲染推理块（推理在 reasoning-only 行）
+    const suppressReasoning = !!row._splitText;
     const isUser = m.role === "user";
     const isError = m.isError;
     const isLast = isLastRow;
@@ -1383,7 +1430,7 @@ function MessageThread({ messages = [], loading, streamPhase, thinkingText, reas
     // 此前 ReasoningBlock 只在完成态分支渲染 —— 思考阶段（_thinking 行）和
     // 文字生成阶段（isStreamingText 行）都看不到推理流，用户反馈"看不到
     // thinking 的过程"。现在三个分支都能流式显示。
-    const liveReasoning = !isUser
+    const liveReasoning = !isUser && !suppressReasoning
       ? (m.reasoning && m.reasoning.trim()
           ? m.reasoning
           : (isLast && loading && reasoningText && reasoningText.trim() ? reasoningText : ""))
