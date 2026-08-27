@@ -941,8 +941,11 @@ function ProgressLine({ m, status }) {
   );
 }
 
-function ToolsRow({ items, assistantAvatar, loading, isLastRow, toolStatus = {}, onImageClick, onViewInSidebar }) {
-  const toolsRunning = loading && isLastRow;
+function ToolsRow({ items, assistantAvatar, inCurrentTurn = false, toolStatus = {}, onImageClick, onViewInSidebar }) {
+  // 「当前回合内」= loading 且本行位于最后一条 assistant 消息之后（后面只有
+  // thinking 行也不算结束）。不能用 isLastRow —— 工具全部完成后 thinking 行
+  // 会顶上来把 last 位抢走，导致回合还没结束就提前收纳（2026-08-27）。
+  const toolsRunning = inCurrentTurn;
   const hasRunning = items.some(m => mapStatus(m.status) === "running");
   const allComplete = items.every(m => {
     const s = mapStatus(m.status);
@@ -955,7 +958,8 @@ function ToolsRow({ items, assistantAvatar, loading, isLastRow, toolStatus = {},
   // 2026-08-27 交互约定：运行中自动展开（用户实时看工具明细），回合结束
   // 自动收纳。手动点按头切换后尊重用户选择，直到下一个运行/结束边界
   // （override 重置为 null，重新跟随自动行为）。
-  const phaseRunning = toolsRunning && !allComplete;
+  // 回合进行中就保持展开（即使本行工具已全部完成——回合结束由 loading 收场）
+  const phaseRunning = toolsRunning;
   const prevRunningRef = useRef(phaseRunning);
   const [expandOverride, setExpandOverride] = useState(null); // true=开 false=收 null=跟随自动
   useEffect(() => {
@@ -1170,10 +1174,12 @@ function MessageThread({ messages = [], loading, streamPhase, thinkingText, reas
   // 不能用 isLast（会被工具行挤掉 last 位）判定流式状态，否则工具一启动
   // 推理框就提前折叠（2026-08-27「过程展示、结束收纳」约定）。
   let currentAssistantMsgId = null;
+  let lastAssistantRowIdx = -1;
   for (let i = rows.length - 1; i >= 0; i--) {
     const r = rows[i];
     if (r.type === "message" && r.data && r.data.role === "assistant") {
       currentAssistantMsgId = r.data.id;
+      lastAssistantRowIdx = i;
       break;
     }
   }
@@ -1330,8 +1336,7 @@ function MessageThread({ messages = [], loading, streamPhase, thinkingText, reas
         <ToolsRow
           items={row.items}
           assistantAvatar={assistantAvatar}
-          loading={loading}
-          isLastRow={isLastRow}
+          inCurrentTurn={loading && index > lastAssistantRowIdx}
           toolStatus={toolStatus}
           onImageClick={handleImageClick}
           onViewInSidebar={() => onOpenPreviewUrl && onOpenPreviewUrl("tab:artifacts")}
