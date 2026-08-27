@@ -912,13 +912,38 @@ function estimatedHeight(row) {
 // becomes one inline line with a status marker, the tool name, the args
 // preview, and a short result summary — readable as plain text rather than
 // a structured timeline card.
+// 参数预览去噪（2026-08-27）：executor 传来的 args 含 tool_id/name 等内部
+// 字段，原样打印又长又乱。解析 JSON 后跳过内部键，输出紧凑的 key=value；
+// 非 JSON 则回退到截断的原文。
+function friendlyArgsPreview(raw) {
+  const args = String(raw || "").replace(/\n+/g, " ").trim();
+  try {
+    const obj = JSON.parse(args);
+    if (obj && typeof obj === "object" && !Array.isArray(obj)) {
+      const skip = new Set(["tool_id", "name", "type"]);
+      const parts = [];
+      for (const [k, v] of Object.entries(obj)) {
+        if (skip.has(k)) continue;
+        let val = typeof v === "string" ? v.replace(/\n+/g, " ") : JSON.stringify(v);
+        if (val.length > 120) val = val.slice(0, 120) + "…";
+        parts.push(`${k}=${val}`);
+      }
+      if (parts.length > 0) {
+        const joined = parts.join("  ");
+        return joined.length > 200 ? joined.slice(0, 200) + "…" : joined;
+      }
+    }
+  } catch { /* 非 JSON，走原文截断 */ }
+  return args.length > 160 ? args.slice(0, 160) + "…" : args;
+}
+
 function ProgressLine({ m, status }) {
   const marker =
     status === "running" ? "…" :
     status === "error" || status === "interrupted" ? "✗" :
     "✓";
   const args = (m.args || "").replace(/\n+/g, " ").trim();
-  const argsPreview = args.length > 80 ? args.slice(0, 80) + "…" : args;
+  const argsPreview = friendlyArgsPreview(args);
   const hasResult = m.result !== undefined && m.result !== null;
   const resultText = hasResult
     ? (typeof m.result === "string" ? m.result : JSON.stringify(m.result)).replace(/\n+/g, " ").trim()

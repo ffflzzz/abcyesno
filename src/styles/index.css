@@ -4874,6 +4874,8 @@ body {
   margin: 4px 0 4px 2px;
   padding: 6px 8px 6px 10px;
   border-left: 2px solid var(--border);
+  min-width: 0;
+  max-width: 100%;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -4951,6 +4953,9 @@ body {
   color: var(--muted);
   margin-top: 2px;
   white-space: pre-wrap;
+  /* 长 JSON 无空格也能断行，否则整行画出容器右边界（2026-08-27） */
+  overflow-wrap: anywhere;
+  word-break: break-all;
   opacity: 0.85;
 }
 .tool-card {
