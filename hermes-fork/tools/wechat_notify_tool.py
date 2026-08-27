@@ -49,10 +49,20 @@ def wechat_notify(text: Optional[str] = None) -> str:
     except Exception as exc:
         return tool_error(f"调用微信通知端点失败：{exc}")
 
-    # 桥返回 {ok, error?}；ok=false 时把 error 原样带给模型（iLink 回复窗口
-    # 过期、桥未连接等都从这里透出），由模型如实转告用户。
+    # 桥返回 {ok, queued?, error?}；queued=true 表示回复窗口未激活、
+    # 通知已持久化排队，用户下次从微信发任意一条消息后自动补发——
+    # 这是正常送达路径，不是失败，如实转告即可。
     if data.get("ok"):
         return tool_result(success=True, note="已通过微信桥发送给绑定的微信用户")
+    if data.get("queued"):
+        return tool_result(
+            success=True,
+            queued=True,
+            note=(
+                "微信回复窗口未激活，通知已排队（不会丢）。"
+                "请告知用户：随便给机器人发一条微信（比如「1」），排队的通知会立即补发。"
+            ),
+        )
     return tool_error(f"微信桥发送失败：{data.get('error') or '未知原因'}")
 
 
@@ -71,8 +81,9 @@ WECHAT_NOTIFY_SCHEMA = {
         "注意：\n"
         "- 这是唯一的微信发送方式——不要用 curl/终端发微信通知，"
         "cmd 命令行会把中文绞成乱码。\n"
-        "- 发送依赖微信桥在线且用户近期给机器人发过消息（微信被动回复窗口限制）；"
-        "失败时错误信息会原样返回，请如实告知用户（例如提示先给机器人发条消息）。"
+        "- 微信机器人只能被动回复：发送窗口随用户每条来消息刷新且几分钟内过期。"
+        "若返回 queued=true，表示通知已排队（不会丢），"
+        "用户下次从微信给机器人发任意一条消息后会立即补发——把这个状态如实告诉用户。"
     ),
     "parameters": {
         "type": "object",

@@ -2,7 +2,7 @@ import { createInterface } from 'node:readline';
 import process from 'node:process';
 import { spawnSync } from 'node:child_process';
 import { join, basename } from 'node:path';
-import { unlinkSync, writeFileSync, mkdirSync } from 'node:fs';
+import { unlinkSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 
 import { WeChatApi } from './wechat/api.js';
@@ -304,6 +304,85 @@ export function getLastTurnInfo(): { contextToken: string; userId: string } {
   return lastTurnInfo;
 }
 
+// ---------------------------------------------------------------------------
+// Pending proactive sends — queued when the iLink passive-reply window was
+// closed (no fresh context_token), flushed on the next inbound user message.
+//
+// Why this exists (2026-08-27): iLink bots can only REPLY. The context_token
+// from each inbound message goes stale within minutes and lives only in
+// memory, so a desktop-initiated "notify me when done" that fires minutes
+// later reliably fails with "没有可用的 context_token". The user kept sending
+// activation messages and the agent kept failing — the two events must be
+// CORRELATED in time, which the notify use case can never guarantee. So
+// instead of failing, we park the message and deliver it the moment the user
+// sends anything to the bot. Persisted across restarts (app restarts were
+// the other major token-lost trigger).
+// ---------------------------------------------------------------------------
+
+const PENDING_SENDS_FILE = join(DATA_DIR, 'pending_sends.json');
+const PENDING_SENDS_MAX = 10;
+const PENDING_SENDS_TTL_MS = 24 * 60 * 60 * 1000;
+
+function loadPendingSends(): { text: string; ts: number }[] {
+  try {
+    const parsed = JSON.parse(readFileSync(PENDING_SENDS_FILE, 'utf8'));
+    if (!Array.isArray(parsed)) return [];
+    const now = Date.now();
+    return parsed
+      .filter((x) => x && typeof x.text === 'string' && typeof x.ts === 'number' && now - x.ts < PENDING_SENDS_TTL_MS)
+      .slice(0, PENDING_SENDS_MAX);
+  } catch {
+    return [];
+  }
+}
+
+function savePendingSends(list: { text: string; ts: number }[]): void {
+  try {
+    mkdirSync(DATA_DIR, { recursive: true });
+    writeFileSync(PENDING_SENDS_FILE, JSON.stringify(list), 'utf8');
+  } catch (err) {
+    logger.warn('savePendingSends failed', { error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+export const pendingProactiveSends: { text: string; ts: number }[] = loadPendingSends();
+
+/** Park a proactive send for later flush on the next inbound user message. */
+export function queueProactiveSend(text: string): void {
+  pendingProactiveSends.push({ text, ts: Date.now() });
+  while (pendingProactiveSends.length > PENDING_SENDS_MAX) pendingProactiveSends.shift();
+  const now = Date.now();
+  while (pendingProactiveSends.length && now - pendingProactiveSends[0].ts > PENDING_SENDS_TTL_MS) {
+    pendingProactiveSends.shift();
+  }
+  savePendingSends(pendingProactiveSends);
+}
+
+/**
+ * Try to flush queued proactive sends with a freshly refreshed context_token.
+ * Called from onMessage after lastTurnInfo is updated. On failure the batch
+ * (failed item first) is restored so a later message retries it.
+ */
+export async function flushPendingSends(
+  sender: ReturnType<typeof createSender>,
+  freshToken: string,
+): Promise<void> {
+  if (!pendingProactiveSends.length || !freshToken || !lastTurnInfo.userId) return;
+  const batch = pendingProactiveSends.splice(0, pendingProactiveSends.length);
+  for (let i = 0; i < batch.length; i++) {
+    try {
+      await sender.sendText(lastTurnInfo.userId, freshToken, batch[i].text);
+      logger.info('pending proactive send delivered', { index: i, queuedAt: batch[i].ts });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn('pending proactive send failed, re-queueing remainder', { error: msg, index: i });
+      pendingProactiveSends.push(...batch.slice(i));
+      break;
+    }
+  }
+  savePendingSends(pendingProactiveSends);
+}
+
 /**
  * Embeddable daemon runtime (used by abcyesno's Electron main process via
  * bridge.ts). Returns null when no WeChat account is bound yet.
@@ -380,6 +459,16 @@ export async function createDaemonRuntime(): Promise<DaemonRuntime | null> {
       if (msg.message_type === MessageType.USER) {
         lastTurnInfo.contextToken = msg.context_token ?? lastTurnInfo.contextToken;
         if (msg.from_user_id) lastTurnInfo.userId = msg.from_user_id;
+        // A user message refreshes the passive-reply window — deliver any
+        // proactive sends that were queued while the window was closed.
+        const freshToken = msg.context_token ?? lastTurnInfo.contextToken;
+        if (pendingProactiveSends.length && freshToken) {
+          // fire-and-forget: never block the normal message pipeline on a
+          // queued-notification flush (each send is rate-limited anyway).
+          flushPendingSends(sender, freshToken).catch((err) => {
+            logger.warn('flushPendingSends threw', { error: err instanceof Error ? err.message : String(err) });
+          });
+        }
       }
       if (handlePriorityCommand(msg)) return;
       messageQueue.push(msg);

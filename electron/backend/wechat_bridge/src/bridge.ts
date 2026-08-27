@@ -420,23 +420,36 @@ export function tailLogs(maxLines = 120): string[] {
 }
 
 /**
- * Send a text message to the bound user (used by the "发送测试消息" button).
- * Requires a connected runtime — the context_token comes from the last
- * inbound message stored by send.ts.
+ * Send a text message to the bound user (used by the "发送测试消息" button and
+ * the agent-facing /api/wechat/notify endpoint).
+ *
+ * iLink bots can only REPLY: the context_token comes from the last inbound
+ * message and goes stale within minutes (and is lost on restart/reconnect).
+ * When the window is closed we no longer hard-fail — the message is queued
+ * (persisted in main.ts) and auto-delivered on the user's next WeChat message.
+ * The returned `queued: true` tells the agent to relay that exact expectation.
  */
-export async function sendTestMessage(text: string): Promise<{ ok: boolean; error?: string }> {
-  if (!runtime) return { ok: false, error: '桥接未连接' };
+export async function sendTestMessage(text: string): Promise<{ ok: boolean; queued?: boolean; error?: string }> {
+  const { getLastTurnInfo, queueProactiveSend } = await import('./main.js');
+  if (!runtime) {
+    queueProactiveSend(text);
+    return { ok: false, queued: true, error: '微信桥未连接，通知已排队：桥恢复且用户下次发消息后自动补发' };
+  }
   try {
-    const { getLastTurnInfo } = await import('./main.js');
     const turn = getLastTurnInfo();
     if (!turn.contextToken || !turn.userId) {
-      return { ok: false, error: '没有可用的 context_token，请先从微信发一条消息' };
+      queueProactiveSend(text);
+      return { ok: false, queued: true, error: '微信回复窗口未激活，通知已排队：用户下次从微信给机器人发任意一条消息后自动补发' };
     }
     await runtime.sender.sendText(turn.userId, turn.contextToken, text);
     return { ok: true };
   } catch (err: any) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.warn('sendTestMessage failed', { error: msg });
+    if (/stale session|context_token/i.test(msg)) {
+      queueProactiveSend(text);
+      return { ok: false, queued: true, error: '微信回复窗口已过期，通知已排队：用户下次从微信发任意一条消息后自动补发' };
+    }
     return { ok: false, error: msg };
   }
 }
