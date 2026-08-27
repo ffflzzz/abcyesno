@@ -1091,7 +1091,7 @@ function ToolsRow({ items, assistantAvatar, inCurrentTurn = false, toolStatus = 
   );
 }
 
-function MessageThread({ messages = [], loading, streamPhase, thinkingText, reasoningText = "", backendSilentMs = 0, turnElapsedMs = 0, uiBlocks = [], stalled = false, subagents = [], moaRefs = [], moaAggregating = null, toolStatus = {}, reviewSummary = null, onRetry, onRegenerate, assistant, manifests = [], onOpenPreviewUrl, approval, onRespondApproval, sessionId, onEditMessage, onDeleteMessage, editingMessageId, onSaveEdit, onCancelEdit, onSend }) {
+function MessageThread({ messages = [], loading, streamPhase, thinkingText, reasoningText = "", backendSilentMs = 0, turnElapsedMs = 0, timeline = null, uiBlocks = [], stalled = false, subagents = [], moaRefs = [], moaAggregating = null, toolStatus = {}, reviewSummary = null, onRetry, onRegenerate, assistant, manifests = [], onOpenPreviewUrl, approval, onRespondApproval, sessionId, onEditMessage, onDeleteMessage, editingMessageId, onSaveEdit, onCancelEdit, onSend }) {
   const [lightbox, setLightbox] = useState(null);
   // Stable image-click handler so memoized markdown bubbles (React.memo on
   // CollapsibleMarkdown/MarkdownView) don't re-render on every stream token.
@@ -1173,6 +1173,52 @@ function MessageThread({ messages = [], loading, streamPhase, thinkingText, reas
   // entire data set changed and re-renders all visible items, causing
   // flicker even for unchanged message bubbles.
   const rows = useMemo(() => {
+    // ── agent 时间线渲染（2026-08-27）──
+    // timeline 存在时，当前回合（最后一条 user 消息之后）按 感知→推理→行动→回复
+    // 的实际发生顺序拆段渲染：reasoning 段→ReasoningBlock，tools 段→工具条，
+    // text 段→正文行。历史消息（user 及之前）仍走 renderGrouped。
+    // timeline 为 null（应用重启后的历史会话）回退到旧的合并渲染。
+    if (timeline && timeline.length > 0) {
+      let lastUserIdx = -1;
+      messages.forEach((m, i) => { if (m && m.role === "user") lastUserIdx = i; });
+      if (lastUserIdx >= 0) {
+        const byId = new Map(messages.map((m) => [m.id, m]));
+        const r = renderGrouped(messages.slice(0, lastUserIdx + 1));
+        let realAssistantId = null;
+        for (let i = messages.length - 1; i >= 0; i--) {
+          if (messages[i] && messages[i].role === "assistant") { realAssistantId = messages[i].id; break; }
+        }
+        let toolsBuf = [];
+        const flushTools = () => {
+          if (toolsBuf.length > 0) {
+            r.push({ type: "tools", items: toolsBuf });
+            toolsBuf = [];
+          }
+        };
+        timeline.forEach((seg) => {
+          if (seg.kind === "reasoning") {
+            flushTools();
+            if (seg.text && seg.text.trim()) {
+              r.push({ type: "reasoning-only", data: { id: `tl-r-${r.length}`, reasoning: seg.text, createdAt: seg.ts } });
+            }
+          } else if (seg.kind === "tools") {
+            const items = (seg.ids || []).map((id) => byId.get(id)).filter(Boolean);
+            if (items.length > 0) toolsBuf.push(...items);
+          } else if (seg.kind === "text") {
+            flushTools();
+            if (seg.text && seg.text.trim()) {
+              r.push({ type: "text-only", data: { id: `tl-t-${r.length}`, role: "assistant", content: seg.text, createdAt: seg.ts, _realId: realAssistantId }, _splitText: true, _timeline: true });
+            }
+          }
+        });
+        flushTools();
+        if (loading) {
+          r.push({ type: "thinking", phase: streamPhase || "tool_executing" });
+        }
+        return r;
+      }
+    }
+
     const grouped = renderGrouped(messages);
     const r = [...grouped];
     // Append thinking / progress indicator when agent is busy.
@@ -1406,7 +1452,7 @@ function MessageThread({ messages = [], loading, streamPhase, thinkingText, reas
         <ToolsRow
           items={row.items}
           assistantAvatar={assistantAvatar}
-          inCurrentTurn={loading && index > lastAssistantRowIdx}
+          inCurrentTurn={timeline && timeline.length > 0 ? loading : loading && index > lastAssistantRowIdx}
           toolStatus={toolStatus}
           onImageClick={handleImageClick}
           onViewInSidebar={() => onOpenPreviewUrl && onOpenPreviewUrl("tab:artifacts")}
@@ -1557,7 +1603,7 @@ function MessageThread({ messages = [], loading, streamPhase, thinkingText, reas
           </div>
           {!isEditing && !isThinkingInline && !isStreamingText && (
             <MessageActions
-              message={m}
+              message={row._timeline && m._realId ? { ...m, id: m._realId } : m}
               isUser={isUser}
               cleanedText={typeof displayContent === "string" ? sanitizeMessageContent(displayContent) : ""}
               rawText={typeof displayContent === "string" ? displayContent : ""}

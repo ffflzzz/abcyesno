@@ -33,6 +33,7 @@ export default function ChatLayout({
   reasoningText = "",
   backendSilentMs = 0,
   turnElapsedMs = 0,
+  timeline = null,
   statusLine = "",
   statusKind = "",
   toolStatus = {},
@@ -239,6 +240,7 @@ export default function ChatLayout({
             reasoningText={reasoningText}
             backendSilentMs={backendSilentMs}
             turnElapsedMs={turnElapsedMs}
+            timeline={timeline}
             uiBlocks={uiBlocks}
             stalled={stalled}
             subagents={subagents}

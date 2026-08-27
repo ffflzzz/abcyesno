@@ -144,6 +144,7 @@ function createSessionState(id) {
     // ── P1 新增可见状态（深度推理 / 状态行 / 工具进度 / 子 agent / MOA / 用量 / 评审）──
     reasoningText: "",
     roundReasoningBase: 0,     // /goal 多轮：当前 assistant 轮在 reasoningText 中的起始偏移
+    timeline: null,            // 2026-08-27 agent 时间线：[{kind:'reasoning'|'tools'|'text', ...}]，感知-推理-行动 流水顺序
     backendSilentMs: 0,        // agui 心跳：后端真实事件静默时长（0=未知/刚有事件）
     turnElapsedMs: 0,          // agui 心跳：当前 turn 已运行时长
     statusLine: "",
@@ -177,6 +178,7 @@ function snapshotOf(s) {
     uiBlocks: s.uiBlocks,
     stalled: s.stalled,
     reasoningText: s.reasoningText,
+    timeline: s.timeline,
     backendSilentMs: s.backendSilentMs,
     turnElapsedMs: s.turnElapsedMs,
     statusLine: s.statusLine,
@@ -774,6 +776,7 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
           // 复位上一轮残留的 P1 状态
           sess.reasoningText = "";
           sess.roundReasoningBase = 0;
+          sess.timeline = [];
           sess.backendSilentMs = 0;
           sess.turnElapsedMs = 0;
           sess.statusLine = "";
@@ -814,6 +817,12 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
             if (/^Operation interrupted:/.test(ev.delta)) break;
             if (sess.phase !== "text_generating") sess.phase = "text_generating";
             appendToMessage(sess, ev.messageId, ev.delta);
+            // agent 时间线：正文段（连续正文并入同段）
+            if (Array.isArray(sess.timeline)) {
+              const last = sess.timeline[sess.timeline.length - 1];
+              const seg = last && last.kind === "text" ? last : (() => { const sg = { kind: "text", text: "", ts: Date.now() }; sess.timeline.push(sg); return sg; })();
+              seg.text += ev.delta;
+            }
           }
           break;
 
@@ -839,6 +848,12 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
 
         case "TOOL_CALL_START": {
           sess.phase = "tool_executing";
+          // agent 时间线：行动段（连续工具并入同段）
+          if (Array.isArray(sess.timeline)) {
+            const last = sess.timeline[sess.timeline.length - 1];
+            if (last && last.kind === "tools") last.ids.push(ev.toolCallId);
+            else sess.timeline.push({ kind: "tools", ids: [ev.toolCallId], ts: Date.now() });
+          }
           const toolMsg = {
             id: ev.toolCallId,
             role: "tool",
@@ -1323,6 +1338,7 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
     stalled: snapshot.stalled,
     // ── P1 新增 ──
     reasoningText: snapshot.reasoningText,
+    timeline: snapshot.timeline,
     backendSilentMs: snapshot.backendSilentMs,
     turnElapsedMs: snapshot.turnElapsedMs,
     statusLine: snapshot.statusLine,

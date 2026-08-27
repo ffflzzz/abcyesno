@@ -292,6 +292,7 @@ function ChatShell({
     reasoningText,
     backendSilentMs,
     turnElapsedMs,
+    timeline,
     statusLine,
     statusKind,
     toolStatus,
@@ -829,6 +830,7 @@ function ChatShell({
         reasoningText={reasoningText}
         backendSilentMs={backendSilentMs}
         turnElapsedMs={turnElapsedMs}
+        timeline={timeline}
         statusLine={statusLine}
         statusKind={statusKind}
         toolStatus={toolStatus}
