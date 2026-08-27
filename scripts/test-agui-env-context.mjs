@@ -93,24 +93,18 @@ function check(name, cond, extra = '') {
     });
     return line.includes('connecting') && line.includes('dfb2****a1b2');
   })());
-  check('wechat: connected → notify endpoint with port', (() => {
+  check('wechat: connected → points to wechat_notify tool, forbids curl', (() => {
     const line = buildWechatEnvLine({
       aguiPort: 9123,
       getWechatStatus: () => ({ bound: true, state: 'connected', accountMasked: 'dfb2****a1b2' }),
     });
-    return line.includes('/api/wechat/notify') && line.includes('9123') && line.includes('dfb2****a1b2');
+    return line.includes('wechat_notify') && line.includes('严禁用终端 curl') && line.includes('dfb2****a1b2');
   })());
-  check('wechat: connected via AGUI_PORT env fallback', (() => {
-    const prev = process.env.AGUI_PORT;
-    process.env.AGUI_PORT = '9455';
-    try {
-      const line = buildWechatEnvLine({
-        getWechatStatus: () => ({ bound: true, state: 'connected', accountMasked: 'x' }),
-      });
-      return line.includes('9455');
-    } finally {
-      if (prev === undefined) delete process.env.AGUI_PORT; else process.env.AGUI_PORT = prev;
-    }
+  check('wechat: connected line no longer leaks raw endpoint (tool instead)', (() => {
+    const line = buildWechatEnvLine({
+      getWechatStatus: () => ({ bound: true, state: 'connected', accountMasked: 'x' }),
+    });
+    return !line.includes('/api/wechat/notify');
   })());
   check('wechat line lands inside env block', (() => {
     const line = buildWechatEnvLine({

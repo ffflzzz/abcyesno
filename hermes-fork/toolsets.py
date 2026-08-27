@@ -80,6 +80,9 @@ _HERMES_CORE_TOOLS = [
     # Agent 自渲染 UI 组件（spec: AGENT_UI_RENDER_SPEC.md）——让模型在对话中
     # 主动声明要渲染的结构化组件（table/flowchart/card/progress/action）。
     "render_ui",
+    # 微信通知（abcyesno 微信桥）：模型主动给绑定微信发消息。必须是工具调用
+    # 而非 curl——cmd GBK 代码页会绞碎命令行内联中文（2026-08-27 乱码根因）。
+    "wechat_notify",
 ]
 
 # Webhook events may originate from untrusted third-party content (for example,

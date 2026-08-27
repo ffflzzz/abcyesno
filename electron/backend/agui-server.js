@@ -2035,9 +2035,9 @@ function buildWechatEnvLine(opts) {
   }
   const port = (opts && opts.aguiPort) || process.env.AGUI_PORT || '9121';
   return '- 微信通知：微信桥已连接' + (st.accountMasked ? `（账号 ${st.accountMasked}）` : '') + '。' +
-    `用户要求"微信通知我/完成后发微信"时，用终端工具向 ` +
-    `http://127.0.0.1:${port}/api/wechat/notify 发送 POST 请求（cmd 下 curl 即可），` +
-    `body 为 JSON：{"text":"要通知的内容"}。` +
+    '用户要求"微信通知我/完成后发微信"时，调用 wechat_notify 工具（参数 text）。' +
+    '严禁用终端 curl 发微信——cmd 的 GBK 代码页会把命令行里的中文绞成乱码' +
+    '（2026-08-27 实测）。' +
     '注意：微信发送依赖用户近期给机器人发过消息（iLink 被动回复窗口限制），' +
     '发送失败时把返回的 error 原样告知用户并说明原因。';
 }
