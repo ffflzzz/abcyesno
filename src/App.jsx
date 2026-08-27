@@ -133,6 +133,9 @@ function toStorageMessage(m) {
     status: m.status,
     durationMs: m.durationMs,
     isError: m.isError,
+    // 深度推理文本随消息持久化：否则 run 结束后 hydrateSession 用磁盘快照
+    // （无 reasoning 字段）替换内存消息，思考气泡直接消失（2026-08-27）。
+    reasoning: typeof m.reasoning === "string" ? m.reasoning : "",
   };
 }
 

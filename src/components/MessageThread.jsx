@@ -1269,7 +1269,8 @@ function MessageThread({ messages = [], loading, streamPhase, thinkingText, reas
                   </div>
                 )}
               </div>
-              <ArtifactPreview toolMessages={currentTurnToolMessages} compact onViewInSidebar={() => onOpenPreviewUrl && onOpenPreviewUrl("tab:artifacts")} />
+              {/* ArtifactPreview 已由 ToolsRow 渲染（message-thread 内唯一出口）：
+                  这里再渲染一份会造成运行期「产物 chip 重复出现两次」。 */}
             </div>
           </div>
         </div>
@@ -1390,7 +1391,8 @@ function MessageThread({ messages = [], loading, streamPhase, thinkingText, reas
                 {liveReasoning && !isDuplicateReasoning(liveReasoning, "") && (
                   <ReasoningBlock text={liveReasoning} streaming={true} />
                 )}
-                <ArtifactPreview toolMessages={toolMessages} compact onViewInSidebar={() => onOpenPreviewUrl && onOpenPreviewUrl("tab:artifacts")} />
+                {/* ArtifactPreview 唯一出口在 ToolsRow —— 这里重复渲染会让
+                    运行期产物 chip 出现两次（2026-08-27）。 */}
               </>
             ) : isStreamingText ? (
               <>

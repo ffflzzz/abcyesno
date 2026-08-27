@@ -1539,7 +1539,11 @@ body {
 
 /* 2026-08-27 对齐统一：工具行列撑满标准助手宽度（86% 上限与文本气泡一致），
    让「N 个工具调用」条与深度推理条/回答气泡左右边缘完全对齐、等宽。 */
-.message-row.tool-row .message-col {
+/* 2026-08-27 对齐统一（v2）：所有 assistant 行（含 tool-row，它同时带
+   assistant 类）的列都撑满标准宽度（86% 上限），深度推理条 / 工具调用条 /
+   回答文本三者左右边缘与宽度完全一致。之前只对 tool-row 生效，message 行
+   列仍是内容自适应 —— 无正文时推理条窄于工具条。 */
+.message-row.assistant .message-col {
   flex: 1 1 auto;
 }
 
