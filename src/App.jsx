@@ -336,11 +336,16 @@ function ChatShell({
     );
     if (freshBrowserTools.length === 0) return;
     freshBrowserTools.forEach((m) => seenBrowserToolIdsRef.current.add(m.id));
+    // 只有 agent 正在运行时出现的新 browser 工具才弹面板。2026-08-27 修复：
+    // 切会话瞬间 seed 的是空/未水合列表，紧接着历史 hydrate 进来的旧工具
+    // 消息被误判为"新调用"→ 一进会话面板就自动弹开。历史回看（!loading）
+    // 一律不弹。
+    if (!isStreaming) return;
     // 面板开着就不动；关着（或从没开过）则弹开。用户手动关掉后 agent 再次
     // 用浏览器时也会重新弹出——比旧版"每会话只弹一次"更符合直觉。
     if (browserPanelOpenRef.current) return;
     onOpenBrowserPanel();
-  }, [visibleMessages, onOpenBrowserPanel, selectedSessionId]);
+  }, [visibleMessages, onOpenBrowserPanel, selectedSessionId, isStreaming]);
 
   // Permission mode: default (backend "ask") or yolo (session approval bypass).
 
