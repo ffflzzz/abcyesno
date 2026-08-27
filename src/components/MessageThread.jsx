@@ -979,6 +979,63 @@ function ProgressLine({ m, status }) {
  * 同一块固定高度滚动区；自动滚到底，用户上滚即暂停。回合结束后该块
  * 整体消失，由折叠的推理条 + 工具条 + 完整回复气泡接管。
  */
+/**
+ * ConsoleToolSegment — 过程流里的工具段：保留「汇总条 + 手动收纳」交互。
+ * 头部：⚙ N 个工具调用 · 名称×次数 · 状态徽标 · 折叠箭头；
+ * 体部：固定高度 progress-stream 流式滚动（自动滚底、上滚暂停）。
+ */
+function ConsoleToolSegment({ seg, messages }) {
+  const byId = useMemo(() => new Map((messages || []).map((m) => [m.id, m])), [messages]);
+  const items = (seg.ids || []).map((id) => byId.get(id)).filter(Boolean);
+  const hasRunning = items.some((m) => m.status === "running" || m.status === "in_progress");
+  const [open, setOpen] = useState(true);
+  const streamRef = useRef(null);
+  const userScrolledRef = useRef(false);
+  useEffect(() => {
+    const el = streamRef.current;
+    if (!el || !open) return;
+    if (!userScrolledRef.current) el.scrollTop = el.scrollHeight;
+  });
+  const handleScroll = useCallback(() => {
+    const el = streamRef.current;
+    if (!el) return;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+    userScrolledRef.current = !nearBottom;
+  }, []);
+  const groups = {};
+  for (const t of items) {
+    const name = t.toolName || "tool";
+    (groups[name] = groups[name] || []).push(t);
+  }
+  const toolNames = Object.keys(groups);
+  return (
+    <div className="agent-console-tools">
+      <div className="agent-console-tools-head" onClick={() => setOpen((o) => !o)}>
+        <span className="act-tools-icon"><Icon name={hasRunning ? "settings" : "check-circle"} size={12} /></span>
+        <span className="act-tools-count">{items.length} 个工具调用</span>
+        <span className="act-tools-names">
+          {toolNames.map((n) => `${n}×${groups[n].length}`).join(" · ")}
+        </span>
+        <span className={`act-tools-status ${hasRunning ? "running" : "complete"}`}>
+          {hasRunning ? "执行中…" : "全部完成"}
+        </span>
+        <span className={`act-tools-chevron ${open ? "expanded" : ""}`}>
+          <Icon name="chevron" size={11} style={{ transform: open ? "rotate(90deg)" : "rotate(0deg)" }} />
+        </span>
+      </div>
+      {open && (
+        <div className="progress-stream" ref={streamRef} onScroll={handleScroll}>
+          {items.map((m) => {
+            const st = m.status === "running" || m.status === "in_progress" ? "running"
+              : m.isError ? "error" : "complete";
+            return <ProgressLine key={m.id} m={m} status={st} />;
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AgentProcessStream({ timeline, messages }) {
   const ref = useRef(null);
   const userScrolledRef = useRef(false);
@@ -1003,16 +1060,7 @@ function AgentProcessStream({ timeline, messages }) {
           ) : null;
         }
         if (seg.kind === "tools") {
-          const lines = (seg.ids || []).map((id) => {
-            const m = byId.get(id);
-            if (!m) return null;
-            const st = m.status === "running" || m.status === "in_progress" ? "running"
-              : m.isError ? "error" : "complete";
-            return <ProgressLine key={id} m={m} status={st} />;
-          });
-          return lines.some(Boolean) ? (
-            <div key={`t-${i}`} className="agent-console-tools">{lines}</div>
-          ) : null;
+          return <ConsoleToolSegment key={`t-${i}`} seg={seg} messages={messages} />;
         }
         return seg.text && seg.text.trim() ? (
           <div key={`x-${i}`} className="agent-console-text">{seg.text}</div>

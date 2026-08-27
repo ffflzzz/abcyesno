@@ -468,6 +468,11 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
         sess.phase = "thinking";
         sess.reasoningText = text;
         sess.roundReasoningBase = 0; // snapshot 是全量替换，本轮偏移归零
+        // agent 时间线：非流式思考快照（部分回合模型不流式吐 reasoning，
+        // 只有 reasoning.available 兜底）——否则过程流里 thinking 行缺失
+        if (Array.isArray(sess.timeline)) {
+          sess.timeline.push({ kind: "reasoning", text, ts: Date.now() });
+        }
         if (sess.currentAssistantId) {
           patchMessage(sess, sess.currentAssistantId, { reasoning: sess.reasoningText });
         } else {
