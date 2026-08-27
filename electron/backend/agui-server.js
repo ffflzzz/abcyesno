@@ -999,6 +999,8 @@ function createAgUIServer(getGatewayClient, storage, options) {
     const translator = createTurnTranslator(res, encoder, { ...ctx, hermesSessionId }, { multiRound: goalMode });
 
     const promise = new Promise((resolve, reject) => {
+      const turnStartedAt = Date.now();
+      let lastBackendEventAt = Date.now();
       const timer = setTimeout(() => {
         cleanup();
         translator.finalize('');
@@ -1023,10 +1025,31 @@ function createAgUIServer(getGatewayClient, storage, options) {
         }, idleMs);
       };
 
+      // Liveness heartbeat (2026-08-27 "卡住不知健不健康"): while a turn is
+      // open the frontend gets a stream.heartbeat every 30s carrying how long
+      // the BACKEND has been silent. Long terminal commands (600s hard cap)
+      // and slow reasoning-model calls produce minutes of zero events — the
+      // user had no way to tell "healthy but quiet" from "dead". This event
+      // proves the SSE bridge is alive and quantifies the quiet; it does NOT
+      // touch the goal idle timer (that tracks real backend events only).
+      let hbTimer = setInterval(() => {
+        if (settled) return;
+        sendSSE(res, encoder, {
+          type: 'CUSTOM',
+          name: 'stream.heartbeat',
+          value: {
+            runId: ctx.runId,
+            elapsedMs: Date.now() - turnStartedAt,
+            sinceLastEventMs: Date.now() - lastBackendEventAt,
+          },
+        });
+      }, 30000);
+
       const cleanup = () => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        if (hbTimer) { clearInterval(hbTimer); hbTimer = null; }
         if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
         client.off('event', handler);
         // Also remove disconnect listeners
@@ -1046,6 +1069,7 @@ function createAgUIServer(getGatewayClient, storage, options) {
         // Reset idle timer on every event so a stream of events keeps the
         // SSE open. (Non-goal runs ignore the timer — first complete resolves.)
         armIdleTimer();
+        lastBackendEventAt = Date.now();
         try {
           translator.handleEvent(type, params);
         } catch (err) {
@@ -1388,10 +1412,12 @@ function createAgUIServer(getGatewayClient, storage, options) {
       );
       await attachTurnImages(hermesSessionId);
       let wechatLine = '';
+      let appLines = [];
       try { wechatLine = buildWechatEnvLine(options); } catch (_) { wechatLine = ''; }
+      try { appLines = getAppContextLines(); } catch (_) { appLines = []; }
       await client.request('prompt.submit', {
         session_id: hermesSessionId,
-        text: prependEnvContext(ctx, text, { wechatLine }),
+        text: prependEnvContext(ctx, text, { wechatLine, appLines }),
       }, 120000);
       await turnPromise;
       return translator;
@@ -2016,14 +2042,78 @@ function buildWechatEnvLine(opts) {
     '发送失败时把返回的 error 原样告知用户并说明原因。';
 }
 
+// ── App self-awareness block (data-driven) ───────────────────────────────
+// The agent runs inside the Abcyesno desktop UI, but the backend runtime has
+// no intrinsic knowledge of that — without these lines it behaves like a bare
+// headless runtime ("我不知道自己在什么应用里"). This block gives it a compact
+// model of the app it lives in: what the user sees, which UI-level tools
+// exist, and where the other capability entries live.
+// Data-driven: HERMES_HOME/app-context.json overrides the bundled
+// app-context.default.json so the block can be tuned without code edits.
+// Invalid/missing files fall through to the bundled default; a broken block
+// must never break prompt submission.
+function parseAppContext(jsonText) {
+  try {
+    const parsed = JSON.parse(jsonText);
+    if (!parsed || !Array.isArray(parsed.appLines)) return null;
+    const lines = parsed.appLines.filter((l) => typeof l === 'string' && l.trim());
+    return lines.length > 0 ? lines : null;
+  } catch {
+    return null;
+  }
+}
+
+const APP_CONTEXT_CACHE_TTL_MS = 30 * 1000;
+let appContextCache = { lines: null, readAt: 0 };
+
+function appContextCandidatePaths() {
+  const candidates = [];
+  const hermesHome = process.env.HERMES_HOME;
+  if (hermesHome) candidates.push(path.join(hermesHome, 'app-context.json'));
+  candidates.push(path.join(__dirname, 'app-context.default.json'));
+  return candidates;
+}
+
+function getAppContextLines(opts) {
+  const candidates = (opts && Array.isArray(opts.candidates) && opts.candidates.length > 0)
+    ? opts.candidates
+    : appContextCandidatePaths();
+  // 显式传 candidates 视为测试路径，绕过缓存；常规路径走 30s 缓存。
+  const useCache = !(opts && opts.candidates);
+  const now = Date.now();
+  if (useCache && appContextCache.lines && now - appContextCache.readAt < APP_CONTEXT_CACHE_TTL_MS) {
+    return appContextCache.lines;
+  }
+  let lines = null;
+  for (const p of candidates) {
+    try {
+      if (!fs.existsSync(p)) continue;
+      lines = parseAppContext(fs.readFileSync(p, 'utf8'));
+      if (lines) break;
+    } catch { /* try next candidate */ }
+  }
+  const result = lines || [];
+  if (useCache) appContextCache = { lines: result, readAt: now };
+  return result;
+}
+
 function prependEnvContext(ctx, rawText, extras) {
   if (!rawText) return rawText;
   if (/^\[环境上下文\]/.test(rawText)) return rawText;       // already injected
   const enabled = !(ctx && ctx.forwardedProps && ctx.forwardedProps.env_aware === false);
   if (!enabled) return rawText;
-  // 可选扩展行（微信桥状态等）：由调用方按当前运行时状态生成，测试可省略。
-  const extraLines = extras && typeof extras.wechatLine === 'string' && extras.wechatLine
-    ? `\n${extras.wechatLine}\n` : '\n';
+  // 可选扩展行：app 自我认知块（静态，数据驱动）在前，微信桥状态（动态）在后。
+  // 由调用方按当前运行时状态生成，测试可省略。
+  const extraParts = [];
+  if (extras && Array.isArray(extras.appLines)) {
+    for (const l of extras.appLines) {
+      if (typeof l === 'string' && l.trim()) extraParts.push(l.trim());
+    }
+  }
+  if (extras && typeof extras.wechatLine === 'string' && extras.wechatLine) {
+    extraParts.push(extras.wechatLine);
+  }
+  const extraLines = extraParts.length > 0 ? `\n${extraParts.join('\n')}\n` : '\n';
   const env =
     `[环境上下文] 当前时间：${formatNowForModel()}\n` +
     `- 日期、时间、星期、电话号码、身份证号、版本号、引用的数字等必须是真实数据；` +
@@ -2077,6 +2167,8 @@ module.exports = {
   formatNowForModel,
   prependEnvContext,
   buildWechatEnvLine,
+  parseAppContext,
+  getAppContextLines,
   appendStreamDelta,
   finalizeRemainder,
 };

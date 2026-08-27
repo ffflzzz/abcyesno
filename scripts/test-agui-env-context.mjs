@@ -19,9 +19,15 @@ const {
   prependEnvContext,
   formatNowForModel,
   buildWechatEnvLine,
+  parseAppContext,
+  getAppContextLines,
   appendStreamDelta,
   finalizeRemainder,
 } = require('../electron/backend/agui-server.js');
+
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 let pass = 0;
 let fail = 0;
@@ -121,6 +127,54 @@ function check(name, cond, extra = '') {
   check('getWechatStatus throwing → safe unbound fallback', (() => {
     const line = buildWechatEnvLine({ getWechatStatus: () => { throw new Error('boom'); } });
     return line.includes('未绑定');
+  })());
+}
+
+// ── (1.6) 应用自我认知块：parseAppContext + getAppContextLines ───────────
+{
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const defaultPath = path.join(here, '..', 'electron', 'backend', 'app-context.default.json');
+
+  check('parseAppContext: valid json → lines', (() => {
+    const lines = parseAppContext(JSON.stringify({ appLines: ['a', 'b', ''] }));
+    return Array.isArray(lines) && lines.length === 2 && lines[0] === 'a';
+  })());
+  check('parseAppContext: invalid json → null', parseAppContext('{oops') === null);
+  check('parseAppContext: wrong shape → null', parseAppContext('{"nope":1}') === null);
+  check('parseAppContext: all-empty lines → null', parseAppContext('{"appLines":["  ",""]}') === null);
+
+  check('default file exists and parses with Abcyesno identity', (() => {
+    const lines = getAppContextLines({ candidates: [defaultPath] });
+    return lines.length >= 3 && lines.some((l) => l.includes('Abcyesno')) && lines.some((l) => l.includes('render_ui'));
+  })());
+
+  check('invalid override falls through to bundled default', (() => {
+    const bad = path.join(here, 'fixtures-app-context-bad.json');
+    fs.writeFileSync(bad, '{broken json', 'utf8');
+    try {
+      const lines = getAppContextLines({ candidates: [bad, defaultPath] });
+      return lines.length >= 3 && lines.some((l) => l.includes('Abcyesno'));
+    } finally {
+      try { fs.unlinkSync(bad); } catch { /* ignore */ }
+    }
+  })());
+
+  check('missing candidates → empty array (no crash)', (() => {
+    const lines = getAppContextLines({ candidates: ['Z:/definitely/missing/app-context.json'] });
+    return Array.isArray(lines) && lines.length === 0;
+  })());
+
+  check('app lines land before separator, wechat line after app lines', (() => {
+    const appLines = getAppContextLines({ candidates: [defaultPath] });
+    const wx = buildWechatEnvLine({
+      aguiPort: 9121,
+      getWechatStatus: () => ({ bound: true, state: 'connected', accountMasked: 'dfb2****a1b2' }),
+    });
+    const out = prependEnvContext({ forwardedProps: {} }, '正文', { appLines, wechatLine: wx });
+    const appIdx = out.indexOf('Abcyesno——');
+    const wxIdx = out.indexOf('微信桥已连接');
+    const sepIdx = out.indexOf('---\n\n正文');
+    return appIdx > -1 && wxIdx > appIdx && sepIdx > wxIdx;
   })());
 }
 
