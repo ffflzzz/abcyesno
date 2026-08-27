@@ -967,6 +967,24 @@ function ToolsRow({ items, assistantAvatar, loading, isLastRow, toolStatus = {},
   const expanded = expandOverride !== null ? expandOverride : phaseRunning;
   const toggle = () => setExpandOverride(!expanded);
 
+  // 固定高度块内流式打印：默认自动滚到底；用户上滚即暂停，滚回底部恢复。
+  const streamRef = useRef(null);
+  const streamUserScrolledRef = useRef(false);
+  useEffect(() => {
+    if (prevRunningRef.current !== phaseRunning) {
+      streamUserScrolledRef.current = false; // 运行边界重置滚动跟随
+    }
+    const el = streamRef.current;
+    if (!el || !expanded) return;
+    if (!streamUserScrolledRef.current) el.scrollTop = el.scrollHeight;
+  }, [expanded, items, phaseRunning]);
+  const handleStreamScroll = useCallback(() => {
+    const el = streamRef.current;
+    if (!el) return;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+    streamUserScrolledRef.current = !nearBottom;
+  }, []);
+
   const groups = {};
   for (const t of items) {
     const name = t.toolName || "tool";
@@ -1005,7 +1023,7 @@ function ToolsRow({ items, assistantAvatar, loading, isLastRow, toolStatus = {},
           <span className={`tool-summary-chevron ${expanded ? "expanded" : ""}`}><Icon name="chevron" size={12} style={{ transform: expanded ? "rotate(90deg)" : "rotate(0deg)" }} /></span>
         </div>
         {expanded && (
-          <div className="progress-stream">
+          <div className="progress-stream" ref={streamRef} onScroll={handleStreamScroll}>
               {items.map((m, i) => {
                 const mStatus = mapStatus(m.status);
                 // A terminal tool that launched a background PTY session keeps

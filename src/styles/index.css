@@ -4819,15 +4819,26 @@ body {
    ToolCard list inside the expanded ToolsRow. */
 .progress-stream {
   margin: 4px 0 4px 2px;
-  padding: 4px 0 4px 10px;
+  padding: 6px 8px 6px 10px;
   border-left: 2px solid var(--border);
   display: flex;
   flex-direction: column;
   gap: 2px;
-  max-width: 92%;
+  /* 2026-08-27：固定高度内滚动（与 reasoning-bubble 同款），工具一多
+     不再把整个会话流撑到无限长。 */
+  max-height: 260px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   font-size: 12.5px;
   line-height: 1.55;
   color: var(--muted);
+}
+.progress-stream::-webkit-scrollbar {
+  width: 6px;
+}
+.progress-stream::-webkit-scrollbar-thumb {
+  background: rgba(128, 128, 128, 0.35);
+  border-radius: 3px;
 }
 .progress-line {
   display: flex;
