@@ -898,6 +898,7 @@ function rowKey(row, index) {
   // 运行期拆分行：推理与正文同源一条消息，key 必须区分（2026-08-27）
   if (row.type === "reasoning-only") return `reasoning-${row.data?.id || index}`;
   if (row.type === "text-only") return `text-${row.data?.id || index}`;
+  if (row.type === "console") return "agent-console";
   return "thinking";
 }
 
@@ -909,6 +910,7 @@ function estimatedHeight(row) {
   if (row.type === "thinking") return 48;
   if (row.type === "reasoning-only") return 140;
   if (row.type === "text-only") return 100;
+  if (row.type === "console") return 320;
   return 80; // message
 }
 
@@ -967,6 +969,56 @@ function ProgressLine({ m, status }) {
           <div className="progress-result">{resultPreview}</div>
         )}
       </span>
+    </div>
+  );
+}
+
+/**
+ * AgentProcessStream — 运行期逐行打印的 agent 过程流（2026-08-27）。
+ * 推理（暗色斜体）/ 工具（✓✗行）/ 回复（正文）按实际发生顺序逐行打入
+ * 同一块固定高度滚动区；自动滚到底，用户上滚即暂停。回合结束后该块
+ * 整体消失，由折叠的推理条 + 工具条 + 完整回复气泡接管。
+ */
+function AgentProcessStream({ timeline, messages }) {
+  const ref = useRef(null);
+  const userScrolledRef = useRef(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    if (!userScrolledRef.current) el.scrollTop = el.scrollHeight;
+  });
+  const handleScroll = useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+    userScrolledRef.current = !nearBottom;
+  }, []);
+  const byId = useMemo(() => new Map((messages || []).map((m) => [m.id, m])), [messages]);
+  return (
+    <div className="agent-console" ref={ref} onScroll={handleScroll}>
+      {timeline.map((seg, i) => {
+        if (seg.kind === "reasoning") {
+          return seg.text && seg.text.trim() ? (
+            <div key={`r-${i}`} className="agent-console-reasoning">{seg.text}</div>
+          ) : null;
+        }
+        if (seg.kind === "tools") {
+          const lines = (seg.ids || []).map((id) => {
+            const m = byId.get(id);
+            if (!m) return null;
+            const st = m.status === "running" || m.status === "in_progress" ? "running"
+              : m.isError ? "error" : "complete";
+            return <ProgressLine key={id} m={m} status={st} />;
+          });
+          return lines.some(Boolean) ? (
+            <div key={`t-${i}`} className="agent-console-tools">{lines}</div>
+          ) : null;
+        }
+        return seg.text && seg.text.trim() ? (
+          <div key={`x-${i}`} className="agent-console-text">{seg.text}</div>
+        ) : null;
+      })}
+      <div className="agent-console-cursor" aria-hidden="true" />
     </div>
   );
 }
@@ -1173,48 +1225,17 @@ function MessageThread({ messages = [], loading, streamPhase, thinkingText, reas
   // entire data set changed and re-renders all visible items, causing
   // flicker even for unchanged message bubbles.
   const rows = useMemo(() => {
-    // ── agent 时间线渲染（2026-08-27）──
-    // timeline 存在时，当前回合（最后一条 user 消息之后）按 感知→推理→行动→回复
-    // 的实际发生顺序拆段渲染：reasoning 段→ReasoningBlock，tools 段→工具条，
-    // text 段→正文行。历史消息（user 及之前）仍走 renderGrouped。
-    // timeline 为 null（应用重启后的历史会话）回退到旧的合并渲染。
-    if (timeline && timeline.length > 0) {
+    // ── agent 时间线（2026-08-27 v2）──
+    // 运行中：整个回合渲染为一条「逐行打印」的过程流（AgentProcessStream）——
+    // 推理 / 工具 / 回复按实际发生顺序逐行打入同一块固定高度滚动区，
+    // 不再按段拆气泡（避免回复半句成块、完成调用不收纳、thinking 消失）。
+    // 回合结束：整块收纳，回退到合并渲染（折叠的推理条 + 工具条 + 完整回复气泡）。
+    if (timeline && timeline.length > 0 && loading) {
       let lastUserIdx = -1;
       messages.forEach((m, i) => { if (m && m.role === "user") lastUserIdx = i; });
       if (lastUserIdx >= 0) {
-        const byId = new Map(messages.map((m) => [m.id, m]));
         const r = renderGrouped(messages.slice(0, lastUserIdx + 1));
-        let realAssistantId = null;
-        for (let i = messages.length - 1; i >= 0; i--) {
-          if (messages[i] && messages[i].role === "assistant") { realAssistantId = messages[i].id; break; }
-        }
-        let toolsBuf = [];
-        const flushTools = () => {
-          if (toolsBuf.length > 0) {
-            r.push({ type: "tools", items: toolsBuf });
-            toolsBuf = [];
-          }
-        };
-        timeline.forEach((seg) => {
-          if (seg.kind === "reasoning") {
-            flushTools();
-            if (seg.text && seg.text.trim()) {
-              r.push({ type: "reasoning-only", data: { id: `tl-r-${r.length}`, reasoning: seg.text, createdAt: seg.ts } });
-            }
-          } else if (seg.kind === "tools") {
-            const items = (seg.ids || []).map((id) => byId.get(id)).filter(Boolean);
-            if (items.length > 0) toolsBuf.push(...items);
-          } else if (seg.kind === "text") {
-            flushTools();
-            if (seg.text && seg.text.trim()) {
-              r.push({ type: "text-only", data: { id: `tl-t-${r.length}`, role: "assistant", content: seg.text, createdAt: seg.ts, _realId: realAssistantId }, _splitText: true, _timeline: true });
-            }
-          }
-        });
-        flushTools();
-        if (loading) {
-          r.push({ type: "thinking", phase: streamPhase || "tool_executing" });
-        }
+        r.push({ type: "console", timeline });
         return r;
       }
     }
@@ -1413,6 +1434,17 @@ function MessageThread({ messages = [], loading, streamPhase, thinkingText, reas
               {/* ArtifactPreview 已由 ToolsRow 渲染（message-thread 内唯一出口）：
                   这里再渲染一份会造成运行期「产物 chip 重复出现两次」。 */}
             </div>
+          </div>
+        </div>
+      );
+    }
+
+    if (row.type === "console") {
+      return (
+        <div className="message-row assistant">
+          <div className="message-avatar agent-avatar thinking">{assistantAvatar}</div>
+          <div className="message-col">
+            <AgentProcessStream timeline={row.timeline} messages={messages} />
           </div>
         </div>
       );

@@ -3203,6 +3203,45 @@ body {
   cursor: not-allowed;
 }
 
+/* ── agent 过程流（2026-08-27）：运行期逐行打印控制台 ──
+   推理（暗斜体）/ 工具（✓✗行）/ 回复（正文）按发生顺序逐行打印，
+   固定高度内滚动、自动滚底、上滚暂停。回合结束整块收纳。 */
+.agent-console {
+  max-height: 340px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 8px 12px;
+  background: rgba(0, 0, 0, 0.16);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 8px);
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text);
+}
+.agent-console::-webkit-scrollbar { width: 6px; }
+.agent-console::-webkit-scrollbar-thumb { background: rgba(128,128,128,0.35); border-radius: 3px; }
+.agent-console-reasoning {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  opacity: 0.8;
+  font-style: italic;
+  margin: 4px 0;
+}
+.agent-console-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 4px 0;
+}
+.agent-console-tools { margin: 4px 0; }
+.agent-console-tools .progress-line { padding: 1px 0; }
+.agent-console-cursor::after {
+  content: '▋';
+  color: var(--accent);
+  animation: status-running-pulse 1.2s ease-in-out infinite;
+  font-size: 11px;
+}
+
 /* ── 审批气泡（2026-08-27 v2）：与 composer-error-bubble 同款设计 ──
    同样的锚定/表面/圆角/阴影/入场动画，仅边框换琥珀色；锚在 Bach 头顶上方，
    内容向上生长，永不遮挡 Composer。 */
