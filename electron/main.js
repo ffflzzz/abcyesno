@@ -84,6 +84,10 @@ let mainWindow = null;
 let hermesRunner = null;
 let paperDashboardRunner = null;
 let wechatBridgeRunner = null;
+// Latest wechat bridge status snapshot (masked payload from the runner's
+// onStatus callback). agui-server reads this synchronously when building the
+// env-context line, so the agent knows whether WeChat notification exists.
+let wechatStatusCache = null;
 let gatewayClient = null;
 let aguiServer = null;
 let aguiPort = 0;
@@ -552,7 +556,19 @@ async function startAgUIServer() {
       path.join(HERMES_FORK, 'skills', 'langgraph_agents', 'agents'),
       process.env.ABC_LANGGRAPH_AGENTS_DIR,
     ].filter(Boolean);
-    const aguiApp = createAgUIServer(() => gatewayClient, storage, { agentsDir });
+    const aguiApp = createAgUIServer(() => gatewayClient, storage, {
+      agentsDir,
+      aguiPort,
+      // 微信桥状态快照：prependEnvContext 用它生成"微信通知"环境行，
+      // 让 agent 感知微信绑定/连接状态（否则模型会答"Hermes 没有配置微信"）。
+      getWechatStatus: () => wechatStatusCache,
+      // agent 主动发微信的通道：转发到桥的 sendTestMessage（iLink 被动回复窗口
+      // 内有效，失败原因由桥返回、端点透传给 agent）。
+      wechatNotify: async (text) => {
+        if (!wechatBridgeRunner) return { ok: false, error: 'wechat bridge not initialized' };
+        return wechatBridgeRunner.call('sendTestMessage', { text });
+      },
+    });
     const server = aguiApp.listen(aguiPort, '127.0.0.1', (err) => {
       if (err) return reject(err);
       log('agui-server', `AG-UI bridge listening on http://127.0.0.1:${aguiPort}`);
@@ -606,6 +622,7 @@ async function doStartBackend() {
     wechatBridgeRunner = createWechatBridgeRunner({
       onStatus: (payload) => {
         log('wechat-bridge', `status: ${payload.state}${payload.detail ? ` (${payload.detail})` : ''}`);
+        wechatStatusCache = payload;
         if (mainWindow && !mainWindow.isDestroyed()) {
           mainWindow.webContents.send('wechat-status', payload);
         }

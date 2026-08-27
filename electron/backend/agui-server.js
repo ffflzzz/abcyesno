@@ -1387,7 +1387,12 @@ function createAgUIServer(getGatewayClient, storage, options) {
         client, hermesSessionId, ctx, res, encoder, turnTimeoutMs, waitOpts
       );
       await attachTurnImages(hermesSessionId);
-      await client.request('prompt.submit', { session_id: hermesSessionId, text: prependEnvContext(ctx, text) }, 120000);
+      let wechatLine = '';
+      try { wechatLine = buildWechatEnvLine(options); } catch (_) { wechatLine = ''; }
+      await client.request('prompt.submit', {
+        session_id: hermesSessionId,
+        text: prependEnvContext(ctx, text, { wechatLine }),
+      }, 120000);
       await turnPromise;
       return translator;
     }
@@ -1657,6 +1662,34 @@ function createAgUIServer(getGatewayClient, storage, options) {
     } catch (_) {}
     return process.env.AGNES_API_KEY || '';
   }
+
+  // --- WeChat notify bridge (agent → bound WeChat user) -------------------
+  // The agent learns about this endpoint from the env context line (see
+  // buildWechatEnvLine). It POSTs {"text": "..."} and we forward to the
+  // wechat bridge's send (sendTestMessage). The bridge enforces its own
+  // constraints (must be connected; iLink passive-reply window), surfacing
+  // a plain {ok, error} result the agent can relay back to the user.
+  app.post('/api/wechat/notify', async (req, res) => {
+    try {
+      const body = req.body || {};
+      const text = String(body.text || '').trim();
+      if (!text) {
+        return res.json({ ok: false, error: 'text is required' });
+      }
+      const notify = options && typeof options.wechatNotify === 'function'
+        ? options.wechatNotify : null;
+      if (!notify) {
+        return res.json({ ok: false, error: 'wechat bridge unavailable' });
+      }
+      // 单条上限 2000 字符，防止 agent 把整份产物当通知发出去。
+      const result = await notify(text.slice(0, 2000));
+      log('agui-server', `wechat.notify → ${JSON.stringify(result).slice(0, 200)}`);
+      return res.json(result);
+    } catch (err) {
+      log('agui-server', `wechat.notify error: ${err && err.message}`);
+      return res.json({ ok: false, error: (err && err.message) || String(err) });
+    }
+  });
 
   app.post('/api/transcribe', async (req, res) => {
     try {
@@ -1953,11 +1986,44 @@ function formatNowForModel() {
     return new Date().toISOString();
   }
 }
-function prependEnvContext(ctx, rawText) {
+// ── WeChat bridge awareness ──────────────────────────────────────────────
+// The wechat bridge daemon lives in the Electron main process and is invisible
+// to the agent: without an explicit line in the env context the model answers
+// "Hermes 没有配置微信" even when an account is bound and connected. We build a
+// compact status line from the bridge status snapshot injected by main.js
+// (options.getWechatStatus) and, when connected, expose the notify endpoint so
+// the agent can actually push a message to the bound WeChat user.
+function buildWechatEnvLine(opts) {
+  let st = null;
+  try {
+    const get = opts && opts.getWechatStatus;
+    if (typeof get === 'function') st = get();
+  } catch { st = null; }
+  if (!st || !st.bound) {
+    return '- 微信通知：当前未绑定微信账号。若用户要求"微信通知我/发微信"，' +
+      '告知可在 设置 → 微信绑定 中扫码绑定；不要回答"Hermes 没有配置微信"。';
+  }
+  if (st.state !== 'connected') {
+    return `- 微信通知：已绑定微信账号${st.accountMasked ? `（${st.accountMasked}）` : ''}，` +
+      `但桥接当前状态为 ${st.state}，暂时无法发送微信消息。`;
+  }
+  const port = (opts && opts.aguiPort) || process.env.AGUI_PORT || '9121';
+  return '- 微信通知：微信桥已连接' + (st.accountMasked ? `（账号 ${st.accountMasked}）` : '') + '。' +
+    `用户要求"微信通知我/完成后发微信"时，用终端工具向 ` +
+    `http://127.0.0.1:${port}/api/wechat/notify 发送 POST 请求（cmd 下 curl 即可），` +
+    `body 为 JSON：{"text":"要通知的内容"}。` +
+    '注意：微信发送依赖用户近期给机器人发过消息（iLink 被动回复窗口限制），' +
+    '发送失败时把返回的 error 原样告知用户并说明原因。';
+}
+
+function prependEnvContext(ctx, rawText, extras) {
   if (!rawText) return rawText;
   if (/^\[环境上下文\]/.test(rawText)) return rawText;       // already injected
   const enabled = !(ctx && ctx.forwardedProps && ctx.forwardedProps.env_aware === false);
   if (!enabled) return rawText;
+  // 可选扩展行（微信桥状态等）：由调用方按当前运行时状态生成，测试可省略。
+  const extraLines = extras && typeof extras.wechatLine === 'string' && extras.wechatLine
+    ? `\n${extras.wechatLine}\n` : '\n';
   const env =
     `[环境上下文] 当前时间：${formatNowForModel()}\n` +
     `- 日期、时间、星期、电话号码、身份证号、版本号、引用的数字等必须是真实数据；` +
@@ -1970,8 +2036,10 @@ function prependEnvContext(ctx, rawText) {
     `或完整路径 \`hermes-fork\\.venv\\Scripts\\python.exe\`。\n` +
     `  · 终端工具的执行环境是 Windows cmd，不是 Git Bash/POSIX：` +
     `\`/tmp/xxx\`、heredoc（\`cat > x << EOF\`）、\`python3\` 这类写法不可用。` +
-    `临时脚本写到项目目录下的绝对路径，再用 \`python\` 执行。\n`;
-  return `${env}\n---\n\n${rawText}`;
+    `临时脚本写到项目目录下的绝对路径，再用 \`python\` 执行。` +
+    `${extraLines}` +
+    `---\n`;
+  return `${env}\n${rawText}`;
 }
 
 // ── Stream delta handling ────────────────────────────────────────────────
@@ -2008,6 +2076,7 @@ module.exports = {
   extractText,
   formatNowForModel,
   prependEnvContext,
+  buildWechatEnvLine,
   appendStreamDelta,
   finalizeRemainder,
 };

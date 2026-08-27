@@ -18,6 +18,7 @@ const require = createRequire(import.meta.url);
 const {
   prependEnvContext,
   formatNowForModel,
+  buildWechatEnvLine,
   appendStreamDelta,
   finalizeRemainder,
 } = require('../electron/backend/agui-server.js');
@@ -68,6 +69,59 @@ function check(name, cond, extra = '') {
 {
   const s = formatNowForModel();
   check('formatNowForModel returns non-empty string', typeof s === 'string' && s.length > 0, `got=${JSON.stringify(s)}`);
+}
+
+// ── (1.5) buildWechatEnvLine + prependEnvContext 微信行注入 ──────────────
+{
+  check('wechat: no status → unbound hint', (() => {
+    const line = buildWechatEnvLine({});
+    return line.includes('未绑定') && line.includes('微信绑定');
+  })());
+  check('wechat: null status → unbound hint', (() => {
+    const line = buildWechatEnvLine({ getWechatStatus: () => null });
+    return line.includes('未绑定');
+  })());
+  check('wechat: bound but not connected → state surfaced', (() => {
+    const line = buildWechatEnvLine({
+      getWechatStatus: () => ({ bound: true, state: 'connecting', accountMasked: 'dfb2****a1b2' }),
+    });
+    return line.includes('connecting') && line.includes('dfb2****a1b2');
+  })());
+  check('wechat: connected → notify endpoint with port', (() => {
+    const line = buildWechatEnvLine({
+      aguiPort: 9123,
+      getWechatStatus: () => ({ bound: true, state: 'connected', accountMasked: 'dfb2****a1b2' }),
+    });
+    return line.includes('/api/wechat/notify') && line.includes('9123') && line.includes('dfb2****a1b2');
+  })());
+  check('wechat: connected via AGUI_PORT env fallback', (() => {
+    const prev = process.env.AGUI_PORT;
+    process.env.AGUI_PORT = '9455';
+    try {
+      const line = buildWechatEnvLine({
+        getWechatStatus: () => ({ bound: true, state: 'connected', accountMasked: 'x' }),
+      });
+      return line.includes('9455');
+    } finally {
+      if (prev === undefined) delete process.env.AGUI_PORT; else process.env.AGUI_PORT = prev;
+    }
+  })());
+  check('wechat line lands inside env block', (() => {
+    const line = buildWechatEnvLine({
+      aguiPort: 9121,
+      getWechatStatus: () => ({ bound: true, state: 'connected', accountMasked: 'dfb2****a1b2' }),
+    });
+    const out = prependEnvContext({ forwardedProps: {} }, '完成后微信通知我', { wechatLine: line });
+    return out.includes('微信桥已连接') && out.includes('---\n\n完成后微信通知我');
+  })());
+  check('no extras → env block unchanged (no wechat line)', (() => {
+    const out = prependEnvContext({ forwardedProps: {} }, '普通问题');
+    return !out.includes('微信通知');
+  })());
+  check('getWechatStatus throwing → safe unbound fallback', (() => {
+    const line = buildWechatEnvLine({ getWechatStatus: () => { throw new Error('boom'); } });
+    return line.includes('未绑定');
+  })());
 }
 
 // ── (2) appendStreamDelta：纯增量透传，零去重 ─────────────────────────────
