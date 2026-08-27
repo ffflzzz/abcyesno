@@ -988,7 +988,18 @@ function ConsoleToolSegment({ seg, messages }) {
   const byId = useMemo(() => new Map((messages || []).map((m) => [m.id, m])), [messages]);
   const items = (seg.ids || []).map((id) => byId.get(id)).filter(Boolean);
   const hasRunning = items.some((m) => m.status === "running" || m.status === "in_progress");
-  const [open, setOpen] = useState(true);
+  // 2026-08-27：段内工具全部完成 → 自动收纳（只展开当前活跃段）；
+  // 手动点头部切换后尊重用户选择，直到下一个运行/完成边界。
+  const prevRunningRef = useRef(hasRunning);
+  const [expandOverride, setExpandOverride] = useState(null);
+  useEffect(() => {
+    if (prevRunningRef.current !== hasRunning) {
+      prevRunningRef.current = hasRunning;
+      setExpandOverride(null);
+    }
+  }, [hasRunning]);
+  const open = expandOverride !== null ? expandOverride : hasRunning;
+  const toggleOpen = () => setExpandOverride(!open);
   const streamRef = useRef(null);
   const userScrolledRef = useRef(false);
   useEffect(() => {
@@ -1010,7 +1021,7 @@ function ConsoleToolSegment({ seg, messages }) {
   const toolNames = Object.keys(groups);
   return (
     <div className="agent-console-tools">
-      <div className="agent-console-tools-head" onClick={() => setOpen((o) => !o)}>
+      <div className="agent-console-tools-head" onClick={toggleOpen}>
         <span className="act-tools-icon"><Icon name={hasRunning ? "settings" : "check-circle"} size={12} /></span>
         <span className="act-tools-count">{items.length} 个工具调用</span>
         <span className="act-tools-names">
