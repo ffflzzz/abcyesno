@@ -952,15 +952,20 @@ function ToolsRow({ items, assistantAvatar, loading, isLastRow, toolStatus = {},
   const interruptedCount = items.filter(m => mapStatus(m.status) === "interrupted").length;
   const totalTools = items.length;
 
-  // Always collapsed by default — user clicks to expand.
-  const [expanded, setExpanded] = useState(false);
-
-  // Never auto-expand; respect user toggle only.
-  const userToggledRef = useRef(false);
-  const toggle = () => {
-    userToggledRef.current = true;
-    setExpanded(v => !v);
-  };
+  // 2026-08-27 交互约定：运行中自动展开（用户实时看工具明细），回合结束
+  // 自动收纳。手动点按头切换后尊重用户选择，直到下一个运行/结束边界
+  // （override 重置为 null，重新跟随自动行为）。
+  const phaseRunning = toolsRunning && !allComplete;
+  const prevRunningRef = useRef(phaseRunning);
+  const [expandOverride, setExpandOverride] = useState(null); // true=开 false=收 null=跟随自动
+  useEffect(() => {
+    if (prevRunningRef.current !== phaseRunning) {
+      prevRunningRef.current = phaseRunning;
+      setExpandOverride(null);
+    }
+  }, [phaseRunning]);
+  const expanded = expandOverride !== null ? expandOverride : phaseRunning;
+  const toggle = () => setExpandOverride(!expanded);
 
   const groups = {};
   for (const t of items) {
@@ -1142,6 +1147,19 @@ function MessageThread({ messages = [], loading, streamPhase, thinkingText, reas
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages, loading, streamPhase]);
 
+  // 当前回合仍在写的那条 assistant 消息 id：loading 期间从后往前找的最后一条
+  // assistant 消息行。它后面的 tools/thinking 行不代表回合结束 —— 推理块
+  // 不能用 isLast（会被工具行挤掉 last 位）判定流式状态，否则工具一启动
+  // 推理框就提前折叠（2026-08-27「过程展示、结束收纳」约定）。
+  let currentAssistantMsgId = null;
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const r = rows[i];
+    if (r.type === "message" && r.data && r.data.role === "assistant") {
+      currentAssistantMsgId = r.data.id;
+      break;
+    }
+  }
+
   // ── Virtualized scroll via react-virtuoso ───────────────────
   // Long conversations previously rendered the entire message column in a
   // native overflow-y:auto container — every stream token re-rendered all
@@ -1310,6 +1328,8 @@ function MessageThread({ messages = [], loading, streamPhase, thinkingText, reas
     const isLast = isLastRow;
     const isStreamingText = isLast && !isUser && loading && streamPhase === "text_generating";
     const isThinkingInline = !isUser && row._thinking; // inline thinking inside this bubble
+    // 本回合仍在写的 assistant 消息：推理块据此保持展开（回合结束 → loading=false → 自动收纳）。
+    const isCurrentAssistantTurn = !isUser && loading && !!currentAssistantMsgId && m.id === currentAssistantMsgId;
     // Live deep-reasoning stream: reasoning.delta 实时 patch 到 m.reasoning
     // （2026-08-26 起），所以优先用 m.reasoning；reasoningText 仅作兜底。
     // 此前 ReasoningBlock 只在完成态分支渲染 —— 思考阶段（_thinking 行）和
@@ -1433,7 +1453,7 @@ function MessageThread({ messages = [], loading, streamPhase, thinkingText, reas
                     <ReasoningBlock
                       key="reasoning-block"
                       text={liveReasoning}
-                      streaming={isLast && loading}
+                      streaming={isCurrentAssistantTurn}
                     />
                   )}
                 {formatContent(displayContent, handleImageClick, onOpenPreviewUrl)}
@@ -1540,12 +1560,13 @@ function ReasoningBlock({ text, streaming = false }) {
   const userToggledRef = useRef(false);
   const display = text || "";
 
-  // When streaming ends, auto-fold unless the user explicitly opened it.
-  // When a brand-new streaming cycle starts, reset the manual override so
-  // each fresh reply starts folded by default.
+  // 2026-08-27 交互约定：流式进行中自动展开（用户实时看推理内容），
+  // 回合结束自动收纳。用户手动切换过则尊重其选择，直到下一个流式周期
+  // （streaming 再次变为 true 时重置手动覆盖）。
   useEffect(() => {
     if (streaming) {
       userToggledRef.current = false;
+      setOpen(true);
     } else if (!userToggledRef.current) {
       setOpen(false);
     }
