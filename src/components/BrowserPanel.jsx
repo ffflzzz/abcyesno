@@ -24,14 +24,29 @@ export default function BrowserPanel({ progress = [], initialUrl = "", fullscree
   const partition = initialUrl ? "static-browser" : "pw-browser";
   const [canGoBack, setCanGoBack] = useState(false);
   const [canGoForward, setCanGoForward] = useState(false);
+  // 面板宽度夹紧（2026-08-27「内置浏览器显示不全——窗口裁切」）：
+  // 面板绝对定位于内容区右侧，宽度超过可用空间时右半被窗口边界直接裁掉。
+  // 规则：聊天列至少保留 380px + 侧栏/边距 80px，其余才允许给面板。
+  const clampWidth = (w) => {
+    const maxW = Math.max(320, window.innerWidth - 380 - 80);
+    return Math.max(280, Math.min(w, maxW));
+  };
   const [panelWidth, setPanelWidth] = useState(() => {
     // Persist width across open/close cycles via sessionStorage
     try {
       const saved = Number(sessionStorage.getItem("bp-width"));
-      if (saved && saved >= 280) return saved;
+      if (saved && saved >= 280) return clampWidth(saved);
     } catch (_) {}
-    return 560; // default — wider than before (was 440)
+    return clampWidth(560); // default — wider than before (was 440)
   });
+  const panelWidthRef = useRef(panelWidth);
+  useEffect(() => { panelWidthRef.current = panelWidth; }, [panelWidth]);
+  // 窗口变小时同步收缩面板，避免被窗口边界裁切
+  useEffect(() => {
+    const onWinResize = () => setPanelWidth((w) => clampWidth(w));
+    window.addEventListener("resize", onWinResize);
+    return () => window.removeEventListener("resize", onWinResize);
+  }, []);
   const webviewRef = useRef(null);
   const webviewCleanupRef = useRef(null);
   const inputRef = useRef(null);
@@ -76,13 +91,13 @@ export default function BrowserPanel({ progress = [], initialUrl = "", fullscree
     const onMove = (ev) => {
       if (!resizingRef.current) return;
       const delta = startX - ev.clientX; // drag left → wider
-      const next = Math.max(280, Math.min(startW + delta, window.innerWidth * 0.75));
-      setPanelWidth(next);
+      setPanelWidth(clampWidth(startW + delta));
     };
 
     const onUp = () => {
       resizingRef.current = false;
-      try { sessionStorage.setItem("bp-width", String(panelWidth)); } catch (_) {}
+      // 持久化最终宽度（旧实现读闭包里的 panelWidth，存的是拖动前的旧值）
+      try { sessionStorage.setItem("bp-width", String(panelWidthRef.current)); } catch (_) {}
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
       document.body.style.cursor = "";
@@ -93,7 +108,7 @@ export default function BrowserPanel({ progress = [], initialUrl = "", fullscree
     window.addEventListener("mouseup", onUp);
     document.body.style.cursor = "col-resize";
     document.body.style.userSelect = "none";
-  }, [panelWidth]);
+  }, []);
 
   // --- Navigation helpers ---
   const syncNavState = () => {

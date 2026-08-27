@@ -3203,23 +3203,17 @@ body {
   cursor: not-allowed;
 }
 
-/* ── agent 过程流（2026-08-27）：运行期逐行打印控制台 ──
-   推理（暗斜体）/ 工具（✓✗行）/ 回复（正文）按发生顺序逐行打印，
-   固定高度内滚动、自动滚底、上滚暂停。回合结束整块收纳。 */
+/* ── agent 过程流（2026-08-27 v3）：无框平铺打印 ──
+   推理（暗斜体）/ 工具段 / 回复段直接平铺在聊天流上，不再套框。
+   流式期间由 Virtuoso followOutput 跟随底部；回合结束切换为
+   折叠推理条 + 工具条 + 完整回复气泡。 */
 .agent-console {
-  max-height: 340px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: 8px 12px;
-  background: rgba(0, 0, 0, 0.16);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm, 8px);
+  padding: 2px 0;
   font-size: 12.5px;
-  line-height: 1.55;
+  line-height: 1.6;
   color: var(--text);
+  min-width: 0;
 }
-.agent-console::-webkit-scrollbar { width: 6px; }
-.agent-console::-webkit-scrollbar-thumb { background: rgba(128,128,128,0.35); border-radius: 3px; }
 .agent-console-reasoning {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
