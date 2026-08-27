@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import Icon from "./Icon.jsx";
 import bachPeek from "../assets/bach-peek.png";
+import ApprovalBubble from "./ApprovalBubble.jsx";
 
 const AGNES_MODELS = [
   { id: "agnes-2.5-flash", name: "agnes-2.5-flash", tag: "快" },
@@ -186,6 +187,8 @@ export default function Composer({
   onOpenPreviewUrl,
   runError = null,
   onClearRunError,
+  approval = null,
+  onRespondApproval,
 }) {
   const [empty, setEmpty] = useState(true);
   const [dragOver, setDragOver] = useState(false);
@@ -647,6 +650,14 @@ export default function Composer({
           >
             知道了
           </button>
+        </div>
+      )}
+      {/* ── 审批气泡（2026-08-27 重设计）──
+         从小 Bach 头顶冒出的紧凑气泡：右下锚定、尾巴指向 Bach、轻微上浮入场。
+         替代旧的 chat 流末尾渲染（位置偏移、动静大）。空内容时窄条收起。 */}
+      {approval && (
+        <div className="composer-approval-pop" role="dialog" aria-label="操作确认">
+          <ApprovalBubble approval={approval} onRespond={onRespondApproval} />
         </div>
       )}
       {/* ── File attachment chip (non-image files still go through upload) ── */}

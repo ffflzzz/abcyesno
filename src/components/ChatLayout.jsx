@@ -297,6 +297,8 @@ export default function ChatLayout({
           onOpenBrowser={onOpenBrowser}
           runError={runError}
           onClearRunError={onClearRunError}
+          approval={approval}
+          onRespondApproval={onRespondApproval}
           placeholder={
             approvalPending
               ? "请先在审批弹窗中选择批准或拒绝…"

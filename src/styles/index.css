@@ -3203,6 +3203,84 @@ body {
   cursor: not-allowed;
 }
 
+/* ── 审批气泡（2026-08-27 重设计）：从小 Bach 头顶冒出 ─────────────
+   旧的渲染在消息流末尾（Footer 区），视觉上位置漂移、动静大。
+   现在锚定在 Composer 右上角 Bach 头顶：右下尾巴指向 Bach，轻微上浮入场，
+   内容超长时卡片内部滚动（max-height），不再挤占会话流。 */
+.composer-approval-pop {
+  position: absolute;
+  bottom: calc(100% - 2px);
+  right: 10px;
+  width: min(470px, calc(100vw - 250px));
+  max-height: min(540px, calc(100vh - 240px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  z-index: 90;
+}
+/* 尾巴：双层三角（外描边 + 内填充）指向 Bach 头顶 */
+.composer-approval-pop::before {
+  content: '';
+  position: absolute;
+  bottom: -10px;
+  right: 12px;
+  border-left: 10px solid transparent;
+  border-right: 10px solid transparent;
+  border-top: 10px solid rgba(210, 153, 34, 0.4);
+}
+.composer-approval-pop::after {
+  content: '';
+  position: absolute;
+  bottom: -8px;
+  right: 13px;
+  border-left: 9px solid transparent;
+  border-right: 9px solid transparent;
+  border-top: 9px solid var(--assistant-bubble);
+}
+
+.approval-pop-card {
+  background: var(--assistant-bubble);
+  border: 1px solid rgba(210, 153, 34, 0.4);
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--text);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.32);
+  animation: approval-pop-in 0.16s ease-out;
+}
+.approval-pop-card .approval-bubble-header { display: flex; align-items: center; gap: 7px; }
+.approval-pop-card .approval-bubble-title { font-weight: 600; font-size: 13px; color: #d29922; }
+.approval-pop-card .approval-bubble-gate {
+  margin-left: auto; font-size: 11px; color: var(--muted);
+  padding: 1px 7px; border-radius: var(--radius-xs, 4px); background: rgba(128,128,128,0.12);
+  max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.approval-pop-card .approval-bubble-message { font-size: 12.5px; line-height: 1.55; }
+.approval-pop-card .approval-bubble-content {
+  background: rgba(0,0,0,0.18); border-radius: 8px; overflow: hidden;
+}
+.approval-pop-card .approval-bubble-code {
+  margin: 0; padding: 8px 10px; font-size: 11.5px; line-height: 1.5;
+  max-height: 140px; overflow-y: auto; white-space: pre-wrap; word-break: break-all;
+  font-family: var(--font-mono, monospace); color: var(--text);
+}
+.approval-pop-card .approval-bubble-expand-btn {
+  width: 100%; text-align: left; background: none; border: none;
+  border-top: 1px dashed var(--border); color: var(--muted);
+  font-size: 11.5px; padding: 4px 10px; cursor: pointer;
+}
+.approval-pop-card .approval-bubble-code.expanded-safe,
+.approval-pop-card .approval-bubble-content.expanded .approval-bubble-code { max-height: 420px; }
+.approval-pop-card .approval-bubble-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 2px; }
+.approval-pop-ended .approval-pop-card { border-color: rgba(210,153,34,0.55); }
+
+@keyframes approval-pop-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
 .approval-bubble {
   max-width: 560px !important;
   border: 1px solid rgba(210, 153, 34, 0.35) !important;

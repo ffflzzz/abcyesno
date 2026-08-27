@@ -1725,14 +1725,7 @@ function MessageFooter({ context }) {
       {reviewSummary && (
         <ReviewSummaryBlock key="review-summary" text={reviewSummary} />
       )}
-      {approval && (
-        <ApprovalBubble
-          key="approval-bubble"
-          approval={approval}
-          onRespond={onRespondApproval}
-          toolMessages={currentTurnToolMessages}
-        />
-      )}
+      {/* 审批气泡已迁移至 Composer（小 Bach 头顶气泡，2026-08-27），此处不再渲染 */}
     </>
   );
 }

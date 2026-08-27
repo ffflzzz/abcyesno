@@ -196,12 +196,9 @@ export default function ApprovalBubble({ approval, onRespond, toolMessages = [],
   // 死锁（决策文件无人消费）。改为明确的失效态：禁用操作、给出原因、提供关闭。
   if (ended) {
     return (
-      <div className="message-row assistant">
-        <div className="message-avatar agent-avatar approval">
-          <Icon name="alert" size={18} style={{ color: "#d29922" }} />
-        </div>
-        <div className="message-col">
-          <div className="message-bubble assistant approval-bubble approval-ended">
+      <div className="approval-pop approval-pop-ended">
+        <div className="approval-pop-tail" aria-hidden="true" />
+        <div className="approval-pop-card">
             <div className="approval-bubble-header">
               <span className="approval-bubble-icon"><Icon name="alert" size={14} /></span>
               <span className="approval-bubble-title">{label || "审批已失效"}</span>
@@ -212,14 +209,13 @@ export default function ApprovalBubble({ approval, onRespond, toolMessages = [],
             <div className="approval-bubble-message">
               {message || "该审批任务已结束或已超时，无法再响应。请重新发起任务。"}
             </div>
-            <div className="approval-bubble-actions">
-              <button
-                className="approval-btn dismiss"
-                onClick={() => onRespond && onRespond(null, false, "")}
-              >
-                知道了
-              </button>
-            </div>
+          <div className="approval-bubble-actions">
+            <button
+              className="approval-btn dismiss"
+              onClick={() => onRespond && onRespond(null, false, "")}
+            >
+              知道了
+            </button>
           </div>
         </div>
       </div>
@@ -227,12 +223,9 @@ export default function ApprovalBubble({ approval, onRespond, toolMessages = [],
   }
 
   return (
-    <div className="message-row assistant">
-      <div className="message-avatar agent-avatar approval">
-        <Icon name="pause" size={18} style={{ color: "#d29922" }} />
-      </div>
-      <div className="message-col">
-        <div className="message-bubble assistant approval-bubble">
+    <div className="approval-pop">
+      <div className="approval-pop-tail" aria-hidden="true" />
+      <div className="approval-pop-card">
           {/* Header */}
           <div className="approval-bubble-header">
             <span className="approval-bubble-icon"><Icon name="warning" size={14} /></span>
@@ -387,9 +380,7 @@ export default function ApprovalBubble({ approval, onRespond, toolMessages = [],
               {responding ? "处理中…" : "批准"}
             </button>
           </div>
-        </div>
       </div>
-
       {/* Lightbox overlay */}
       {lightboxSrc && (
         <div className="approval-lightbox" onClick={() => setLightboxSrc(null)}>
