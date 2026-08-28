@@ -1053,7 +1053,7 @@ function ConsoleToolSegment({ seg, messages }) {
   );
 }
 
-function AgentProcessStream({ timeline, messages }) {
+function AgentProcessStream({ timeline, messages, loading }) {
   const ref = useRef(null);
   const userScrolledRef = useRef(false);
   useEffect(() => {
@@ -1549,7 +1549,7 @@ function MessageThread({ messages = [], loading, streamPhase, thinkingText, reas
         <div className="message-row assistant">
           <div className="message-avatar agent-avatar thinking">{assistantAvatar}</div>
           <div className="message-col">
-            <AgentProcessStream timeline={row.timeline} messages={messages} />
+            <AgentProcessStream timeline={row.timeline} messages={messages} loading={loading} />
           </div>
         </div>
       );
