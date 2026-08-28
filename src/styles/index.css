@@ -5731,6 +5731,41 @@ body {
   border-top: 1px solid var(--border);
   margin-top: 2px;
 }
+/* Recent-workspace row: entry + hover-revealed forget (x) button */
+.composer-ws-row {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+}
+.composer-ws-row .composer-menu-item {
+  flex: 1;
+  min-width: 0;
+  padding-right: 28px;
+}
+.composer-ws-forget {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.composer-ws-row:hover .composer-ws-forget {
+  display: flex;
+}
+.composer-ws-forget:hover {
+  background: var(--panel-2);
+  color: var(--text);
+}
 .menu-item-title {
   font-size: 13px;
   color: var(--text);

@@ -48,6 +48,19 @@ export function rememberWorkspace(dir) {
   }
 }
 
+// Remove one entry from the recents list. Pure UI hygiene: recents are a
+// localStorage convenience cache, so forgetting a path never touches the
+// folder on disk nor any session's existing workspaceDir binding.
+export function forgetWorkspace(dir) {
+  if (!dir) return;
+  try {
+    const next = loadRecentWorkspaces().filter((d) => d !== dir);
+    localStorage.setItem(WS_RECENT_KEY, JSON.stringify(next));
+  } catch {
+    /* best-effort */
+  }
+}
+
 // Slash commands surfaced by the `/` command palette. This list mirrors what
 // the 9120 gateway's `command.dispatch` actually implements (see
 // tui_gateway/server.py). Commands that are TUI-only on the backend
@@ -841,18 +854,26 @@ export default function Composer({
             {showWorkspaceMenu && (
               <div className="composer-popover composer-popover-up">
                 {recentWorkspaces.filter((d) => d !== workspace).map((dir) => (
-                  <button
-                    key={dir}
-                    className="composer-menu-item"
-                    title={dir}
-                    onClick={() => { setShowWorkspaceMenu(false); if (onWorkspaceChange) onWorkspaceChange(dir); }}
-                  >
-                    <span className="menu-icon"><Icon name="circle" size={12} /></span>
-                    <span>
-                      <div className="menu-item-title">{wsBasename(dir)}</div>
-                      <div className="menu-item-desc">{dir}</div>
-                    </span>
-                  </button>
+                  <div key={dir} className="composer-ws-row">
+                    <button
+                      className="composer-menu-item"
+                      title={dir}
+                      onClick={() => { setShowWorkspaceMenu(false); if (onWorkspaceChange) onWorkspaceChange(dir); }}
+                    >
+                      <span className="menu-icon"><Icon name="circle" size={12} /></span>
+                      <span>
+                        <div className="menu-item-title">{wsBasename(dir)}</div>
+                        <div className="menu-item-desc">{dir}</div>
+                      </span>
+                    </button>
+                    <button
+                      className="composer-ws-forget"
+                      title="从历史列表移除（不影响磁盘上的文件夹）"
+                      onClick={(e) => { e.stopPropagation(); forgetWorkspace(dir); setRecentWorkspaces(loadRecentWorkspaces()); }}
+                    >
+                      <Icon name="x" size={12} />
+                    </button>
+                  </div>
                 ))}
                 <button
                   className="composer-menu-item"

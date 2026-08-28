@@ -207,6 +207,7 @@ function ChatShell({
   onOpenWechatBind = () => {},
   wechatStatus = { state: "idle", bound: false },
   onOpenLiveStudio = () => {},
+  wsDraftKey: propsWsDraftKey = "",
 }) {
   // Keep a live ref to the session list so the settle callback (which is
   // identity-stable by design) can look up titles without going stale.
@@ -408,12 +409,28 @@ function ChatShell({
   // pill reflects an optimistic local override immediately: waiting for
   // updateSession + loadSessions round-trip left the pill stale for seconds
   // (and empty-session cleanup could even swallow the session in between).
+  //
+  // Sessions are created lazily on the first send, so before that there is
+  // no record to write to. The chosen folder is kept as a per-tab DRAFT
+  // (keyed by wsDraftKey) and materialized onto the session record the
+  // moment handleSend creates it — see pendingWsRef.
+  const wsDraftKey = propsWsDraftKey || "__draft__";
   const [wsOverride, setWsOverride] = useState({});
-  const workspaceDir = wsOverride[selectedSessionId] !== undefined
-    ? wsOverride[selectedSessionId]
+  const pendingWsRef = useRef(null);
+  const wsViewKey = selectedSessionId || wsDraftKey;
+  const workspaceDir = wsOverride[wsViewKey] !== undefined
+    ? wsOverride[wsViewKey]
     : (session?.workspaceDir || null);
   async function handleWorkspaceChange(dir) {
-    if (!selectedSessionId || !hermesRef.current?.updateSession) return;
+    if (!hermesRef.current?.updateSession) return;
+    // No session yet (chat not started): bind as draft. The first send
+    // materializes it onto the created session before the run starts.
+    if (!selectedSessionId) {
+      pendingWsRef.current = dir || null;
+      setWsOverride((m) => ({ ...m, [wsDraftKey]: dir || null }));
+      if (dir) rememberWorkspace(dir);
+      return;
+    }
     setWsOverride((m) => ({ ...m, [selectedSessionId]: dir || null }));
     if (dir) rememberWorkspace(dir);
     try {
@@ -439,6 +456,21 @@ function ChatShell({
   useEffect(() => {
     setQueuedMessages([]);
   }, [selectedSessionId]);
+
+  // A draft workspace binding only applies to the not-yet-created session of
+  // this tab. Selecting any real session discards it (the lazy-create path in
+  // handleSend consumes it before onSelectSession, so that flow is unaffected;
+  // this only catches the abandoned-draft case).
+  useEffect(() => {
+    if (!selectedSessionId) return;
+    pendingWsRef.current = null;
+    setWsOverride((m) => {
+      if (!(wsDraftKey in m)) return m;
+      const next = { ...m };
+      delete next[wsDraftKey];
+      return next;
+    });
+  }, [selectedSessionId, wsDraftKey]);
 
   // Load persisted messages when the session or sessions list changes.
   //
@@ -466,11 +498,14 @@ function ChatShell({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedSessionId, sessions, hydrateSession]);
 
-  async function doSend(text, mentions, explicitThreadId) {
+  async function doSend(text, mentions, explicitThreadId, workspaceDirOverride) {
     if (!text.trim()) return;
     const threadId = explicitThreadId || selectedSessionId;
     // Workspace binding: resolve from the live session list so background
     // sends (explicitThreadId ≠ selected) still carry the right folder.
+    // workspaceDirOverride covers the lazy-create path — the brand-new
+    // session isn't in sessionsListRef yet, but its draft binding (picked
+    // before the first message) must apply to this very first run.
     const wsSource = (sessionsListRef.current || []).find((s) => s.id === threadId);
     await sendMessage(text, {
       threadId,
@@ -478,7 +513,9 @@ function ChatShell({
       skillId: assistant?.skillId,
       model,
       mentions,
-      workspaceDir: wsSource?.workspaceDir || null,
+      workspaceDir: workspaceDirOverride !== undefined
+        ? workspaceDirOverride
+        : (wsSource?.workspaceDir || null),
     });
   }
 
@@ -525,14 +562,31 @@ function ChatShell({
     if (!selectedSessionId) {
       try {
         const assistantId = selectedAssistantId || "default";
+        // Consume the draft workspace binding (folder picked before the
+        // first message), so it lands on the session + this first run.
+        const draftWs = pendingWsRef.current;
+        pendingWsRef.current = null;
         const session = await hermes.createSession(assistantId, "新会话");
+        if (draftWs && hermesRef.current?.updateSession) {
+          try {
+            await hermesRef.current.updateSession(session.id, { workspaceDir: draftWs });
+          } catch (err) {
+            console.error("apply draft workspace failed", err);
+          }
+        }
+        setWsOverride((m) => {
+          const next = { ...m };
+          delete next[wsDraftKey];
+          if (draftWs) next[session.id] = draftWs;
+          return next;
+        });
         // Select the new session. hydrateSession() sees the bucket is already
         // live (doSend below writes into it) and leaves it alone.
         onSelectSession(session.id);
         // Send immediately using the explicit session id — don't wait for
         // React to flush state. The stream hooks pick up the new threadId
         // via the closure-free explicitThreadId parameter.
-        await doSend(text, mentions, session.id);
+        await doSend(text, mentions, session.id, draftWs || undefined);
         return;
       } catch (err) {
         console.error("auto-create session failed", err);
@@ -2025,6 +2079,7 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
           onOpenWechatBind={() => setShowWechatBind(true)}
           wechatStatus={wechatStatus}
           onOpenLiveStudio={openLiveStudio}
+          wsDraftKey={`tab:${activeTabId}`}
         />
               </div>
               {activeTab.type === "homepage" && (
