@@ -66,7 +66,7 @@ contextBridge.exposeInMainWorld('hermes', {
   updateSession: (id, data) => ipcRenderer.invoke('update-session', id, data),
 
   // Approval & gateway passthrough
-  respondApproval: (id, choice) => ipcRenderer.invoke('respond-approval', id, choice),
+  respondApproval: (id, choice, sessionId) => ipcRenderer.invoke('respond-approval', id, choice, sessionId),
   // Workflow (LangGraph HITL) brake: POST the decision to the agui-server
   // control-channel endpoint; the paused graph polls the resulting file.
   sendWorkflowInterrupt: async (payload) => {

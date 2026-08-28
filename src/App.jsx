@@ -1506,7 +1506,7 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
 
     async function autoApprove(req) {
       try {
-        await hermes.respondApproval(req.id, true);
+        await hermes.respondApproval(req.id, true, req.session_id);
       } catch (err) {
         console.error("auto approval failed", err);
         setApproval(req);
@@ -1803,7 +1803,7 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
           steerText: hasSteer ? steerText : "",
         });
       } else {
-        await hermes.respondApproval(approval.id, choice);
+        await hermes.respondApproval(approval.id, choice, approval.session_id);
         if (remember && approval.operation) {
           const allowed = JSON.parse(localStorage.getItem("abcyesno:allowedOps") || "[]");
           if (!allowed.includes(approval.operation)) {

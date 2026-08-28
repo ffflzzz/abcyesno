@@ -655,7 +655,8 @@ async function doStartBackend() {
   gatewayClient.on('event', (type, params) => {
     if (type === 'approval.request') {
       if (mainWindow) {
-        mainWindow.webContents.send('approval-request', params.payload || params);
+        // 附带 session_id：respond-approval 需要它回传给 gateway
+        mainWindow.webContents.send('approval-request', { ...(params.payload || params), session_id: params.session_id });
       }
     } else if (type === 'sudo.request') {
       if (mainWindow) {
@@ -1097,7 +1098,8 @@ ipcMain.handle('set-api-key', async (_event, key) => {
     gatewayClient.on('event', (type, params) => {
       if (type === 'approval.request') {
         if (mainWindow) {
-          mainWindow.webContents.send('approval-request', params.payload || params);
+          // 附带 session_id：respond-approval 需要它回传给 gateway
+          mainWindow.webContents.send('approval-request', { ...(params.payload || params), session_id: params.session_id });
         }
       } else if (type === 'sudo.request') {
         if (mainWindow) {
@@ -1299,11 +1301,17 @@ ipcMain.handle('update-session', async (_event, id, data) => {
   return storage.updateSession(id, data);
 });
 
-ipcMain.handle('respond-approval', async (_event, id, choice) => {
+ipcMain.handle('respond-approval', async (_event, id, choice, sessionId) => {
   if (!gatewayClient || !gatewayClient.ready) {
     throw new Error('gateway not connected');
   }
-  return gatewayClient.request('approval.respond', { id, choice }, 30000);
+  // 2026-08-28：gateway 的 approval.respond 需要 session_id 定位会话，
+  // 缺失时报 "session not found" → 用户点批准永远失败，工具只能等
+  // 300s 审批超时（实测每回合 2×300s 空转）。
+  if (!sessionId) {
+    throw new Error('session id required for approval respond');
+  }
+  return gatewayClient.request('approval.respond', { id, choice, session_id: sessionId }, 30000);
 });
 
 ipcMain.handle('gateway-request', async (_event, method, params, timeout) => {
