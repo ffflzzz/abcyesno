@@ -1293,17 +1293,54 @@ function MessageThread({ messages = [], loading, streamPhase, thinkingText, reas
   // entire data set changed and re-renders all visible items, causing
   // flicker even for unchanged message bubbles.
   const rows = useMemo(() => {
-    // ── agent 时间线（2026-08-27 v2）──
-    // 运行中：整个回合渲染为一条「逐行打印」的过程流（AgentProcessStream）——
-    // 推理 / 工具 / 回复按实际发生顺序逐行打入同一块固定高度滚动区，
-    // 不再按段拆气泡（避免回复半句成块、完成调用不收纳、thinking 消失）。
-    // 回合结束：整块收纳，回退到合并渲染（折叠的推理条 + 工具条 + 完整回复气泡）。
-    if (timeline && timeline.length > 0 && loading) {
+    // ── agent 时间线（2026-08-28 v4）──
+    // 当前回合（最后一条 user 消息之后）始终按时间线分段渲染，保持
+    // 感知→推理→行动→回复 的真实时序：
+    //   运行中 → 单条过程流（AgentProcessStream）逐行打印；
+    //   结束后 → 按段渲染完成态（推理条/工具条/回复行，全部收纳）。
+    // 2026-08-28 修复：此前回合结束回退 renderGrouped 合并渲染，回复
+    // （回合开头创建的 assistant 消息）又夹回两段工具条之间。
+    // timeline 为 null（应用重启后的历史会话）才回退合并渲染。
+    if (timeline && timeline.length > 0) {
       let lastUserIdx = -1;
       messages.forEach((m, i) => { if (m && m.role === "user") lastUserIdx = i; });
       if (lastUserIdx >= 0) {
+        const byId = new Map(messages.map((m) => [m.id, m]));
         const r = renderGrouped(messages.slice(0, lastUserIdx + 1));
-        r.push({ type: "console", timeline });
+        let realAssistantId = null;
+        for (let i = messages.length - 1; i >= 0; i--) {
+          if (messages[i] && messages[i].role === "assistant") { realAssistantId = messages[i].id; break; }
+        }
+        if (loading) {
+          // 运行中：单条过程流逐行打印
+          r.push({ type: "console", timeline });
+          return r;
+        }
+        // 结束后：按段渲染完成态（各段自动收纳）
+        let toolsBuf = [];
+        const flushTools = () => {
+          if (toolsBuf.length > 0) {
+            r.push({ type: "tools", items: toolsBuf });
+            toolsBuf = [];
+          }
+        };
+        timeline.forEach((seg) => {
+          if (seg.kind === "reasoning") {
+            flushTools();
+            if (seg.text && seg.text.trim()) {
+              r.push({ type: "reasoning-only", data: { id: `tl-r-${r.length}`, reasoning: seg.text, createdAt: seg.ts } });
+            }
+          } else if (seg.kind === "tools") {
+            const items = (seg.ids || []).map((id) => byId.get(id)).filter(Boolean);
+            if (items.length > 0) toolsBuf.push(...items);
+          } else if (seg.kind === "text") {
+            flushTools();
+            if (seg.text && seg.text.trim()) {
+              r.push({ type: "text-only", data: { id: `tl-t-${r.length}`, role: "assistant", content: seg.text, createdAt: seg.ts, _realId: realAssistantId }, _splitText: true, _timeline: true });
+            }
+          }
+        });
+        flushTools();
         return r;
       }
     }
