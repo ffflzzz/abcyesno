@@ -444,6 +444,12 @@ class HermesRunner {
       // 15 turns is too low for deep research / multi-step tasks; raise to 100
       // so the agent can finish long reports without pausing for "好了吗" prompts.
       HERMES_TUI_MAX_TURNS: process.env.HERMES_TUI_MAX_TURNS || '100',
+      // 2026-08-29「怎么老是未收到模型输出」：gateway 默认 busy_input_mode=
+      // interrupt——同一会话任何新消息（包括 goal 续跑的续篇）都会打断正在
+      // 跑的 turn，留下「未收到模型输出」空占位气泡。桌面端 composer 本身
+      // 就承诺「Enter 排队」，切到 queue 模式：忙时消息走 FIFO 按到达顺序
+      // 逐条执行，绝不打断；/stop 仍走显式中断路径不受影响。可用 env 覆盖。
+      HERMES_GATEWAY_BUSY_INPUT_MODE: process.env.HERMES_GATEWAY_BUSY_INPUT_MODE || 'queue',
       // 2026-08-28 "Chaos 卡住": video-generation batches legitimately run
       // >10 min; the terminal tool's 600s foreground cap killed them
       // mid-flight twice (LN01-05 / LN05-09) and the tool then returned a
