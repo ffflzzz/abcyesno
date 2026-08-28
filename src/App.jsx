@@ -16,7 +16,7 @@ import BrowserPanel from "./components/BrowserPanel.jsx";
 import ConfirmModal from "./components/ConfirmModal.jsx";
 import BlockRequestDialog from "./components/BlockRequestDialog.jsx";
 import WechatBindModal from "./components/WechatBindModal.jsx";
-import { initContract, listManifests } from "./contract/registry.js";
+import { initContract, listManifests, getManifest } from "./contract/registry.js";
 import { launcherApps } from "./contract/manifests.generated.js";
 import { subscribeContractEvents } from "./contract/eventBus.js";
 import { useTts } from "./hooks/useTts.jsx";
@@ -1156,10 +1156,17 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
   // task. The workbench subscribes to the task's workflow.* events and renders
   // node progress / artifacts inline; the launcher-grid open path doesn't
   // carry a taskId so it stays untouched.
+  // Guard: only workbench-type workflows get a StudioWorkbench tab. Chat / form /
+  // dashboard workflows (e.g. paper_rewriter_agent) are surfaced elsewhere.
   const openLiveStudio = useCallback((task) => {
     if (!task) return;
     const wf = task.workflowId || task.workflowName;
     if (!wf) return;
+    const manifest = getManifest(wf);
+    if (!manifest || manifest.ui?.type !== "workbench") {
+      console.warn(`[openLiveStudio] ${wf} is not a workbench workflow; refusing to open studio tab`);
+      return;
+    }
     const assistant = assistants.find((a) => a.id === task.assistantId) || null;
     const launcherKey = wf; // manifest key in LAUNCHER_ICONS
     const iconSrc = LAUNCHER_ICONS[launcherKey] || appManjuIcon;

@@ -412,13 +412,29 @@ export function useTaskManager(onSend, onStop) {
         }
 
         // ── Re-run in the same session: restart the existing task ──
+        // The new run may delegate to a *different* agent than the previous
+        // one in the same session (e.g. user first ran manjucraft_agent, then
+        // asked for paper_rewriter_agent). Update workflow identity from the
+        // fresh event so task cards / openLiveStudio route to the right UI.
         if (
           (evType === "workflow.graph" || evType === "workflow.started") &&
           (existing.status === "completed" || existing.status === "failed" || existing.status === "stopped" || existing.status === "interrupted")
         ) {
+          const p = ev.payload || {};
+          const agent = p.agent || "langgraph_agent";
           return prev.map((t) =>
             t.runId === runId
-              ? { ...t, status: "running", startedAt: Date.now(), completedAt: null, events: [ev], artifacts: [] }
+              ? {
+                  ...t,
+                  workflowId: agent,
+                  agentName: agent,
+                  workflowName: friendlyName(agent),
+                  status: "running",
+                  startedAt: Date.now(),
+                  completedAt: null,
+                  events: [ev],
+                  artifacts: [],
+                }
               : t
           );
         }

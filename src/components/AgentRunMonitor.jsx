@@ -2,6 +2,7 @@ import React, { useState, useMemo } from "react";
 import Icon from "./Icon.jsx";
 import WorkflowTimeline from "./WorkflowTimeline.jsx";
 import { useResolvedArtifacts, localPathOf } from "../contract/useResolvedArtifacts.js";
+import { getManifest } from "../contract/registry.js";
 
 const STATUS_MAP = {
   pending: { label: "等待中", cls: "task-pending", icon: "loader" },
@@ -70,6 +71,12 @@ export default function AgentRunMonitor({ task, onStop, onOpenTaskDetail, onOpen
   const isActive = task.status === "running" || task.status === "pending";
   const resolved = useResolvedArtifacts(view.artifacts);
 
+  // Only manifest-defined workbench workflows should open a StudioWorkbench tab.
+  // Chat / dashboard / form workflows (e.g. paper_rewriter_agent) should not be
+  // routed into the generic studio surface.
+  const manifest = task?.workflowId ? getManifest(task.workflowId) : null;
+  const hasWorkbenchSurface = manifest && manifest.ui?.type === "workbench";
+
   return (
     <div className={`agent-run-monitor ${si.cls} ${expanded ? "expanded" : ""}`}>
       <div className="arm-header" onClick={() => setExpanded((v) => !v)}>
@@ -124,7 +131,7 @@ export default function AgentRunMonitor({ task, onStop, onOpenTaskDetail, onOpen
         </div>
 
         <div className="arm-actions" onClick={(e) => e.stopPropagation()}>
-          {onOpenStudio && task.workflowId && (
+          {onOpenStudio && task.workflowId && hasWorkbenchSurface && (
             <button
               className="arm-btn"
               title="在 StudioWorkbench 里查看节点/产物"

@@ -299,18 +299,21 @@ LANGGRAPH_AGENT_SCHEMA = {
         "and progress/artifacts/approval gates/completion arrive as events. "
         "DO NOT call this tool again to poll for results; repeated calls for the "
         "same request will be ignored with a 'running' response.\n\n"
+        "CRITICAL: set agent_name to the exact manifest id requested by the user. "
+        "Do not default to any agent; if the user asks for the paper rewriter, use "
+        "paper_rewriter_agent, not manjucraft_agent.\n\n"
         "Available agents: " + _available_agents_text() + "\n\n"
-        "Example (free text):\n"
+        "Example (short-drama / manjucraft_agent):\n"
         '{"agent_name": "manjucraft_agent", "input": "一只小猫在草地上玩耍", "thread_id": "demo-1"}\n'
-        "Example (structured object):\n"
-        '{"agent_name": "manjucraft_agent", "input": {"mode":"single","script":"...","style":"写实"}, "thread_id": "demo-2"}'
+        "Example (paper rewrite / paper_rewriter_agent):\n"
+        '{"agent_name": "paper_rewriter_agent", "input": {"mode":"download","instruction":"写中微子","target_audience":"大一非理工科学生"}, "thread_id": "demo-2"}'
     ),
     "parameters": {
         "type": "object",
         "properties": {
             "agent_name": {
                 "type": "string",
-                "description": "Name of the LangGraph agent package to invoke.",
+                "description": "Manifest id of the agent to invoke (must exactly match one of the available agents).",
             },
             "input": {
                 "type": ["string", "object"],
