@@ -253,7 +253,11 @@ function ChatShell({
     const assistantMsg = [...uiMessages].reverse().find((m) => m.role === "assistant");
     const patch = { messages: uiMessages };
     if (assistantMsg) {
-      const clean = sanitizeMessageContent(assistantMsg.content || "");
+      // 2026-08-28: the empty-reply placeholder must never leak into the
+      // preview or the model-generated title (a sidebar session was literally
+      // titled "（未收到模型输出，任务可能已被中断）").
+      const raw = sanitizeMessageContent(assistantMsg.content || "");
+      const clean = raw.includes("未收到模型输出") ? "" : raw;
       patch.preview = clean.slice(0, 45).replace(/\n/g, " ") || "(新对话)";
     }
     // Don't hardcode the first N chars as the title. When the session still
@@ -262,9 +266,11 @@ function ChatShell({
     // to the assistant name. Failures keep the default title.
     if (userMsg && stored?.title === "新会话") {
       const userText = (userMsg.content || "").replace(/\n/g, " ").trim();
-      const assistantText = sanitizeMessageContent(assistantMsg?.content || "").replace(/\n/g, " ").trim();
+      const assistantText = sanitizeMessageContent(assistantMsg?.content || "")
+        .split("未收到模型输出").join(" ")
+        .replace(/\s+/g, " ").trim();
       generateSessionTitle(sid, userText, assistantText)
-        .then((t) => { if (t) h.updateSession(sid, { title: t }); })
+        .then((t) => { if (t && !t.includes("未收到模型输出")) h.updateSession(sid, { title: t }); })
         .catch(() => {});
     }
     h.updateSession(sid, patch)
