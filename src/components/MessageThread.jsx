@@ -1072,8 +1072,11 @@ function AgentProcessStream({ timeline, messages }) {
     <div className="agent-console" ref={ref} onScroll={handleScroll}>
       {timeline.map((seg, i) => {
         if (seg.kind === "reasoning") {
+          // 2026-08-28：推理段渲染为正式的 thinking 框（ReasoningBlock）——
+          // 回答前就弹出并流式展开，充分展示思考过程；运行结束随整流收纳。
+          // 此前用暗色斜体小字，用户感知不到"思考框已弹出"。
           return seg.text && seg.text.trim() ? (
-            <div key={`r-${i}`} className="agent-console-reasoning">{seg.text}</div>
+            <ReasoningBlock key={`r-${i}`} text={seg.text} streaming={loading} />
           ) : null;
         }
         if (seg.kind === "tools") {
