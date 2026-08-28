@@ -782,6 +782,12 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
           sess.reasoningText = "";
           sess.roundReasoningBase = 0;
           sess.timeline = [];
+          // 2026-08-28 关键修复：清掉上一回合残留的 currentAssistantId。
+          // 若上一回合被中断（没走到 TEXT_MESSAGE_END），该字段仍指向旧
+          // assistant 消息 → 新回合的 thinking.delta 会被 patchMessage 写进
+          // 旧消息的 reasoning 字段，渲染成"新一轮 thinking 出现在旧对话的
+          // thinking 框里"。
+          sess.currentAssistantId = null;
           sess.backendSilentMs = 0;
           sess.turnElapsedMs = 0;
           sess.statusLine = "";
