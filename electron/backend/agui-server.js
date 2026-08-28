@@ -973,7 +973,17 @@ function createAgUIServer(getGatewayClient, storage, options) {
       }
     }
 
-    return { handleEvent, finalize, hasError: () => hasRunError };
+    return {
+      handleEvent,
+      finalize,
+      hasError: () => hasRunError,
+      // Idle-watchdog input (2026-08-28): a long silent terminal (600s hard
+      // cap, no chunks) leaves activeToolCalls populated with zero events on
+      // the wire — "quiet" here means a tool is executing, not that the goal
+      // loop wedged. Exposed so the goal idle timer can extend instead of
+      // killing the SSE mid-tool (2026-08-28 "Chaos 卡住" root cause).
+      hasActiveToolCalls: () => activeToolCalls.size > 0,
+    };
   }
 
   function waitForHermesTurn(client, hermesSessionId, ctx, res, encoder, timeoutMs = 120000, opts = {}) {
@@ -1018,6 +1028,18 @@ function createAgUIServer(getGatewayClient, storage, options) {
         if (idleTimer) clearTimeout(idleTimer);
         idleTimer = setTimeout(() => {
           if (settled) return;
+          // 2026-08-28 "Chaos 卡住 20 分钟": a 600s terminal command emitted
+          // tool.start then went silent for exactly the idle window — the
+          // watchdog killed the SSE at the same second the tool timed out,
+          // and 14 more minutes of agent work (second batch, final answer)
+          // never reached the UI. Silence with a tool still in flight is
+          // EXPECTED (terminal hard-caps at 600s with no chunks), so extend
+          // instead of ending. The 6h goal turn timeout remains the backstop.
+          if (translator.hasActiveToolCalls()) {
+            log('agui-server', `goal-mode idle ${idleMs}ms reached but a tool call is in flight — extending idle window`);
+            armIdleTimer();
+            return;
+          }
           log('agui-server', `goal-mode idle ${idleMs}ms reached, ending turn`);
           cleanup();
           translator.finalize('');

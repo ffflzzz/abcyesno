@@ -946,6 +946,7 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
             createdAt: now,
             isError: true,
           });
+          resetRunningTools(sess);
           settle(sess);
           break;
 
@@ -953,7 +954,10 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
           sess.phase = "idle";
           sess.thinkingText = "";
           sess.thinkingSince = null;
-          publish(sess.id);
+          // Run ended → any tool card still "running" is orphaned (its
+          // TOOL_CALL_END was lost upstream, e.g. goal idle-watchdog ended
+          // the turn mid-tool). Reconcile so it doesn't spin forever.
+          resetRunningTools(sess);
           settle(sess);
           break;
 
@@ -961,7 +965,7 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
           break;
       }
     },
-    [publish, appendMessage, patchMessage, appendToMessage, handleCustom, settle]
+    [publish, appendMessage, patchMessage, appendToMessage, handleCustom, settle, resetRunningTools]
   );
 
   // ── 发送消息（建立 SSE 连接）────────────────────────────────

@@ -444,6 +444,11 @@ class HermesRunner {
       // 15 turns is too low for deep research / multi-step tasks; raise to 100
       // so the agent can finish long reports without pausing for "好了吗" prompts.
       HERMES_TUI_MAX_TURNS: process.env.HERMES_TUI_MAX_TURNS || '100',
+      // 2026-08-28 "Chaos 卡住": video-generation batches legitimately run
+      // >10 min; the terminal tool's 600s foreground cap killed them
+      // mid-flight twice (LN01-05 / LN05-09) and the tool then returned a
+      // timeout error the UI never saw. Raise to 1h; still overridable.
+      TERMINAL_MAX_FOREGROUND_TIMEOUT: process.env.TERMINAL_MAX_FOREGROUND_TIMEOUT || '3600',
       // Enable the Hermes toolsets. `hermes-cli` carries langgraph_agent and
       // shell/file tools; `browser-pw` adds the 7 pw_browser_* native-driver tools
       // (Path B browser automation). Override via HERMES_TUI_TOOLSETS to roll back.
