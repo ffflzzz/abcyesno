@@ -85,12 +85,24 @@ function readFileAsDataURL(file) {
 // the model sees the picture exactly where the user placed it.
 
 function makeInlineImageChip(fileName, dataUrl, idx) {
+  // 2026-08-28：chip 内嵌真实缩略图（此前只有文件名文本，悬停预览用的
+  // CSS attr(data-img-src) 在 Chromium 不生效——用户根本看不到图片预览）。
   const chip = document.createElement("span");
   chip.className = "composer-image-chip";
   chip.setAttribute("data-inline-img", String(idx));
   chip.setAttribute("data-img-src", dataUrl);
   chip.setAttribute("contentEditable", "false");
-  chip.textContent = fileName || "图片";
+  chip.setAttribute("title", fileName || "图片");
+  const img = document.createElement("img");
+  img.className = "composer-image-chip-thumb";
+  img.src = dataUrl;
+  img.alt = fileName || "图片";
+  img.draggable = false;
+  chip.appendChild(img);
+  const label = document.createElement("span");
+  label.className = "composer-image-chip-name";
+  label.textContent = fileName || "图片";
+  chip.appendChild(label);
   return chip;
 }
 

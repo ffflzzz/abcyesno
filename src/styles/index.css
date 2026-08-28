@@ -1676,9 +1676,9 @@ body {
 .composer-image-chip {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  height: 26px;
-  padding: 0 10px;
+  gap: 7px;
+  height: auto;
+  padding: 3px 9px 3px 3px;
   border-radius: var(--radius-md);
   background: var(--panel-2);
   border: 1px solid var(--border);
@@ -1707,23 +1707,20 @@ body {
 .composer-image-chip {
   position: relative;
 }
-.composer-image-chip:hover::after {
-  content: "";
-  position: absolute;
-  bottom: 34px;
-  left: 0;
-  width: 160px;
-  height: 120px;
-  background-image: attr(data-img-src url);
-  background-size: contain;
-  background-repeat: no-repeat;
-  background-position: center;
-  background-color: var(--panel);
+.composer-image-chip-thumb {
+  width: 44px;
+  height: 44px;
+  object-fit: cover;
+  border-radius: 5px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
-  z-index: 1000;
+  flex-shrink: 0;
   pointer-events: none;
+}
+.composer-image-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 170px;
 }
 
 /* React ImageChip tooltip rendered fixed to avoid clipping inside scrollers */
