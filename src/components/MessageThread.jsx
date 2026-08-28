@@ -988,17 +988,23 @@ function ConsoleToolSegment({ seg, messages }) {
   const byId = useMemo(() => new Map((messages || []).map((m) => [m.id, m])), [messages]);
   const items = (seg.ids || []).map((id) => byId.get(id)).filter(Boolean);
   const hasRunning = items.some((m) => m.status === "running" || m.status === "in_progress");
-  // 2026-08-27：段内工具全部完成 → 自动收纳（只展开当前活跃段）；
-  // 手动点头部切换后尊重用户选择，直到下一个运行/完成边界。
-  const prevRunningRef = useRef(hasRunning);
+  // 2026-08-28：段内工具全部完成 → 延迟 2s 自动收纳（只展开当前活跃段）。
+  // 立即收纳会让"展开→完成→收起"高频切换产生闪烁感，2s 缓冲让用户看清
+  // 完成状态；手动点头部切换后尊重用户选择，直到下一个运行/完成边界。
   const [expandOverride, setExpandOverride] = useState(null);
+  const [autoClosed, setAutoClosed] = useState(!hasRunning);
   useEffect(() => {
-    if (prevRunningRef.current !== hasRunning) {
-      prevRunningRef.current = hasRunning;
+    if (hasRunning) {
+      // 新运行边界：重置手动选择，立即展开
       setExpandOverride(null);
+      setAutoClosed(false);
+      return;
     }
+    // 完成 → 2s 后收纳
+    const t = setTimeout(() => setAutoClosed(true), 2000);
+    return () => clearTimeout(t);
   }, [hasRunning]);
-  const open = expandOverride !== null ? expandOverride : hasRunning;
+  const open = expandOverride !== null ? expandOverride : !autoClosed;
   const toggleOpen = () => setExpandOverride(!open);
   const streamRef = useRef(null);
   const userScrolledRef = useRef(false);
