@@ -38,7 +38,18 @@ from langgraph.types import interrupt
 # ─────────────────────────────────────────────
 
 # 运行目录辅助
-_RUNS_DIR = os.path.join(_PROJECT_ROOT, "runs")
+# 与 Hermes langgraph_agent 调用的 paper_rewriter_agent (pr_config.RUNS_DIR)
+# 保持一致，使 dashboard 启动的运行和对话启动的运行共享同一历史目录。
+def _hermes_home() -> str:
+    return os.environ.get("HERMES_HOME") or str(
+        os.path.join(os.path.expanduser("~"), ".hermes_portable_data")
+    )
+
+
+_RUNS_DIR = os.environ.get("PR_RUNS_DIR") or os.path.join(
+    _hermes_home(), "paper_rewriter_runs"
+)
+
 
 def _get_run_dir(run_id: str) -> str:
     d = os.path.join(_RUNS_DIR, run_id)

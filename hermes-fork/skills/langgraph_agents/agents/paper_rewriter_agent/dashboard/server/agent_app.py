@@ -25,7 +25,7 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-from agent.graph import build_agent_graph, set_current_run_id, init_run, _get_run_dir, _log
+from agent.graph import build_agent_graph, set_current_run_id, init_run, _get_run_dir, _RUNS_DIR, _log
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, SystemMessage
 from langgraph.types import Command
 from pipeline.config import SERVER_HOST, SERVER_PORT, OUTPUT_DIR
@@ -162,27 +162,120 @@ async def get_graph_definition():
     }
 
 
+def _scan_run_directory(name: str) -> dict | None:
+    """读取单个 run 目录的元信息和进度，返回标准化摘要。"""
+    run_dir = os.path.join(_RUNS_DIR, name)
+    if not os.path.isdir(run_dir):
+        return None
+
+    meta = {}
+    progress = {}
+
+    meta_path = os.path.join(run_dir, "meta.json")
+    progress_path = os.path.join(run_dir, "progress.json")
+
+    if os.path.exists(meta_path):
+        try:
+            with open(meta_path, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+        except Exception:
+            pass
+    if os.path.exists(progress_path):
+        try:
+            with open(progress_path, "r", encoding="utf-8") as f:
+                progress = json.load(f)
+        except Exception:
+            pass
+
+    chapters = progress.get("chapters", {}) if isinstance(progress, dict) else {}
+    total_chars = sum(ch.get("chars", 0) for ch in chapters.values())
+    started_at = progress.get("started_at") or meta.get("created_at", 0)
+    last_updated = progress.get("last_updated", started_at)
+
+    # 启发式状态：未生成 PDF 且 30 分钟内有过更新视为运行中
+    pdf_path = os.path.join(run_dir, "output.pdf")
+    is_running = (
+        not os.path.exists(pdf_path)
+        and (time.time() - last_updated) < 1800
+    )
+
+    return {
+        "run_id": name,
+        "paper_title": meta.get("paper_title", ""),
+        "original_chars": meta.get("original_chars", 0),
+        "chapters_written": len(chapters),
+        "total_chars": total_chars,
+        "created_at": meta.get("created_at", 0),
+        "started_at": started_at,
+        "last_updated": last_updated,
+        "status": "running" if is_running else "completed",
+        "pdf_ready": os.path.exists(pdf_path),
+    }
+
+
+def _find_latest_external_run() -> dict | None:
+    """当 dashboard 自身没有 current_run 时，从共享 runs 目录发现最新外部运行。"""
+    if not os.path.isdir(_RUNS_DIR):
+        return None
+
+    candidates = []
+    for name in os.listdir(_RUNS_DIR):
+        info = _scan_run_directory(name)
+        if info and info.get("last_updated"):
+            candidates.append(info)
+
+    if not candidates:
+        return None
+
+    latest = max(candidates, key=lambda x: x["last_updated"])
+    return {
+        "run_id": latest["run_id"],
+        "status": latest["status"],
+        "started_at": latest["started_at"],
+        "ended_at": None if latest["status"] == "running" else latest["last_updated"],
+        "chapters": {},  # status 摘要不需要章节明细
+    }
+
+
 @app.get("/api/status")
 async def get_status():
     chapters_info = {}
     run_id = current_run.get("run_id")
+    status = current_run.get("status", "idle")
+    started_at = current_run["started_at"]
+    ended_at = current_run["ended_at"]
+    error = current_run.get("error", "")
+    tool_calls = current_run.get("tool_calls", 0)
+    last_action = current_run.get("last_action", "")
+    awaiting = current_run.get("awaiting")
+
     if run_id:
         run_dir = _get_run_dir(run_id)
         progress_path = os.path.join(run_dir, "progress.json")
         if os.path.exists(progress_path):
             with open(progress_path, "r", encoding="utf-8") as f:
                 chapters_info = json.load(f).get("chapters", {})
+    elif status != "running":
+        # 兜底：发现从对话 langgraph_agent 启动的外部运行
+        external = _find_latest_external_run()
+        if external:
+            run_id = external["run_id"]
+            status = external["status"]
+            started_at = external["started_at"]
+            ended_at = external["ended_at"]
+            chapters_info = external.get("chapters", {})
+            last_action = "外部运行" if status == "running" else "外部运行已完成"
 
     return {
-        "run_id": current_run["run_id"],
-        "status": current_run["status"],
-        "started_at": current_run["started_at"],
-        "ended_at": current_run["ended_at"],
-        "error": current_run.get("error", ""),
-        "tool_calls": current_run.get("tool_calls", 0),
-        "last_action": current_run.get("last_action", ""),
+        "run_id": run_id,
+        "status": status,
+        "started_at": started_at,
+        "ended_at": ended_at,
+        "error": error,
+        "tool_calls": tool_calls,
+        "last_action": last_action,
         "auto_approve": current_run.get("auto_approve", False),
-        "awaiting": current_run.get("awaiting"),
+        "awaiting": awaiting,
         "auto_tools": sorted(current_run.get("auto_tools") or []),
         "chapters": chapters_info,
     }
@@ -190,41 +283,15 @@ async def get_status():
 
 @app.get("/api/runs")
 async def list_runs():
-    runs_dir = os.path.join(_PROJECT_ROOT, "runs")
-    if not os.path.exists(runs_dir):
+    if not os.path.exists(_RUNS_DIR):
         return []
-    
+
     runs = []
-    for name in sorted(os.listdir(runs_dir), reverse=True):
-        run_dir = os.path.join(runs_dir, name)
-        if not os.path.isdir(run_dir):
-            continue
-        
-        meta = {}
-        progress = {}
-        
-        meta_path = os.path.join(run_dir, "meta.json")
-        progress_path = os.path.join(run_dir, "progress.json")
-        
-        if os.path.exists(meta_path):
-            with open(meta_path, "r", encoding="utf-8") as f:
-                meta = json.load(f)
-        if os.path.exists(progress_path):
-            with open(progress_path, "r", encoding="utf-8") as f:
-                progress = json.load(f)
-        
-        chapters = progress.get("chapters", {})
-        total_chars = sum(ch.get("chars", 0) for ch in chapters.values())
-        
-        runs.append({
-            "run_id": name,
-            "paper_title": meta.get("paper_title", ""),
-            "original_chars": meta.get("original_chars", 0),
-            "chapters_written": len(chapters),
-            "total_chars": total_chars,
-            "created_at": meta.get("created_at", 0),
-        })
-    
+    for name in sorted(os.listdir(_RUNS_DIR), reverse=True):
+        info = _scan_run_directory(name)
+        if info:
+            runs.append(info)
+
     return runs
 
 
