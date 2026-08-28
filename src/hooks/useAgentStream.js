@@ -444,6 +444,14 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
         if (text.length > 1 && sess.reasoningText.endsWith(text)) return;
         sess.phase = "thinking";
         sess.reasoningText += text;
+        // agent 时间线：推理段（连续推理并入同段；被工具/正文打断则开新段）。
+        // 2026-08-28 修复：此前这一处的补丁静默失败（replace 无断言），
+        // reasoning.delta 从未进入时间线 → 过程流运行中永远没有 thinking 框。
+        if (Array.isArray(sess.timeline)) {
+          const last = sess.timeline[sess.timeline.length - 1];
+          const seg = last && last.kind === "reasoning" ? last : (() => { const sg = { kind: "reasoning", text: "", ts: Date.now() }; sess.timeline.push(sg); return sg; })();
+          seg.text += text;
+        }
         // 同步绑定到当前 assistant 消息（只取本轮 slice）：这样工具执行阶段
         // （该消息已不是最后一行，isLast=false 的实时分支不生效）以及历史回看
         // 时，ReasoningBlock 都能显示本轮推理，而不是等 TEXT_MESSAGE_END 才
