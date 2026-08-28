@@ -1805,7 +1805,6 @@ function MessageThread({ messages = [], loading, streamPhase, thinkingText, reas
             subagents,
             moaRefs,
             moaAggregating,
-            reviewSummary,
             approval,
             onRespondApproval,
             currentTurnToolMessages,
@@ -1957,21 +1956,10 @@ function MoaBlock({ refs, aggregating }) {
 }
 
 /**
- * ReviewSummaryBlock — 评审 / 自检摘要（review.summary）。
+ * ReviewSummaryBlock 已移除（2026-08-28）：评审/自检事件（review.summary）
+ * 改由 useAgentStream 追加为消息流内的内联 self_review 工具卡，与其它事件
+ * 一起打印、一起行进，不再用 Composer 上方的折叠框单独包裹。
  */
-function ReviewSummaryBlock({ text }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="review-summary-block">
-      <button className="review-toggle" onClick={() => setOpen((o) => !o)}>
-        <Icon name="clipboard" size={13} />
-        <span>评审摘要</span>
-        <Icon name="chevron" size={12} style={{ transform: open ? "rotate(90deg)" : "rotate(0deg)" }} />
-      </button>
-      {open && <pre className="review-text">{text}</pre>}
-    </div>
-  );
-}
 
 
 /**
@@ -1979,12 +1967,14 @@ function ReviewSummaryBlock({ text }) {
  *
  * 之前 Virtuoso 的 `components.Footer` 用内联箭头函数定义，导致每次
  * MessageThread 重渲染时 Footer 组件类型都变，React 会把整个 Footer 子树
- * 卸载并重新挂载。结果 ReviewSummaryBlock 等带内部 state 的 P1 组件在每次
- * 流式 token 到来时都丢失状态，表现为「评审摘要无法展开」。
+ * 卸载并重新挂载，带内部 state 的组件会丢失状态。
  *
  * 把这个 Footer 提取为模块级稳定组件，动态数据通过 Virtuoso 的 `context`
- * 传入；context 变化只会触发重渲染，不会导致子树 remount，因此
- * ReviewSummaryBlock 的展开状态可以保留。
+ * 传入；context 变化只会触发重渲染，不会导致子树 remount。
+ *
+ * 2026-08-28：ReviewSummaryBlock（「评审摘要」折叠框）已移除——评审/自检
+ * 事件（review.summary）现在由 useAgentStream 追加为消息流内的内联
+ * self_review 工具卡，与其它事件一起打印、一起行进。
  */
 function MessageFooter({ context }) {
   const {
@@ -1992,7 +1982,6 @@ function MessageFooter({ context }) {
     subagents,
     moaRefs,
     moaAggregating,
-    reviewSummary,
     approval,
     onRespondApproval,
     currentTurnToolMessages,
@@ -2009,9 +1998,6 @@ function MessageFooter({ context }) {
       {subagents?.length > 0 && null /* SubagentTerminal 移除：subagent 状态由 AgentRunMonitor（Composer 上方）承载，inner message 文本表达完成 */}
       {moaRefs?.length > 0 && (
         <MoaBlock key="moa-block" refs={moaRefs} aggregating={moaAggregating} />
-      )}
-      {reviewSummary && (
-        <ReviewSummaryBlock key="review-summary" text={reviewSummary} />
       )}
       {/* 审批气泡已迁移至 Composer（小 Bach 头顶气泡，2026-08-27），此处不再渲染 */}
     </>

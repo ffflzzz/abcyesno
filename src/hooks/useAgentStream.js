@@ -563,8 +563,23 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
       } else if (name === "background.complete") {
         emitToastShow({ key: value?.task_id, level: "success", text: `后台任务完成：${value?.text || value?.task_id || ""}`, kind: "ttl", ttlMs: 6000 });
       } else if (name === "review.summary") {
-        sess.reviewSummary = value?.text || "";
-        emitToastShow({ key: "review-summary", level: "info", text: "收到评审摘要", kind: "ttl", ttlMs: 4000 });
+        // 2026-08-28：评审/自检事件改为消息流内的内联卡片，与工具卡一起
+        // 打印、一起行进——不再用 Composer 上方的「评审摘要」折叠框单独
+        // 包裹（用户反馈：自动生成的 skill 不该被特殊框隔开）。
+        const text = value?.text || "";
+        if (text) {
+          appendMessage(sess, {
+            id: `review-${Date.now()}`,
+            role: "tool",
+            toolName: "self_review",
+            args: "",
+            content: text,
+            result: text,
+            status: "complete",
+            createdAt: Date.now(),
+            startedAt: Date.now(),
+          });
+        }
         publish(sess.id);
       } else if (name === "browser.progress") {
         // Agent-driven browser activity (route B / pw_browser_* tools). The
