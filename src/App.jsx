@@ -284,6 +284,7 @@ function ChatShell({
     runningSessionIds,
     sendMessage,
     stop,
+    clearError: clearStreamError,
     setHistory,
     hydrateSession,
     getSessionMessages,
@@ -770,6 +771,16 @@ function ChatShell({
   // Combine prop runError with stream error for the banner.
   const displayError = runError || streamError;
 
+  // 「知道了」必须清掉真正产生这条错误的那个源。displayError 是两个源的合并
+  // （App 层 runError prop + useAgentStream 的 per-session sess.error），此前
+  // dismiss 只调 onClearRunError，于是 stream 侧的错误（workflow.error、
+  // "工作流已被拒绝"、"审批等待超时"）点了气泡不消失 —— 用户报的"点击知道了没反应"。
+  // 两个都清，谁产生的都能关掉。
+  const handleClearRunError = useCallback(() => {
+    if (onClearRunError) onClearRunError();
+    clearStreamError(selectedSessionId);
+  }, [onClearRunError, clearStreamError, selectedSessionId]);
+
   return (
     <>
       <IconRail
@@ -860,7 +871,7 @@ function ChatShell({
         backendStatus={backendStatus}
         skills={skills}
         runError={displayError}
-        onClearRunError={onClearRunError}
+        onClearRunError={handleClearRunError}
         manifests={manifests}
         selectedWorkflowId={selectedWorkflowId}
         onSelectWorkflow={onSelectWorkflow}

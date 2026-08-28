@@ -1189,6 +1189,26 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
     [publishNow]
   );
 
+  /**
+   * 清掉指定会话的错误态（用户点「知道了」/关闭错误气泡）。
+   *
+   * 错误在 UI 上有两个来源：App 层的 `runError` state 和这里的 per-session
+   * `sess.error`。Composer 的「知道了」原先只调 App 的 onClearRunError，凡是
+   * stream 侧产生的错误（workflow.error / workflow.done status!=done，例如
+   * "工作流已被拒绝"）点了都没反应——气泡读的是 displayError = runError ||
+   * streamError，清 runError 对 streamError 毫无作用。
+   */
+  const clearError = useCallback(
+    (sessionId) => {
+      const sid = typeof sessionId === "string" ? sessionId : activeIdRef.current;
+      const sess = sessionsRef.current.get(sid || "");
+      if (!sess || sess.error == null) return;
+      sess.error = null;
+      publishNow(sess.id);
+    },
+    [publishNow]
+  );
+
   /** 覆盖指定会话的消息列表（编辑/重新生成/删除场景）。 */
   const setHistory = useCallback(
     (history, sessionId) => {
@@ -1359,6 +1379,7 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
     sendMessage,
     stop,
     reset,
+    clearError,
     setHistory,
     hydrateSession,
     dropSession,
