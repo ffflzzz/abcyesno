@@ -807,7 +807,14 @@ function createAgUIServer(getGatewayClient, storage, options) {
           if (payload && payload.usage) {
             send({ type: 'CUSTOM', name: 'usage.update', value: payload.usage });
           }
-          setPhase('idle');
+          // 2026-08-28 "状态文字/spinner 消失": in goal (multiRound) mode
+          // message.complete fires at EVERY round boundary while the loop
+          // keeps running — broadcasting phase:idle here made the frontend
+          // spinner/status vanish mid-run until the next round's first
+          // phase-carrying event (judge + silent tools = minutes of
+          // "looks finished"). Non-goal turns end for real and RUN_FINISHED
+          // flips the frontend to idle anyway, so gate it.
+          if (!multiRound) setPhase('idle');
           finalize(text);
           break;
         }

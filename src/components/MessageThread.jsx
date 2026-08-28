@@ -1471,13 +1471,17 @@ function MessageThread({ messages = [], loading, streamPhase, thinkingText, reas
       const prevRow = index > 0 ? rows[index - 1] : null;
       const isContinuation = prevRow?.type === "tools";
       const spinnerText = isKawaiiSpinnerPhrase(thinkingText) ? thinkingText.trim() : "";
+      // 2026-08-28: a stale non-kawaii thinkingText used to blank the whole
+      // status line (phaseLabel was suppressed whenever thinkingText was
+      // non-empty) — during long tool runs the compact row rendered EMPTY and
+      // the bottom looked "finished". Tool/text phases now always show their
+      // label; only the plain thinking phase yields to real thinking content.
       const phaseLabel =
-        !spinnerText
-          ? !thinkingText
-            ? row.phase === "text_generating" ? "正在生成回复"
-            : row.phase === "tool_executing" ? "正在调用工具"
-            : "正在思考…"
-          : ""
+        spinnerText
+          ? ""
+          : row.phase === "text_generating" ? "正在生成回复"
+          : row.phase === "tool_executing" ? "正在调用工具"
+          : !thinkingText ? "正在思考…"
           : "";
       const showStatusLine = spinnerText || phaseLabel;
       return (
