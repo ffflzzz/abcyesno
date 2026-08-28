@@ -1068,6 +1068,16 @@ function AgentProcessStream({ timeline, messages, loading }) {
     userScrolledRef.current = !nearBottom;
   }, []);
   const byId = useMemo(() => new Map((messages || []).map((m) => [m.id, m])), [messages]);
+  // Only the LAST reasoning segment streams "思考中…" — during a /goal run
+  // `loading` is true across the whole loop, so keying every historical
+  // segment off `loading` made all completed thinking blocks say 思考中.
+  const lastReasoningIdx = useMemo(() => {
+    let idx = -1;
+    (timeline || []).forEach((s, i) => {
+      if (s.kind === "reasoning" && s.text && s.text.trim()) idx = i;
+    });
+    return idx;
+  }, [timeline]);
   return (
     <div className="agent-console" ref={ref} onScroll={handleScroll}>
       {timeline.map((seg, i) => {
@@ -1076,7 +1086,7 @@ function AgentProcessStream({ timeline, messages, loading }) {
           // 回答前就弹出并流式展开，充分展示思考过程；运行结束随整流收纳。
           // 此前用暗色斜体小字，用户感知不到"思考框已弹出"。
           return seg.text && seg.text.trim() ? (
-            <ReasoningBlock key={`r-${i}`} text={seg.text} streaming={loading} />
+            <ReasoningBlock key={`r-${i}`} text={seg.text} streaming={loading && i === lastReasoningIdx} />
           ) : null;
         }
         if (seg.kind === "tools") {
@@ -1227,6 +1237,17 @@ function MessageThread({ messages = [], loading, streamPhase, thinkingText, reas
     }
     if (lastUserIdx < 0) return messages.filter((m) => m.role === "tool");
     return messages.slice(lastUserIdx + 1).filter((m) => m.role === "tool");
+  }, [messages]);
+
+  // 2026-08-28: id of the last assistant message. ReasoningBlock streaming
+  // badges must only apply to THIS message — during a /goal run `loading` is
+  // true for the WHOLE multi-round loop, so keying off `loading` alone made
+  // every completed round's 深度推理 block show "思考中…" forever.
+  const lastAssistantId = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i] && messages[i].role === "assistant") return messages[i].id;
+    }
+    return null;
   }, [messages]);
 
   // ── Workflow progress: extract stage list from contract events ──
@@ -1568,7 +1589,10 @@ function MessageThread({ messages = [], loading, streamPhase, thinkingText, reas
           <div className="message-col">
             <div className="assistant-body">
               {m.reasoning && m.reasoning.trim() ? (
-                <ReasoningBlock text={m.reasoning} streaming={loading} />
+                // streaming only for the CURRENT round's message — during a
+                // goal run `loading` stays true across rounds, and every
+                // historical round's block showed "思考中…" (2026-08-28).
+                <ReasoningBlock text={m.reasoning} streaming={loading && m.id === lastAssistantId} />
               ) : null}
             </div>
           </div>
