@@ -40,6 +40,20 @@ export function setAbcSessionHelper(h: AbcSessionHelper): void {
 }
 
 // ---------------------------------------------------------------------------
+// Inbound interceptor (injected by bridge.ts, wired from Electron main)
+// ---------------------------------------------------------------------------
+// 2026-08-29 微信授权「原路返回」：agent 在微信驱动的 turn 里触发工具授权时，
+// 主进程把授权请求转发到微信并把待决审批挂在这里注册的表里。用户回复
+// 「批准/拒绝」时，拦截器消费这条消息作为审批决策，直接回传 gateway，
+// 绝不能再当普通对话起一个 agent turn。
+export type InboundInterceptor = (text: string, fromUserId: string) => boolean;
+
+let inboundInterceptor: InboundInterceptor | null = null;
+export function setInboundInterceptor(fn: InboundInterceptor | null): void {
+  inboundInterceptor = fn;
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -468,6 +482,18 @@ export async function createDaemonRuntime(): Promise<DaemonRuntime | null> {
           flushPendingSends(sender, freshToken).catch((err) => {
             logger.warn('flushPendingSends threw', { error: err instanceof Error ? err.message : String(err) });
           });
+        }
+        // 2026-08-29 微信授权原路返回：待决审批的「批准/拒绝」回复在这里被
+        // 消费（主进程回传 gateway），不再进入普通对话管线。
+        if (msg.item_list && inboundInterceptor) {
+          const interceptText = extractTextFromItems(msg.item_list);
+          if (interceptText && inboundInterceptor(interceptText, msg.from_user_id ?? '')) {
+            logger.info('Inbound message consumed by approval interceptor', {
+              fromUserId: msg.from_user_id,
+              text: interceptText.slice(0, 40),
+            });
+            return;
+          }
         }
       }
       if (handlePriorityCommand(msg)) return;

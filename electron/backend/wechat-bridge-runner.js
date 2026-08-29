@@ -164,7 +164,40 @@ function createWechatBridgeRunner({ onStatus, getStorage, onSessionsUpdated } = 
     }
   }
 
-  return { start, stop, call, isStarted: () => started };
+  return {
+    start,
+    stop,
+    call,
+    isStarted: () => started,
+    setInboundInterceptor,
+    getFromUserForSession,
+  };
 }
+
+// ── 2026-08-29 微信授权「原路返回」 ──────────────────────────────────────
+// main.js 注入拦截器：微信用户回复「批准/拒绝」时由 bridge 入站管线消费，
+// 直接回传 gateway，不再当普通对话起 agent turn。反向映射用于把
+// approval.request 的 session 定位回微信用户（dist bundle 是进程级单例，
+// 挂在模块级与 createWechatBridgeRunner 实例无关；工厂返回对象引用同两个
+// 函数，供 main.js 经 runner 实例调用）。
+function setInboundInterceptor(fn) {
+  try {
+    if (typeof bridge.setInboundInterceptor === 'function') bridge.setInboundInterceptor(fn);
+  } catch (err) {
+    console.warn('[wechat-bridge] setInboundInterceptor failed:', err?.message || err);
+  }
+}
+
+function getFromUserForSession(sessionId) {
+  try {
+    if (typeof bridge.getFromUserForSession === 'function') {
+      return bridge.getFromUserForSession(sessionId);
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
+module.exports.setInboundInterceptor = setInboundInterceptor;
+module.exports.getFromUserForSession = getFromUserForSession;
 
 module.exports = { createWechatBridgeRunner };

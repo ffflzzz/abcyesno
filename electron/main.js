@@ -92,6 +92,91 @@ let gatewayClient = null;
 let aguiServer = null;
 let aguiPort = 0;
 let gatewayReady = false; // true only after gatewayClient WS 'open' fires
+
+// ── 2026-08-29 微信授权「原路返回」 ────────────────────────────────────────
+// 微信 bridge 驱动的 turn 触发工具授权时，审批请求不再弹到桌面
+// （用户不在电脑前 = 永久卡死），而是原路发回微信：转发请求 → 用户回复
+// 「批准/拒绝」→ bridge 入站拦截器消费回复 → approval.respond 回传 gateway。
+// 每个会话同时最多一个待决审批（同会话新请求替换旧的并清理其定时器）；
+// gateway 工具审批自身约 300s 超时，这里 4 分钟后主动作废并告知用户。
+const pendingWechatApprovals = new Map(); // sessionId -> { id, fromUser, timer }
+const WECHAT_APPROVAL_TTL_MS = 4 * 60 * 1000;
+
+function sendWechatText(text) {
+  try {
+    if (!wechatBridgeRunner) return;
+    wechatBridgeRunner.call('sendTestMessage', { text }).catch(() => {});
+  } catch { /* best-effort */ }
+}
+
+function clearPendingWechatApproval(sessionId) {
+  const p = pendingWechatApprovals.get(sessionId);
+  if (p && p.timer) clearTimeout(p.timer);
+  pendingWechatApprovals.delete(sessionId);
+}
+
+/**
+ * 微信会话的审批请求改走微信。返回 true 表示已接管（不再投递桌面）。
+ * 非微信会话 / bridge 未就绪 / 反查不到用户 → false，走桌面弹窗。
+ */
+function routeApprovalToWechat(req) {
+  try {
+    if (!wechatBridgeRunner || !req || !req.session_id) return false;
+    const sessionId = String(req.session_id);
+    const fromUser = wechatBridgeRunner.getFromUserForSession(sessionId);
+    if (!fromUser) return false;
+    // 同会话重复请求：替换旧的（清定时器），以最新为准。
+    clearPendingWechatApproval(sessionId);
+    const detail = String(
+      req.command || req.description || req.operation || req.label || '执行一个敏感操作'
+    ).slice(0, 500);
+    const text = `⚠️ Agent 请求授权\n\n${detail}\n\n回复「批准」执行，回复「拒绝」取消。（4 分钟内有效）`;
+    sendWechatText(text);
+    const timer = setTimeout(() => {
+      if (pendingWechatApprovals.get(sessionId)?.id !== req.id) return;
+      pendingWechatApprovals.delete(sessionId);
+      sendWechatText('⌛ 该授权请求已超时失效，agent 侧会按拒绝处理；如需继续请让它重新发起。');
+    }, WECHAT_APPROVAL_TTL_MS);
+    pendingWechatApprovals.set(sessionId, { id: req.id, fromUser, timer });
+    log('wechat-bridge', `approval ${req.id} routed to wechat user for session ${sessionId}`);
+    return true;
+  } catch (err) {
+    log('wechat-bridge', `routeApprovalToWechat failed: ${err.message}`);
+    return false;
+  }
+}
+
+/**
+ * bridge 入站拦截器：微信用户回复「批准/拒绝」时消费该消息并回传
+ * gateway；非审批回复返回 false，走正常对话管线。
+ */
+function handleWechatApprovalReply(text, fromUserId) {
+  try {
+    for (const [sessionId, p] of pendingWechatApprovals) {
+      if (p.fromUser !== fromUserId) continue;
+      const t = String(text || '').trim();
+      const lower = t.toLowerCase();
+      let choice = null;
+      if (/^(批准|同意|允许|好的?|可以|行|yes|y|approve|ok)/.test(lower)) choice = true;
+      else if (/^(拒绝|不同意|不允许|不行|不要|no|n|deny|reject)/.test(lower)) choice = false;
+      if (choice === null) return false; // 普通对话，不打扰
+      clearPendingWechatApproval(sessionId);
+      if (!gatewayClient || !gatewayClient.ready) {
+        sendWechatText('⚠️ 后端网关未连接，授权回传失败，请稍后重试。');
+        return true;
+      }
+      gatewayClient.request('approval.respond', { id: p.id, choice, session_id: sessionId }, 30000)
+        .then(() => {
+          sendWechatText(choice ? '✅ 已批准，agent 正在继续执行。' : '🚫 已拒绝，agent 已停止该操作。');
+        })
+        .catch((err) => {
+          sendWechatText(`⚠️ 授权回传失败：${err.message}`);
+        });
+      return true; // consumed — 绝不再起 agent turn
+    }
+  } catch { /* fall through */ }
+  return false;
+}
 // Track every BrowserWindow we own so the "window-all-closed" guard and
 // clean-shutdown hooks know when the user is fully done.
 const allWindows = new Set();
@@ -649,14 +734,25 @@ async function doStartBackend() {
     log('wechat-bridge', `init failed (non-fatal): ${err.message}`);
   }
 
+  // 微信授权原路返回：bridge 入站管线先过审批回复拦截器（批准/拒绝 →
+  // approval.respond 回传 gateway），其余消息正常起 agent turn。
+  try {
+    wechatBridgeRunner.setInboundInterceptor(handleWechatApprovalReply);
+  } catch (err) {
+    log('wechat-bridge', `inject approval interceptor failed (non-fatal): ${err.message}`);
+  }
+
   const wsUrl = `ws://127.0.0.1:${hermesRunner.getPort()}/api/ws`;
   gatewayClient = new GatewayClient({ url: wsUrl, token: hermesRunner.getSessionToken() });
 
   gatewayClient.on('event', (type, params) => {
     if (type === 'approval.request') {
+      // 2026-08-29 微信会话的审批原路返回微信（不弹桌面）；桌面会话照旧。
+      const req = { ...(params.payload || params), session_id: params.session_id };
+      if (routeApprovalToWechat(req)) return;
       if (mainWindow) {
         // 附带 session_id：respond-approval 需要它回传给 gateway
-        mainWindow.webContents.send('approval-request', { ...(params.payload || params), session_id: params.session_id });
+        mainWindow.webContents.send('approval-request', req);
       }
     } else if (type === 'sudo.request') {
       if (mainWindow) {

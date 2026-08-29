@@ -6458,10 +6458,14 @@ __export(main_exports, {
   lastTurnInfo: () => lastTurnInfo,
   pendingProactiveSends: () => pendingProactiveSends,
   queueProactiveSend: () => queueProactiveSend,
-  setAbcSessionHelper: () => setAbcSessionHelper
+  setAbcSessionHelper: () => setAbcSessionHelper,
+  setInboundInterceptor: () => setInboundInterceptor
 });
 function setAbcSessionHelper(h) {
   abcSessionHelper = h;
+}
+function setInboundInterceptor(fn) {
+  inboundInterceptor = fn;
 }
 function extractFilePathsFromText(text, cwd) {
   const paths = [];
@@ -6740,6 +6744,16 @@ async function createDaemonRuntime() {
           flushPendingSends(sender, freshToken).catch((err) => {
             logger.warn("flushPendingSends threw", { error: err instanceof Error ? err.message : String(err) });
           });
+        }
+        if (msg.item_list && inboundInterceptor) {
+          const interceptText = extractTextFromItems(msg.item_list);
+          if (interceptText && inboundInterceptor(interceptText, msg.from_user_id ?? "")) {
+            logger.info("Inbound message consumed by approval interceptor", {
+              fromUserId: msg.from_user_id,
+              text: interceptText.slice(0, 40)
+            });
+            return;
+          }
         }
       }
       if (handlePriorityCommand(msg)) return;
@@ -7243,7 +7257,7 @@ async function sendToClaude(userText, imageItem, fileItem, fromUserId, contextTo
     }
   }
 }
-var import_node_readline, import_node_process, import_node_child_process, import_node_path14, import_node_fs12, import_node_os5, abcSessionHelper, MAX_MESSAGE_LENGTH, AUTO_PUSH_EXTENSIONS, lastTurnInfo, PENDING_SENDS_FILE, PENDING_SENDS_MAX, PENDING_SENDS_TTL_MS, pendingProactiveSends;
+var import_node_readline, import_node_process, import_node_child_process, import_node_path14, import_node_fs12, import_node_os5, abcSessionHelper, inboundInterceptor, MAX_MESSAGE_LENGTH, AUTO_PUSH_EXTENSIONS, lastTurnInfo, PENDING_SENDS_FILE, PENDING_SENDS_MAX, PENDING_SENDS_TTL_MS, pendingProactiveSends;
 var init_main = __esm({
   "electron/backend/wechat_bridge/src/main.ts"() {
     import_node_readline = require("node:readline");
@@ -7269,6 +7283,7 @@ var init_main = __esm({
     init_types();
     init_pending_queue();
     abcSessionHelper = null;
+    inboundInterceptor = null;
     MAX_MESSAGE_LENGTH = 4e3;
     AUTO_PUSH_EXTENSIONS = /* @__PURE__ */ new Set([
       ".png",
@@ -7333,6 +7348,7 @@ __export(bridge_exports, {
   ensureAbcSessionForWechatUser: () => ensureAbcSessionForWechatUser,
   getBridgeStatus: () => getBridgeStatus,
   getCurrentQrUrl: () => getCurrentQrUrl,
+  getFromUserForSession: () => getFromUserForSession,
   getQrDataUrl: () => getQrDataUrl,
   getSessionIdForFromUser: () => getSessionIdForFromUser,
   makeWechatThreadId: () => makeWechatThreadId,
@@ -7341,6 +7357,7 @@ __export(bridge_exports, {
   restartBridge: () => restartBridge,
   sendTestMessage: () => sendTestMessage,
   setAbcStorage: () => setAbcStorage,
+  setInboundInterceptor: () => setInboundInterceptor,
   setSessionIdForFromUser: () => setSessionIdForFromUser,
   startBridge: () => startBridge,
   stopBridge: () => stopBridge,
@@ -7356,6 +7373,7 @@ init_main();
 init_constants();
 init_logger();
 init_provider();
+init_main();
 var SESSION_MAP_FILE = (0, import_node_path15.join)(DATA_DIR, "wx_session_map.json");
 var sessionMapCache = /* @__PURE__ */ new Map();
 function loadSessionMap() {
@@ -7397,6 +7415,20 @@ function clearSessionMap() {
     (0, import_node_fs13.rmSync)(SESSION_MAP_FILE, { force: true });
   } catch {
   }
+}
+function getFromUserForSession(sessionId) {
+  if (!sessionId) return null;
+  for (const [user, sid] of sessionMapCache.entries()) {
+    if (sid === sessionId) return user;
+  }
+  const map = loadSessionMap();
+  for (const [user, sid] of Object.entries(map)) {
+    if (sid === sessionId) {
+      sessionMapCache.set(user, sid);
+      return user;
+    }
+  }
+  return null;
 }
 function makeWechatThreadId(fromUserId) {
   return `wx-${fromUserId}`;
@@ -7664,6 +7696,7 @@ try {
   ensureAbcSessionForWechatUser,
   getBridgeStatus,
   getCurrentQrUrl,
+  getFromUserForSession,
   getQrDataUrl,
   getSessionIdForFromUser,
   makeWechatThreadId,
@@ -7672,6 +7705,7 @@ try {
   restartBridge,
   sendTestMessage,
   setAbcStorage,
+  setInboundInterceptor,
   setSessionIdForFromUser,
   startBridge,
   stopBridge,

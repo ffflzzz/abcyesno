@@ -3,12 +3,14 @@ import { readdirSync, readFileSync, mkdirSync, rmSync, existsSync, writeFileSync
 
 import { loadLatestAccount, type AccountData } from './wechat/accounts.js';
 import { startQrLogin, waitForQrScan } from './wechat/login.js';
-import { createDaemonRuntime, setAbcSessionHelper, type DaemonRuntime } from './main.js';
+import { createDaemonRuntime, setAbcSessionHelper, setInboundInterceptor, type DaemonRuntime } from './main.js';
 import { DATA_DIR } from './constants.js';
 import { logger } from './logger.js';
 import { claudeQuery } from './claude/provider.js';
 
 export { claudeQuery };
+// 2026-08-29 微信授权原路返回：主进程经 runner 注入审批回复拦截器。
+export { setInboundInterceptor } from './main.js';
 
 // ---------------------------------------------------------------------------
 // WeChat user -> abcyesno sessionId mapping
@@ -66,6 +68,25 @@ export function setSessionIdForFromUser(fromUserId: string, sessionId: string): 
 export function clearSessionMap(): void {
   sessionMapCache.clear();
   try { rmSync(SESSION_MAP_FILE, { force: true }); } catch { /* ignore */ }
+}
+
+/**
+ * 2026-08-29 微信授权原路返回：反查某个 abcyesno 会话绑定的微信用户。
+ * 微信驱动的 turn 触发工具授权时，主进程据此把授权请求发回用户的微信。
+ */
+export function getFromUserForSession(sessionId: string): string | null {
+  if (!sessionId) return null;
+  for (const [user, sid] of sessionMapCache.entries()) {
+    if (sid === sessionId) return user;
+  }
+  const map = loadSessionMap();
+  for (const [user, sid] of Object.entries(map)) {
+    if (sid === sessionId) {
+      sessionMapCache.set(user, sid);
+      return user;
+    }
+  }
+  return null;
 }
 
 /** Stable Hermes threadId for a WeChat user (one thread per user, persistent). */
