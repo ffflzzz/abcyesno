@@ -127,10 +127,11 @@ function routeApprovalToWechat(req) {
     if (!fromUser) return false;
     // 同会话重复请求：替换旧的（清定时器），以最新为准。
     clearPendingWechatApproval(sessionId);
-    const detail = String(
-      req.command || req.description || req.operation || req.label || '执行一个敏感操作'
-    ).slice(0, 500);
-    const text = `⚠️ Agent 请求授权\n\n${detail}\n\n回复「批准」执行，回复「拒绝」取消。（4 分钟内有效）`;
+    // 2026-08-30：微信端同样优先给「人话摘要」，原始命令折叠为参考。
+    const summary = String(req.summary || '').trim();
+    const rawCmd = String(req.command || '').trim();
+    const detail = summary || (rawCmd ? rawCmd.slice(0, 300) : '执行一个敏感操作');
+    const text = `⚠️ Agent 请求授权\n\n${detail}${summary && rawCmd ? `\n\n命令：${rawCmd.slice(0, 300)}` : ''}\n\n回复「批准」执行，回复「拒绝」取消。（4 分钟内有效）`;
     sendWechatText(text);
     const timer = setTimeout(() => {
       if (pendingWechatApprovals.get(sessionId)?.id !== req.id) return;

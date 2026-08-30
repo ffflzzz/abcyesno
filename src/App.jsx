@@ -1574,6 +1574,11 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
     }
 
     const onApproval = (req) => {
+      // 2026-08-30：工具授权的 operation 常为空（弹「未知操作」，且「始终
+      // 批准此类操作」复选框形同虚设）。用模式描述作为稳定的类别键。
+      if (req && !req.operation) {
+        req.operation = req.pattern_key || req.description || "terminal.command";
+      }
       const allowed = JSON.parse(localStorage.getItem("abcyesno:allowedOps") || "[]");
       if (req && req.operation && allowed.includes(req.operation)) {
         autoApprove(req);

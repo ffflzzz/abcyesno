@@ -1011,6 +1011,54 @@ def _emit(event: str, sid: str, payload: dict | None = None):
     write_json({"jsonrpc": "2.0", "method": "event", "params": params})
 
 
+def _summarize_command_for_human(command: str) -> str:
+    """2026-08-30：为审批 UI 生成一句普通人能读懂的命令摘要。
+
+    普通用户无法从 30 行 `python -c` 判断安全性——弹窗主角应该是「agent 想做
+    什么」，原始命令降级为可展开的技术详情。启发式覆盖常见形态，返回空串时
+    前端回退到命令首行截断。
+    """
+    try:
+        cmd = (command or "").strip()
+        if not cmd:
+            return ""
+        first_line = cmd.splitlines()[0].strip() if "\n" in cmd else cmd
+        low = cmd.lower()
+
+        # python -c "<code>"（短剧 skill 的状态读写都是这个形态）
+        m = re.search(r"python[0-9.]*\s+(?:-u\s+)?-c\s+", low)
+        if m:
+            code_m = re.search(r"python[0-9.]*\s+(?:-u\s+)?-c\s+[\"'](.*)[\"']\s*$", cmd, re.S)
+            code = code_m.group(1) if code_m else ""
+            n_lines = len([l for l in code.splitlines() if l.strip()]) or 1
+            targets = re.findall(r"[\"']([^\"']+\.(?:json|md|txt|csv|ya?ml|html|js|py|srt))[\"']", code, re.I)
+            target = f"，读写 {targets[0]}" if targets else ""
+            return f"在工作区运行 Python 内联脚本（约 {n_lines} 行，用于更新任务状态）{target}"
+
+        m = re.search(r"git\s+clone\s+(\S+)", low)
+        if m:
+            return f"克隆 Git 仓库：{m.group(1)}"
+        if re.search(r"\brm\s+-[rf]", low):
+            paths = re.findall(r"[\"']?([/~][^\s\"';&|]+)", cmd)
+            return f"递归删除文件/目录：{paths[0] if paths else first_line[:80]}"
+        if re.search(r"\bcurl\b[^\n]*\|\s*(?:ba)?sh", low) or re.search(r"\bwget\b[^\n]*\|\s*(?:ba)?sh", low):
+            return "下载并直接执行远程脚本（高危操作）"
+        m = re.search(r"pip[0-9.]*\s+install\s+(.+)", low)
+        if m:
+            pkgs = m.group(1).split()[:4]
+            return f"安装 Python 依赖包：{', '.join(p for p in pkgs if not p.startswith('-'))}"
+        if re.search(r"\bnpm\s+(?:i|install)\b", low):
+            return "安装 npm 依赖包"
+        if low.startswith("git "):
+            op = low.split()[1] if len(low.split()) > 1 else "操作"
+            return f"执行 Git {op} 操作"
+        if "curl" in low or "wget" in low:
+            return "从网络下载内容"
+        return first_line[:100]
+    except Exception:
+        return ""
+
+
 def _emit_approval_request(sid: str, data: dict | None) -> None:
     """Emit an ``approval.request`` event to the TUI client with the command
     redacted. The approval payload is built from the RAW command string, so a
@@ -1023,6 +1071,12 @@ def _emit_approval_request(sid: str, data: dict | None) -> None:
         from gateway.run import _redact_approval_command
 
         payload["command"] = _redact_approval_command(payload.get("command"))
+    # 2026-08-30：给普通用户的一句人话摘要——弹窗主角改为「agent 想做什么」，
+    # 原始命令由前端折叠为技术详情。微信授权转发同样优先使用该字段。
+    try:
+        payload["summary"] = _summarize_command_for_human(payload.get("command"))
+    except Exception:
+        payload["summary"] = ""
     _emit("approval.request", sid, payload)
 
 

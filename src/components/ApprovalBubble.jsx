@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import Icon from "./Icon.jsx";
 import { toLoadableSrc } from "../utils/mediaSrc.js";
+import { humanSummaryOf, friendlyOperationOf } from "../utils/approvalHuman.js";
 
 function formatValue(value) {
   if (value === undefined || value === null) return "";
@@ -86,7 +87,10 @@ export default function ApprovalBubble({ approval, onRespond, toolMessages = [],
     return () => { cancelled = true; };
   }, [approval]);
 
-  const operationName = label || operation || tool_name || "未知操作";
+  // 2026-08-30 可读性改造：弹窗主角改为「agent 想做什么」的人话摘要；
+  // 原始命令默认折叠为技术详情（8 行/400 字以上必折叠）。
+  const humanSummary = humanSummaryOf(approval);
+  const operationName = friendlyOperationOf(approval) || "需要确认";
   const displayCommand = command
     || formatValue(args)
     || formatValue(description)
@@ -95,10 +99,12 @@ export default function ApprovalBubble({ approval, onRespond, toolMessages = [],
 
   const shownArtifacts = Array.isArray(artifacts) ? artifacts : [];
 
-  // Truncate very long content for the bubble preview
-  const isLongContent = displayCommand.length > 300;
+  // 折叠规则：>8 行或 >400 字符一律默认折叠（纯字符数判断会放过 30 行短行命令）
+  const lineCount = displayCommand ? displayCommand.split("\n").length : 0;
+  const isLongContent = displayCommand.length > 400 || lineCount > 8;
+  const COLLAPSED_CHARS = 360;
   const previewContent = isLongContent && !expanded
-    ? displayCommand.slice(0, 300) + "…"
+    ? displayCommand.slice(0, COLLAPSED_CHARS) + (displayCommand.length > COLLAPSED_CHARS ? "…" : "")
     : displayCommand;
 
   async function handleRespond(choice, withSteer) {
@@ -238,6 +244,14 @@ export default function ApprovalBubble({ approval, onRespond, toolMessages = [],
             <div className="approval-bubble-message">{message}</div>
           )}
 
+          {/* 2026-08-30 人话摘要：agent 想做什么（原始命令折叠在下方技术详情里） */}
+          {humanSummary && (
+            <div className="approval-bubble-message approval-bubble-human">
+              <span className="approval-bubble-human-label">agent 想要</span>
+              {humanSummary}
+            </div>
+          )}
+
           {/* Gate ID */}
           {gateId && (
             <div className="approval-bubble-meta">
@@ -306,6 +320,7 @@ export default function ApprovalBubble({ approval, onRespond, toolMessages = [],
           {/* Detailed content (collapsible when long) */}
           {displayCommand && (
             <div className={`approval-bubble-content ${isLongContent ? "collapsible" : ""} ${expanded ? "expanded" : ""}`}>
+              <div className="approval-bubble-content-label">技术详情（原始命令）</div>
               <pre className="approval-bubble-code">{previewContent}</pre>
               {isLongContent && (
                 <button
@@ -315,7 +330,7 @@ export default function ApprovalBubble({ approval, onRespond, toolMessages = [],
                   {expanded ? (
                     <><Icon name="chevron" size={10} style={{ transform: "rotate(-90deg)" }} /> 收起</>
                   ) : (
-                    <><Icon name="chevron" size={10} style={{ transform: "rotate(90deg)" }} /> 展开全部 ({displayCommand.length} 字符)</>
+                    <><Icon name="chevron" size={10} style={{ transform: "rotate(90deg)" }} /> 展开全部 ({displayCommand.length} 字符 / {lineCount} 行)</>
                   )}
                 </button>
               )}
