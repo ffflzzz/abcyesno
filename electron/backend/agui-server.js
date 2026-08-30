@@ -1025,6 +1025,11 @@ function createAgUIServer(getGatewayClient, storage, options) {
       }, timeoutMs);
 
       let settled = false;
+      // 2026-08-30: set by markQueued() when prompt.submit lands behind an
+      // in-flight turn — every event is then dropped until the queued turn's
+      // first message.start, so stale tail events of the previous turn can
+      // never resolve this run with empty text.
+      let suppressUntilMessageStart = false;
       // Phase 2: in goal mode the gateway emits multiple message.start/complete
       // cycles back-to-back. We can't resolve on the first complete — instead
       // arm an idle timer that resets on every event; when no new events
@@ -1095,6 +1100,18 @@ function createAgUIServer(getGatewayClient, storage, options) {
       };
 
       const handler = (type, params) => {
+        // Session filter must precede suppression — another session's
+        // message.start must not unsuppress us.
+        const _sid = params && (params.session_id || params.sid);
+        if (_sid && _sid !== hermesSessionId) return;
+        // Queued-run suppression: drop everything until the queued turn's
+        // first message.start. Must sit before armIdleTimer so the OLD turn's
+        // tail events can't keep this run's idle timer alive either.
+        if (suppressUntilMessageStart) {
+          if (type !== 'message.start') return;
+          suppressUntilMessageStart = false;
+          log('agui-server', 'queued turn started (message.start) — resuming event translation');
+        }
         // Reset idle timer on every event so a stream of events keeps the
         // SSE open. (Non-goal runs ignore the timer — first complete resolves.)
         armIdleTimer();
@@ -1149,7 +1166,18 @@ function createAgUIServer(getGatewayClient, storage, options) {
       armIdleTimer();
     });
 
-    return { promise, translator };
+    // 2026-08-30「未收到模型输出」×2：prompt.submit 落在忙时会话时 gateway
+    // 返回 {status:"queued"}——消息排队等旧 turn 跑完，但本 run 的 waiter 已经
+    // 在监听了，会咬到旧 turn 尾部的 message.complete 等事件，瞬间以空文本
+    // resolve，留下一串「（未收到模型输出）」占位。markQueued() 让 waiter 进入
+    // 屏蔽态：丢弃一切事件，直到新 turn 的首个 message.start 才恢复翻译。
+    function markQueued() {
+      if (suppressUntilMessageStart) return;
+      suppressUntilMessageStart = true;
+      log('agui-server', 'prompt queued behind an in-flight turn — suppressing events until it starts');
+    }
+
+    return { promise, translator, markQueued };
   }
 
   // Safety net: if the gateway WebSocket hasn't connected yet (e.g. Hermes is
@@ -1419,9 +1447,16 @@ function createAgUIServer(getGatewayClient, storage, options) {
       // 2026-08-26 实测一个 20-turn 预算的 goal 跑了 42 分钟（23:09→23:51），
       // 30 分钟硬超时会在循环中段把 SSE 掐掉。goal 的优雅收尾由显式
       // goal.complete 信号负责，硬超时只是防脱轨兜底，给到 6 小时。
+      //
+      // 2026-08-30「Hermes turn timed out」：非 goal 的 30 分钟硬顶成了新瓶颈
+      // ——terminal 前台上限已放宽到 1h，44 个工具的视频流水线合法跑超 30
+      // 分钟被整点砍掉（21:40:04 → 22:10:04）。且超时只断 SSE，hermes turn
+      // 仍 headless 续跑，同会话新 run 的 waiter 会咬到旧 turn 尾部事件产生
+      // 空占位。非 goal 抬到 2 小时；防挂死由 gateway 断连检测 + 用户 /stop
+      // 兜底，仍可用 env 覆盖。
       const turnTimeoutMs = goalMode
         ? Number(process.env.ABC_AGUI_GOAL_TURN_TIMEOUT || 6 * 60 * 60 * 1000)
-        : Number(process.env.ABC_AGUI_TURN_TIMEOUT || 1800000);
+        : Number(process.env.ABC_AGUI_TURN_TIMEOUT || 2 * 60 * 60 * 1000);
       // Phase 2: when a /goal kickoff is in flight, the gateway recurses into
       // multiple message.start/complete cycles (Ralph-style loop). The
       // translator must mint a fresh messageId each round and the turn waiter
@@ -1436,7 +1471,7 @@ function createAgUIServer(getGatewayClient, storage, options) {
         // 由 goal.complete / goal.continue 显式信号驱动，idle 只是兜底。
         ? { goalMode: true, idleMs: Number(process.env.ABC_AGUI_GOAL_IDLE_MS || 600000) }
         : undefined;
-      const { promise: turnPromise, translator } = waitForHermesTurn(
+      const { promise: turnPromise, translator, markQueued } = waitForHermesTurn(
         client, hermesSessionId, ctx, res, encoder, turnTimeoutMs, waitOpts
       );
       await attachTurnImages(hermesSessionId);
@@ -1444,10 +1479,15 @@ function createAgUIServer(getGatewayClient, storage, options) {
       let appLines = [];
       try { wechatLine = buildWechatEnvLine(options); } catch (_) { wechatLine = ''; }
       try { appLines = getAppContextLines(); } catch (_) { appLines = []; }
-      await client.request('prompt.submit', {
+      const submitRes = await client.request('prompt.submit', {
         session_id: hermesSessionId,
         text: prependEnvContext(ctx, text, { wechatLine, appLines }),
       }, 120000);
+      // 2026-08-30：忙时会话里 prompt.submit 返回 {status:"queued"}——消息已
+      // 排队等旧 turn 跑完。屏蔽本 run 对旧 turn 尾部事件的消费，防止空占位。
+      if (submitRes && submitRes.status === 'queued' && typeof markQueued === 'function') {
+        markQueued();
+      }
       await turnPromise;
       return translator;
     }
