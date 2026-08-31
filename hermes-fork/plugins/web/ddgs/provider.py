@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import concurrent.futures as _cf
 import logging
+import os
 from typing import Any, Dict
 
 from agent.web_search_provider import WebSearchProvider
@@ -28,6 +29,23 @@ logger = logging.getLogger(__name__)
 _SEARCH_TIMEOUT_SECS = 30
 
 
+def _resolve_proxy() -> str | None:
+    """Pick a proxy for the ddgs HTTP client from the process env.
+
+    ``primp`` (the Rust HTTP client behind ddgs) only uses an explicit
+    ``proxy`` argument — it does not reliably honor ``HTTPS_PROXY`` on its
+    own. hermes-runner.js injects the resolved proxy (env → config.yaml
+    ``proxy_url`` → Windows registry system proxy) into the backend process
+    env, so reading the standard vars here keeps DuckDuckGo reachable behind
+    a local proxy without hardcoding any port.
+    """
+    for var in ("DDGS_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"):
+        val = os.environ.get(var)
+        if val:
+            return val
+    return None
+
+
 def _run_ddgs_search(query: str, safe_limit: int) -> list[dict[str, Any]]:
     """Run the blocking ddgs query and return normalized hits.
 
@@ -39,7 +57,7 @@ def _run_ddgs_search(query: str, safe_limit: int) -> list[dict[str, Any]]:
     from ddgs import DDGS  # type: ignore
 
     results: list[dict[str, Any]] = []
-    with DDGS(timeout=10) as client:
+    with DDGS(timeout=10, proxy=_resolve_proxy()) as client:
         for i, hit in enumerate(client.text(query, max_results=safe_limit)):
             if i >= safe_limit:
                 break
