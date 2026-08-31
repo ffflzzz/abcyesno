@@ -447,7 +447,11 @@ export default function Composer({
     const el = editableRef.current;
     const raw = el ? serializeEditable(el).trim() : "";
     const hasImage = !!(el && el.querySelector("img[data-inline-img]"));
-    const hasContent = raw.length > 0 || hasImage;
+    // 2026-08-31：attachment（上传/粘贴生成的独立附件条，不在 contentEditable
+    // 里）也算内容——此前只有附件没正文时 empty=true，插队按钮被隐藏、
+    // Enter 也发不出去。
+    const hasAttachment = !!attachment;
+    const hasContent = raw.length > 0 || hasImage || hasAttachment;
 
     // Hard disabled (approval gate / backend down): the button acts as Stop.
     if (disabled) {
@@ -983,7 +987,7 @@ export default function Composer({
           </button>
 
           {/* Steer (busy-only): inject into the running turn without interrupting */}
-          {busy && !empty && !disabled && (
+          {busy && !disabled && (!empty || !!attachment) && (
             <button
               className="composer-steer-btn"
               onClick={submitSteer}
@@ -998,17 +1002,17 @@ export default function Composer({
 
           {/* Send / Queue / Stop */}
           <button
-            className={`composer-send-btn ${disabled || (busy && empty) ? "stop" : ""}`}
+            className={`composer-send-btn ${disabled || (busy && empty && !attachment) ? "stop" : ""}`}
             onClick={submit}
             title={
               disabled
                 ? "停止"
                 : busy
-                ? (!empty ? "排队发送" : "停止")
+                ? (!empty || !!attachment ? "排队发送（⚡插队用 Ctrl+Enter）" : "停止")
                 : "发送"
             }
           >
-            {disabled || (busy && empty) ? (
+            {disabled || (busy && empty && !attachment) ? (
               <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
                 <rect x="1" y="1" width="10" height="10" rx="2" />
               </svg>
