@@ -6718,7 +6718,9 @@ async function createDaemonRuntime() {
   function handlePriorityCommand(msg) {
     if (msg.message_type !== 1 /* USER */ || !msg.item_list) return false;
     const text = extractTextFromItems(msg.item_list);
-    if (!text.startsWith("/stop") && !text.startsWith("/clear")) return false;
+    const trimmed = text.trim().toLowerCase();
+    const isStopAlias = trimmed === "\u505C\u6B62" || trimmed === "stop" || trimmed === "/stop";
+    if (!isStopAlias && !text.startsWith("/clear")) return false;
     if (session.state !== "processing") return false;
     const ctrl = activeControllers.get(account.accountId);
     if (ctrl) {
@@ -6727,7 +6729,7 @@ async function createDaemonRuntime() {
     }
     session.state = "idle";
     sessionStore.save(account.accountId, session);
-    if (text.startsWith("/stop")) {
+    if (isStopAlias) {
       messageQueue.length = 0;
       sender.sendText(msg.from_user_id, msg.context_token ?? "", "\u23F9 \u5DF2\u505C\u6B62\u5F53\u524D\u5BF9\u8BDD\uFF0C\u6392\u961F\u4E2D\u7684\u6D88\u606F\u5DF2\u6E05\u7A7A\u3002").catch(() => {
       });
@@ -7071,8 +7073,8 @@ async function sendToClaude(userText, imageItem, fileItem, fromUserId, contextTo
       "\u4ECD\u5728\u5904\u7406\u4E2D\uFF0C\u76EE\u524D\u8FD8\u6CA1\u6709\u6700\u7EC8\u7ED3\u679C\uFF0C\u8BF7\u7A0D\u5019"
     ];
     const SILENCE_LONG_MESSAGES = [
-      '\u4EFB\u52A1\u5DF2\u7ECF\u8DD1\u4E86\u633A\u4E45\uFF08\u8D85\u8FC715\u5206\u949F\uFF09\uFF0C\u8FD8\u5728\u7EE7\u7EED\u5904\u7406\uFF1B\u5982\u679C\u4F60\u7740\u6025\uFF0C\u53EF\u4EE5\u76F4\u63A5\u53D1"\u505C\u6B62"\u4E2D\u65AD\u5F53\u524D\u4EFB\u52A1',
-      '\u8FD8\u5728\u540E\u53F0\u5904\u7406\u4E2D\uFF0C\u5DF2\u7ECF\u8D85\u8FC715\u5206\u949F\u4E86\uFF1B\u4E0D\u60F3\u7B49\u7684\u8BDD\u53D1"\u505C\u6B62"\u53EF\u4EE5\u4E2D\u65AD'
+      "\u4EFB\u52A1\u5DF2\u7ECF\u8DD1\u4E86\u633A\u4E45\uFF08\u8D85\u8FC715\u5206\u949F\uFF09\uFF0C\u8FD8\u5728\u7EE7\u7EED\u5904\u7406\uFF1B\u5982\u679C\u4F60\u7740\u6025\uFF0C\u53EF\u4EE5\u76F4\u63A5\u53D1\u300C\u505C\u6B62\u300D\u6216 /stop \u4E2D\u65AD\u5F53\u524D\u4EFB\u52A1",
+      "\u8FD8\u5728\u540E\u53F0\u5904\u7406\u4E2D\uFF0C\u5DF2\u7ECF\u8D85\u8FC715\u5206\u949F\u4E86\uFF1B\u4E0D\u60F3\u7B49\u7684\u8BDD\u53D1\u300C\u505C\u6B62\u300D\u6216 /stop \u53EF\u4EE5\u4E2D\u65AD"
     ];
     let silenceCount = 0;
     flushTimer = setInterval(() => {

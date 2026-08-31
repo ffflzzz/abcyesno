@@ -451,7 +451,11 @@ export async function createDaemonRuntime(): Promise<DaemonRuntime | null> {
   function handlePriorityCommand(msg: WeixinMessage): boolean {
     if (msg.message_type !== MessageType.USER || !msg.item_list) return false;
     const text = extractTextFromItems(msg.item_list);
-    if (!text.startsWith('/stop') && !text.startsWith('/clear')) return false;
+    // 2026-08-31 保活文案告知用户可发"停止"中断——中文别名必须是精确匹配
+    // （不能 startsWith，避免劫持"停止之后再继续…"这类正常消息）。
+    const trimmed = text.trim().toLowerCase();
+    const isStopAlias = trimmed === '停止' || trimmed === 'stop' || trimmed === '/stop';
+    if (!isStopAlias && !text.startsWith('/clear')) return false;
     if (session.state !== 'processing') return false;
 
     const ctrl = activeControllers.get(account!.accountId);
@@ -459,7 +463,7 @@ export async function createDaemonRuntime(): Promise<DaemonRuntime | null> {
     session.state = 'idle';
     sessionStore.save(account!.accountId, session);
 
-    if (text.startsWith('/stop')) {
+    if (isStopAlias) {
       messageQueue.length = 0;
       sender.sendText(msg.from_user_id!, msg.context_token ?? '', '⏹ 已停止当前对话，排队中的消息已清空。').catch(() => {});
     }
@@ -929,8 +933,8 @@ async function sendToClaude(
       '仍在处理中，目前还没有最终结果，请稍候',
     ];
     const SILENCE_LONG_MESSAGES = [
-      '任务已经跑了挺久（超过15分钟），还在继续处理；如果你着急，可以直接发"停止"中断当前任务',
-      '还在后台处理中，已经超过15分钟了；不想等的话发"停止"可以中断',
+      '任务已经跑了挺久（超过15分钟），还在继续处理；如果你着急，可以直接发「停止」或 /stop 中断当前任务',
+      '还在后台处理中，已经超过15分钟了；不想等的话发「停止」或 /stop 可以中断',
     ];
     let silenceCount = 0;
     flushTimer = setInterval(() => {
