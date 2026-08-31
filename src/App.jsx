@@ -310,6 +310,7 @@ function ChatShell({
     usage,
     reviewSummary,
     browserProgress,
+    appendLocalMessage,
   } = useAgentStream(aguiPort, selectedSessionId, { onSettled: handleSessionSettled });
 
   // Auto-open the embedded browser panel when agent uses browser_* / pw_browser_*
@@ -557,7 +558,7 @@ function ChatShell({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedSessionId]);
 
-  async function handleSend(text, mentions) {
+  async function handleSend(text, mentions, opts = {}) {
     if (!text.trim()) return;
     // No active session → create one inline, then immediately send.
     // IMPORTANT: We do NOT call loadSessions here because it triggers
@@ -600,11 +601,43 @@ function ChatShell({
       }
     }
     // Busy → queue instead of dropping; the composer stays editable.
+    // 2026-08-31 插队（steer）：opts.steer 时走 session.steer 注入运行中
+    // turn（不打断），失败/竞态落空则退回排队，消息永不丢。
+    if (opts && opts.steer && isStreaming && selectedSessionId) {
+      await handleSteerSend(text, mentions);
+      return;
+    }
     if (isStreaming) {
       setQueuedMessages((q) => [...q, { id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, text, mentions }]);
       return;
     }
     await doSend(text, mentions);
+  }
+
+  // 忙时插队：经 IPC → gateway session.steer 把文本注入当前 turn 的下一个
+  // 工具结果（OUT-OF-BAND）。注入成功后在本地消息流追加带 steer 徽标的
+  // 用户消息（后端不会把它作为独立 user turn 存储，前端可视化兜底）。
+  async function handleSteerSend(text, mentions) {
+    const sid = selectedSessionId;
+    let ok = false;
+    try {
+      if (window.hermes && window.hermes.steerSession) {
+        const res = await window.hermes.steerSession(sid, text);
+        ok = !!(res && res.success);
+      }
+    } catch (err) {
+      console.error("steer failed", err);
+    }
+    if (ok) {
+      appendLocalMessage(sid, {
+        id: `user-${Date.now()}`,
+        role: "user",
+        content: text,
+        steer: true,
+      });
+    } else {
+      setQueuedMessages((q) => [...q, { id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, text, mentions }]);
+    }
   }
 
   function handleRemoveQueued(id) {

@@ -1434,6 +1434,36 @@ ipcMain.handle('interrupt-session', async (_event, sessionId) => {
   }
 });
 
+// 2026-08-31「消息无法插队」：忙时插队通道。把用户文本经 gateway 的
+// session.steer RPC 注入运行中 turn 的下一个工具结果（OUT-OF-BAND 标记），
+// 不打断、不起新 turn。仅当会话确实在跑时才有意义——前端用 SSE 的
+// isStreaming 把关，这里只做透传；若 run 恰好结束导致 steer 落空
+// （status=rejected 或 gateway 报错），返回 success:false 让前端退回排队。
+ipcMain.handle('steer-session', async (_event, sessionId, text) => {
+  if (!gatewayClient || !gatewayClient.ready || !sessionId || !text || !String(text).trim()) {
+    return { success: false, error: 'not ready' };
+  }
+  try {
+    const hermesSessionId = await storage.getThreadMapping(sessionId);
+    if (!hermesSessionId) {
+      return { success: false, error: 'session not mapped' };
+    }
+    const res = await gatewayClient.request(
+      'session.steer',
+      { session_id: hermesSessionId, text: String(text).trim() },
+      10000
+    );
+    const status = res && res.status;
+    if (status === 'rejected') {
+      return { success: false, error: 'rejected' };
+    }
+    return { success: true };
+  } catch (err) {
+    log('main', `steer-session failed: ${err.message}`);
+    return { success: false, error: err.message };
+  }
+});
+
 ipcMain.handle('set-permission-mode', async (_event, mode, sessionId) => {
   if (!gatewayClient || !gatewayClient.ready || !sessionId) {
     return { success: false, error: 'not ready' };

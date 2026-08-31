@@ -443,7 +443,7 @@ export default function Composer({
     detectSlashTrigger();
   };
 
-  const submit = () => {
+  const submitCore = (steer) => {
     const el = editableRef.current;
     const raw = el ? serializeEditable(el).trim() : "";
     const hasImage = !!(el && el.querySelector("img[data-inline-img]"));
@@ -472,12 +472,18 @@ export default function Composer({
     setMentionOpen(false);
     // When busy, onSend queues this behind the current run; when idle it
     // sends immediately. Either way the composer clears and stays editable.
-    Promise.resolve(onSend(content, images, mentions)).catch((err) => {
+    // 2026-08-31 steer：busy 时第 4 参 {steer:true} 走插队注入（不打断），
+    // 未生效时 App 层退回排队；空闲时 steer 等价普通发送。
+    Promise.resolve(onSend(content, images, mentions, steer ? { steer: true } : {})).catch((err) => {
       console.error("send failed", err);
     }).finally(() => {
       setSending(false);
     });
   };
+
+  const submit = () => submitCore(false);
+  // 插队发送：busy 时把内容注入当前运行中的任务（不打断、排队语义不变）。
+  const submitSteer = () => submitCore(true);
 
   // Insert an image inline at the caret; stash its dataUrl for send.
   const insertImageInline = (fileName, dataUrl) => {
@@ -536,6 +542,13 @@ export default function Composer({
     if (e.key === "Enter" && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
       e.preventDefault();
       submit();
+      return;
+    }
+    // 2026-08-31 插队：Ctrl/Cmd+Enter 忙时立即注入当前任务（不打断）。
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
+      e.preventDefault();
+      if (busy) submitSteer();
+      else submit();
     }
   };
 
@@ -968,6 +981,20 @@ export default function Composer({
           >
             {recording ? <Icon name="stop" size={16} /> : <Icon name="mic" size={16} />}
           </button>
+
+          {/* Steer (busy-only): inject into the running turn without interrupting */}
+          {busy && !empty && !disabled && (
+            <button
+              className="composer-steer-btn"
+              onClick={submitSteer}
+              title="插队：立即注入当前正在运行的任务（不打断，agent 在下一步工具间隙即可看到）"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z" />
+              </svg>
+              <span>插队</span>
+            </button>
+          )}
 
           {/* Send / Queue / Stop */}
           <button

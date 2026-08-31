@@ -155,6 +155,9 @@ contextBridge.exposeInMainWorld('hermes', {
   // reach the AG-UI runtime in time).
   interruptSession: (sessionId) => ipcRenderer.invoke('interrupt-session', sessionId),
 
+  // 2026-08-31 插队：把文本注入运行中 turn 的下一个工具结果（不打断）。
+  steerSession: (sessionId, text) => ipcRenderer.invoke('steer-session', sessionId, text),
+
   // Permission mode: push default/yolo to the backend for the current session.
   setPermissionMode: (mode, sessionId) => ipcRenderer.invoke('set-permission-mode', mode, sessionId),
 

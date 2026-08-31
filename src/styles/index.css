@@ -5677,6 +5677,36 @@ body {
   color: #fff;
 }
 
+/* ── 2026-08-31 插队（steer）：忙时注入当前运行中的任务，不打断 ── */
+.composer-steer-btn {
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 15px;
+  background: transparent;
+  color: var(--warning);
+  border: 1px solid var(--warning);
+  cursor: pointer;
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+.composer-steer-btn:hover {
+  opacity: 0.85;
+  background: rgba(210, 153, 34, 0.12);
+}
+.msg-steer-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--warning);
+  opacity: 0.85;
+  margin-bottom: 3px;
+}
+
 /* Menu wrapper for positioning popovers */
 .composer-menu-wrap {
   position: relative;

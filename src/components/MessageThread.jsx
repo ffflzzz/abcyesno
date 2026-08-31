@@ -1671,6 +1671,14 @@ function MessageThread({ messages = [], loading, streamPhase, thinkingText, reas
                 <span className="message-time">{formatTime(m.createdAt)}</span>
               </div>
             )}
+            {isUser && m.steer && (
+              <div className="msg-steer-note" title="该消息已通过插队注入当前运行中的任务（不打断）">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                  <path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z" />
+                </svg>
+                已插队注入当前任务
+              </div>
+            )}
             {isMentionUser && (
               <div className="mention-call">
                 <span className="mention-chip">@{mctx.self.name}</span>

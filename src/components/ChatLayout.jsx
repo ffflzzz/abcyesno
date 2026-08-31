@@ -178,7 +178,7 @@ export default function ChatLayout({
     }
   }
 
-  function handleSend(content, images, mentions) {
+  function handleSend(content, images, mentions, opts = {}) {
     const hasImages = images && images.length > 0;
     if (!content.trim() && !hasImages && !attachment) return;
     let fullText = content;
@@ -198,7 +198,7 @@ export default function ChatLayout({
       fullText = `[附件: ${attachment.fileName}]${pathLine}\n${fullText}`;
       setAttachment(null);
     }
-    onSend(fullText, mentions);
+    onSend(fullText, mentions, opts);
   }
 
   return (

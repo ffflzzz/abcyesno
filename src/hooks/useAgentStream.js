@@ -1242,6 +1242,22 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
     [publishNow]
   );
 
+  /**
+   * 2026-08-31 插队（steer）：向前端本地消息流追加一条消息，不触碰
+   * phase/thinkingText 等运行态——插队消息不打断当前 run，只是把用户
+   * 发出的文本可视化（带 steer 徽标）。持久化走既有 flush 路径
+   * （onSettled / 会话切换 flush 会把 sess.messages 整体落盘）。
+   */
+  const appendLocalMessage = useCallback(
+    (sessionId, msg) => {
+      if (!sessionId || !msg) return;
+      const sess = getSession(sessionId);
+      sess.messages = [...sess.messages, { createdAt: Date.now(), ...msg }];
+      publishNow(sessionId);
+    },
+    [getSession, publishNow]
+  );
+
   /** 覆盖指定会话的消息列表（编辑/重新生成/删除场景）。 */
   const setHistory = useCallback(
     (history, sessionId) => {
@@ -1414,6 +1430,7 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
     reset,
     clearError,
     setHistory,
+    appendLocalMessage,
     hydrateSession,
     dropSession,
     getSessionMessages,
