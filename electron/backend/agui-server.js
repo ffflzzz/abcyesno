@@ -1066,6 +1066,22 @@ function createAgUIServer(getGatewayClient, storage, options) {
       // user had no way to tell "healthy but quiet" from "dead". This event
       // proves the SSE bridge is alive and quantifies the quiet; it does NOT
       // touch the goal idle timer (that tracks real backend events only).
+      // 2026-08-31 微信看门狗常量：wx-* run 专属，两级 steer 收尾提醒。
+      const isWxRun = typeof ctx.threadId === 'string' && ctx.threadId.startsWith('wx-');
+      let wxEffectiveStartAt = turnStartedAt; // 排队 run 从真正开跑（message.start）算起
+      let wxNudgeLevel = 0;
+      const WX_NUDGE_MS_1 = Number(process.env.ABC_AGUI_WX_NUDGE_MS || 12 * 60 * 1000);
+      const WX_NUDGE_MS_2 = Number(process.env.ABC_AGUI_WX_NUDGE2_MS || 25 * 60 * 1000);
+      const wxNudge = (level) => {
+        const text = level === 1
+          ? '（系统自动提醒）微信用户已等待超过12分钟且还没收到答复。若任务即将完成可以继续；否则请停止无意义的重试/探索，基于已有信息立即给出阶段性或最终答复，并说明哪些部分没能完成。'
+          : '（系统强提醒）微信用户已等待超过25分钟。不要再发起新工具调用、不要再看新内容，立即基于已有信息输出最终答复；查不到的部分直接说明。';
+        try {
+          client.request('session.steer', { session_id: hermesSessionId, text }, 15000)
+            .catch((err) => log('agui-server', `wx nudge L${level} steer failed: ${err.message}`));
+          log('agui-server', `wx turn nudge L${level} steered into session ${hermesSessionId}`);
+        } catch (_) {}
+      };
       let hbTimer = setInterval(() => {
         if (settled) return;
         sendSSE(res, encoder, {
@@ -1077,6 +1093,21 @@ function createAgUIServer(getGatewayClient, storage, options) {
             sinceLastEventMs: Date.now() - lastBackendEventAt,
           },
         });
+        // 2026-08-31 微信端「一直卡着」：wx-* 线程的 turn 可能因无可用联网
+        // 路径而无限重试（curl 超时循环 26 分钟），微信用户只能看保活消息。
+        // 两级温和看门狗——不打断、经 session.steer 注入收尾指令（OUT-OF-BAND）：
+        //   L1 12min：提醒尽快收尾/给阶段性答复；L2 25min：强令立即出最终答复。
+        // 不自动硬中断（怕砍掉合法长任务如视频流水线），turnTimeout 仍是兜底。
+        if (isWxRun) {
+          const wxElapsed = Date.now() - wxEffectiveStartAt;
+          if (wxNudgeLevel === 0 && wxElapsed >= WX_NUDGE_MS_1) {
+            wxNudgeLevel = 1;
+            wxNudge(1);
+          } else if (wxNudgeLevel === 1 && wxElapsed >= WX_NUDGE_MS_2) {
+            wxNudgeLevel = 2;
+            wxNudge(2);
+          }
+        }
       }, 30000);
 
       const cleanup = () => {
@@ -1110,6 +1141,7 @@ function createAgUIServer(getGatewayClient, storage, options) {
         if (suppressUntilMessageStart) {
           if (type !== 'message.start') return;
           suppressUntilMessageStart = false;
+          wxEffectiveStartAt = Date.now(); // 排队 turn 真正开跑，看门狗重新计时
           log('agui-server', 'queued turn started (message.start) — resuming event translation');
         }
         // Reset idle timer on every event so a stream of events keeps the

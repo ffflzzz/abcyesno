@@ -516,14 +516,50 @@ class HermesRunner {
         if (v && v !== 'direct' && /^https?:\/\//i.test(v)) proxyFromConfig = v;
       }
     } catch (_) {}
-    const proxyUrl = proxyEnv || proxyFromConfig;
+    // 2026-08-31 微信端 agent「无法联网」根因之一：env 与 config.yaml 都没配
+    // 代理 → Hermes 直连外网，terminal curl 全部超时（exit 28），agent 无限
+    // 重试烧掉 20+ 分钟。第三优先级读 Windows 系统代理（Internet Settings
+    // 注册表）——clash/v2rayN 开启系统代理时写入且端口动态变化也能跟上。
+    let proxyFromRegistry = '';
+    if (process.platform === 'win32') {
+      try {
+        const { execSync } = require('child_process');
+        const enOut = execSync(
+          'reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyEnable',
+          { timeout: 3000, encoding: 'utf-8' }
+        );
+        const en = enOut.match(/ProxyEnable\s+REG_DWORD\s+(\w+)/);
+        if (en && parseInt(en[1], 16) !== 0) {
+          const psOut = execSync(
+            'reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyServer',
+            { timeout: 3000, encoding: 'utf-8' }
+          );
+          const ps = psOut.match(/ProxyServer\s+REG_SZ\s+(\S+)/);
+          if (ps) {
+            let v = ps[1].trim();
+            // ProxyServer 可能是 "host:port" 或 "http=…;https=…;socks=…" 协议映射
+            if (v.includes(';') || v.includes('=')) {
+              const kv = {};
+              for (const pair of v.split(';')) {
+                const [k, val] = pair.split('=');
+                if (k && val) kv[k.trim()] = val.trim();
+              }
+              v = kv.https || kv.http || '';
+            }
+            if (v && !/^https?:\/\//i.test(v)) v = 'http://' + v;
+            if (/^https?:\/\/\S+:\d+/.test(v)) proxyFromRegistry = v;
+          }
+        }
+      } catch (_) {}
+    }
+    const proxyUrl = proxyEnv || proxyFromConfig || proxyFromRegistry;
     if (proxyUrl) {
       env.HTTPS_PROXY = proxyUrl;
       env.HTTP_PROXY = proxyUrl;
       if (!env.NO_PROXY && !env.no_proxy) {
         env.NO_PROXY = 'localhost,127.0.0.1,::1';
       }
-    } else {
+      log('hermes-runner', `proxy resolved: ${proxyUrl} (source: ${proxyEnv ? 'env' : proxyFromConfig ? 'config.yaml' : 'windows-registry'})`);    } else {
       // Explicit direct: drop any inherited proxy so Hermes connects directly.
       delete env.HTTPS_PROXY;
       delete env.HTTP_PROXY;

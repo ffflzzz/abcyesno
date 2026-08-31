@@ -916,21 +916,28 @@ async function sendToClaude(
 
     // Safety net: send keepalive if nothing was sent for 5 minutes
     const SILENCE_WARNING_MS = 5 * 60 * 1000;
+    // 2026-08-31 文案诚实化：去掉"马上就好/一分钟搞定"式承诺（曾出现任务
+    // 26 分钟无进展仍每 5 分钟说"马上出结果"），全部改为不承诺时长的中性
+    // 表述；超过 15 分钟的静默追加告知式文案，用户可自行决定是否打断。
     const SILENCE_MESSAGES = [
       '我还在处理中，这个问题有点复杂，请再稍等一下',
-      '正在努力干活中，马上就有结果了，请稍等片刻',
-      '有点复杂正在处理，再给我一点时间，很快就好',
-      '快好了别着急，正在收尾阶段，马上给你回复',
-      '还在跑呢，任务量比较大，不过马上就能出结果了',
-      '任务比想象的复杂一些，再等等我，正在全力处理',
-      '正在处理中，进展顺利，再等一会儿就好',
-      '还没完不过已经快了，再给我一分钟就能搞定',
+      '还在后台全力跑着，任务量比较大，完成后立刻发你',
+      '任务比想象的复杂一些，还在处理中，请再等等',
+      '正在处理中，还没结束，好了会第一时间发你',
       '我在认真思考这个问题，请再稍等一会儿',
-      '稍微有点棘手，不过已经快解决了，再等我一下',
+      '还在跑，这部分确实需要一些时间',
+      '仍在处理中，目前还没有最终结果，请稍候',
     ];
+    const SILENCE_LONG_MESSAGES = [
+      '任务已经跑了挺久（超过15分钟），还在继续处理；如果你着急，可以直接发"停止"中断当前任务',
+      '还在后台处理中，已经超过15分钟了；不想等的话发"停止"可以中断',
+    ];
+    let silenceCount = 0;
     flushTimer = setInterval(() => {
       if (Date.now() - lastSentTime > SILENCE_WARNING_MS) {
-        const msg = SILENCE_MESSAGES[Math.floor(Math.random() * SILENCE_MESSAGES.length)];
+        silenceCount += 1;
+        const pool = silenceCount >= 3 ? SILENCE_LONG_MESSAGES : SILENCE_MESSAGES;
+        const msg = pool[Math.floor(Math.random() * pool.length)];
         sender.sendText(fromUserId, contextToken, msg).catch(() => {});
         lastSentTime = Date.now();
       }

@@ -116,9 +116,12 @@ def _wait_ready(timeout: float = 15.0) -> None:
             last_err = str(exc)
         time.sleep(0.4)
     raise RuntimeError(
-        "browser panel not ready ({}) — 请打开应用内的「浏览器」面板，然后重试. "
-        "DO NOT retry browser navigation; instead fall back to web_extract / "
-        "web_search / terminal(curl) to fetch page content.".format(last_err)
+        "browser panel not ready ({}) — 浏览器面板不可用（微信会话等无面板场景常见）. "
+        "DO NOT retry browser navigation — it will keep failing. Fall back to "
+        "terminal(curl) to fetch page content; if直接连接超时，先检查代理环境变量 "
+        "(HTTPS_PROXY/HTTP_PROXY) 是否可用再重试一次，仍失败则基于已有信息作答并"
+        "明确告知用户哪部分无法访问。不要反复重试，也不要尝试 web_search / "
+        "web_extract——它们不是可用工具。".format(last_err)
     )
 
 
