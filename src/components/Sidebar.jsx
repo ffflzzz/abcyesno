@@ -80,7 +80,11 @@ function lastMessageTime(s) {
 
 function isDefaultTitle(title) {
   const t = (title || "").trim();
-  return !t || t === "新会话";
+  // Junk titles: empty / default / backend summary failures that produced
+  // pure-digit strings ("26", "2") — falling back to the first-message
+  // preview reads far better than a bare number as the primary label.
+  if (!t || t === "新会话" || /^\d+$/.test(t)) return true;
+  return false;
 }
 
 /** Build a meaningful session title. Falls back to the first message preview
@@ -93,14 +97,11 @@ function getSessionDisplayTitle(s) {
   return "新会话";
 }
 
-/** Sidebar subtitle: show a short message preview only when the session
- *  still has the default title. If the user renamed it, the title is
- *  already the displayed primary — repeating it as a subtitle just makes
- *  the list look duplicated / busy (UX: "侧边栏只显示主标题"). */
-function getSessionDisplayPreview(s) {
-  if (!isDefaultTitle((s.title || "").trim())) return "";
-  const p = stripMd(s.preview || "", 30);
-  return p && p !== "无消息" ? p : "";
+/** Hover tooltip for a session row: prefer the last-message preview (more
+ *  informative than the label itself for default-titled sessions), fall back
+ *  to the raw title so renamed sessions show their untruncated name. */
+function getSessionTooltip(s) {
+  return stripMd(s.preview || "", 80) || (s.title || "").trim();
 }
 
 // Bucket a session into a date group for the sectioned list. Order is
@@ -282,21 +283,22 @@ export default function Sidebar({
                         onClick={() => onSelectSession(s.id)}
                         onContextMenu={(e) => openMenu(e, "session", s.id, s.title)}
                       >
+                        {/* Single-line row: status dot + title + time. The
+                            preview line was removed — it mostly surfaced
+                            error/status text and made row heights uneven;
+                            the full preview lives in the hover tooltip. */}
                         <div className="session-row">
-                          <div className="session-title">
+                          <div className="session-title" title={getSessionTooltip(s)}>
                             {running && <span className="session-running-dot" title="正在生成" />}
                             {getSessionDisplayTitle(s)}
                           </div>
-                          <div className="session-time">{formatRelativeTime(t)}</div>
+                          {/* Time label only inside the 今天 bucket — later
+                              buckets already say 昨天/3-7 天前 in their group
+                              header, so per-row labels were pure repetition. */}
+                          {bucket === "今天" && (
+                            <div className="session-time">{formatRelativeTime(t)}</div>
+                          )}
                         </div>
-                        {(() => {
-                          const preview = getSessionDisplayPreview(s);
-                          return preview ? (
-                            <div className="session-preview" title={preview}>
-                              {running ? "正在生成…" : preview}
-                            </div>
-                          ) : null;
-                        })()}
                         <button
                           className="session-menu"
                           onClick={(e) => { e.stopPropagation(); onDeleteSession(s.id); }}
