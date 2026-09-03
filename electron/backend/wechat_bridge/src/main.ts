@@ -991,36 +991,28 @@ async function sendToClaude(
       });
     };
 
-    // Safety net: 静默超过阈值时报一次当前进展。
-    // 2026-09-01 重写：原来这里是从 7 条「稍后/稍等」罐头文案里随机抽一条，
-    // 用户完全看不到任务在干什么（且曾出现 26 分钟无进展仍说「马上出结果」的
-    // 不诚实承诺）。现在优先报 tracker 里的真实步骤；有进展就尽快说，没进展
-    // 也不再每 5 分钟重复同一句空话。
-    const SILENCE_SOFT_MS = 3 * 60 * 1000;    // 有新进展时的最短播报间隔
-    const SILENCE_REPEAT_MS = 10 * 60 * 1000; // 同一句最多每 10 分钟重复一次
-    const SILENCE_LONG_MS = 15 * 60 * 1000;
-    const SILENCE_FALLBACK = '我还在处理中，这个问题有点复杂，请再稍等一下';
-    const SILENCE_LONG =
-      '任务已经跑了挺久（超过15分钟），还在继续处理；如果你着急，可以直接发「停止」或 /stop 中断当前任务';
+    // Safety net: 静默兜底。2026-09-03 按用户反馈再砍一刀：「不要礼貌但无用
+    // 的状态占位」。原来的兜底文案（「我还在处理中…」「已超过15分钟…」）全部
+    // 删除 —— 现在只有 tracker 里有**真实步骤**（最近一次工具调用 / workflow
+    // 步骤）才值得报；没有就保持沉默，一个字都不发。
+    const SILENCE_SOFT_MS = 3 * 60 * 1000;    // 步骤变化后的最短播报间隔
+    const SILENCE_REPEAT_MS = 20 * 60 * 1000; // 同一步骤最多每 20 分钟重报一次（带已运行时长）
     let lastKeepaliveStep = '';
     flushTimer = setInterval(() => {
       const silenceFor = Date.now() - lastSentTime;
       const step = tracker.currentStepText();
-      const stepChanged = !!step && step !== lastKeepaliveStep;
+      if (!step) return; // 没有真实进展可报 → 沉默
 
+      const stepChanged = step !== lastKeepaliveStep;
       let due = false;
       if (stepChanged && silenceFor >= SILENCE_SOFT_MS) due = true;
       else if (!stepChanged && silenceFor >= SILENCE_REPEAT_MS) due = true;
       if (!due) return;
 
-      let msg: string;
-      if (step) {
-        msg = silenceFor >= SILENCE_LONG_MS
-          ? `⏳ 还在 ${step}（已 ${Math.floor(silenceFor / 60000)} 分钟没新消息）；不想等可以发「停止」中断`
-          : `⏳ 还在 ${step}`;
-      } else {
-        msg = silenceFor >= SILENCE_LONG_MS ? SILENCE_LONG : SILENCE_FALLBACK;
-      }
+      const totalMin = Math.floor(tracker.elapsedMs / 60000);
+      const msg = stepChanged
+        ? `⏳ 还在 ${step}`
+        : `⏳ 还在 ${step}（任务已运行 ${totalMin} 分钟；不想等可以发「停止」中断）`;
 
       lastKeepaliveStep = step;
       lastSentTime = Date.now();

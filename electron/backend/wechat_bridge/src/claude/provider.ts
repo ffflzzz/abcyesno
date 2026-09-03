@@ -63,6 +63,10 @@ export interface AgUiParserState {
   textParts: string[];
   errorMessage?: string;
   finished: boolean;
+  /** toolCallId -> 工具名（TOOL_CALL_START 记下，供 ARGS/END 回查） */
+  toolNames?: Record<string, string>;
+  /** toolCallId -> 累积的 args JSON 文本（agui-server 实践中一次性发全量） */
+  toolArgs?: Record<string, string>;
 }
 
 /**
@@ -92,6 +96,51 @@ export function handleAgUiEvent(
         callbacks.onCustom?.(ev);
       } catch {
         // 进度渲染出错绝不能打断主文本流
+      }
+      break;
+    }
+    case 'TOOL_CALL_START': {
+      // agent 真实在做的事：调了哪个工具。args 由紧随其后的 TOOL_CALL_ARGS
+      // 带来（agui-server 在 Hermes tool.start 里一次性 JSON.stringify(args)
+      // 发出，见 emitToolStart），所以这里只记名字，等 ARGS 到了再合成一条
+      // 「tool.call」给进度通道 —— 那才是用户要看的真实工作过程。
+      if (ev?.toolCallId) {
+        state.toolNames = state.toolNames || {};
+        state.toolArgs = state.toolArgs || {};
+        state.toolNames[String(ev.toolCallId)] = String(ev.toolCallName || 'tool');
+        state.toolArgs[String(ev.toolCallId)] = '';
+      }
+      break;
+    }
+    case 'TOOL_CALL_ARGS': {
+      const id = String(ev?.toolCallId || '');
+      if (!id) break;
+      state.toolArgs = state.toolArgs || {};
+      state.toolArgs[id] = (state.toolArgs[id] || '') + String(ev?.delta || '');
+      const toolName = (state.toolNames || {})[id] || 'tool';
+      try {
+        callbacks.onCustom?.({
+          name: 'tool.call',
+          value: { toolCallId: id, toolName, argsText: state.toolArgs[id] },
+        });
+      } catch {
+        // 进度渲染出错绝不能打断主文本流
+      }
+      break;
+    }
+    case 'TOOL_CALL_END': {
+      const id = String(ev?.toolCallId || '');
+      if (!id) break;
+      const toolName = (state.toolNames || {})[id] || 'tool';
+      delete state.toolNames?.[id];
+      delete state.toolArgs?.[id];
+      // 只报失败；成功完成不算「过程」，报了就是噪音
+      if (ev?.failed) {
+        try {
+          callbacks.onCustom?.({ name: 'tool.error', value: { toolCallId: id, toolName } });
+        } catch {
+          // ignore
+        }
       }
       break;
     }

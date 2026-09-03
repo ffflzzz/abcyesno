@@ -1263,6 +1263,34 @@ function truncate(s, max) {
   const t = s.replace(/\s+/g, " ").trim();
   return t.length <= max ? t : `${t.slice(0, max - 1)}\u2026`;
 }
+function looksLikeBinary(s) {
+  return /^data:/i.test(s) || /^[A-Za-z0-9+/=\s]{120,}$/.test(s);
+}
+function summarizeArgs(argsText) {
+  const raw = String(argsText || "").trim();
+  if (!raw) return "";
+  try {
+    const obj = JSON.parse(raw);
+    if (obj === null || typeof obj !== "object") return truncate(String(obj), 48);
+    if (Array.isArray(obj)) {
+      const first = obj[0];
+      if (typeof first === "string" && !looksLikeBinary(first)) return truncate(first, 48);
+      return truncate(JSON.stringify(obj), 48);
+    }
+    const rec = obj;
+    for (const k of ARG_KEY_PRIORITY) {
+      const val = rec[k];
+      if (typeof val === "string" && val.trim() && !looksLikeBinary(val)) return truncate(val, 48);
+    }
+    for (const val of Object.values(rec)) {
+      if (typeof val === "string" && val.trim() && !looksLikeBinary(val)) return truncate(val, 48);
+      if (typeof val === "number" || typeof val === "boolean") return truncate(String(val), 48);
+    }
+    return "";
+  } catch {
+    return truncate(raw, 48);
+  }
+}
 function shortPath(p) {
   if (!p) return "";
   const norm = String(p).replace(/\\/g, "/");
@@ -1369,10 +1397,26 @@ function humanizeEvent(ev) {
         return null;
     }
   }
-  if (name === "stream.phase") {
-    const label = PHASE_LABEL[String(v.phase || "")];
-    if (!label) return null;
-    return { kind: "phase", key: `phase:${String(v.phase)}`, text: label, urgent: false };
+  if (name === "tool.call") {
+    const toolName = String(v.toolName || "tool");
+    const excerpt = summarizeArgs(v.argsText);
+    return {
+      kind: "progress",
+      key: `tool:${toolName}:${excerpt}`,
+      text: excerpt ? `\u{1F527} ${toolName}\uFF1A${excerpt}` : `\u{1F527} ${toolName}`,
+      urgent: false,
+      // 即使被节流挡下，keepalive 和 /进度 也该知道现在在跑什么
+      trackStep: excerpt ? `${toolName}\uFF08${excerpt}\uFF09` : toolName
+    };
+  }
+  if (name === "tool.error") {
+    const toolName = String(v.toolName || "tool");
+    return {
+      kind: "error",
+      key: `toolerr:${toolName}`,
+      text: `\u26A0\uFE0F ${toolName} \u6267\u884C\u5931\u8D25`,
+      urgent: true
+    };
   }
   return null;
 }
@@ -1397,7 +1441,7 @@ function resetProgressTracker(threadId) {
 function wechatThreadId(fromUserId) {
   return `wx-${fromUserId}`;
 }
-var MAX_ENTRIES, DEDUP_TTL_MS, THROTTLE_MS, MAX_EMITS_PER_RUN, DIGEST_LIMIT, REPORT_LIMIT, DIGEST_LOOKBACK_MS, PHASE_LABEL, ProgressTracker, REGISTRY_MAX, registry;
+var MAX_ENTRIES, DEDUP_TTL_MS, THROTTLE_MS, MAX_EMITS_PER_RUN, DIGEST_LIMIT, REPORT_LIMIT, DIGEST_LOOKBACK_MS, ARG_KEY_PRIORITY, ProgressTracker, REGISTRY_MAX, registry;
 var init_progress_tracker = __esm({
   "electron/backend/wechat_bridge/src/claude/progress-tracker.ts"() {
     MAX_ENTRIES = 80;
@@ -1407,11 +1451,30 @@ var init_progress_tracker = __esm({
     DIGEST_LIMIT = 8;
     REPORT_LIMIT = 10;
     DIGEST_LOOKBACK_MS = 6 * 60 * 60 * 1e3;
-    PHASE_LABEL = {
-      thinking: "\u{1F914} \u601D\u8003\u4E2D",
-      tool_executing: "\u{1F527} \u6267\u884C\u5DE5\u5177",
-      text_generating: "\u270D\uFE0F \u751F\u6210\u56DE\u590D"
-    };
+    ARG_KEY_PRIORITY = [
+      "query",
+      "q",
+      "keyword",
+      "search",
+      "topic",
+      "question",
+      "url",
+      "command",
+      "cmd",
+      "script",
+      "path",
+      "file",
+      "filename",
+      "filepath",
+      "prompt",
+      "task",
+      "input",
+      "text",
+      "content",
+      "code",
+      "pattern",
+      "message"
+    ];
     ProgressTracker = class {
       threadId;
       entries = [];
@@ -1896,6 +1959,44 @@ function handleAgUiEvent(ev, state, callbacks) {
       try {
         callbacks.onCustom?.(ev);
       } catch {
+      }
+      break;
+    }
+    case "TOOL_CALL_START": {
+      if (ev?.toolCallId) {
+        state.toolNames = state.toolNames || {};
+        state.toolArgs = state.toolArgs || {};
+        state.toolNames[String(ev.toolCallId)] = String(ev.toolCallName || "tool");
+        state.toolArgs[String(ev.toolCallId)] = "";
+      }
+      break;
+    }
+    case "TOOL_CALL_ARGS": {
+      const id = String(ev?.toolCallId || "");
+      if (!id) break;
+      state.toolArgs = state.toolArgs || {};
+      state.toolArgs[id] = (state.toolArgs[id] || "") + String(ev?.delta || "");
+      const toolName = (state.toolNames || {})[id] || "tool";
+      try {
+        callbacks.onCustom?.({
+          name: "tool.call",
+          value: { toolCallId: id, toolName, argsText: state.toolArgs[id] }
+        });
+      } catch {
+      }
+      break;
+    }
+    case "TOOL_CALL_END": {
+      const id = String(ev?.toolCallId || "");
+      if (!id) break;
+      const toolName = (state.toolNames || {})[id] || "tool";
+      delete state.toolNames?.[id];
+      delete state.toolArgs?.[id];
+      if (ev?.failed) {
+        try {
+          callbacks.onCustom?.({ name: "tool.error", value: { toolCallId: id, toolName } });
+        } catch {
+        }
       }
       break;
     }
@@ -7432,25 +7533,19 @@ async function sendToClaude(userText, imageItem, fileItem, fromUserId, contextTo
       });
     };
     const SILENCE_SOFT_MS = 3 * 60 * 1e3;
-    const SILENCE_REPEAT_MS = 10 * 60 * 1e3;
-    const SILENCE_LONG_MS = 15 * 60 * 1e3;
-    const SILENCE_FALLBACK = "\u6211\u8FD8\u5728\u5904\u7406\u4E2D\uFF0C\u8FD9\u4E2A\u95EE\u9898\u6709\u70B9\u590D\u6742\uFF0C\u8BF7\u518D\u7A0D\u7B49\u4E00\u4E0B";
-    const SILENCE_LONG = "\u4EFB\u52A1\u5DF2\u7ECF\u8DD1\u4E86\u633A\u4E45\uFF08\u8D85\u8FC715\u5206\u949F\uFF09\uFF0C\u8FD8\u5728\u7EE7\u7EED\u5904\u7406\uFF1B\u5982\u679C\u4F60\u7740\u6025\uFF0C\u53EF\u4EE5\u76F4\u63A5\u53D1\u300C\u505C\u6B62\u300D\u6216 /stop \u4E2D\u65AD\u5F53\u524D\u4EFB\u52A1";
+    const SILENCE_REPEAT_MS = 20 * 60 * 1e3;
     let lastKeepaliveStep = "";
     flushTimer = setInterval(() => {
       const silenceFor = Date.now() - lastSentTime;
       const step = tracker.currentStepText();
-      const stepChanged = !!step && step !== lastKeepaliveStep;
+      if (!step) return;
+      const stepChanged = step !== lastKeepaliveStep;
       let due = false;
       if (stepChanged && silenceFor >= SILENCE_SOFT_MS) due = true;
       else if (!stepChanged && silenceFor >= SILENCE_REPEAT_MS) due = true;
       if (!due) return;
-      let msg;
-      if (step) {
-        msg = silenceFor >= SILENCE_LONG_MS ? `\u23F3 \u8FD8\u5728 ${step}\uFF08\u5DF2 ${Math.floor(silenceFor / 6e4)} \u5206\u949F\u6CA1\u65B0\u6D88\u606F\uFF09\uFF1B\u4E0D\u60F3\u7B49\u53EF\u4EE5\u53D1\u300C\u505C\u6B62\u300D\u4E2D\u65AD` : `\u23F3 \u8FD8\u5728 ${step}`;
-      } else {
-        msg = silenceFor >= SILENCE_LONG_MS ? SILENCE_LONG : SILENCE_FALLBACK;
-      }
+      const totalMin = Math.floor(tracker.elapsedMs / 6e4);
+      const msg = stepChanged ? `\u23F3 \u8FD8\u5728 ${step}` : `\u23F3 \u8FD8\u5728 ${step}\uFF08\u4EFB\u52A1\u5DF2\u8FD0\u884C ${totalMin} \u5206\u949F\uFF1B\u4E0D\u60F3\u7B49\u53EF\u4EE5\u53D1\u300C\u505C\u6B62\u300D\u4E2D\u65AD\uFF09`;
       lastKeepaliveStep = step;
       lastSentTime = Date.now();
       sender.sendText(fromUserId, contextToken, msg).catch((err) => {

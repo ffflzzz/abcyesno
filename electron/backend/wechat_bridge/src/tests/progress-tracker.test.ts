@@ -78,9 +78,65 @@ test('humanizeEvent: workflow.graph / trace / 噪音事件不产生文案', () =
   assert.equal(trace.trackNode, 'gen_shots');
 });
 
-test('humanizeEvent: stream.phase 只认已知阶段', () => {
-  assert.equal(humanizeEvent({ name: 'stream.phase', value: { phase: 'tool_executing' } })?.text, '🔧 执行工具');
+test('humanizeEvent: stream.phase 是空转占位，一律不推送（2026-09-03 用户反馈）', () => {
+  assert.equal(humanizeEvent({ name: 'stream.phase', value: { phase: 'tool_executing' } }), null);
+  assert.equal(humanizeEvent({ name: 'stream.phase', value: { phase: 'thinking' } }), null);
+  assert.equal(humanizeEvent({ name: 'stream.phase', value: { phase: 'text_generating' } }), null);
   assert.equal(humanizeEvent({ name: 'stream.phase', value: { phase: 'idle' } }), null);
+});
+
+// ---------------------------------------------------------------------------
+// tool.call / tool.error —— 普通聊天长任务的真实工作过程
+// ---------------------------------------------------------------------------
+
+test('humanizeEvent: tool.call 取 query 键做参数摘要', () => {
+  const h = humanizeEvent({
+    name: 'tool.call',
+    value: { toolName: 'web_search', argsText: '{"query":"Google 发布 Gemini 3.8 Flash","limit":5}' },
+  });
+  assert.ok(h);
+  assert.equal(h.text, '🔧 web_search：Google 发布 Gemini 3.8 Flash');
+  assert.equal(h.urgent, false);
+  assert.equal(h.trackStep, 'web_search（Google 发布 Gemini 3.8 Flash）');
+});
+
+test('humanizeEvent: tool.call 无命中键时取第一个像人话的字符串', () => {
+  const h = humanizeEvent({
+    name: 'tool.call',
+    value: { toolName: 'translate', argsText: '{"lang":"en","body":"把这段话翻译成英文"}' },
+  });
+  assert.ok(h);
+  assert.equal(h.text, '🔧 translate：en');
+});
+
+test('humanizeEvent: tool.call 跳过 base64/dataURL，退回下一个可用值', () => {
+  const bigB64 = `data:image/png;base64,${'A'.repeat(300)}`;
+  const h = humanizeEvent({
+    name: 'tool.call',
+    value: { toolName: 'vision', argsText: JSON.stringify({ image: bigB64, note: '识别这张截图' }) },
+  });
+  assert.ok(h);
+  assert.equal(h.text, '🔧 vision：识别这张截图');
+});
+
+test('humanizeEvent: tool.call 无参数时只报工具名', () => {
+  const h = humanizeEvent({ name: 'tool.call', value: { toolName: 'get_time', argsText: '' } });
+  assert.ok(h);
+  assert.equal(h.text, '🔧 get_time');
+  assert.equal(h.trackStep, 'get_time');
+});
+
+test('humanizeEvent: tool.call args 不是合法 JSON 时截原始文本', () => {
+  const h = humanizeEvent({ name: 'tool.call', value: { toolName: 't', argsText: 'raw text args' } });
+  assert.ok(h);
+  assert.equal(h.text, '🔧 t：raw text args');
+});
+
+test('humanizeEvent: tool.error 紧急报失败', () => {
+  const h = humanizeEvent({ name: 'tool.error', value: { toolName: 'web_fetch' } });
+  assert.ok(h);
+  assert.equal(h.text, '⚠️ web_fetch 执行失败');
+  assert.equal(h.urgent, true);
 });
 
 test('humanizeEvent: 空/畸形输入安全返回 null 且不抛', () => {
@@ -209,6 +265,26 @@ test('tracker: renderReport 展示当前步骤与已运行时长', () => {
   const report = t.renderReport();
   assert.match(report, /正在做：3\/7 分镜脚本/);
   assert.match(report, /已运行/);
+});
+
+test('tracker: tool.call 被节流挡下时 currentStep 仍然更新（keepalive 有真实内容可报）', () => {
+  const t = new ProgressTracker('wx-t11');
+  assert.ok(t.ingest({ name: 'tool.call', value: { toolName: 'web_search', argsText: '{"query":"第一次搜索"}' } }),
+    '第一条应放行');
+  assert.equal(t.currentStepText(), 'web_search（第一次搜索）');
+  // 20s 节流窗口内的第二条：不推送，但步骤必须跟上
+  assert.equal(t.ingest({ name: 'tool.call', value: { toolName: 'web_fetch', argsText: '{"url":"https://example.com/a"}' } }), null);
+  assert.equal(t.currentStepText(), 'web_fetch（https://example.com/a）');
+  // 记账仍在：/进度 与补发摘要看得到
+  assert.equal(t.allEntries().length, 2);
+});
+
+test('tracker: 相同工具+相同参数在 TTL 内去重', () => {
+  const t = new ProgressTracker('wx-t12');
+  const ev = { name: 'tool.call', value: { toolName: 'web_search', argsText: '{"query":"同一次搜索"}' } };
+  assert.ok(t.ingest(ev));
+  assert.equal(t.ingest(ev), null, '重复调用应被去重');
+  assert.equal(t.allEntries().length, 2, '去重的仍然记账');
 });
 
 // ---------------------------------------------------------------------------

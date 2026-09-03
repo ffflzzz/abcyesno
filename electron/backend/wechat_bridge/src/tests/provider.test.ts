@@ -91,6 +91,75 @@ test('没有注册 onCustom 时 CUSTOM 事件安全跳过', () => {
 });
 
 // ---------------------------------------------------------------------------
+// TOOL_CALL_*：真实工作过程（2026-09-03 修复）
+// ---------------------------------------------------------------------------
+// agui-server 会把 Hermes 的 tool.start/complete 翻译成标准 AG-UI 的
+// TOOL_CALL_START + TOOL_CALL_ARGS（一次性全量 JSON）+ TOOL_CALL_END。
+// 之前桥这里 default: break 全丢 —— 用户看到的全是「思考中/执行工具」占位，
+// 真正搜了什么、跑了什么一条都看不到。
+
+test('TOOL_CALL_START + ARGS 合成一条 tool.call（含工具名与参数原文）', () => {
+  const state = freshState();
+  const seen: any[] = [];
+  const cb = { onCustom: (ev: any) => seen.push(ev) };
+  handleAgUiEvent({ type: 'TOOL_CALL_START', toolCallId: 'tc-1', toolCallName: 'web_search' }, state, cb);
+  handleAgUiEvent(
+    { type: 'TOOL_CALL_ARGS', toolCallId: 'tc-1', delta: '{"query":"Gemini 3.8 Flash","limit":5}' },
+    state,
+    cb,
+  );
+  assert.equal(seen.length, 1, 'START 不发消息，ARGS 才合成 tool.call');
+  assert.equal(seen[0].name, 'tool.call');
+  assert.equal(seen[0].value.toolName, 'web_search');
+  assert.equal(seen[0].value.argsText, '{"query":"Gemini 3.8 Flash","limit":5}');
+  assert.equal(seen[0].value.toolCallId, 'tc-1');
+});
+
+test('TOOL_CALL_ARGS 分片到达时累积成完整 argsText', () => {
+  const state = freshState();
+  const seen: any[] = [];
+  const cb = { onCustom: (ev: any) => seen.push(ev) };
+  handleAgUiEvent({ type: 'TOOL_CALL_START', toolCallId: 'tc-2', toolCallName: 'write' }, state, cb);
+  handleAgUiEvent({ type: 'TOOL_CALL_ARGS', toolCallId: 'tc-2', delta: '{"content":"第一段' }, state, cb);
+  handleAgUiEvent({ type: 'TOOL_CALL_ARGS', toolCallId: 'tc-2', delta: '第二段"}' }, state, cb);
+  assert.equal(seen.length, 2);
+  assert.equal(seen[1].value.argsText, '{"content":"第一段第二段"}');
+});
+
+test('TOOL_CALL_END failed=true 合成 tool.error；成功则不产生任何消息', () => {
+  const state = freshState();
+  const seen: any[] = [];
+  const cb = { onCustom: (ev: any) => seen.push(ev) };
+  handleAgUiEvent({ type: 'TOOL_CALL_START', toolCallId: 'tc-3', toolCallName: 'terminal' }, state, cb);
+  handleAgUiEvent({ type: 'TOOL_CALL_END', toolCallId: 'tc-3', durationMs: 1200 }, state, cb);
+  assert.equal(seen.length, 0, '成功完成的工具不报「过程」');
+
+  handleAgUiEvent({ type: 'TOOL_CALL_START', toolCallId: 'tc-4', toolCallName: 'terminal' }, state, cb);
+  handleAgUiEvent({ type: 'TOOL_CALL_END', toolCallId: 'tc-4', failed: true }, state, cb);
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].name, 'tool.error');
+  assert.equal(seen[0].value.toolName, 'terminal');
+});
+
+test('TOOL_CALL_END 之后清理内部状态（不跨工具串名）', () => {
+  const state = freshState();
+  const cb = { onCustom: () => {} };
+  handleAgUiEvent({ type: 'TOOL_CALL_START', toolCallId: 'tc-5', toolCallName: 'a' }, state, cb);
+  handleAgUiEvent({ type: 'TOOL_CALL_END', toolCallId: 'tc-5' }, state, cb);
+  assert.equal(state.toolNames?.['tc-5'], undefined);
+  assert.equal(state.toolArgs?.['tc-5'], undefined);
+});
+
+test('TOOL_CALL_* 缺字段时不抛错', () => {
+  const state = freshState();
+  assert.doesNotThrow(() => {
+    handleAgUiEvent({ type: 'TOOL_CALL_START' }, state, {});
+    handleAgUiEvent({ type: 'TOOL_CALL_ARGS' }, state, {});
+    handleAgUiEvent({ type: 'TOOL_CALL_END' }, state, {});
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 终态
 // ---------------------------------------------------------------------------
 

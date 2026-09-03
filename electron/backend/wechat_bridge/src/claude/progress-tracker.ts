@@ -21,8 +21,7 @@ export type ProgressKind =
   | 'artifact'
   | 'approval'
   | 'error'
-  | 'done'
-  | 'phase';
+  | 'done';
 
 export interface ProgressEntry {
   ts: number;
@@ -76,11 +75,16 @@ const REPORT_LIMIT = 10;
 /** 补发摘要只回看这么久以内的进度 */
 const DIGEST_LOOKBACK_MS = 6 * 60 * 60 * 1000;
 
-const PHASE_LABEL: Record<string, string> = {
-  thinking: '🤔 思考中',
-  tool_executing: '🔧 执行工具',
-  text_generating: '✍️ 生成回复',
-};
+/**
+ * 工具参数摘要时优先取哪些键 —— 覆盖常见的搜索/读写/执行类参数名。
+ * 找不到命中时退回「第一个像人话的字符串值」，不做任何 per-tool 硬编码表。
+ */
+const ARG_KEY_PRIORITY = [
+  'query', 'q', 'keyword', 'search', 'topic', 'question',
+  'url', 'command', 'cmd', 'script',
+  'path', 'file', 'filename', 'filepath',
+  'prompt', 'task', 'input', 'text', 'content', 'code', 'pattern', 'message',
+];
 
 // ---------------------------------------------------------------------------
 // 小工具
@@ -89,6 +93,41 @@ const PHASE_LABEL: Record<string, string> = {
 function truncate(s: string, max: number): string {
   const t = s.replace(/\s+/g, ' ').trim();
   return t.length <= max ? t : `${t.slice(0, max - 1)}…`;
+}
+
+/** base64 / dataURL / 超长无空格串 —— 摘要里出现这种就是乱码，直接跳过 */
+function looksLikeBinary(s: string): boolean {
+  return /^data:/i.test(s) || /^[A-Za-z0-9+/=\s]{120,}$/.test(s);
+}
+
+/**
+ * 把工具调用的 args JSON 缩成一行人话：优先按 ARG_KEY_PRIORITY 取键，
+ * 否则取第一个「像人话」的字符串/数值；解析失败就截原始文本。
+ */
+function summarizeArgs(argsText?: unknown): string {
+  const raw = String(argsText || '').trim();
+  if (!raw) return '';
+  try {
+    const obj = JSON.parse(raw);
+    if (obj === null || typeof obj !== 'object') return truncate(String(obj), 48);
+    if (Array.isArray(obj)) {
+      const first = obj[0];
+      if (typeof first === 'string' && !looksLikeBinary(first)) return truncate(first, 48);
+      return truncate(JSON.stringify(obj), 48);
+    }
+    const rec = obj as Record<string, unknown>;
+    for (const k of ARG_KEY_PRIORITY) {
+      const val = rec[k];
+      if (typeof val === 'string' && val.trim() && !looksLikeBinary(val)) return truncate(val, 48);
+    }
+    for (const val of Object.values(rec)) {
+      if (typeof val === 'string' && val.trim() && !looksLikeBinary(val)) return truncate(val, 48);
+      if (typeof val === 'number' || typeof val === 'boolean') return truncate(String(val), 48);
+    }
+    return '';
+  } catch {
+    return truncate(raw, 48);
+  }
 }
 
 function shortPath(p?: string): string {
@@ -218,12 +257,32 @@ export function humanizeEvent(
     }
   }
 
-  // stream.phase 是 agui-server 发的阶段心跳（thinking / tool_executing /
-  // text_generating），是 workflow 之外唯一值得看的过程信号。
-  if (name === 'stream.phase') {
-    const label = PHASE_LABEL[String(v.phase || '')];
-    if (!label) return null;
-    return { kind: 'phase', key: `phase:${String(v.phase)}`, text: label, urgent: false };
+  // ── 真实工作过程（2026-09-03 起）─────────────────────────────────
+  // 用户明确反馈「不要礼貌但无用的状态占位」：stream.phase（思考中/生成回复/
+  // 执行工具）这种空转心跳从推送往返为 null —— 它们不携带任何任务信息。
+  // 普通聊天（非 workflow）长任务里唯一「真实」的过程信号是工具调用本身：
+  // 搜了什么关键词、跑了什么命令、打开了哪个文件。
+  if (name === 'tool.call') {
+    const toolName = String(v.toolName || 'tool');
+    const excerpt = summarizeArgs(v.argsText);
+    return {
+      kind: 'progress',
+      key: `tool:${toolName}:${excerpt}`,
+      text: excerpt ? `🔧 ${toolName}：${excerpt}` : `🔧 ${toolName}`,
+      urgent: false,
+      // 即使被节流挡下，keepalive 和 /进度 也该知道现在在跑什么
+      trackStep: excerpt ? `${toolName}（${excerpt}）` : toolName,
+    };
+  }
+
+  if (name === 'tool.error') {
+    const toolName = String(v.toolName || 'tool');
+    return {
+      kind: 'error',
+      key: `toolerr:${toolName}`,
+      text: `⚠️ ${toolName} 执行失败`,
+      urgent: true,
+    };
   }
 
   return null;
