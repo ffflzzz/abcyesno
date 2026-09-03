@@ -3569,6 +3569,82 @@ def uninstall_skill(skill_name: str) -> Tuple[bool, str]:
     return True, f"Uninstalled '{skill_name}' from {entry['install_path']}"
 
 
+def uninstall_local_skill(skill_name: str) -> Tuple[bool, str]:
+    """Remove a non-hub (user-created / manually imported) skill directory.
+
+    2026-09-03: the abcyesno skill panel needs to delete self-created skills,
+    which by definition have no hub lock entry — uninstall_skill refuses them
+    with "not a hub-installed skill (may be a builtin)". This complements it
+    for the local case.
+
+    The destructive boundary mirrors uninstall_skill and is intentionally
+    strict:
+      - the lock file always wins: a hub-tracked skill is NOT handled here;
+      - the resolved target MUST be inside SKILLS_DIR;
+      - the directory basename MUST equal the skill name (flat
+        ``skills/<name>/`` or one category level ``skills/<cat>/<name>/`` —
+        the same shapes _find_all_skills scans);
+      - symlink/junction redirects that escape SKILLS_DIR are refused;
+      - ``skills/.hub`` (lock/quarantine/audit) is never a candidate.
+    """
+    from agent.skill_utils import get_external_skills_dirs  # noqa: F401  (docs: external dirs are out of scope)
+
+    lock = HubLockFile()
+    if lock.get_installed(skill_name):
+        return False, f"'{skill_name}' is tracked by the skills hub; uninstall it through the hub path instead"
+
+    name = str(skill_name or "").strip()
+    if not name or name in {".", ".."} or "/" in name or "\\" in name:
+        return False, f"invalid skill name: '{skill_name}'"
+
+    skills_dir = _skills_dir()
+    if not skills_dir.exists():
+        return False, f"skills directory does not exist: {skills_dir}"
+
+    candidates: List[Path] = []
+    direct = skills_dir / name
+    if direct.is_dir():
+        candidates.append(direct)
+    try:
+        for child in skills_dir.iterdir():
+            if child.is_dir() and child.name != ".hub":
+                nested = child / name
+                if nested.is_dir():
+                    candidates.append(nested)
+    except OSError:
+        pass
+
+    if not candidates:
+        return False, (
+            f"'{name}' 没有在 skills 目录里找到对应的技能文件夹"
+            "（注意：外部目录/内置技能不在可删除范围内）"
+        )
+    if len(candidates) > 1:
+        shown = ", ".join(str(c.relative_to(skills_dir)) for c in candidates)
+        return False, f"多个位置都存在 '{name}'，为安全起见请手动处理其中一个: {shown}"
+
+    target = candidates[0]
+    resolved = target.resolve()
+    try:
+        rel = resolved.relative_to(skills_dir.resolve())
+    except ValueError:
+        return False, f"Refusing to remove '{name}': target escapes SKILLS_DIR"
+    if not rel.parts or rel.parts[0] == ".hub":
+        return False, "Refusing to remove: invalid target"
+
+    shutil.rmtree(resolved)
+
+    try:
+        from agent.prompt_builder import clear_skills_system_prompt_cache
+
+        clear_skills_system_prompt_cache(clear_snapshot=True)
+    except Exception:
+        pass
+    append_audit_log("UNINSTALL_LOCAL", name, "local", "user", "n/a", "user_request")
+
+    return True, f"Removed {rel.as_posix()}"
+
+
 def bundle_content_hash(bundle: SkillBundle) -> str:
     """Compute a deterministic hash for an in-memory skill bundle."""
     h = hashlib.sha256()
