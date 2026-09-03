@@ -1,5 +1,6 @@
 import type { CommandContext, CommandResult } from './router.js';
 import { scanAllSkills, formatSkillList, findSkill, type SkillInfo } from '../claude/skill-scanner.js';
+import { getProgressTracker, wechatThreadId } from '../claude/progress-tracker.js';
 import { loadConfig, saveConfig } from '../config.js';
 import { DEFAULT_WORKING_DIR } from '../constants.js';
 import { readFileSync, existsSync, statSync } from 'node:fs';
@@ -14,7 +15,8 @@ const HELP_TEXT = `可用命令：
   /stop             停止当前对话并清空排队消息
   /clear            清除当前会话
   /reset            完全重置（包括工作目录等设置）
-  /status           查看当前会话状态
+  /status            查看当前会话状态
+  /progress [别名 /p] 查看当前任务跑到哪一步了（长任务进行中也可用）
   /compact          压缩上下文（开始新 SDK 会话，保留历史）
   /history [数量]   查看对话记录（默认最近20条）
   /undo [数量]      撤销最近对话（默认1条）
@@ -89,7 +91,33 @@ export function handleStatus(ctx: CommandContext): CommandResult {
     `会话ID: ${s.sdkSessionId ?? '无'}`,
     `状态: ${s.state}`,
   ];
+  // 长任务期间最想看的是「现在跑到哪了」，顺手附上。
+  const progress = renderProgressSection(ctx.fromUserId);
+  if (progress) lines.push('', progress);
   return { reply: lines.join('\n'), handled: true };
+}
+
+/**
+ * /进度 —— 渲染该用户当前（或上一次）任务的进展。
+ *
+ * 长任务进行中时，串行队列被 claudeQuery 占着，/progress 由 main.ts 的
+ * handleLiveProgressCommand 旁路即时回复；这里服务的是「任务已结束 / 消息
+ * 恰好被排队」的情况，两者共用同一个 tracker。
+ */
+export function handleProgress(ctx: CommandContext): CommandResult {
+  const section = renderProgressSection(ctx.fromUserId);
+  return { reply: section || '📊 当前没有进行中的任务。', handled: true };
+}
+
+function renderProgressSection(fromUserId?: string): string | null {
+  if (!fromUserId) return null;
+  try {
+    const tracker = getProgressTracker(wechatThreadId(fromUserId));
+    if (tracker.allEntries().length === 0 && !tracker.currentStepText()) return null;
+    return tracker.renderReport();
+  } catch {
+    return null;
+  }
 }
 
 export function handleSkills(args: string): CommandResult {

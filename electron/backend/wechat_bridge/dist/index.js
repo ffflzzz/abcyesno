@@ -1258,6 +1258,301 @@ var init_skill_scanner = __esm({
   }
 });
 
+// electron/backend/wechat_bridge/src/claude/progress-tracker.ts
+function truncate(s, max) {
+  const t = s.replace(/\s+/g, " ").trim();
+  return t.length <= max ? t : `${t.slice(0, max - 1)}\u2026`;
+}
+function shortPath(p) {
+  if (!p) return "";
+  const norm = String(p).replace(/\\/g, "/");
+  const idx = norm.lastIndexOf("/");
+  return idx >= 0 ? norm.slice(idx + 1) : norm;
+}
+function formatDuration(ms) {
+  const totalSec = Math.max(0, Math.round(ms / 1e3));
+  const min = Math.floor(totalSec / 60);
+  const sec = totalSec % 60;
+  if (min <= 0) return `${sec} \u79D2`;
+  return `${min} \u5206 ${sec} \u79D2`;
+}
+function humanizeEvent(ev) {
+  const name = String(ev?.name || "");
+  if (!name) return null;
+  const v = ev?.value && typeof ev.value === "object" ? ev.value : {};
+  if (name.startsWith("workflow.")) {
+    switch (name) {
+      // 图拓扑，给前端画 DAG 用的，进聊天流纯属噪音
+      case "workflow.graph":
+        return null;
+      case "workflow.started":
+        return { kind: "started", key: "wf:started", text: "\u{1F680} \u4EFB\u52A1\u5DF2\u5F00\u59CB", urgent: false };
+      // 节点级 trace 是**不去重**的（series 模式会重复跑同一节点），只拿来
+      // 更新「当前节点」，绝不逐条推送。
+      case "workflow.trace": {
+        const node = String(v.node || "");
+        if (!node) return null;
+        return { kind: "progress", key: `trace:${node}`, text: "", urgent: false, trackNode: node };
+      }
+      case "workflow.progress": {
+        const status = String(v.status || "");
+        const stepId = String(v.step_id || v.node || "");
+        const label = String(v.stage || stepId || "\u5904\u7406\u4E2D");
+        const completed = Number(v.completed || 0);
+        const total = Number(v.total || 0);
+        const counter = completed > 0 && total > 0 ? `${completed}/${total} ` : "";
+        if (status === "done") {
+          return {
+            kind: "progress",
+            key: `done:${stepId}`,
+            text: `\u2705 ${counter}${label} \u5B8C\u6210`,
+            urgent: false,
+            trackStep: label
+          };
+        }
+        return {
+          kind: "progress",
+          key: `run:${stepId}`,
+          text: `\u23F3 ${counter}${label}`,
+          urgent: false,
+          trackStep: `${counter}${label}`.trim()
+        };
+      }
+      case "workflow.artifact": {
+        const label = String(v.label || v.id || "\u4EA7\u7269");
+        const file = shortPath(v.path);
+        return {
+          kind: "artifact",
+          key: `artifact:${String(v.id || label)}`,
+          text: file ? `\u{1F4E6} ${label}\uFF1A${file}` : `\u{1F4E6} ${label} \u5DF2\u751F\u6210`,
+          urgent: true
+        };
+      }
+      case "workflow.approval": {
+        const label = truncate(String(v.label || v.message || "\u9700\u8981\u786E\u8BA4"), 120);
+        return {
+          kind: "approval",
+          key: `approval:${String(v.gate_id || v.node || label)}`,
+          text: `\u{1F64B} \u9700\u8981\u4F60\u786E\u8BA4\uFF1A${label}
+\u56DE\u590D\u300C\u6279\u51C6\u300D\u7EE7\u7EED\uFF0C\u56DE\u590D\u300C\u62D2\u7EDD\u300D\u4E2D\u6B62\u3002`,
+          urgent: true
+        };
+      }
+      case "workflow.error": {
+        const msg = truncate(String(v.message || "\u672A\u77E5\u9519\u8BEF"), 200);
+        return {
+          kind: "error",
+          key: `error:${String(v.node || "")}:${msg.slice(0, 40)}`,
+          text: `\u26A0\uFE0F ${msg}`,
+          urgent: true
+        };
+      }
+      case "workflow.done": {
+        const status = String(v.status || "done");
+        if (status === "rejected") {
+          return { kind: "done", key: "wf:done", text: "\u23F9 \u5DF2\u6309\u4F60\u7684\u51B3\u5B9A\u4E2D\u6B62", urgent: true };
+        }
+        if (status === "timeout") {
+          return { kind: "done", key: "wf:done", text: "\u231B \u5BA1\u6279\u7B49\u5F85\u8D85\u65F6\uFF0C\u4EFB\u52A1\u5DF2\u4E2D\u6B62", urgent: true };
+        }
+        if (status === "done") {
+          return { kind: "done", key: "wf:done", text: "\u2705 \u4EFB\u52A1\u5B8C\u6210", urgent: true };
+        }
+        return {
+          kind: "done",
+          key: "wf:done",
+          text: `\u274C \u4EFB\u52A1\u5931\u8D25${v.error ? `\uFF1A${truncate(String(v.error), 160)}` : ""}`,
+          urgent: true
+        };
+      }
+      default:
+        return null;
+    }
+  }
+  if (name === "stream.phase") {
+    const label = PHASE_LABEL[String(v.phase || "")];
+    if (!label) return null;
+    return { kind: "phase", key: `phase:${String(v.phase)}`, text: label, urgent: false };
+  }
+  return null;
+}
+function getProgressTracker(threadId) {
+  let t = registry.get(threadId);
+  if (!t) {
+    if (registry.size >= REGISTRY_MAX) {
+      const oldest = registry.keys().next().value;
+      if (oldest !== void 0) registry.delete(oldest);
+    }
+    t = new ProgressTracker(threadId);
+    registry.set(threadId, t);
+  }
+  return t;
+}
+function resetProgressTracker(threadId) {
+  registry.delete(threadId);
+  const t = new ProgressTracker(threadId);
+  registry.set(threadId, t);
+  return t;
+}
+function wechatThreadId(fromUserId) {
+  return `wx-${fromUserId}`;
+}
+var MAX_ENTRIES, DEDUP_TTL_MS, THROTTLE_MS, MAX_EMITS_PER_RUN, DIGEST_LIMIT, REPORT_LIMIT, DIGEST_LOOKBACK_MS, PHASE_LABEL, ProgressTracker, REGISTRY_MAX, registry;
+var init_progress_tracker = __esm({
+  "electron/backend/wechat_bridge/src/claude/progress-tracker.ts"() {
+    MAX_ENTRIES = 80;
+    DEDUP_TTL_MS = 45e3;
+    THROTTLE_MS = 2e4;
+    MAX_EMITS_PER_RUN = 6;
+    DIGEST_LIMIT = 8;
+    REPORT_LIMIT = 10;
+    DIGEST_LOOKBACK_MS = 6 * 60 * 60 * 1e3;
+    PHASE_LABEL = {
+      thinking: "\u{1F914} \u601D\u8003\u4E2D",
+      tool_executing: "\u{1F527} \u6267\u884C\u5DE5\u5177",
+      text_generating: "\u270D\uFE0F \u751F\u6210\u56DE\u590D"
+    };
+    ProgressTracker = class {
+      threadId;
+      entries = [];
+      lastKeyAt = /* @__PURE__ */ new Map();
+      lastEmitAt = 0;
+      emitCount = 0;
+      sendFailed = false;
+      /** 最近一次 workflow.progress 报的「N/M 步骤名」——最像「现在在干嘛」的东西 */
+      currentStep = "";
+      /** workflow.trace 给的原始节点名，仅当 currentStep 为空时兜底 */
+      currentNode = "";
+      startedAt = Date.now();
+      lastActivityAt = Date.now();
+      constructor(threadId) {
+        this.threadId = threadId;
+      }
+      /** 新一轮对话开始时调用，清掉上一轮的状态。 */
+      reset() {
+        this.entries = [];
+        this.lastKeyAt.clear();
+        this.lastEmitAt = 0;
+        this.emitCount = 0;
+        this.sendFailed = false;
+        this.currentStep = "";
+        this.currentNode = "";
+        this.startedAt = Date.now();
+        this.lastActivityAt = Date.now();
+      }
+      /** 当前步骤的可读文案；没有则用 trace 节点名兜底。 */
+      currentStepText() {
+        return this.currentStep || this.currentNode || "";
+      }
+      get elapsedMs() {
+        return Date.now() - this.startedAt;
+      }
+      /**
+       * 吃进一个 CUSTOM 事件。返回非 null 表示「这条值得推给微信」，调用方负责推。
+       * 无论返回什么都已记账（/进度 与补发摘要看得到）。
+       */
+      ingest(ev) {
+        this.lastActivityAt = Date.now();
+        const h = humanizeEvent(ev);
+        if (!h) return null;
+        if (!h.text) {
+          if (h.trackNode) this.currentNode = h.trackNode;
+          return null;
+        }
+        if (h.trackStep) this.currentStep = h.trackStep;
+        const now = Date.now();
+        const entry = {
+          ts: now,
+          kind: h.kind,
+          key: h.key,
+          text: h.text,
+          urgent: h.urgent,
+          emitted: false,
+          delivered: false,
+          failed: false
+        };
+        this.entries.push(entry);
+        if (this.entries.length > MAX_ENTRIES) this.entries.shift();
+        const lastAt = this.lastKeyAt.get(h.key) || 0;
+        if (now - lastAt < DEDUP_TTL_MS) return null;
+        if (!h.urgent) {
+          if (this.emitCount >= MAX_EMITS_PER_RUN) return null;
+          if (now - this.lastEmitAt < THROTTLE_MS) return null;
+        }
+        this.lastKeyAt.set(h.key, now);
+        this.lastEmitAt = now;
+        this.emitCount += 1;
+        entry.emitted = true;
+        return { text: h.text, entry };
+      }
+      markDelivered(entry) {
+        entry.delivered = true;
+        entry.failed = false;
+      }
+      noteSendFailure(entry) {
+        this.sendFailed = true;
+        if (entry) entry.failed = true;
+      }
+      /** 上一轮推送是否失败过 —— 决定要不要在下一条用户消息前补一段进展摘要。 */
+      get hadSendFailure() {
+        return this.sendFailed;
+      }
+      hasDigest() {
+        if (!this.sendFailed) return false;
+        const cutoff = Date.now() - DIGEST_LOOKBACK_MS;
+        return this.entries.some((e) => e.ts >= cutoff);
+      }
+      /** 记账里所有条目（供 /进度 渲染）。 */
+      allEntries() {
+        return this.entries;
+      }
+      /**
+       * 生成「你不在的时候发生了什么」的补发摘要，并把它标记为已消费。
+       * 只在至少一次推送失败过（= 回复窗口被关掉过）时才有内容。
+       */
+      takeDigest() {
+        if (!this.hasDigest()) return null;
+        const lines = this.pickDigestLines();
+        this.sendFailed = false;
+        for (const e of this.entries) e.failed = false;
+        if (!lines.length) return null;
+        return [
+          "\u{1F4CC} \u4E0A\u4E00\u6761\u4EFB\u52A1\u7684\u90E8\u5206\u8FDB\u5C55\u6CA1\u80FD\u5728\u5F53\u65F6\u9001\u8FBE\u5FAE\u4FE1\uFF0C\u8865\u7ED9\u4F60\uFF1A",
+          ...lines.map((l) => `\xB7 ${l}`)
+        ].join("\n");
+      }
+      pickDigestLines() {
+        const cutoff = Date.now() - DIGEST_LOOKBACK_MS;
+        const byKey = /* @__PURE__ */ new Map();
+        for (const e of this.entries) {
+          if (e.ts < cutoff) continue;
+          byKey.set(e.key, e);
+        }
+        return [...byKey.values()].sort((a, b) => a.ts - b.ts).slice(-DIGEST_LIMIT).map((e) => e.text.split("\n")[0]);
+      }
+      /** /进度 用：当前步骤 + 最近 N 条。 */
+      renderReport() {
+        const step = this.currentStepText();
+        if (!step && this.entries.length === 0) {
+          return "\u{1F4CA} \u5F53\u524D\u6CA1\u6709\u8FDB\u884C\u4E2D\u7684\u4EFB\u52A1\u3002";
+        }
+        const byKey = /* @__PURE__ */ new Map();
+        for (const e of this.entries) byKey.set(e.key, e);
+        const recent = [...byKey.values()].sort((a, b) => a.ts - b.ts).slice(-REPORT_LIMIT).map((e) => `\xB7 ${e.text.split("\n")[0]}`);
+        const lines = ["\u{1F4CA} \u5F53\u524D\u8FDB\u5C55"];
+        lines.push(step ? `\u6B63\u5728\u505A\uFF1A${step}` : "\u6B63\u5728\u505A\uFF1A\u2014");
+        if (recent.length) {
+          lines.push("", "\u6700\u8FD1\u52A8\u6001\uFF1A", ...recent);
+        }
+        lines.push("", `\u5DF2\u8FD0\u884C ${formatDuration(this.elapsedMs)}`);
+        return lines.join("\n");
+      }
+    };
+    REGISTRY_MAX = 64;
+    registry = /* @__PURE__ */ new Map();
+  }
+});
+
 // electron/backend/wechat_bridge/src/config.ts
 function loadConfig() {
   try {
@@ -1347,7 +1642,23 @@ function handleStatus(ctx) {
     `\u4F1A\u8BDDID: ${s.sdkSessionId ?? "\u65E0"}`,
     `\u72B6\u6001: ${s.state}`
   ];
+  const progress = renderProgressSection(ctx.fromUserId);
+  if (progress) lines.push("", progress);
   return { reply: lines.join("\n"), handled: true };
+}
+function handleProgress(ctx) {
+  const section = renderProgressSection(ctx.fromUserId);
+  return { reply: section || "\u{1F4CA} \u5F53\u524D\u6CA1\u6709\u8FDB\u884C\u4E2D\u7684\u4EFB\u52A1\u3002", handled: true };
+}
+function renderProgressSection(fromUserId) {
+  if (!fromUserId) return null;
+  try {
+    const tracker = getProgressTracker(wechatThreadId(fromUserId));
+    if (tracker.allEntries().length === 0 && !tracker.currentStepText()) return null;
+    return tracker.renderReport();
+  } catch {
+    return null;
+  }
 }
 function handleSkills(args) {
   invalidateSkillCache();
@@ -1483,6 +1794,7 @@ var import_node_fs10, import_node_path12, import_node_os4, import_node_url, impo
 var init_handlers = __esm({
   "electron/backend/wechat_bridge/src/commands/handlers.ts"() {
     init_skill_scanner();
+    init_progress_tracker();
     init_config();
     init_constants();
     import_node_fs10 = require("node:fs");
@@ -1497,7 +1809,8 @@ var init_handlers = __esm({
   /stop             \u505C\u6B62\u5F53\u524D\u5BF9\u8BDD\u5E76\u6E05\u7A7A\u6392\u961F\u6D88\u606F
   /clear            \u6E05\u9664\u5F53\u524D\u4F1A\u8BDD
   /reset            \u5B8C\u5168\u91CD\u7F6E\uFF08\u5305\u62EC\u5DE5\u4F5C\u76EE\u5F55\u7B49\u8BBE\u7F6E\uFF09
-  /status           \u67E5\u770B\u5F53\u524D\u4F1A\u8BDD\u72B6\u6001
+  /status            \u67E5\u770B\u5F53\u524D\u4F1A\u8BDD\u72B6\u6001
+  /progress [\u522B\u540D /p] \u67E5\u770B\u5F53\u524D\u4EFB\u52A1\u8DD1\u5230\u54EA\u4E00\u6B65\u4E86\uFF08\u957F\u4EFB\u52A1\u8FDB\u884C\u4E2D\u4E5F\u53EF\u7528\uFF09
   /compact          \u538B\u7F29\u4E0A\u4E0B\u6587\uFF08\u5F00\u59CB\u65B0 SDK \u4F1A\u8BDD\uFF0C\u4FDD\u7559\u5386\u53F2\uFF09
   /history [\u6570\u91CF]   \u67E5\u770B\u5BF9\u8BDD\u8BB0\u5F55\uFF08\u9ED8\u8BA4\u6700\u8FD120\u6761\uFF09
   /undo [\u6570\u91CF]      \u64A4\u9500\u6700\u8FD1\u5BF9\u8BDD\uFF08\u9ED8\u8BA41\u6761\uFF09
@@ -1548,6 +1861,10 @@ function routeCommand(ctx) {
       return handlePrompt(ctx, args);
     case "status":
       return handleStatus(ctx);
+    case "progress":
+    case "\u8FDB\u5EA6":
+    case "p":
+      return handleProgress(ctx);
     case "skills":
       return handleSkills(args);
     case "history":
@@ -1575,6 +1892,13 @@ var init_router = __esm({
 // electron/backend/wechat_bridge/src/claude/provider.ts
 function handleAgUiEvent(ev, state, callbacks) {
   switch (ev?.type) {
+    case "CUSTOM": {
+      try {
+        callbacks.onCustom?.(ev);
+      } catch {
+      }
+      break;
+    }
     case "TEXT_MESSAGE_START": {
       state.messageId = ev.messageId || state.messageId;
       break;
@@ -1620,6 +1944,7 @@ async function claudeQuery(options) {
     images,
     onText,
     onTurnEnd,
+    onCustom,
     abortController,
     systemPrompt
   } = options;
@@ -1745,6 +2070,12 @@ ${prompt}` : prompt;
               onTurnEnd: (r) => {
                 try {
                   onTurnEnd?.(r);
+                } catch {
+                }
+              },
+              onCustom: (c) => {
+                try {
+                  onCustom?.(c);
                 } catch {
                 }
               }
@@ -6736,6 +7067,19 @@ async function createDaemonRuntime() {
     }
     return true;
   }
+  function handleLiveProgressCommand(msg) {
+    if (msg.message_type !== 1 /* USER */ || !msg.item_list) return false;
+    if (session.state !== "processing") return false;
+    const trimmed = extractTextFromItems(msg.item_list).trim().toLowerCase();
+    if (trimmed !== "/progress" && trimmed !== "/\u8FDB\u5EA6" && trimmed !== "/p") return false;
+    const tracker = getProgressTracker(wechatThreadId(msg.from_user_id ?? ""));
+    const report = tracker.renderReport();
+    logger.info("live progress query", { steps: tracker.allEntries().length, report });
+    sender.sendText(msg.from_user_id, msg.context_token ?? "", report).catch((err) => {
+      logger.warn("live progress reply failed", { error: err instanceof Error ? err.message : String(err) });
+    });
+    return true;
+  }
   const callbacks = {
     onMessage: async (msg) => {
       if (msg.message_type === 1 /* USER */) {
@@ -6759,6 +7103,7 @@ async function createDaemonRuntime() {
         }
       }
       if (handlePriorityCommand(msg)) return;
+      if (handleLiveProgressCommand(msg)) return;
       messageQueue.push(msg);
       drainQueue();
     },
@@ -6834,6 +7179,17 @@ async function handleMessage(msg, account, session, sessionStore, sender, config
   const userText = extractTextFromItems(msg.item_list);
   const imageItem = extractFirstImageUrl(msg.item_list);
   const fileItem = extractFirstFileItem(msg.item_list);
+  if (userText && !userText.trim().startsWith("/")) {
+    const progressTracker = getProgressTracker(wechatThreadId(fromUserId));
+    if (progressTracker.hasDigest()) {
+      const digest = progressTracker.takeDigest();
+      if (digest) {
+        await sender.sendText(fromUserId, contextToken, digest).catch((err) => {
+          logger.warn("progress digest send failed", { error: err instanceof Error ? err.message : String(err) });
+        });
+      }
+    }
+  }
   if (session.state === "processing" && !userText.startsWith("/")) {
     return;
   }
@@ -6845,6 +7201,7 @@ async function handleMessage(msg, account, session, sessionStore, sender, config
     const ctx = {
       accountId: account.accountId,
       session,
+      fromUserId,
       updateSession,
       clearSession: () => sessionStore.clear(account.accountId),
       getChatHistoryText: (limit) => sessionStore.getChatHistoryText(session, limit),
@@ -6983,9 +7340,9 @@ async function sendToClaude(userText, imageItem, fileItem, fromUserId, contextTo
         }
       }
       return bigramJaccard(a, b) >= DEDUP_SIMILARITY;
-    }, emitText = function(text, role) {
+    }, emitText = function(text, role, opts) {
       if (!text.trim()) return;
-      if (isSelfCorrectionDuplicate(text)) {
+      if (!opts?.skipDedup && isSelfCorrectionDuplicate(text)) {
         logger.info("dropped self-correction duplicate", {
           role,
           length: text.length,
@@ -6993,14 +7350,14 @@ async function sendToClaude(userText, imageItem, fileItem, fromUserId, contextTo
         });
         return;
       }
-      lastEmitRecord = { text, ts: Date.now() };
+      if (!opts?.skipDedup) lastEmitRecord = { text, ts: Date.now() };
       if (pendingRetry) {
         const stuck = pendingRetry;
         pendingRetry = null;
         scheduleSend(stuck.text, stuck.role);
       }
-      scheduleSend(text, role);
-    }, scheduleSend = function(text, role) {
+      scheduleSend(text, role, opts);
+    }, scheduleSend = function(text, role, opts) {
       if (!text.trim()) return;
       flushChain = flushChain.then(async () => {
         const chunks = splitMessage(text);
@@ -7009,6 +7366,7 @@ async function sendToClaude(userText, imageItem, fileItem, fromUserId, contextTo
             await sender.sendText(fromUserId, contextToken, chunks[i]);
           } catch (err) {
             pendingRetry = { text: chunks.slice(i).join("\n\n"), role };
+            opts?.onFailed?.();
             logger.warn("emitText send failed, content retained for retry", {
               role,
               error: err instanceof Error ? err.message : String(err),
@@ -7019,6 +7377,7 @@ async function sendToClaude(userText, imageItem, fileItem, fromUserId, contextTo
         }
         anySent = true;
         lastSentTime = Date.now();
+        opts?.onDelivered?.();
       });
     };
     let images;
@@ -7062,30 +7421,41 @@ async function sendToClaude(userText, imageItem, fileItem, fromUserId, contextTo
     const DEDUP_SIMILARITY = 0.8;
     let lastEmitRecord = null;
     const router = new TurnRouter((msg) => emitText(filterToolNoise(msg.text), msg.role));
-    const SILENCE_WARNING_MS = 5 * 60 * 1e3;
-    const SILENCE_MESSAGES = [
-      "\u6211\u8FD8\u5728\u5904\u7406\u4E2D\uFF0C\u8FD9\u4E2A\u95EE\u9898\u6709\u70B9\u590D\u6742\uFF0C\u8BF7\u518D\u7A0D\u7B49\u4E00\u4E0B",
-      "\u8FD8\u5728\u540E\u53F0\u5168\u529B\u8DD1\u7740\uFF0C\u4EFB\u52A1\u91CF\u6BD4\u8F83\u5927\uFF0C\u5B8C\u6210\u540E\u7ACB\u523B\u53D1\u4F60",
-      "\u4EFB\u52A1\u6BD4\u60F3\u8C61\u7684\u590D\u6742\u4E00\u4E9B\uFF0C\u8FD8\u5728\u5904\u7406\u4E2D\uFF0C\u8BF7\u518D\u7B49\u7B49",
-      "\u6B63\u5728\u5904\u7406\u4E2D\uFF0C\u8FD8\u6CA1\u7ED3\u675F\uFF0C\u597D\u4E86\u4F1A\u7B2C\u4E00\u65F6\u95F4\u53D1\u4F60",
-      "\u6211\u5728\u8BA4\u771F\u601D\u8003\u8FD9\u4E2A\u95EE\u9898\uFF0C\u8BF7\u518D\u7A0D\u7B49\u4E00\u4F1A\u513F",
-      "\u8FD8\u5728\u8DD1\uFF0C\u8FD9\u90E8\u5206\u786E\u5B9E\u9700\u8981\u4E00\u4E9B\u65F6\u95F4",
-      "\u4ECD\u5728\u5904\u7406\u4E2D\uFF0C\u76EE\u524D\u8FD8\u6CA1\u6709\u6700\u7EC8\u7ED3\u679C\uFF0C\u8BF7\u7A0D\u5019"
-    ];
-    const SILENCE_LONG_MESSAGES = [
-      "\u4EFB\u52A1\u5DF2\u7ECF\u8DD1\u4E86\u633A\u4E45\uFF08\u8D85\u8FC715\u5206\u949F\uFF09\uFF0C\u8FD8\u5728\u7EE7\u7EED\u5904\u7406\uFF1B\u5982\u679C\u4F60\u7740\u6025\uFF0C\u53EF\u4EE5\u76F4\u63A5\u53D1\u300C\u505C\u6B62\u300D\u6216 /stop \u4E2D\u65AD\u5F53\u524D\u4EFB\u52A1",
-      "\u8FD8\u5728\u540E\u53F0\u5904\u7406\u4E2D\uFF0C\u5DF2\u7ECF\u8D85\u8FC715\u5206\u949F\u4E86\uFF1B\u4E0D\u60F3\u7B49\u7684\u8BDD\u53D1\u300C\u505C\u6B62\u300D\u6216 /stop \u53EF\u4EE5\u4E2D\u65AD"
-    ];
-    let silenceCount = 0;
+    const tracker = resetProgressTracker(wechatThreadId(fromUserId));
+    const emitProgress = (ev) => {
+      const line = tracker.ingest(ev);
+      if (!line) return;
+      emitText(line.text, "interstitial", {
+        skipDedup: true,
+        onDelivered: () => tracker.markDelivered(line.entry),
+        onFailed: () => tracker.noteSendFailure(line.entry)
+      });
+    };
+    const SILENCE_SOFT_MS = 3 * 60 * 1e3;
+    const SILENCE_REPEAT_MS = 10 * 60 * 1e3;
+    const SILENCE_LONG_MS = 15 * 60 * 1e3;
+    const SILENCE_FALLBACK = "\u6211\u8FD8\u5728\u5904\u7406\u4E2D\uFF0C\u8FD9\u4E2A\u95EE\u9898\u6709\u70B9\u590D\u6742\uFF0C\u8BF7\u518D\u7A0D\u7B49\u4E00\u4E0B";
+    const SILENCE_LONG = "\u4EFB\u52A1\u5DF2\u7ECF\u8DD1\u4E86\u633A\u4E45\uFF08\u8D85\u8FC715\u5206\u949F\uFF09\uFF0C\u8FD8\u5728\u7EE7\u7EED\u5904\u7406\uFF1B\u5982\u679C\u4F60\u7740\u6025\uFF0C\u53EF\u4EE5\u76F4\u63A5\u53D1\u300C\u505C\u6B62\u300D\u6216 /stop \u4E2D\u65AD\u5F53\u524D\u4EFB\u52A1";
+    let lastKeepaliveStep = "";
     flushTimer = setInterval(() => {
-      if (Date.now() - lastSentTime > SILENCE_WARNING_MS) {
-        silenceCount += 1;
-        const pool = silenceCount >= 3 ? SILENCE_LONG_MESSAGES : SILENCE_MESSAGES;
-        const msg = pool[Math.floor(Math.random() * pool.length)];
-        sender.sendText(fromUserId, contextToken, msg).catch(() => {
-        });
-        lastSentTime = Date.now();
+      const silenceFor = Date.now() - lastSentTime;
+      const step = tracker.currentStepText();
+      const stepChanged = !!step && step !== lastKeepaliveStep;
+      let due = false;
+      if (stepChanged && silenceFor >= SILENCE_SOFT_MS) due = true;
+      else if (!stepChanged && silenceFor >= SILENCE_REPEAT_MS) due = true;
+      if (!due) return;
+      let msg;
+      if (step) {
+        msg = silenceFor >= SILENCE_LONG_MS ? `\u23F3 \u8FD8\u5728 ${step}\uFF08\u5DF2 ${Math.floor(silenceFor / 6e4)} \u5206\u949F\u6CA1\u65B0\u6D88\u606F\uFF09\uFF1B\u4E0D\u60F3\u7B49\u53EF\u4EE5\u53D1\u300C\u505C\u6B62\u300D\u4E2D\u65AD` : `\u23F3 \u8FD8\u5728 ${step}`;
+      } else {
+        msg = silenceFor >= SILENCE_LONG_MS ? SILENCE_LONG : SILENCE_FALLBACK;
       }
+      lastKeepaliveStep = step;
+      lastSentTime = Date.now();
+      sender.sendText(fromUserId, contextToken, msg).catch((err) => {
+        logger.warn("keepalive send failed", { error: err instanceof Error ? err.message : String(err) });
+      });
     }, 2e3);
     const queryOptions = {
       prompt,
@@ -7115,7 +7485,9 @@ async function sendToClaude(userText, imageItem, fileItem, fromUserId, contextTo
       },
       onTurnEnd: (stopReason) => {
         router.onTurnEnd(stopReason);
-      }
+      },
+      // workflow.progress / artifact / approval / error / done / stream.phase
+      onCustom: emitProgress
     };
     let result = await claudeQuery(queryOptions);
     if (result.error && queryOptions.resume) {
@@ -7283,6 +7655,7 @@ var init_main = __esm({
     init_provider();
     init_turn_router();
     init_tool_noise_filter();
+    init_progress_tracker();
     init_config();
     init_logger();
     init_constants();

@@ -16,8 +16,14 @@ import { execSync } from 'node:child_process';
 
 const DATA_DIR = process.env.WCC_DATA_DIR || join(homedir(), '.wechat-claude-code');
 
-// ─── Keepalive messages (must match main.ts SILENCE_MESSAGES) ───
-const SILENCE_MESSAGES = new Set([
+// ─── Keepalive 识别 ───
+// 2026-09-01 之前这里是一份「必须与 main.ts SILENCE_MESSAGES 逐字同步」的硬
+// 编码清单 —— 文案一改就失效。现在改成「结构化判定 + 历史串兜底」：新的保活
+// 文案一律以 `⏳ 还在 ` 开头（带真实步骤名），直接按前缀识别；旧串保留只为
+// 还能正确标注历史日志。
+
+/** 历史上用过的保活文案（仅供识别旧日志，新文案不在这里维护）。 */
+const LEGACY_KEEPALIVE_MESSAGES = new Set([
   '我还在处理中，这个问题有点复杂，请再稍等一下',
   '正在努力干活中，马上就有结果了，请稍等片刻',
   '有点复杂正在处理，再给我一点时间，很快就好',
@@ -28,7 +34,7 @@ const SILENCE_MESSAGES = new Set([
   '还没完不过已经快了，再给我一分钟就能搞定',
   '我在认真思考这个问题，请再稍等一会儿',
   '稍微有点棘手，不过已经快解决了，再等我一下',
-  // 2026-08-31 文案诚实化新增（旧文案保留以便识别历史日志）
+  // 2026-08-31 文案诚实化新增
   '还在后台全力跑着，任务量比较大，完成后立刻发你',
   '任务比想象的复杂一些，还在处理中，请再等等',
   '正在处理中，还没结束，好了会第一时间发你',
@@ -39,6 +45,16 @@ const SILENCE_MESSAGES = new Set([
   '我还在处理，请稍等一下',
   '请稍等一下',
 ]);
+
+/** 新保活文案统一前缀：⏳ 还在 <当前步骤>[（已 N 分钟…）…] */
+const KEEPALIVE_PREFIX = '⏳ 还在 ';
+
+function isKeepaliveMessage(text: string): boolean {
+  const t = (text || '').trim();
+  if (!t) return false;
+  if (t.startsWith(KEEPALIVE_PREFIX)) return true;
+  return LEGACY_KEEPALIVE_MESSAGES.has(t);
+}
 
 // ─── Types ───
 
@@ -273,7 +289,7 @@ function reconstructSessions(lines: ParsedLine[]): Session[] {
           text: sent.text,
           timestamp: line.timestamp,
           clientId: sent.clientId,
-          isKeepalive: SILENCE_MESSAGES.has(sent.text),
+          isKeepalive: isKeepaliveMessage(sent.text),
         });
       }
     }

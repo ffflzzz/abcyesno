@@ -16,6 +16,11 @@ import { routeCommand, type CommandContext, type CommandResult } from './command
 import { claudeQuery, type QueryOptions } from './claude/provider.js';
 import { TurnRouter } from './claude/turn-router.js';
 import { filterToolNoise } from './claude/tool-noise-filter.js';
+import {
+  resetProgressTracker,
+  getProgressTracker,
+  wechatThreadId,
+} from './claude/progress-tracker.js';
 import { loadConfig, saveConfig } from './config.js';
 import { logger } from './logger.js';
 import { DATA_DIR } from './constants.js';
@@ -470,6 +475,29 @@ export async function createDaemonRuntime(): Promise<DaemonRuntime | null> {
     return true;
   }
 
+  /**
+   * 运行中的进度查询（/progress | /进度 | /p）——**必须绕过串行队列**。
+   *
+   * drainQueue 是 `await handleMessage(...)` 串起来的，而 handleMessage 会一路
+   * 阻塞到 claudeQuery 结束。所以长任务期间 /进度 如果进队列，要等任务跑完
+   * 才被处理 —— 那就完全没有「可观察」可言了。这里走和 /stop 一样的旁路，
+   * 直接从 tracker 读当前状态即时回复。
+   */
+  function handleLiveProgressCommand(msg: WeixinMessage): boolean {
+    if (msg.message_type !== MessageType.USER || !msg.item_list) return false;
+    if (session.state !== 'processing') return false;
+    const trimmed = extractTextFromItems(msg.item_list).trim().toLowerCase();
+    if (trimmed !== '/progress' && trimmed !== '/进度' && trimmed !== '/p') return false;
+
+    const tracker = getProgressTracker(wechatThreadId(msg.from_user_id ?? ''));
+    const report = tracker.renderReport();
+    logger.info('live progress query', { steps: tracker.allEntries().length, report });
+    sender.sendText(msg.from_user_id!, msg.context_token ?? '', report).catch((err) => {
+      logger.warn('live progress reply failed', { error: err instanceof Error ? err.message : String(err) });
+    });
+    return true;
+  }
+
   const callbacks: MonitorCallbacks = {
     onMessage: async (msg: WeixinMessage) => {
       // Track the latest inbound turn info so the embeddable API (bridge.ts)
@@ -501,6 +529,7 @@ export async function createDaemonRuntime(): Promise<DaemonRuntime | null> {
         }
       }
       if (handlePriorityCommand(msg)) return;
+      if (handleLiveProgressCommand(msg)) return;
       messageQueue.push(msg);
       drainQueue();
     },
@@ -615,6 +644,21 @@ async function handleMessage(
   const imageItem = extractFirstImageUrl(msg.item_list);
   const fileItem = extractFirstFileItem(msg.item_list);
 
+  // 补发「你不在时发生了什么」：上一轮如果有进度消息因微信回复窗口关闭
+  // 而推送失败，用户这条消息带来了新的 context_token，先把进展补上再处理
+  // 他的新请求。命令类消息跳过（/进度 自己就会渲染进展，不重复）。
+  if (userText && !userText.trim().startsWith('/')) {
+    const progressTracker = getProgressTracker(wechatThreadId(fromUserId));
+    if (progressTracker.hasDigest()) {
+      const digest = progressTracker.takeDigest();
+      if (digest) {
+        await sender.sendText(fromUserId, contextToken, digest).catch((err) => {
+          logger.warn('progress digest send failed', { error: err instanceof Error ? err.message : String(err) });
+        });
+      }
+    }
+  }
+
   // Drop non-command messages while processing (priority commands already handled upstream)
   if (session.state === 'processing' && !userText.startsWith('/')) {
     return;
@@ -631,6 +675,7 @@ async function handleMessage(
     const ctx: CommandContext = {
       accountId: account.accountId,
       session,
+      fromUserId,
       updateSession,
       clearSession: () => sessionStore.clear(account.accountId),
       getChatHistoryText: (limit?: number) => sessionStore.getChatHistoryText(session, limit),
@@ -868,12 +913,18 @@ async function sendToClaude(
       return bigramJaccard(a, b) >= DEDUP_SIMILARITY;
     }
 
-    function emitText(text: string, role: 'interstitial' | 'final'): void {
+    function emitText(
+      text: string,
+      role: 'interstitial' | 'final',
+      opts?: { skipDedup?: boolean; onDelivered?: () => void; onFailed?: () => void },
+    ): void {
       if (!text.trim()) return;
 
       // Drop self-correction duplicates BEFORE we commit to flushing.
       // Logged so it's visible in bridge-*.log when investigating.
-      if (isSelfCorrectionDuplicate(text)) {
+      // 进度短句是我们自己生成的，不存在「模型自我修正重写」，跳过该去重，
+      // 否则重复一步会把 lastEmitRecord 也污染掉、影响最终答案的判定。
+      if (!opts?.skipDedup && isSelfCorrectionDuplicate(text)) {
         logger.info('dropped self-correction duplicate', {
           role,
           length: text.length,
@@ -881,7 +932,7 @@ async function sendToClaude(
         });
         return;
       }
-      lastEmitRecord = { text, ts: Date.now() };
+      if (!opts?.skipDedup) lastEmitRecord = { text, ts: Date.now() };
 
       // 若上一次发送失败留下了 pendingRetry，先用它原本的 role 单独补发，
       // 不要和当前 role 的文本合并（避免 interstitial 内容混进 final 答案）。
@@ -891,10 +942,14 @@ async function sendToClaude(
         scheduleSend(stuck.text, stuck.role);
       }
 
-      scheduleSend(text, role);
+      scheduleSend(text, role, opts);
     }
 
-    function scheduleSend(text: string, role: 'interstitial' | 'final'): void {
+    function scheduleSend(
+      text: string,
+      role: 'interstitial' | 'final',
+      opts?: { onDelivered?: () => void; onFailed?: () => void },
+    ): void {
       if (!text.trim()) return;
       flushChain = flushChain.then(async () => {
         const chunks = splitMessage(text);
@@ -903,6 +958,7 @@ async function sendToClaude(
             await sender.sendText(fromUserId, contextToken, chunks[i]);
           } catch (err) {
             pendingRetry = { text: chunks.slice(i).join('\n\n'), role };
+            opts?.onFailed?.();
             logger.warn('emitText send failed, content retained for retry', {
               role,
               error: err instanceof Error ? err.message : String(err),
@@ -913,38 +969,64 @@ async function sendToClaude(
         }
         anySent = true;
         lastSentTime = Date.now();
+        opts?.onDelivered?.();
       });
     }
 
     const router = new TurnRouter((msg) => emitText(filterToolNoise(msg.text), msg.role));
 
-    // Safety net: send keepalive if nothing was sent for 5 minutes
-    const SILENCE_WARNING_MS = 5 * 60 * 1000;
-    // 2026-08-31 文案诚实化：去掉"马上就好/一分钟搞定"式承诺（曾出现任务
-    // 26 分钟无进展仍每 5 分钟说"马上出结果"），全部改为不承诺时长的中性
-    // 表述；超过 15 分钟的静默追加告知式文案，用户可自行决定是否打断。
-    const SILENCE_MESSAGES = [
-      '我还在处理中，这个问题有点复杂，请再稍等一下',
-      '还在后台全力跑着，任务量比较大，完成后立刻发你',
-      '任务比想象的复杂一些，还在处理中，请再等等',
-      '正在处理中，还没结束，好了会第一时间发你',
-      '我在认真思考这个问题，请再稍等一会儿',
-      '还在跑，这部分确实需要一些时间',
-      '仍在处理中，目前还没有最终结果，请稍候',
-    ];
-    const SILENCE_LONG_MESSAGES = [
-      '任务已经跑了挺久（超过15分钟），还在继续处理；如果你着急，可以直接发「停止」或 /stop 中断当前任务',
-      '还在后台处理中，已经超过15分钟了；不想等的话发「停止」或 /stop 可以中断',
-    ];
-    let silenceCount = 0;
+    // ── 进度可观察通道 ────────────────────────────────────────────────
+    // 长任务期间外层文本流是空的（langgraph_agent 跑在后台线程，中间不发
+    // TEXT_MESSAGE_CONTENT），所有过程信息都在 AG-UI 的 CUSTOM 事件里。这里
+    // 把它们翻译成微信短句推给用户，并把送达结果回写给 tracker —— 推送失败
+    // 说明微信回复窗口已关，进度会累计起来，等用户下一条消息再补发摘要。
+    const tracker = resetProgressTracker(wechatThreadId(fromUserId));
+    const emitProgress = (ev: { name?: string; value?: unknown }): void => {
+      const line = tracker.ingest(ev);
+      if (!line) return;
+      emitText(line.text, 'interstitial', {
+        skipDedup: true,
+        onDelivered: () => tracker.markDelivered(line.entry),
+        onFailed: () => tracker.noteSendFailure(line.entry),
+      });
+    };
+
+    // Safety net: 静默超过阈值时报一次当前进展。
+    // 2026-09-01 重写：原来这里是从 7 条「稍后/稍等」罐头文案里随机抽一条，
+    // 用户完全看不到任务在干什么（且曾出现 26 分钟无进展仍说「马上出结果」的
+    // 不诚实承诺）。现在优先报 tracker 里的真实步骤；有进展就尽快说，没进展
+    // 也不再每 5 分钟重复同一句空话。
+    const SILENCE_SOFT_MS = 3 * 60 * 1000;    // 有新进展时的最短播报间隔
+    const SILENCE_REPEAT_MS = 10 * 60 * 1000; // 同一句最多每 10 分钟重复一次
+    const SILENCE_LONG_MS = 15 * 60 * 1000;
+    const SILENCE_FALLBACK = '我还在处理中，这个问题有点复杂，请再稍等一下';
+    const SILENCE_LONG =
+      '任务已经跑了挺久（超过15分钟），还在继续处理；如果你着急，可以直接发「停止」或 /stop 中断当前任务';
+    let lastKeepaliveStep = '';
     flushTimer = setInterval(() => {
-      if (Date.now() - lastSentTime > SILENCE_WARNING_MS) {
-        silenceCount += 1;
-        const pool = silenceCount >= 3 ? SILENCE_LONG_MESSAGES : SILENCE_MESSAGES;
-        const msg = pool[Math.floor(Math.random() * pool.length)];
-        sender.sendText(fromUserId, contextToken, msg).catch(() => {});
-        lastSentTime = Date.now();
+      const silenceFor = Date.now() - lastSentTime;
+      const step = tracker.currentStepText();
+      const stepChanged = !!step && step !== lastKeepaliveStep;
+
+      let due = false;
+      if (stepChanged && silenceFor >= SILENCE_SOFT_MS) due = true;
+      else if (!stepChanged && silenceFor >= SILENCE_REPEAT_MS) due = true;
+      if (!due) return;
+
+      let msg: string;
+      if (step) {
+        msg = silenceFor >= SILENCE_LONG_MS
+          ? `⏳ 还在 ${step}（已 ${Math.floor(silenceFor / 60000)} 分钟没新消息）；不想等可以发「停止」中断`
+          : `⏳ 还在 ${step}`;
+      } else {
+        msg = silenceFor >= SILENCE_LONG_MS ? SILENCE_LONG : SILENCE_FALLBACK;
       }
+
+      lastKeepaliveStep = step;
+      lastSentTime = Date.now();
+      sender.sendText(fromUserId, contextToken, msg).catch((err) => {
+        logger.warn('keepalive send failed', { error: err instanceof Error ? err.message : String(err) });
+      });
     }, 2000);
 
     const queryOptions: QueryOptions = {
@@ -976,6 +1058,8 @@ async function sendToClaude(
       onTurnEnd: (stopReason: string) => {
         router.onTurnEnd(stopReason);
       },
+      // workflow.progress / artifact / approval / error / done / stream.phase
+      onCustom: emitProgress,
     };
 
     let result = await claudeQuery(queryOptions);

@@ -36,6 +36,14 @@ export interface QueryOptions {
   onText?: (text: string) => Promise<void> | void;
   /** Called when the run finishes ('end_turn' | 'error' | ...). */
   onTurnEnd?: (stopReason: string) => Promise<void> | void;
+  /**
+   * Called for every AG-UI `CUSTOM` event (workflow.progress / workflow.artifact
+   * / workflow.approval / workflow.error / workflow.done / stream.phase ...).
+   * This is the observability channel: a long langgraph_agent run produces no
+   * assistant text at all until it finishes, so without this the WeChat side
+   * sees nothing but keepalive boilerplate.
+   */
+  onCustom?: (ev: { name?: string; value?: unknown }) => void;
   /** Optional abort controller to cancel the query. */
   abortController?: AbortController;
 }
@@ -64,9 +72,29 @@ export interface AgUiParserState {
 export function handleAgUiEvent(
   ev: any,
   state: AgUiParserState,
-  callbacks: { onText?: (t: string) => void; onTurnEnd?: (reason: string) => void },
+  callbacks: {
+    onText?: (t: string) => void;
+    onTurnEnd?: (reason: string) => void;
+    /**
+     * AG-UI `CUSTOM` 事件（workflow.* / stream.phase / thinking.delta ...）。
+     *
+     * 2026-09-01 之前这里只有 `default: break`，于是整条过程通道被静默丢弃：
+     * agent 一旦调 langgraph_agent 跑长任务，外层文本流就是空的，微信侧只能
+     * 看到「稍后/稍等」的保活文案。现在把 CUSTOM 原样交给调用方（main.ts）
+     * 去做进度可读化。
+     */
+    onCustom?: (ev: any) => void;
+  },
 ): boolean {
   switch (ev?.type) {
+    case 'CUSTOM': {
+      try {
+        callbacks.onCustom?.(ev);
+      } catch {
+        // 进度渲染出错绝不能打断主文本流
+      }
+      break;
+    }
     case 'TEXT_MESSAGE_START': {
       state.messageId = ev.messageId || state.messageId;
       break;
@@ -143,6 +171,7 @@ export async function claudeQuery(options: QueryOptions): Promise<QueryResult> {
     images,
     onText,
     onTurnEnd,
+    onCustom,
     abortController,
     systemPrompt,
   } = options;
@@ -280,6 +309,7 @@ export async function claudeQuery(options: QueryOptions): Promise<QueryResult> {
             handleAgUiEvent(ev, state, {
               onText: (t) => { try { onText?.(t); } catch { /* never kill stream on emit errors */ } },
               onTurnEnd: (r) => { try { onTurnEnd?.(r); } catch { /* ignore */ } },
+              onCustom: (c) => { try { onCustom?.(c); } catch { /* never kill stream on progress errors */ } },
             });
             if (state.finished) {
               await cancelStream();

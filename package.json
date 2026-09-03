@@ -10,7 +10,9 @@
     "electron:dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
     "postinstall": "electron-builder install-app-deps",
     "selfdiag": "node scripts/runtime-diag.mjs",
-    "selfdiag:attach": "node scripts/runtime-diag.mjs --attach"
+    "selfdiag:attach": "node scripts/runtime-diag.mjs --attach",
+    "bridge:build": "node electron/backend/wechat_bridge/build.mjs",
+    "test:bridge": "node scripts/test-wechat-bridge-unit.mjs"
   },
   "build": {
     "appId": "com.hermes.agent",
@@ -63,6 +65,7 @@
       "dist/**/*",
       "electron/**/*",
       "!electron/backend/wechat_bridge/src/tests/**",
+      "!electron/backend/wechat_bridge/.tmp-tests/**",
       "hermes-fork/**/*",
       "!hermes-fork/website/**",
       "package.json"

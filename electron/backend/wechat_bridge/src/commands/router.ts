@@ -1,11 +1,16 @@
 import type { Session } from '../session.js';
 import { findSkill } from '../claude/skill-scanner.js';
 import { logger } from '../logger.js';
-import { handleHelp, handleClear, handleCwd, handleModel, handleStatus, handleSkills, handleHistory, handleReset, handleCompact, handleUndo, handleVersion, handlePrompt, handleSend, handleUnknown } from './handlers.js';
+import { handleHelp, handleClear, handleCwd, handleModel, handleStatus, handleProgress, handleSkills, handleHistory, handleReset, handleCompact, handleUndo, handleVersion, handlePrompt, handleSend, handleUnknown } from './handlers.js';
 
 export interface CommandContext {
   accountId: string;
   session: Session;
+  /**
+   * 微信发送者 ID。用于拼出该用户的 Hermes threadId（`wx-<id>`）从而取到
+   * 对应的进度累加器。standalone / 无 fromUserId 的场景下进度段会被跳过。
+   */
+  fromUserId?: string;
   updateSession: (partial: Partial<Session>) => void;
   clearSession: () => Session;
   getChatHistoryText?: (limit?: number) => string;
@@ -26,7 +31,8 @@ export interface CommandResult {
  *   /help     - Show help text with all available commands
  *   /clear    - Clear the current session
  *   /model <name> - Update the session model
- *   /status   - Show current session info
+ *   /status   - Show current session info (+ live task progress)
+ *   /progress - Show the live progress of the running/last task
  *   /skills   - List all installed skills
  *   /<skill>  - Invoke a skill by name (args are forwarded to Claude)
  */
@@ -58,6 +64,10 @@ export function routeCommand(ctx: CommandContext): CommandResult {
       return handlePrompt(ctx, args);
     case 'status':
       return handleStatus(ctx);
+    case 'progress':
+    case '进度':
+    case 'p':
+      return handleProgress(ctx);
     case 'skills':
       return handleSkills(args);
     case 'history':

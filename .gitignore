@@ -52,6 +52,9 @@ Thumbs.db
 scripts/test-multisession/hook.mjs
 scripts/test-multisession/fake-eventbus.mjs
 
+# wechat_bridge 单测的 esbuild 中间产物（scripts/test-wechat-bridge-unit.mjs）
+electron/backend/wechat_bridge/.tmp-tests/
+
 # ImageGen 临时输出（scripts/normalize-icons.cjs 的中间产物；最终源在 src/assets/）
 gen/
 
