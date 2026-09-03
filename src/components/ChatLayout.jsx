@@ -66,6 +66,7 @@ export default function ChatLayout({
   onRespondApproval,
   showSkills,
   onToggleSkills,
+  onSkillsChanged,
   onRetry,
   onRegenerate,
   manifests,
@@ -323,6 +324,7 @@ export default function ChatLayout({
           selectedWorkflowId={selectedWorkflowId}
           onSelectWorkflow={onSelectWorkflow}
           onClose={onToggleSkills}
+          onSkillsChanged={onSkillsChanged}
         />
       )}
 

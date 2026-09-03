@@ -57,6 +57,11 @@ contextBridge.exposeInMainWorld('hermes', {
   updateAssistant: (id, data) => ipcRenderer.invoke('update-assistant', id, data),
   deleteAssistant: (id) => ipcRenderer.invoke('delete-assistant', id),
   listSkills: () => ipcRenderer.invoke('list-skills'),
+  // 技能管理（2026-09-03）：市场搜索/安装、卸载、键入新建、本地文件夹导入
+  skillsManage: (payload) => ipcRenderer.invoke('skills-manage', payload),
+  skillsReload: () => ipcRenderer.invoke('skills-reload'),
+  skillsCreate: (name, description) => ipcRenderer.invoke('skills-create', name, description),
+  skillsImportFolder: () => ipcRenderer.invoke('skills-import-folder'),
 
   // Sessions
   listSessions: (assistantId) => ipcRenderer.invoke('list-sessions', assistantId),

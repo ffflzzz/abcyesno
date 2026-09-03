@@ -1591,11 +1591,7 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
       setShowKeyModal(!ok);
     });
     loadAssistants();
-    hermes.listSkills().then((list) => {
-      if (list && list.length > 0) {
-        setSkills([{ id: "default", name: "通用助手", category: "general" }, ...list]);
-      }
-    });
+    refreshSkills();
 
     async function autoApprove(req) {
       try {
@@ -1868,6 +1864,15 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
     }
   }
 
+  // 重新拉取技能列表（技能面板 安装/删除/新建/导入 后回调）。
+  function refreshSkills() {
+    return hermes.listSkills().then((list) => {
+      if (list && list.length > 0) {
+        setSkills([{ id: "default", name: "通用助手", category: "general" }, ...list]);
+      }
+    });
+  }
+
   // Skill-market enable/disable is persisted client-side so it survives reloads.
   function handleToggleSkill(id) {
     setEnabledSkills((prev) => {
@@ -2093,6 +2098,7 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
           skills={skills}
           showSkills={showSkills}
           onToggleSkills={() => setShowSkills((s) => !s)}
+          onSkillsChanged={refreshSkills}
           showMarket={showMarket}
           setShowMarket={setShowMarket}
           runError={runError}

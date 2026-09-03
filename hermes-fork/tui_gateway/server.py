@@ -13884,6 +13884,24 @@ def _(rid, params: dict) -> dict:
             from hermes_cli.skills_hub import inspect_skill
 
             return _ok(rid, {"info": inspect_skill(query) or {}})
+        if action == "uninstall":
+            # 2026-09-03: abcyesno 的技能面板需要「删除」。直接调
+            # tools.skills_hub.uninstall_skill 拿 (success, msg)，比 CLI 层的
+            # do_uninstall 干净（那边负责交互式确认，RPC 场景确认由前端做）。
+            from tools.skills_hub import uninstall_skill
+
+            name = str(query or "").strip()
+            if not name:
+                return _err(rid, 4018, "uninstall requires a skill name")
+            success, msg = uninstall_skill(name)
+            if success:
+                try:
+                    from agent.prompt_builder import clear_skills_system_prompt_cache
+
+                    clear_skills_system_prompt_cache(clear_snapshot=True)
+                except Exception:
+                    pass
+            return _ok(rid, {"success": bool(success), "message": str(msg), "name": name})
         return _err(rid, 4017, f"unknown skills action: {action}")
     except Exception as e:
         return _err(rid, 5024, str(e))

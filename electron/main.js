@@ -1378,6 +1378,100 @@ ipcMain.handle('list-skills', async () => {
   }
 });
 
+// ── Skill management（2026-09-03，技能面板需要 查找/键入/删除/导入）────
+// skills.manage 在 Hermes 侧已有 list/search/browse/install/inspect/uninstall；
+// 这里的 IPC 只做三件事：透传 RPC、包装错误、以及纯 fs 的本地文件夹操作。
+function skillsRoot() {
+  return path.join(
+    process.env.HERMES_HOME || path.join(os.homedir(), '.hermes_portable_data'),
+    'skills'
+  );
+}
+
+ipcMain.handle('skills-manage', async (_event, payload) => {
+  const action = (payload && payload.action) || 'list';
+  try {
+    if (!gatewayClient || !gatewayClient.ready) throw new Error('Hermes 引擎未就绪');
+    // gatewayClient.request 对 jsonrpc error 载荷会直接 reject（带 message），
+    // 所以这里只需要兜网络/超时类失败。
+    const { timeoutMs, ...params } = payload || {};
+    const res = await gatewayClient.request('skills.manage', params, timeoutMs || 120000);
+    return { ok: true, data: res };
+  } catch (err) {
+    log('main', `skills-manage(${action}) failed: ${err.message}`);
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('skills-reload', async () => {
+  try {
+    if (!gatewayClient || !gatewayClient.ready) throw new Error('Hermes 引擎未就绪');
+    const res = await gatewayClient.request('skills.reload', {}, 30000);
+    return { ok: true, data: res };
+  } catch (err) {
+    log('main', `skills-reload failed: ${err.message}`);
+    return { ok: false, error: err.message };
+  }
+});
+
+// 键入新建：一个最小技能 = skills/<name>/SKILL.md（frontmatter: name + description）
+ipcMain.handle('skills-create', async (_event, name, description) => {
+  try {
+    const safe = String(name || '').trim().toLowerCase()
+      .replace(/[\\/:*?"<>|\s]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+    if (!safe) throw new Error('技能名只能包含字母/数字/连字符');
+    const dir = path.join(skillsRoot(), safe);
+    if (fs.existsSync(dir)) throw new Error(`技能已存在：skills/${safe}`);
+    const desc = String(description || '').trim() || `${safe} skill`;
+    const skillMd = [
+      '---',
+      `name: ${safe}`,
+      `description: ${desc}`,
+      '---',
+      '',
+      `# ${safe}`,
+      '',
+      desc,
+      '',
+      '## 用法',
+      '',
+      '（在此描述这个技能做什么、什么时候用、怎么用）',
+      '',
+    ].join('\n');
+    await fs.promises.mkdir(dir, { recursive: true });
+    await fs.promises.writeFile(path.join(dir, 'SKILL.md'), skillMd, 'utf8');
+    return { ok: true, name: safe };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+// 导入：选本地文件夹 → 整目录拷进 HERMES_HOME/skills/<dirname> → 前端再触发重载
+ipcMain.handle('skills-import-folder', async (_event) => {
+  try {
+    const res = await dialog.showOpenDialog({
+      title: '选择要导入的技能文件夹',
+      properties: ['openDirectory'],
+    });
+    if (res.canceled || !res.filePaths || !res.filePaths.length) {
+      return { ok: false, canceled: true };
+    }
+    const src = res.filePaths[0];
+    const stat = await fs.promises.stat(src);
+    if (!stat.isDirectory()) throw new Error('请选择文件夹（技能需是包含 SKILL.md 的目录）');
+    const safe = path.basename(src).replace(/[\\/:*?"<>|\s]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase();
+    if (!safe) throw new Error('文件夹名无法作为技能名');
+    const dest = path.join(skillsRoot(), safe);
+    if (fs.existsSync(dest)) throw new Error(`目标已存在：skills/${safe}`);
+    await fs.promises.cp(src, dest, { recursive: true });
+    const hasSkillMd = fs.existsSync(path.join(dest, 'SKILL.md'));
+    return { ok: true, name: safe, hasSkillMd };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
 ipcMain.handle('list-sessions', async (_event, assistantId) => {
   return storage.listSessions(assistantId);
 });

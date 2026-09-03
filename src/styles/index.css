@@ -833,6 +833,9 @@ body {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  /* 弹层（skill-panel-mask 等）的定位基准——absolute 相对 chat 区域，
+     不再依赖 fixed（fixed 在含 transform 的祖先里会被吸附，位置乱飘）。 */
+  position: relative;
   /* FIX: allow this flex child to shrink so the inner .vs-container can own
      the scroll chain; without it the layout could overflow and break the
      virtual-scroll container's height. */
@@ -2960,22 +2963,25 @@ body {
   flex-shrink: 0;
 }
 
-/* Skill panel */
+/* Skill panel —— 锚在 chat 区域左下角（输入区上方），贴着触发它的「+」菜单 */
 .skill-panel-mask {
-  position: fixed;
+  position: absolute;
   inset: 0;
   z-index: 500;
   display: flex;
   align-items: flex-end;
-  justify-content: center;
-  padding-bottom: 90px;
+  justify-content: flex-start;
+  padding: 0 0 96px 12px;
   background: transparent;
   pointer-events: none;
 }
 
 .skill-panel {
-  width: 420px;
-  max-width: 90%;
+  width: 500px;
+  max-width: calc(100% - 24px);
+  max-height: calc(100% - 120px);
+  display: flex;
+  flex-direction: column;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -2988,26 +2994,59 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 14px;
+  padding: 8px 10px;
   border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
 }
 
-.skill-panel-header h4 {
-  margin: 0;
-  font-size: 14px;
-  font-weight: 600;
+.skill-tabs {
+  display: flex;
+  gap: 2px;
 }
 
-.skill-panel-close {
+.skill-tab {
   background: transparent;
   border: none;
   color: var(--muted);
+  font-size: 13px;
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
-  font-size: 14px;
+}
+
+.skill-tab:hover {
+  color: var(--text, inherit);
+  background: var(--panel-2);
+}
+
+.skill-tab.active {
+  color: var(--accent);
+  background: var(--panel-2);
+  font-weight: 600;
+}
+
+.skill-search-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.skill-search {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: inherit;
+  font-size: 13px;
 }
 
 .skill-panel-body {
-  max-height: 320px;
+  flex: 1;
+  min-height: 120px;
   overflow-y: auto;
   padding: 8px;
 }
@@ -3017,6 +3056,19 @@ body {
   text-align: center;
   color: var(--muted);
   font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.skill-busy {
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .skill-item {
@@ -3030,9 +3082,57 @@ body {
   background: var(--panel-2);
 }
 
+.skill-item-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .skill-item-name {
   font-size: 13px;
   font-weight: 500;
+}
+
+.skill-item-actions {
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.skill-item:hover .skill-item-actions {
+  opacity: 1;
+}
+
+.skill-item-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 3px 8px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.skill-item-btn:hover {
+  color: var(--text, inherit);
+  border-color: var(--muted);
+}
+
+.skill-item-btn.install:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.skill-item-btn.danger:hover,
+.skill-item-btn.danger-confirm {
+  color: var(--error-text);
+  border-color: var(--error-text);
 }
 
 .skill-item-meta {
@@ -3048,6 +3148,85 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.skill-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  font-size: 12px;
+  border-top: 1px solid var(--border);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.skill-notice.ok {
+  color: var(--accent);
+}
+
+.skill-notice.err {
+  color: var(--error-text);
+}
+
+.skill-footer {
+  display: flex;
+  gap: 6px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.skill-foot-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: 12px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+
+.skill-foot-btn:hover:not(:disabled) {
+  color: var(--text, inherit);
+  border-color: var(--muted);
+}
+
+.skill-foot-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.skill-foot-btn.primary {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.skill-create-form {
+  display: flex;
+  gap: 6px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.skill-create-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: inherit;
+  font-size: 12px;
+  padding: 5px 8px;
+  outline: none;
+}
+
+.skill-create-input:focus {
+  border-color: var(--accent);
 }
 
 /* Tool card details */
