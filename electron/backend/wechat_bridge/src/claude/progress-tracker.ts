@@ -53,6 +53,14 @@ interface Humanized {
   trackStep?: string;
   /** trace 事件带的原始节点名，仅作 currentStep 的兜底来源 */
   trackNode?: string;
+  /** 只记账、永不推送的事件（工具调用行：/进度 与 keepalive 看得到，聊天流不出现） */
+  silent?: boolean;
+  /** reasoning delta 文本：追加进思考缓冲区，攒够或到边界再整句推送 */
+  trackThink?: string;
+  /** 一整块现成的思考文本（reasoning.snapshot）：直接取尾部推送 */
+  flushThink?: string;
+  /** 阶段切换点：把思考缓冲区里攒的内容整句 flush 出去 */
+  flushBuf?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -86,6 +94,17 @@ const ARG_KEY_PRIORITY = [
   'prompt', 'task', 'input', 'text', 'content', 'code', 'pattern', 'message',
 ];
 
+/** Hermes 的 tool.start 有时把整个 payload 当 args 发，真正参数藏在这类包装键里 */
+const ARG_WRAPPER_KEYS = ['arguments', 'args', 'input', 'parameters', 'kwargs', 'params'];
+/** 回执类键/值（tool_id、call_xxx…）没有任何人话价值，摘要时一律跳过 */
+const ARG_SKIP_KEYS = new Set(['id', 'tool_id', 'call_id', 'name', 'type', 'role', 'session_id', 'status']);
+const ARG_JUNK_VALUE_RE = /^(call_|tool_|msg-|tc-|sess-)/i;
+
+/** 💭 思考推送：一句话最多带多少字符（取尾部，最新的想法最值钱） */
+const THINK_LINE_CHARS = 110;
+/** 思考缓冲区攒到这么多字符还没遇到边界，就先 flush 一次（防单次思考过长无推送） */
+const THINK_OVERFLOW_CHARS = 600;
+
 // ---------------------------------------------------------------------------
 // 小工具
 // ---------------------------------------------------------------------------
@@ -93,6 +112,12 @@ const ARG_KEY_PRIORITY = [
 function truncate(s: string, max: number): string {
   const t = s.replace(/\s+/g, ' ').trim();
   return t.length <= max ? t : `${t.slice(0, max - 1)}…`;
+}
+
+/** 取尾部：思考内容「最新的想法」最值钱，超长时只留最后 N 个字符。 */
+function truncateTail(s: string, max: number): string {
+  const t = s.replace(/\s+/g, ' ').trim();
+  return t.length <= max ? t : `…${t.slice(-(max - 1))}`;
 }
 
 /** base64 / dataURL / 超长无空格串 —— 摘要里出现这种就是乱码，直接跳过 */
@@ -103,25 +128,40 @@ function looksLikeBinary(s: string): boolean {
 /**
  * 把工具调用的 args JSON 缩成一行人话：优先按 ARG_KEY_PRIORITY 取键，
  * 否则取第一个「像人话」的字符串/数值；解析失败就截原始文本。
+ * Hermes 的 tool.start 偶尔把整个 payload 当 args（此时真参数在
+ * arguments/args 包装键里，且混着 call_id 这类回执），这里统一剥掉。
  */
 function summarizeArgs(argsText?: unknown): string {
   const raw = String(argsText || '').trim();
   if (!raw) return '';
   try {
-    const obj = JSON.parse(raw);
+    let obj: unknown = JSON.parse(raw);
     if (obj === null || typeof obj !== 'object') return truncate(String(obj), 48);
     if (Array.isArray(obj)) {
       const first = obj[0];
       if (typeof first === 'string' && !looksLikeBinary(first)) return truncate(first, 48);
       return truncate(JSON.stringify(obj), 48);
     }
-    const rec = obj as Record<string, unknown>;
+    let rec = obj as Record<string, unknown>;
+    // 剥包装：真参数藏在 arguments/args/... 里时下钻一层
+    for (const k of ARG_WRAPPER_KEYS) {
+      const inner = rec[k];
+      if (inner && typeof inner === 'object' && !Array.isArray(inner)) {
+        rec = inner as Record<string, unknown>;
+        break;
+      }
+    }
     for (const k of ARG_KEY_PRIORITY) {
       const val = rec[k];
-      if (typeof val === 'string' && val.trim() && !looksLikeBinary(val)) return truncate(val, 48);
+      if (typeof val === 'string' && val.trim() && !looksLikeBinary(val) && !ARG_JUNK_VALUE_RE.test(val)) {
+        return truncate(val, 48);
+      }
     }
-    for (const val of Object.values(rec)) {
-      if (typeof val === 'string' && val.trim() && !looksLikeBinary(val)) return truncate(val, 48);
+    for (const [k, val] of Object.entries(rec)) {
+      if (ARG_SKIP_KEYS.has(k)) continue;
+      if (typeof val === 'string' && val.trim() && !looksLikeBinary(val) && !ARG_JUNK_VALUE_RE.test(val)) {
+        return truncate(val, 48);
+      }
       if (typeof val === 'number' || typeof val === 'boolean') return truncate(String(val), 48);
     }
     return '';
@@ -151,7 +191,8 @@ function formatDuration(ms: number): string {
 
 /**
  * 把一个 AG-UI `CUSTOM` 事件翻译成一条人话。返回 null 表示「这条不用管」
- * （拓扑、思考 token、工具原始输出等噪音）。
+ * （拓扑、浅层 thinking 指示器、工具原始输出等噪音）；返回 text='' 的事件
+ * 走 track/flush 旁路（trace 节点、思考缓冲、阶段切换点、silent 记账）。
  */
 export function humanizeEvent(
   ev: { name?: string; value?: unknown } | null | undefined,
@@ -257,11 +298,36 @@ export function humanizeEvent(
     }
   }
 
-  // ── 真实工作过程（2026-09-03 起）─────────────────────────────────
-  // 用户明确反馈「不要礼貌但无用的状态占位」：stream.phase（思考中/生成回复/
-  // 执行工具）这种空转心跳从推送往返为 null —— 它们不携带任何任务信息。
-  // 普通聊天（非 workflow）长任务里唯一「真实」的过程信号是工具调用本身：
-  // 搜了什么关键词、跑了什么命令、打开了哪个文件。
+  // ── 思考内容（2026-09-03 二次反馈）──────────────────────────────
+  // 用户反馈：「工具调用本身也是无意义的，应该返回 agent 拿到工具结果之后
+  // 的思考内容，让用户知道他在想啥」。所以：
+  //  - reasoning.delta（reasoning 模型的真实思考 token，前端 ReasoningBlock
+  //    同源）→ 追加进缓冲区，攒到阶段切换点整句 flush 成 💭。
+  //  - thinking.delta 是浅层指示器（可能和 reasoning 重复），不进缓冲。
+  //  - reasoning.snapshot 是一次性兜底快照，直接取尾部推。
+  if (name === 'reasoning.delta') {
+    const text = typeof v.text === 'string' ? v.text : '';
+    if (!text.trim()) return null;
+    return { kind: 'progress', key: 'think:buf', text: '', urgent: false, trackThink: text };
+  }
+
+  if (name === 'reasoning.snapshot') {
+    const text = typeof v.text === 'string' ? v.text : '';
+    if (!text.trim()) return null;
+    return { kind: 'progress', key: 'think:buf', text: '', urgent: false, flushThink: text };
+  }
+
+  // stream.phase 现在唯一的用处：标记「思考结束了」（切到 tool_executing /
+  // text_generating），把缓冲区里攒的思考整句放出去。它本身永远不推送。
+  if (name === 'stream.phase') {
+    const phase = String(v.phase || '');
+    if (phase === 'thinking') return null; // 继续攒
+    return { kind: 'progress', key: 'phase', text: '', urgent: false, flushBuf: true };
+  }
+
+  // ── 工具调用：只记账、不推送 ──────────────────────────────────────
+  // 用户反馈工具调用行本身没信息量（真正想看的是思考），所以降级为 silent：
+  // /进度 与 keepalive 仍能看到当前在跑什么，但聊天流里不再出现。
   if (name === 'tool.call') {
     const toolName = String(v.toolName || 'tool');
     const excerpt = summarizeArgs(v.argsText);
@@ -270,7 +336,7 @@ export function humanizeEvent(
       key: `tool:${toolName}:${excerpt}`,
       text: excerpt ? `🔧 ${toolName}：${excerpt}` : `🔧 ${toolName}`,
       urgent: false,
-      // 即使被节流挡下，keepalive 和 /进度 也该知道现在在跑什么
+      silent: true,
       trackStep: excerpt ? `${toolName}（${excerpt}）` : toolName,
     };
   }
@@ -305,6 +371,8 @@ export class ProgressTracker {
   private currentStep = '';
   /** workflow.trace 给的原始节点名，仅当 currentStep 为空时兜底 */
   private currentNode = '';
+  /** reasoning.delta 攒的思考缓冲，阶段切换点整句 flush 成 💭 */
+  private thinkBuf = '';
   private startedAt = Date.now();
   lastActivityAt = Date.now();
 
@@ -321,6 +389,7 @@ export class ProgressTracker {
     this.sendFailed = false;
     this.currentStep = '';
     this.currentNode = '';
+    this.thinkBuf = '';
     this.startedAt = Date.now();
     this.lastActivityAt = Date.now();
   }
@@ -344,6 +413,37 @@ export class ProgressTracker {
     const h = humanizeEvent(ev);
     if (!h) return null;
 
+    // reasoning delta：追加进思考缓冲区，攒够 THINK_OVERFLOW_CHARS 先推一波
+    if (h.trackThink !== undefined) {
+      this.thinkBuf += h.trackThink;
+      if (this.thinkBuf.length >= THINK_OVERFLOW_CHARS) return this.flushThinkingBuffer();
+      return null;
+    }
+    if (h.flushThink !== undefined) return this.emitThought(h.flushThink);
+    if (h.flushBuf) return this.flushThinkingBuffer();
+
+    // silent（工具调用行）：只记账 + 更新当前步骤，不占推送通道。
+    // 用户明确说工具调用行没信息量；/进度 和 keepalive 仍看得到全貌。
+    // 工具开跑前先把攒下的思考放出去——「拿到结果→思考→决定调工具」，
+    // 这句思考就该在这条工具调用前面说。
+    if (h.silent) {
+      const flushed = this.flushThinkingBuffer();
+      if (h.trackStep) this.currentStep = h.trackStep;
+      const entry: ProgressEntry = {
+        ts: Date.now(),
+        kind: h.kind,
+        key: h.key,
+        text: h.text,
+        urgent: false,
+        emitted: false,
+        delivered: false,
+        failed: false,
+      };
+      this.entries.push(entry);
+      if (this.entries.length > MAX_ENTRIES) this.entries.shift();
+      return flushed;
+    }
+
     // trace 之类只有 track 信息、没有文案的事件：只更新当前节点。
     if (!h.text) {
       if (h.trackNode) this.currentNode = h.trackNode;
@@ -351,6 +451,11 @@ export class ProgressTracker {
     }
     if (h.trackStep) this.currentStep = h.trackStep;
 
+    return this.recordAndGate(h);
+  }
+
+  /** 记账 + 去重/节流/上限门控，ingest 与思考 flush 共用。 */
+  private recordAndGate(h: { kind: ProgressKind; key: string; text: string; urgent: boolean }): ProgressLine | null {
     const now = Date.now();
     const entry: ProgressEntry = {
       ts: now,
@@ -378,6 +483,22 @@ export class ProgressTracker {
     this.emitCount += 1;
     entry.emitted = true;
     return { text: h.text, entry };
+  }
+
+  /** 缓冲区有货就取尾部整句推出去；没货返回 null。 */
+  private flushThinkingBuffer(): ProgressLine | null {
+    const buf = this.thinkBuf;
+    this.thinkBuf = '';
+    if (!buf.trim()) return null;
+    return this.emitThought(buf);
+  }
+
+  /** 一句思考 → 💭 短句。取尾部（最新的想法最值钱），并喂给 keepalive 当步骤。 */
+  private emitThought(text: string): ProgressLine | null {
+    const tail = truncateTail(text, THINK_LINE_CHARS);
+    if (!tail) return null;
+    this.currentStep = `思考：${truncate(tail, 40)}`;
+    return this.recordAndGate({ kind: 'progress', key: `think:${tail}`, text: `💭 ${tail}`, urgent: false });
   }
 
   markDelivered(entry: ProgressEntry): void {

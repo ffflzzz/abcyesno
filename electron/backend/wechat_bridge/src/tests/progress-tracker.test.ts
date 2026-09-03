@@ -78,18 +78,20 @@ test('humanizeEvent: workflow.graph / trace / 噪音事件不产生文案', () =
   assert.equal(trace.trackNode, 'gen_shots');
 });
 
-test('humanizeEvent: stream.phase 是空转占位，一律不推送（2026-09-03 用户反馈）', () => {
-  assert.equal(humanizeEvent({ name: 'stream.phase', value: { phase: 'tool_executing' } }), null);
-  assert.equal(humanizeEvent({ name: 'stream.phase', value: { phase: 'thinking' } }), null);
-  assert.equal(humanizeEvent({ name: 'stream.phase', value: { phase: 'text_generating' } }), null);
-  assert.equal(humanizeEvent({ name: 'stream.phase', value: { phase: 'idle' } }), null);
+test('humanizeEvent: stream.phase 本身永远不是一条消息（切出 thinking 只触发 flush）', () => {
+  const out = humanizeEvent({ name: 'stream.phase', value: { phase: 'tool_executing' } });
+  assert.ok(out);
+  assert.equal(out.text, '');
+  assert.equal(out.flushBuf, true, '切出 thinking 应触发思考缓冲 flush');
+  assert.equal(humanizeEvent({ name: 'stream.phase', value: { phase: 'thinking' } }), null, '进入 thinking 只管继续攒');
+  assert.equal(humanizeEvent({ name: 'stream.phase', value: { phase: 'idle' } })?.flushBuf, true);
 });
 
 // ---------------------------------------------------------------------------
-// tool.call / tool.error —— 普通聊天长任务的真实工作过程
+// tool.call（silent）/ tool.error
 // ---------------------------------------------------------------------------
 
-test('humanizeEvent: tool.call 取 query 键做参数摘要', () => {
+test('humanizeEvent: tool.call 取 query 键做参数摘要，且标记为 silent（不进聊天流）', () => {
   const h = humanizeEvent({
     name: 'tool.call',
     value: { toolName: 'web_search', argsText: '{"query":"Google 发布 Gemini 3.8 Flash","limit":5}' },
@@ -97,7 +99,30 @@ test('humanizeEvent: tool.call 取 query 键做参数摘要', () => {
   assert.ok(h);
   assert.equal(h.text, '🔧 web_search：Google 发布 Gemini 3.8 Flash');
   assert.equal(h.urgent, false);
+  assert.equal(h.silent, true, '工具调用行只记账不推送（2026-09-03 二次反馈）');
   assert.equal(h.trackStep, 'web_search（Google 发布 Gemini 3.8 Flash）');
+});
+
+test('humanizeEvent: tool.call 剥掉 payload 包装键，从 arguments 里取真参数', () => {
+  // Hermes 偶尔把整个 tool.start payload 当 args：外面只有 call_id 这类回执
+  const h = humanizeEvent({
+    name: 'tool.call',
+    value: {
+      toolName: 'web_search',
+      argsText: '{"tool_id":"call_eb2ece4c386d4da49df82523","name":"web_search","arguments":{"query":"METR 智能体攻击事件调查报告"}}',
+    },
+  });
+  assert.ok(h);
+  assert.equal(h.text, '🔧 web_search：METR 智能体攻击事件调查报告');
+});
+
+test('humanizeEvent: tool.call 兜底时跳过 call_id 等回执值', () => {
+  const h = humanizeEvent({
+    name: 'tool.call',
+    value: { toolName: 'web_search', argsText: '{"tool_id":"call_78af5f9eae7d40b09c440ad7","note":"查一下原文"}' },
+  });
+  assert.ok(h);
+  assert.equal(h.text, '🔧 web_search：查一下原文');
 });
 
 test('humanizeEvent: tool.call 无命中键时取第一个像人话的字符串', () => {
@@ -267,24 +292,109 @@ test('tracker: renderReport 展示当前步骤与已运行时长', () => {
   assert.match(report, /已运行/);
 });
 
-test('tracker: tool.call 被节流挡下时 currentStep 仍然更新（keepalive 有真实内容可报）', () => {
+test('tracker: tool.call 一律 silent——不推送、但记账且 currentStep 跟上', () => {
   const t = new ProgressTracker('wx-t11');
-  assert.ok(t.ingest({ name: 'tool.call', value: { toolName: 'web_search', argsText: '{"query":"第一次搜索"}' } }),
-    '第一条应放行');
-  assert.equal(t.currentStepText(), 'web_search（第一次搜索）');
-  // 20s 节流窗口内的第二条：不推送，但步骤必须跟上
+  assert.equal(t.ingest({ name: 'tool.call', value: { toolName: 'web_search', argsText: '{"query":"第一次搜索"}' } }), null,
+    '工具调用行不进聊天流');
+  assert.equal(t.currentStepText(), 'web_search（第一次搜索）', 'keepalive 仍知道在跑什么');
   assert.equal(t.ingest({ name: 'tool.call', value: { toolName: 'web_fetch', argsText: '{"url":"https://example.com/a"}' } }), null);
   assert.equal(t.currentStepText(), 'web_fetch（https://example.com/a）');
-  // 记账仍在：/进度 与补发摘要看得到
+  // 记账仍在：/进度 与补发摘要看得到完整工具轨迹
   assert.equal(t.allEntries().length, 2);
+  assert.ok(t.allEntries().every((e) => !e.emitted), 'silent 条目永不 emitted');
 });
 
-test('tracker: 相同工具+相同参数在 TTL 内去重', () => {
-  const t = new ProgressTracker('wx-t12');
-  const ev = { name: 'tool.call', value: { toolName: 'web_search', argsText: '{"query":"同一次搜索"}' } };
-  assert.ok(t.ingest(ev));
-  assert.equal(t.ingest(ev), null, '重复调用应被去重');
-  assert.equal(t.allEntries().length, 2, '去重的仍然记账');
+test('tracker: tool.call silent 记账不占节流预算', () => {
+  const t = new ProgressTracker('wx-t11b');
+  t.ingest({ name: 'tool.call', value: { toolName: 'a', argsText: '{"q":"1"}' } });
+  t.ingest({ name: 'tool.call', value: { toolName: 'b', argsText: '{"q":"2"}' } });
+  // silent 不动 lastEmitAt —— 紧随其后的普通进度应立即放行
+  assert.ok(t.ingest(progress('a', '剧本', 1, 5)), 'silent 不应消耗节流窗口');
+});
+
+// ---------------------------------------------------------------------------
+// 思考可观察（2026-09-03 二次反馈：用户要看 agent 在想啥）
+// ---------------------------------------------------------------------------
+
+function reasoning(text: string) {
+  return { name: 'reasoning.delta', value: { text } };
+}
+
+test('tracker: reasoning.delta 只进缓冲不推送，切出 thinking 时整句 flush 成 💭', () => {
+  const t = new ProgressTracker('wx-t13');
+  assert.equal(t.ingest(reasoning('用户想知道 METR 报告的可信度，')), null, 'delta 阶段不推送');
+  assert.equal(t.ingest(reasoning('我先搜原始报告再交叉验证各家的说法。')), null);
+  assert.equal(t.allEntries().length, 0, '缓冲中不记账');
+
+  const line = t.ingest({ name: 'stream.phase', value: { phase: 'tool_executing' } });
+  assert.ok(line, '阶段切出 thinking 应 flush');
+  assert.match(line.text, /^💭 /);
+  assert.match(line.text, /我先搜原始报告再交叉验证/);
+  assert.match(t.currentStepText(), /^思考：/);
+  assert.equal(t.allEntries().length, 1);
+  assert.ok(t.allEntries()[0].emitted);
+});
+
+test('tracker: flush 取尾部（最新的想法最值钱），超长加省略号', () => {
+  const t = new ProgressTracker('wx-t14');
+  t.ingest(reasoning('开头铺垫'.repeat(40))); // 320 字
+  t.ingest(reasoning('结尾才是真正的结论：报告可信度存疑'));
+  const line = t.ingest({ name: 'stream.phase', value: { phase: 'text_generating' } });
+  assert.ok(line);
+  assert.match(line.text, /报告可信度存疑$/, '应保留思考的结尾');
+  assert.ok(line.text.length <= 115, `💭 单句应 <= ~110 字，实际 ${line.text.length}`);
+});
+
+test('tracker: 缓冲攒满 600 字符自动 flush，不必等阶段切换', () => {
+  const t = new ProgressTracker('wx-t15');
+  let line: ReturnType<ProgressTracker['ingest']> = null;
+  for (let i = 0; i < 7; i++) {
+    line = t.ingest(reasoning('x'.repeat(100))); // 第 7 次 = 700 > 600
+    if (line) break;
+  }
+  assert.ok(line, '超长思考应中途自动 flush');
+  assert.match(line!.text, /^💭 /);
+  // 缓冲已清空：同毫秒内的阶段事件不再产生第二条
+  assert.equal(t.ingest({ name: 'stream.phase', value: { phase: 'tool_executing' } }), null, '缓冲已清空');
+});
+
+test('tracker: reasoning.snapshot 一次性整块思考直接取尾部推', () => {
+  const t = new ProgressTracker('wx-t16');
+  const line = t.ingest({ name: 'reasoning.snapshot', value: { text: `${'铺垫内容。'.repeat(60)}最终判断：该报告样本量偏小` } });
+  assert.ok(line);
+  assert.match(line.text, /^💭 /);
+  assert.match(line.text, /最终判断：该报告样本量偏小$/);
+});
+
+test('tracker: 思考 flush 也受去重/节流约束，但 currentStep 无论如何都更新', () => {
+  const t = new ProgressTracker('wx-t17');
+  t.ingest(reasoning('第一段思考内容'));
+  const first = t.ingest({ name: 'stream.phase', value: { phase: 'tool_executing' } });
+  assert.ok(first, '第一次 flush 应放行');
+
+  t.ingest(reasoning('第二段思考内容'));
+  const second = t.ingest({ name: 'stream.phase', value: { phase: 'text_generating' } });
+  assert.equal(second, null, '20s 内第二次 flush 应被节流');
+  assert.match(t.currentStepText(), /第二段思考内容/, '步骤仍应跟上');
+  assert.equal(t.allEntries().length, 2, '被节流的思考仍记账');
+  assert.ok(t.allEntries()[1].emitted === false);
+});
+
+test('tracker: thinking.delta（浅层指示器）不进思考缓冲', () => {
+  const t = new ProgressTracker('wx-t18');
+  t.ingest({ name: 'thinking.delta', value: { text: '让我想想' } });
+  const line = t.ingest({ name: 'stream.phase', value: { phase: 'tool_executing' } });
+  assert.equal(line, null, '浅层指示器不应产生 💭');
+  assert.equal(t.allEntries().length, 0);
+});
+
+test('tracker: tool.call 触发思考 flush（有些路径 phase 不变）', () => {
+  const t = new ProgressTracker('wx-t19');
+  t.ingest(reasoning('决定先去搜一下原文链接'));
+  const line = t.ingest({ name: 'tool.call', value: { toolName: 'web_search', argsText: '{"query":"METR"}' } });
+  assert.ok(line, '工具调用前应先把攒的思考放出去');
+  assert.match(line.text, /^💭 /);
+  assert.match(line.text, /决定先去搜一下原文链接/);
 });
 
 // ---------------------------------------------------------------------------

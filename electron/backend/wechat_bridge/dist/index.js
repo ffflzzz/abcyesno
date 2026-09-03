@@ -1263,6 +1263,10 @@ function truncate(s, max) {
   const t = s.replace(/\s+/g, " ").trim();
   return t.length <= max ? t : `${t.slice(0, max - 1)}\u2026`;
 }
+function truncateTail(s, max) {
+  const t = s.replace(/\s+/g, " ").trim();
+  return t.length <= max ? t : `\u2026${t.slice(-(max - 1))}`;
+}
 function looksLikeBinary(s) {
   return /^data:/i.test(s) || /^[A-Za-z0-9+/=\s]{120,}$/.test(s);
 }
@@ -1270,20 +1274,32 @@ function summarizeArgs(argsText) {
   const raw = String(argsText || "").trim();
   if (!raw) return "";
   try {
-    const obj = JSON.parse(raw);
+    let obj = JSON.parse(raw);
     if (obj === null || typeof obj !== "object") return truncate(String(obj), 48);
     if (Array.isArray(obj)) {
       const first = obj[0];
       if (typeof first === "string" && !looksLikeBinary(first)) return truncate(first, 48);
       return truncate(JSON.stringify(obj), 48);
     }
-    const rec = obj;
+    let rec = obj;
+    for (const k of ARG_WRAPPER_KEYS) {
+      const inner = rec[k];
+      if (inner && typeof inner === "object" && !Array.isArray(inner)) {
+        rec = inner;
+        break;
+      }
+    }
     for (const k of ARG_KEY_PRIORITY) {
       const val = rec[k];
-      if (typeof val === "string" && val.trim() && !looksLikeBinary(val)) return truncate(val, 48);
+      if (typeof val === "string" && val.trim() && !looksLikeBinary(val) && !ARG_JUNK_VALUE_RE.test(val)) {
+        return truncate(val, 48);
+      }
     }
-    for (const val of Object.values(rec)) {
-      if (typeof val === "string" && val.trim() && !looksLikeBinary(val)) return truncate(val, 48);
+    for (const [k, val] of Object.entries(rec)) {
+      if (ARG_SKIP_KEYS.has(k)) continue;
+      if (typeof val === "string" && val.trim() && !looksLikeBinary(val) && !ARG_JUNK_VALUE_RE.test(val)) {
+        return truncate(val, 48);
+      }
       if (typeof val === "number" || typeof val === "boolean") return truncate(String(val), 48);
     }
     return "";
@@ -1397,6 +1413,21 @@ function humanizeEvent(ev) {
         return null;
     }
   }
+  if (name === "reasoning.delta") {
+    const text = typeof v.text === "string" ? v.text : "";
+    if (!text.trim()) return null;
+    return { kind: "progress", key: "think:buf", text: "", urgent: false, trackThink: text };
+  }
+  if (name === "reasoning.snapshot") {
+    const text = typeof v.text === "string" ? v.text : "";
+    if (!text.trim()) return null;
+    return { kind: "progress", key: "think:buf", text: "", urgent: false, flushThink: text };
+  }
+  if (name === "stream.phase") {
+    const phase = String(v.phase || "");
+    if (phase === "thinking") return null;
+    return { kind: "progress", key: "phase", text: "", urgent: false, flushBuf: true };
+  }
   if (name === "tool.call") {
     const toolName = String(v.toolName || "tool");
     const excerpt = summarizeArgs(v.argsText);
@@ -1405,7 +1436,7 @@ function humanizeEvent(ev) {
       key: `tool:${toolName}:${excerpt}`,
       text: excerpt ? `\u{1F527} ${toolName}\uFF1A${excerpt}` : `\u{1F527} ${toolName}`,
       urgent: false,
-      // 即使被节流挡下，keepalive 和 /进度 也该知道现在在跑什么
+      silent: true,
       trackStep: excerpt ? `${toolName}\uFF08${excerpt}\uFF09` : toolName
     };
   }
@@ -1441,7 +1472,7 @@ function resetProgressTracker(threadId) {
 function wechatThreadId(fromUserId) {
   return `wx-${fromUserId}`;
 }
-var MAX_ENTRIES, DEDUP_TTL_MS, THROTTLE_MS, MAX_EMITS_PER_RUN, DIGEST_LIMIT, REPORT_LIMIT, DIGEST_LOOKBACK_MS, ARG_KEY_PRIORITY, ProgressTracker, REGISTRY_MAX, registry;
+var MAX_ENTRIES, DEDUP_TTL_MS, THROTTLE_MS, MAX_EMITS_PER_RUN, DIGEST_LIMIT, REPORT_LIMIT, DIGEST_LOOKBACK_MS, ARG_KEY_PRIORITY, ARG_WRAPPER_KEYS, ARG_SKIP_KEYS, ARG_JUNK_VALUE_RE, THINK_LINE_CHARS, THINK_OVERFLOW_CHARS, ProgressTracker, REGISTRY_MAX, registry;
 var init_progress_tracker = __esm({
   "electron/backend/wechat_bridge/src/claude/progress-tracker.ts"() {
     MAX_ENTRIES = 80;
@@ -1475,6 +1506,11 @@ var init_progress_tracker = __esm({
       "pattern",
       "message"
     ];
+    ARG_WRAPPER_KEYS = ["arguments", "args", "input", "parameters", "kwargs", "params"];
+    ARG_SKIP_KEYS = /* @__PURE__ */ new Set(["id", "tool_id", "call_id", "name", "type", "role", "session_id", "status"]);
+    ARG_JUNK_VALUE_RE = /^(call_|tool_|msg-|tc-|sess-)/i;
+    THINK_LINE_CHARS = 110;
+    THINK_OVERFLOW_CHARS = 600;
     ProgressTracker = class {
       threadId;
       entries = [];
@@ -1486,6 +1522,8 @@ var init_progress_tracker = __esm({
       currentStep = "";
       /** workflow.trace 给的原始节点名，仅当 currentStep 为空时兜底 */
       currentNode = "";
+      /** reasoning.delta 攒的思考缓冲，阶段切换点整句 flush 成 💭 */
+      thinkBuf = "";
       startedAt = Date.now();
       lastActivityAt = Date.now();
       constructor(threadId) {
@@ -1500,6 +1538,7 @@ var init_progress_tracker = __esm({
         this.sendFailed = false;
         this.currentStep = "";
         this.currentNode = "";
+        this.thinkBuf = "";
         this.startedAt = Date.now();
         this.lastActivityAt = Date.now();
       }
@@ -1518,11 +1557,39 @@ var init_progress_tracker = __esm({
         this.lastActivityAt = Date.now();
         const h = humanizeEvent(ev);
         if (!h) return null;
+        if (h.trackThink !== void 0) {
+          this.thinkBuf += h.trackThink;
+          if (this.thinkBuf.length >= THINK_OVERFLOW_CHARS) return this.flushThinkingBuffer();
+          return null;
+        }
+        if (h.flushThink !== void 0) return this.emitThought(h.flushThink);
+        if (h.flushBuf) return this.flushThinkingBuffer();
+        if (h.silent) {
+          const flushed = this.flushThinkingBuffer();
+          if (h.trackStep) this.currentStep = h.trackStep;
+          const entry = {
+            ts: Date.now(),
+            kind: h.kind,
+            key: h.key,
+            text: h.text,
+            urgent: false,
+            emitted: false,
+            delivered: false,
+            failed: false
+          };
+          this.entries.push(entry);
+          if (this.entries.length > MAX_ENTRIES) this.entries.shift();
+          return flushed;
+        }
         if (!h.text) {
           if (h.trackNode) this.currentNode = h.trackNode;
           return null;
         }
         if (h.trackStep) this.currentStep = h.trackStep;
+        return this.recordAndGate(h);
+      }
+      /** 记账 + 去重/节流/上限门控，ingest 与思考 flush 共用。 */
+      recordAndGate(h) {
         const now = Date.now();
         const entry = {
           ts: now,
@@ -1547,6 +1614,20 @@ var init_progress_tracker = __esm({
         this.emitCount += 1;
         entry.emitted = true;
         return { text: h.text, entry };
+      }
+      /** 缓冲区有货就取尾部整句推出去；没货返回 null。 */
+      flushThinkingBuffer() {
+        const buf = this.thinkBuf;
+        this.thinkBuf = "";
+        if (!buf.trim()) return null;
+        return this.emitThought(buf);
+      }
+      /** 一句思考 → 💭 短句。取尾部（最新的想法最值钱），并喂给 keepalive 当步骤。 */
+      emitThought(text) {
+        const tail = truncateTail(text, THINK_LINE_CHARS);
+        if (!tail) return null;
+        this.currentStep = `\u601D\u8003\uFF1A${truncate(tail, 40)}`;
+        return this.recordAndGate({ kind: "progress", key: `think:${tail}`, text: `\u{1F4AD} ${tail}`, urgent: false });
       }
       markDelivered(entry) {
         entry.delivered = true;
