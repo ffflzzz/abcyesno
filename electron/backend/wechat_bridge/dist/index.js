@@ -7742,7 +7742,10 @@ async function sendToClaude(userText, imageItem, fileItem, fromUserId, contextTo
       }
     } else if (result.error) {
       logger.error("Claude query error", { error: result.error });
-      await sender.sendText(fromUserId, contextToken, "Claude \u5904\u7406\u8BF7\u6C42\u65F6\u51FA\u9519\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5\u3002");
+      const reason = String(result.error).replace(/\s+/g, " ").trim().slice(0, 120);
+      const hint = /timed out|timeout/i.test(reason) ? "Hermes \u6B63\u5FD9\u4E8E\u957F\u4EFB\u52A1\uFF0C\u521D\u59CB\u5316\u6392\u961F\u8D85\u65F6\uFF1B\u7B49\u5B83\u5598\u53E3\u6C14\u518D\u53D1\u4E00\u6B21\uFF0C\u6216\u53D1\u300C\u505C\u6B62\u300D\u7ED3\u675F\u5F53\u524D\u4EFB\u52A1\u3002" : "\u8BF7\u7A0D\u540E\u91CD\u8BD5\u3002";
+      await sender.sendText(fromUserId, contextToken, `Claude \u5904\u7406\u8BF7\u6C42\u65F6\u51FA\u9519\uFF1A${reason}
+${hint}`);
     } else if (!anySent) {
       await sender.sendText(fromUserId, contextToken, "Claude \u65E0\u8FD4\u56DE\u5185\u5BB9\uFF08\u53EF\u80FD\u56E0\u6743\u9650\u88AB\u62D2\u800C\u7EC8\u6B62\uFF09");
     }

@@ -1151,7 +1151,13 @@ async function sendToClaude(
       }
     } else if (result.error) {
       logger.error('Claude query error', { error: result.error });
-      await sender.sendText(fromUserId, contextToken, 'Claude 处理请求时出错，请稍后重试。');
+      // 2026-09-04: 把真实原因带上（截 120 字）。以前只发「稍后重试」，
+      // 用户永远不知道是 Hermes 忙、初始化超时还是后端没起来。
+      const reason = String(result.error).replace(/\s+/g, ' ').trim().slice(0, 120);
+      const hint = /timed out|timeout/i.test(reason)
+        ? 'Hermes 正忙于长任务，初始化排队超时；等它喘口气再发一次，或发「停止」结束当前任务。'
+        : '请稍后重试。';
+      await sender.sendText(fromUserId, contextToken, `Claude 处理请求时出错：${reason}\n${hint}`);
     } else if (!anySent) {
       await sender.sendText(fromUserId, contextToken, 'Claude 无返回内容（可能因权限被拒而终止）');
     }

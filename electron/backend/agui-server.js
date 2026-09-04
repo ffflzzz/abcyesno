@@ -368,6 +368,16 @@ function createAgUIServer(getGatewayClient, storage, options) {
         }
         return { id: existing, created: false };
       } catch (err) {
+        // 2026-09-04: 超时 ≠ 不存在。gateway 忙时（长任务压缩上下文、巨型
+        // 工具输出）5s 的 status 探活会超时——这时应该信任缓存映射直接复用，
+        // 而不是再来一次完整的 session.create + agent 初始化（那在负载下
+        // 必然又超时，还会泄漏一堆孤儿会话，正是「微信永远报错」的成因）。
+        // 只有网关明确回答 "session not found" 才走重建。
+        if (/timeout/i.test(err.message || '')) {
+          log('agui-server', `session.status probe timed out for ${existing}; trusting cached mapping`);
+          sessionValidatedAt.set(ctx.threadId, Date.now());
+          return { id: existing, created: false };
+        }
         log('agui-server', `existing session ${existing} not found (${err.message}), recreating`);
         await storage.setThreadMapping(ctx.threadId, null);
       }
@@ -1428,8 +1438,13 @@ function createAgUIServer(getGatewayClient, storage, options) {
       // Hermes creates sessions lazily: wait for the agent build to finish
       // before submitting the first prompt, otherwise prompt.submit fails with
       // "agent initialization timed out".
+      // 2026-09-04: 60s → 180s。gateway 在跑重会话（如 deep_agent 长任务：
+      // 上下文压缩 40s+ / 巨型工具输出 / 100 轮迭代）时，新会话的 agent
+      // 初始化（技能扫描 + 模型探测）会被饿到 90-130s 才完成，60s 看门狗
+      // 每次都掐死微信侧的新会话初始化，表现成「微信永远报错」。这个等待
+      // 只在真正 hang 死时才会触底，放宽无副作用。
       if (sessionCreated) {
-        await waitForSessionInfo(client, hermesSessionId, 60000);
+        await waitForSessionInfo(client, hermesSessionId, 180000);
       }
       return hermesSessionId;
     }
