@@ -1077,11 +1077,17 @@ body {
 }
 .composer-error-bubble {
   position: absolute;
-  /* Anchor to the top-right (where Bach peeks) and float above the avatar. */
-  top: -84px;
+  /* 2026-09-04 修复「显示不全」：原来用 top:-84px 顶边锚定，内容向下生长，
+     长 traceback 会盖过 Composer 并伸出窗口底边被裁掉。改成与
+     composer-approval-pop 同款的底边锚定——悬在 Bach 头顶上方，内容向上
+     生长，永不越出窗口底部。 */
+  bottom: calc(100% + 32px);
   right: 0;
   max-width: 360px;
   min-width: 220px;
+  max-height: max(240px, calc(100vh - 280px));
+  display: flex;
+  flex-direction: column;
   background: var(--surface, #1f262e);
   border: 1px solid var(--error, #f85149);
   border-radius: var(--radius-md, 12px);
@@ -1122,8 +1128,12 @@ body {
   white-space: pre-wrap;
   word-break: break-word;
   color: var(--text, #e6edf3);
-  max-height: 160px;
+  /* 气泡级 max-height + flex 滚动接管限高：文本区在气泡内滚动，
+     标题与「知道了」按钮永远可见（2026-09-04 显示不全修复） */
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
   margin-bottom: 8px;
   font-family: ui-monospace, Consolas, monospace;
   font-size: 11.5px;
