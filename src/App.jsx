@@ -26,7 +26,6 @@ import appChatIcon from "./assets/app-chat.png";
 import appManjuIcon from "./assets/app-manju.png";
 import appPaperIcon from "./assets/app-paper.png";
 import aihotIcon from "./assets/aihot.png";
-import anatomyIcon from "./assets/anatomy.png";
 
 // Map of manifest id / special key → vite-imported PNG so the same launcher
 // art shows in BOTH the homepage grid AND the browser-style tab strip.
@@ -38,7 +37,6 @@ const LAUNCHER_ICONS = {
   chat: appChatIcon,
   manjucraft_agent: appManjuIcon,
   paper_rewriter_agent: appPaperIcon,
-  anatomyatelier: anatomyIcon,
 };
 import { sanitizeMessageContent } from "./components/MessageThread.jsx";
 import { useAgentStream } from "./hooks/useAgentStream.js";
@@ -1499,27 +1497,12 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
         });
       },
     },
-    // Anatomy Atelier — external site opened as an in-app browser tab
-    // (same pattern as Excalidraw: <webview> pinned to the URL, not the
-    // system browser).
-    {
-      key: "anatomyatelier",
-      title: "Anatomy Atelier",
-      icon: "default",
-      iconSrc: anatomyIcon,
-      onClick: () => {
-        createTab({
-          type: "browser",
-          title: "Anatomy Atelier",
-          iconSrc: anatomyIcon,
-          browserUrl: "https://anatomyatelier.vercel.app/zh",
-        });
-      },
-    },
     // AI 热点 — opens the aihot.virxact.com AI-news aggregator in the
     // built-in browser tab (Electron <webview> via BrowserPanel), mirroring
     // the Excalidraw pattern. Icon is the site's own cyan radar mark on a
     // dark navy squircle (see src/assets/aihot.png).
+    // (Anatomy Atelier 已于 2026-09-05 移出启动台：上游项目停止维护。图标
+    // 资源 src/assets/anatomy.png 保留在仓库里，恢复维护时可直接接回。)
     {
       key: "aihot",
       title: "AI 热点",
