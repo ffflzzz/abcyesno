@@ -170,6 +170,47 @@ export default function Sidebar({
   const [query, setQuery] = useState("");
   const [contextMenu, setContextMenu] = useState(null);
   const [detail, setDetail] = useState(null);
+
+  // ── 日期分组收纳（2026-09-05）──
+  // 过期会话（前天及更早）默认折叠，点分组头展开/收起，选择持久化。
+  // 选中会话所在的组若处于折叠态则自动展开——用户正在看的东西绝不能被藏起来。
+  const DEFAULT_COLLAPSED_GROUPS = ["前天", "3-7 天前", "更早"];
+  const [collapsedGroups, setCollapsedGroups] = useState(() => {
+    try {
+      const raw = JSON.parse(localStorage.getItem("abcyesno:sidebar:collapsedGroups") || "null");
+      if (Array.isArray(raw)) return new Set(raw);
+    } catch (_) {}
+    return new Set(DEFAULT_COLLAPSED_GROUPS);
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem("abcyesno:sidebar:collapsedGroups", JSON.stringify([...collapsedGroups]));
+    } catch (_) {}
+  }, [collapsedGroups]);
+
+  function toggleGroup(bucket) {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(bucket)) next.delete(bucket);
+      else next.add(bucket);
+      return next;
+    });
+  }
+
+  // 选中会话落在折叠组里时自动展开该组（含首次渲染与切换会话时）
+  useEffect(() => {
+    if (!selectedSessionId || sessions.length === 0) return;
+    const s = sessions.find((x) => x.id === selectedSessionId);
+    if (!s) return;
+    const bucket = getSessionBucket(s);
+    setCollapsedGroups((prev) => {
+      if (!prev.has(bucket)) return prev;
+      const next = new Set(prev);
+      next.delete(bucket);
+      return next;
+    });
+  }, [selectedSessionId, sessions]);
+
   const menuRef = useRef(null);
   const filtered = assistants.filter((a) => (a.name || "").toLowerCase().includes(query.toLowerCase()));
   const dotClass = getStatusDotClass(backendStatus);
@@ -269,10 +310,25 @@ export default function Sidebar({
                 (groups[b] = groups[b] || []).push(s);
               }
               const visible = order.filter((b) => groups[b] && groups[b].length);
-              return visible.map((bucket) => (
-                <div className="session-group" key={bucket}>
-                  <div className="session-group-header">{bucket}</div>
-                  {groups[bucket].map((s) => {
+              return visible.map((bucket) => {
+                const collapsed = collapsedGroups.has(bucket);
+                const items = groups[bucket];
+                return (
+                  <div className="session-group" key={bucket}>
+                    <button
+                      type="button"
+                      className={`session-group-header collapsible ${collapsed ? "collapsed" : ""}`}
+                      onClick={() => toggleGroup(bucket)}
+                      title={collapsed ? "展开这一组" : "收起这一组"}
+                    >
+                      <span className={`session-group-chevron ${collapsed ? "" : "open"}`}>
+                        <Icon name="chevron" size={11} />
+                      </span>
+                      <span className="session-group-label">{bucket}</span>
+                      <span className="session-group-count">{items.length}</span>
+                    </button>
+                  {!collapsed &&
+                    items.map((s) => {
                     const active = s.id === selectedSessionId;
                     const running = runningSessionIds.includes(s.id);
                     const t = lastMessageTime(s);
@@ -310,7 +366,8 @@ export default function Sidebar({
                     );
                   })}
                 </div>
-              ));
+                );
+              });
             })()}
             {sessions.length === 0 && (
               <div className="empty-hint">暂无会话，点击上方创建</div>

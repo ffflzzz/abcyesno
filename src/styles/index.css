@@ -581,6 +581,54 @@ body {
   z-index: 1;
 }
 
+/* 可收纳的分组头（2026-09-05）：整行可点，chevron 指示展开/折叠，
+   右侧计数徽标在折叠时提示组内会话数。 */
+.session-group-header.collapsible {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  border: none;
+  background: var(--bg-elevated, #fff);
+  cursor: pointer;
+  text-align: left;
+  padding: 8px 12px 4px;
+  border-radius: var(--radius-sm);
+  transition: color 0.12s ease;
+}
+.session-group-header.collapsible:hover {
+  color: var(--text, inherit);
+}
+.session-group-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  transition: transform 0.15s ease;
+  opacity: 0.7;
+}
+.session-group-chevron.open {
+  transform: rotate(90deg);
+}
+.session-group-label {
+  flex: 1;
+  min-width: 0;
+}
+.session-group-count {
+  font-size: 10px;
+  line-height: 1;
+  color: var(--muted);
+  background: var(--panel-2, rgba(128, 128, 128, 0.14));
+  border-radius: 999px;
+  padding: 2px 7px;
+  flex-shrink: 0;
+}
+.session-group-header.collapsed .session-group-count {
+  color: var(--text, inherit);
+}
+
 .assistant-item {
   display: flex;
   align-items: center;
