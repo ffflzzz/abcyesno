@@ -398,6 +398,86 @@ test('tracker: tool.call 触发思考 flush（有些路径 phase 不变）', () 
 });
 
 // ---------------------------------------------------------------------------
+// todo.update —— 待办面板（docs/todos-panel.md §6.1）
+// ---------------------------------------------------------------------------
+
+function todoUpdate(items: Array<{ id?: string; content: string; status: string }>) {
+  return { name: 'todo.update', value: { ts: Date.now(), items } };
+}
+
+test('humanizeEvent: todo.update 首次报计划与前 3 条预览', () => {
+  const h = humanizeEvent(todoUpdate([
+    { id: '1', content: '分析现有项目结构', status: 'pending' },
+    { id: '2', content: '创建 brief.json', status: 'in_progress' },
+    { id: '3', content: '生成分镜表', status: 'pending' },
+    { id: '4', content: '导出剪映草稿', status: 'pending' },
+  ]));
+  assert.ok(h);
+  assert.match(h.text, /^📋 计划 4 步：/);
+  assert.match(h.text, /1\) 分析现有项目结构/);
+  assert.equal(h.urgent, false);
+  assert.match(h.trackStep || '', /创建 brief\.json/, '步骤应指向进行中的那一条');
+});
+
+test('humanizeEvent: todo.update 有进展时报完成数与最新完成项', () => {
+  const h = humanizeEvent(todoUpdate([
+    { id: '1', content: '分析现有项目结构', status: 'completed' },
+    { id: '2', content: '创建 brief.json', status: 'completed' },
+    { id: '3', content: '生成分镜表', status: 'in_progress' },
+  ]));
+  assert.ok(h);
+  assert.match(h.text, /^✅ 2\/3 创建 brief\.json 已完成$/);
+});
+
+test('humanizeEvent: todo.update 全部完成时报收尾', () => {
+  const h = humanizeEvent(todoUpdate([
+    { id: '1', content: 'A', status: 'completed' },
+    { id: '2', content: 'B', status: 'completed' },
+  ]));
+  assert.ok(h);
+  assert.match(h.text, /^✅ 计划 2 步全部完成$/);
+});
+
+test('humanizeEvent: todo.update cancelled 不计入分母', () => {
+  const h = humanizeEvent(todoUpdate([
+    { id: '1', content: 'A', status: 'completed' },
+    { id: '2', content: 'B', status: 'completed' },
+    { id: '3', content: 'C', status: 'cancelled' },
+  ]));
+  assert.ok(h);
+  assert.match(h.text, /^✅ 计划 2 步全部完成$/, '取消项不应计入总数（否则会是 3）');
+});
+
+test('humanizeEvent: todo.update 单步计划不推送', () => {
+  assert.equal(humanizeEvent(todoUpdate([{ id: '1', content: '就一件事', status: 'in_progress' }])), null);
+});
+
+test('humanizeEvent: todo.update 畸形载荷安全返回 null', () => {
+  assert.equal(humanizeEvent({ name: 'todo.update', value: {} }), null);
+  assert.equal(humanizeEvent({ name: 'todo.update', value: { items: 'not-an-array' } }), null);
+  assert.equal(humanizeEvent({ name: 'todo.update', value: { items: [] } }), null);
+  assert.equal(humanizeEvent({ name: 'todo.update', value: { items: [null, { status: 'pending' }] } }), null);
+});
+
+test('tracker: todo 相同完成数去重；计数变化的新文案受节流约束但仍记账', () => {
+  const t = new ProgressTracker('wx-todo');
+  const plan = todoUpdate([
+    { id: '1', content: 'A', status: 'pending' },
+    { id: '2', content: 'B', status: 'in_progress' },
+  ]);
+  assert.ok(t.ingest(plan), '首次计划应放行');
+  assert.equal(t.ingest(plan), null, '相同计数应去重');
+  // 完成数变化 → 新 key，但 20s 节流窗口内不放行（仍然记账，/进度 看得到）
+  const progressed = todoUpdate([
+    { id: '1', content: 'A', status: 'completed' },
+    { id: '2', content: 'B', status: 'in_progress' },
+  ]);
+  assert.equal(t.ingest(progressed), null, '节流窗口内不放行');
+  const texts = t.allEntries().map((e) => e.text);
+  assert.ok(texts.some((x) => /✅ 1\/2/.test(x)), '进展文案应已记账');
+});
+
+// ---------------------------------------------------------------------------
 // Registry
 // ---------------------------------------------------------------------------
 

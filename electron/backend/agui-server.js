@@ -508,7 +508,45 @@ function createAgUIServer(getGatewayClient, storage, options) {
     }
   }
 
-  function createTurnTranslator(res, encoder, ctx, opts = {}) {
+// ── 待办快照归一化（docs/todos-panel.md §3.1）──────────────────────────
+// `todo` 工具写入的是完整列表；这里只负责把上游载荷掰成稳定形状，任何异常
+// 都静默返回 null（绝不影响主文本流）。
+const TODO_MAX_ITEMS = 20;
+const TODO_MAX_CONTENT = 200;
+const TODO_VALID_STATUSES = new Set(['pending', 'in_progress', 'completed', 'cancelled']);
+const TODO_WRAPPER_KEYS = ['arguments', 'parameters', 'input', 'args'];
+
+function normalizeTodoItems(args) {
+  if (!args || typeof args !== 'object') return null;
+  let todos = args.todos;
+  if (!Array.isArray(todos)) {
+    // Hermes 偶发把真参数塞进包装键里（与 tool.start payload 形态一致）
+    for (const key of TODO_WRAPPER_KEYS) {
+      const inner = args[key];
+      if (inner && typeof inner === 'object' && Array.isArray(inner.todos)) {
+        todos = inner.todos;
+        break;
+      }
+    }
+  }
+  if (!Array.isArray(todos) || todos.length === 0) return null;
+  const items = [];
+  for (let i = 0; i < todos.length && items.length < TODO_MAX_ITEMS; i++) {
+    const t = todos[i];
+    if (!t || typeof t !== 'object') continue;
+    const raw = typeof t.content === 'string' ? t.content : (typeof t.title === 'string' ? t.title : '');
+    const content = raw.trim();
+    if (!content) continue;
+    items.push({
+      id: String(t.id != null && t.id !== '' ? t.id : i + 1),
+      content: content.slice(0, TODO_MAX_CONTENT),
+      status: TODO_VALID_STATUSES.has(t.status) ? t.status : 'pending',
+    });
+  }
+  return items.length ? items : null;
+}
+
+function createTurnTranslator(res, encoder, ctx, opts = {}) {
     // Phase 2: when `multiRound` is true (set by waitForHermesTurn for /goal
     // runs), every gateway message.start/complete cycle mints a fresh AG-UI
     // messageId so the frontend renders each goal iteration as its own
@@ -525,6 +563,7 @@ function createAgUIServer(getGatewayClient, storage, options) {
     const activeToolCalls = new Set();
     const toolStartTimes = new Map(); // toolCallId -> timestamp, for duration_ms
     let currentPhase = 'idle'; // idle | thinking | tool_executing | text_generating
+    let lastTodoSignature = ''; // 待办快照去重（docs/todos-panel.md）
 
     function send(event) {
       sendSSE(res, encoder, event);
@@ -738,6 +777,25 @@ function createAgUIServer(getGatewayClient, storage, options) {
           toolStartTimes.set(toolCallId, Date.now());
           setPhase('tool_executing');
           emitToolStart(toolCallId, toolName, args, messageId);
+          // 待办面板（docs/todos-panel.md）：`todo` 工具携带的是**写后的完整
+          // 快照**，归一化后广播成 CUSTOM todo.update，前端与微信桥共用同一
+          // 契约。相同快照去重，避免模型「读待办」时重复刷屏。
+          if (toolName === 'todo') {
+            const items = normalizeTodoItems(args);
+            if (items) {
+              const sig = JSON.stringify(items);
+              if (sig !== lastTodoSignature) {
+                lastTodoSignature = sig;
+                // messageId 让前端把快照绑定到具体那一轮的助手气泡：新一轮
+                // 的待办不会改写上一轮（上一轮自动冻结为历史）。
+                send({
+                  type: 'CUSTOM',
+                  name: 'todo.update',
+                  value: { ts: Date.now(), items, messageId },
+                });
+              }
+            }
+          }
           break;
         }
 

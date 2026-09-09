@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, forwardRef } from "react";
 import Icon from "./Icon.jsx";
 import { Virtuoso } from "react-virtuoso";
+import TodoBubble from "./TodoBubble.jsx";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import ThinkingIndicator from "./ThinkingIndicator.jsx";
@@ -1252,6 +1253,21 @@ function MessageThread({ messages = [], loading, streamPhase, thinkingText, reas
 
   // ── Workflow progress: extract stage list from contract events ──
   const contractEvents = useContractEvents(sessionId);
+  // ── 待办快照（docs/todos-panel.md）：todo.update 事件按 messageId 归档，
+  //    同一轮取最后一条快照（工具每次写入的都是完整列表）。
+  const todosByMessage = useMemo(() => {
+    const map = new Map();
+    if (!contractEvents || !contractEvents.length) return map;
+    for (const ev of contractEvents) {
+      if (ev.type !== "todo.update" || !ev.payload) continue;
+      const items = Array.isArray(ev.payload.items) ? ev.payload.items : null;
+      if (!items || !items.length) continue;
+      const key = ev.payload.messageId || "__latest__";
+      map.set(key, items);
+    }
+    return map;
+  }, [contractEvents]);
+  const fallbackTodos = todosByMessage.get("__latest__") || null;
   const { latestProgress, progressStages } = useMemo(() => {
     if (!contractEvents || !contractEvents.length) return { latestProgress: null, progressStages: [] };
     // Collect unique stages in order, keeping the last status per step_id
@@ -1787,6 +1803,12 @@ function MessageThread({ messages = [], loading, streamPhase, thinkingText, reas
               onEdit={onEditMessage}
               onDelete={onDeleteMessage}
             />
+          )}
+          {/* 待办气泡（docs/todos-panel.md）：取绑定到本轮 messageId 的快照，
+              新一轮不会改写上一轮（上一轮自动冻结为历史）；事件没带
+              messageId 时回落到最新快照。 */}
+          {!isUser && (todosByMessage.get(m.id) || (isLast ? fallbackTodos : null)) && (
+            <TodoBubble items={todosByMessage.get(m.id) || fallbackTodos} />
           )}
         </div>
       </div>

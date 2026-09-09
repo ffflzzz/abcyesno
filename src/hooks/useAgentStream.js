@@ -628,6 +628,11 @@ export function useAgentStream(aguiPort, activeSessionId, options = {}) {
           );
           publish(sess.id);
         }
+      } else if (name === "todo.update") {
+        // 待办面板（docs/todos-panel.md §3.3）：todo 工具写的是完整快照，
+        // 转发进 eventBus 供 TodoBubble 取最新一条渲染。
+        emitContractEvent(sess.id, { type: "todo.update", payload: value });
+        publish(sess.id);
       } else if (name && name.startsWith("workflow.")) {
         // Contract layer (L5): relay progress / artifact / approval / done events
         // into the eventBus keyed by the run's threadId. The generic workbenches

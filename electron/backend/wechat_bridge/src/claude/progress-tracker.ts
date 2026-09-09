@@ -341,6 +341,44 @@ export function humanizeEvent(
     };
   }
 
+  // 待办快照（docs/todos-panel.md §5）：todo 工具写入的是完整列表，按
+  // 「已完成/总数」合成一句。首次（done=0）报计划，有进展报完成数，
+  // 全完成报收尾；单步计划无信息量，不推送。
+  if (name === 'todo.update') {
+    const rawItems = Array.isArray((v as Record<string, any>).items)
+      ? ((v as Record<string, any>).items as any[])
+      : null;
+    if (!rawItems || rawItems.length === 0) return null;
+    const active = rawItems.filter((t) => t && t && t.status !== 'cancelled');
+    const doneItems = rawItems.filter((t) => t && t.status === 'completed');
+    const total = active.length;
+    const done = doneItems.length;
+    if (total < 2) return null;
+    let text: string;
+    if (done >= total) {
+      text = `✅ 计划 ${total} 步全部完成`;
+    } else if (done > 0) {
+      const last = doneItems[doneItems.length - 1];
+      const label = truncate(String((last && last.content) || ''), 30);
+      text = label ? `✅ ${done}/${total} ${label} 已完成` : `✅ ${done}/${total}`;
+    } else {
+      const preview = active
+        .slice(0, 3)
+        .map((t, i) => `${i + 1}) ${truncate(String((t && t.content) || ''), 22)}`)
+        .join(' ');
+      text = `📋 计划 ${total} 步：${preview}`;
+    }
+    const running = active.find((t) => t && t.status === 'in_progress');
+    const stepLabel = truncate(String((running && running.content) || ''), 30);
+    return {
+      kind: 'progress',
+      key: `todo:${done}/${total}`,
+      text,
+      urgent: false,
+      trackStep: stepLabel ? `待办 ${done}/${total}：${stepLabel}` : `待办 ${done}/${total}`,
+    };
+  }
+
   if (name === 'tool.error') {
     const toolName = String(v.toolName || 'tool');
     return {

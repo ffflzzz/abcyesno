@@ -1440,6 +1440,35 @@ function humanizeEvent(ev) {
       trackStep: excerpt ? `${toolName}\uFF08${excerpt}\uFF09` : toolName
     };
   }
+  if (name === "todo.update") {
+    const rawItems = Array.isArray(v.items) ? v.items : null;
+    if (!rawItems || rawItems.length === 0) return null;
+    const active = rawItems.filter((t) => t && t && t.status !== "cancelled");
+    const doneItems = rawItems.filter((t) => t && t.status === "completed");
+    const total = active.length;
+    const done = doneItems.length;
+    if (total < 2) return null;
+    let text;
+    if (done >= total) {
+      text = `\u2705 \u8BA1\u5212 ${total} \u6B65\u5168\u90E8\u5B8C\u6210`;
+    } else if (done > 0) {
+      const last = doneItems[doneItems.length - 1];
+      const label = truncate(String(last && last.content || ""), 30);
+      text = label ? `\u2705 ${done}/${total} ${label} \u5DF2\u5B8C\u6210` : `\u2705 ${done}/${total}`;
+    } else {
+      const preview = active.slice(0, 3).map((t, i) => `${i + 1}) ${truncate(String(t && t.content || ""), 22)}`).join(" ");
+      text = `\u{1F4CB} \u8BA1\u5212 ${total} \u6B65\uFF1A${preview}`;
+    }
+    const running = active.find((t) => t && t.status === "in_progress");
+    const stepLabel = truncate(String(running && running.content || ""), 30);
+    return {
+      kind: "progress",
+      key: `todo:${done}/${total}`,
+      text,
+      urgent: false,
+      trackStep: stepLabel ? `\u5F85\u529E ${done}/${total}\uFF1A${stepLabel}` : `\u5F85\u529E ${done}/${total}`
+    };
+  }
   if (name === "tool.error") {
     const toolName = String(v.toolName || "tool");
     return {

@@ -557,6 +557,105 @@ body {
   font-size: 12px;
 }
 
+/* ── 待办气泡（docs/todos-panel.md §4.2）─────────────────────────────
+   消息流内嵌：跟随上下文逐步划线，与 Hermes TUI 观感对齐。 */
+.todo-bubble {
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--panel-2, rgba(128, 128, 128, 0.08));
+  padding: 8px 10px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text, inherit);
+}
+.todo-bubble.all-done {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.todo-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.todo-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 600;
+  font-size: 12px;
+}
+.todo-icon {
+  font-size: 12px;
+}
+.todo-count {
+  font-size: 11px;
+  color: var(--muted);
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.todo-all-done {
+  color: var(--accent);
+}
+.todo-toggle {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs, 4px);
+  color: var(--muted);
+  font-size: 11px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.todo-toggle:hover {
+  color: var(--text, inherit);
+  border-color: var(--muted);
+}
+.todo-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.todo-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+.todo-mark {
+  flex-shrink: 0;
+  width: 14px;
+  text-align: center;
+  color: var(--muted);
+}
+.todo-text {
+  min-width: 0;
+  word-break: break-word;
+}
+.todo-item.in_progress .todo-mark,
+.todo-item.in_progress .todo-text {
+  color: var(--accent);
+}
+.todo-item.completed .todo-text {
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+.todo-item.completed .todo-mark {
+  color: var(--accent);
+}
+.todo-item.cancelled .todo-text {
+  text-decoration: line-through;
+  opacity: 0.42;
+}
+.todo-more {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
 .assistant-list,
 .session-list {
   display: flex;
