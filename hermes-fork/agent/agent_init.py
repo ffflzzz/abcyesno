@@ -1358,6 +1358,12 @@ def init_agent(
     # single turn; the runtime already executes such batches concurrently.
     agent._parallel_tool_call_guidance = bool(_agent_section.get("parallel_tool_call_guidance", True))
 
+    # Multi-step planning guidance toggle.  Default True.  Injected whenever
+    # the `todo` tool is loaded, in every posture — previously the only place
+    # that mentioned `todo` was the coding brief, so general (non-workspace)
+    # sessions never saw any planning steer and rarely produced a todo list.
+    agent._todo_guidance = bool(_agent_section.get("todo_guidance", True))
+
     # Local Python toolchain probe toggle.  Default True.  When False,
     # the probe is skipped entirely (no subprocess calls, no system-prompt
     # line).  Useful for users on exotic setups where the probe heuristics

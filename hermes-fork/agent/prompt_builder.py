@@ -278,6 +278,21 @@ KANBAN_GUIDANCE = (
     "cross-agent handoffs that outlive one API loop."
 )
 
+TODO_PLANNING_GUIDANCE = (
+    "# Planning with todos\n"
+    "For any task with 3+ distinct steps, or whenever the user hands you "
+    "several tasks at once, call `todo` FIRST to lay out the plan before you "
+    "start working — then update it as you go. Keep exactly one item "
+    "`in_progress` at a time and mark an item `completed` the moment it is "
+    "actually done (not when you're about to do it). If a step turns out to be "
+    "unnecessary or fails, mark it `cancelled` and add a revised item instead "
+    "of silently dropping it.\n"
+    "Skip `todo` for single-step or conversational replies — a one-item plan is "
+    "noise. The list is for the user's visibility into what you're doing and "
+    "for your own focus across a long run, so keep item text short and "
+    "concrete."
+)
+
 TOOL_USE_ENFORCEMENT_GUIDANCE = (
     "# Tool-use enforcement\n"
     "You MUST use your tools to take action — do not describe what you would do "

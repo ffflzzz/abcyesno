@@ -39,6 +39,7 @@ from agent.prompt_builder import (
     SKILLS_GUIDANCE,
     STEER_CHANNEL_NOTE,
     TASK_COMPLETION_GUIDANCE,
+    TODO_PLANNING_GUIDANCE,
     TOOL_USE_ENFORCEMENT_GUIDANCE,
     TOOL_USE_ENFORCEMENT_MODELS,
     drain_truncation_warnings,
@@ -192,6 +193,17 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
         tool_guidance.append(SESSION_SEARCH_GUIDANCE)
     if "skill_manage" in agent.valid_tool_names:
         tool_guidance.append(SKILLS_GUIDANCE)
+    # Multi-step planning guidance. The `todo` tool ships with a schema-level
+    # description, but that alone does not make the model reach for it: the
+    # only other place it was ever mentioned is CODING_AGENT_GUIDANCE, which
+    # is injected *only* in the coding posture (a code workspace). In the
+    # general posture — the default for chat/creative sessions — nothing in
+    # the prompt asked for a plan, and real transcripts confirm `todo` was
+    # used rarely and mostly inside code workspaces. Inject it wherever the
+    # tool is actually loaded so planning is steered on every surface.
+    # Gated by config.yaml ``agent.todo_guidance`` (default True).
+    if getattr(agent, "_todo_guidance", True) and "todo" in agent.valid_tool_names:
+        tool_guidance.append(TODO_PLANNING_GUIDANCE)
     # Kanban worker/orchestrator lifecycle — only present when the
     # dispatcher spawned this process (kanban_show check_fn gates on
     # HERMES_KANBAN_TASK env var). Normal chat sessions never see

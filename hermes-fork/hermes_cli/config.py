@@ -982,6 +982,12 @@ DEFAULT_CONFIG = {
         # compounds over a long conversation.  Costs ~70 tokens in the cached
         # system prompt.  Set False to disable globally.
         "parallel_tool_call_guidance": True,
+        # Multi-step planning guidance — short prompt block injected whenever
+        # the `todo` tool is loaded (every posture, not just the coding one),
+        # telling the model to lay out a todo list before starting a 3+ step
+        # task and to mark items done as it goes.  Costs ~90 tokens in the
+        # cached system prompt.  Set False to disable globally.
+        "todo_guidance": True,
         # Local-environment toolchain probe — surfaces Python/pip/uv/PEP-668
         # state in the system prompt when something non-default is detected
         # (e.g. python3 has no pip module, pip→python version mismatch, PEP
