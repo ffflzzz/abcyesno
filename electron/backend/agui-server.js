@@ -2010,7 +2010,10 @@ function createTurnTranslator(res, encoder, ctx, opts = {}) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
         body: JSON.stringify({
-          model: 'agnes-2.5-flash',
+          // 标题生成是轻量文本摘要，跟随主模型升级。
+          // 注意：上方 /api/audio/transcriptions 的 ASR 仍固定用 agnes-2.5-flash
+          // —— 3.0-flash 是文本模型（只接受文本 + 图像 URL），不支持音频输入。
+          model: 'agnes-3.0-flash',
           messages: [
             { role: 'system', content: sys },
             { role: 'user', content: user },

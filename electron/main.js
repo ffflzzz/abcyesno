@@ -1265,7 +1265,7 @@ function readAgnesCredentials() {
   } catch {}
   if (!apiKey) apiKey = process.env.AGNES_API_KEY || '';
   if (!baseUrl) baseUrl = process.env.AGNES_BASE_URL || 'https://apihub.agnes-ai.com/v1';
-  const model = process.env.AGNES_TEXT_MODEL || 'agnes-2.5-flash';
+  const model = process.env.AGNES_TEXT_MODEL || 'agnes-3.0-flash';
   return { apiKey, baseUrl, model };
 }
 

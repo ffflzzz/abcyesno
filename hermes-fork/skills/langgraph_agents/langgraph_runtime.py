@@ -37,7 +37,7 @@ _BUNDLED_AGENTS_DIR = Path(__file__).resolve().parent / "agents"
 # Cache loaded agent modules by name.
 _AGENT_CACHE: Dict[str, Any] = {}
 
-DEFAULT_MODEL = "agnes-2.0-flash"
+DEFAULT_MODEL = "agnes-3.0-flash"
 DEFAULT_BASE_URL = "https://apihub.agnes-ai.com/v1"
 
 

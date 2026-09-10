@@ -1085,7 +1085,7 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
   const [sessions, setSessions] = useState([]);
   const [selectedAssistantId, setSelectedAssistantId] = useState("");
   const [selectedSessionId, setSelectedSessionId] = useState("");
-  const [model, setModel] = useState("agnes-2.5-flash");
+  const [model, setModel] = useState("agnes-3.0-flash");
   const [apiKey, setApiKey] = useState("");
   const [apiKeySet, setApiKeySet] = useState(false);
   const [showKeyModal, setShowKeyModal] = useState(false);

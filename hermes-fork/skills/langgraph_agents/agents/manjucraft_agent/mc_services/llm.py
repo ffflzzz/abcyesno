@@ -11,7 +11,7 @@ from typing import Any
 import httpx
 
 BASE_URL = os.environ.get("AGNES_BASE_URL", "https://apihub.agnes-ai.com/v1")
-DEFAULT_MODEL = os.environ.get("AGNES_TEXT_MODEL", "agnes-2.0-flash")
+DEFAULT_MODEL = os.environ.get("AGNES_TEXT_MODEL", "agnes-3.0-flash")
 
 MOCK = bool(os.environ.get("MANJUCRAFT_AGENT_MOCK"))
 

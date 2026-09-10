@@ -15,6 +15,7 @@ import Icon from "./Icon";
 
 // 模型上下文窗口大小（tokens），后续可从模型配置动态读取
 const MODEL_CONTEXT_WINDOWS = {
+  "agnes-3.0-flash": 512_000,
   "agnes-2.5-flash": 128_000,
   "agnes-2.0-flash": 128_000,
   "agnes-2.0-pro": 128_000,
@@ -140,7 +141,7 @@ function estimateUsageBuckets(messages = [], modelName = "default") {
   };
 }
 
-export default function ContextUsage({ messages = [], model = "agnes-2.5-flash", usage = null, open, onClose }) {
+export default function ContextUsage({ messages = [], model = "agnes-3.0-flash", usage = null, open, onClose }) {
   // 优先展示后端真实用量（message.complete.usage / session.usage）；缺失时回退前端估算。
   const data = useMemo(() => {
     if (usage && (usage.context_max || usage.total || usage.input != null || usage.output != null)) {

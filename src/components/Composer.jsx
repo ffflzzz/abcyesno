@@ -4,7 +4,8 @@ import bachPeek from "../assets/bach-peek.png";
 import ApprovalBubble from "./ApprovalBubble.jsx";
 
 const AGNES_MODELS = [
-  { id: "agnes-2.5-flash", name: "agnes-2.5-flash", tag: "快" },
+  { id: "agnes-3.0-flash", name: "agnes-3.0-flash", tag: "快" },
+  { id: "agnes-2.5-flash", name: "agnes-2.5-flash", tag: "" },
   { id: "__custom__", name: "自定义模型...", tag: "" },
 ];
 
@@ -644,9 +645,9 @@ export default function Composer({
 
   const currentModelLabel = () => {
     if (AGNES_MODELS.some((m) => m.id === model)) {
-      return model || "agnes-2.5-flash";
+      return model || "agnes-3.0-flash";
     }
-    return model || "agnes-2.5-flash";
+    return model || "agnes-3.0-flash";
   };
 
   const currentPermission = PERMISSION_MODES.find((p) => p.id === permission) || PERMISSION_MODES[0];
