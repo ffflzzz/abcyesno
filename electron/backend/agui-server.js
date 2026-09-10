@@ -1612,6 +1612,21 @@ function createTurnTranslator(res, encoder, ctx, opts = {}) {
           await storage.setThreadMapping(ctx.threadId, null);
           hermesSessionId = await getReadyHermesSession();
           translator = await runOnce(hermesSessionId, goalMode);
+        } else if (/gateway request timeout/i.test(msg)) {
+          // 2026-09-10 微信高频超时修复（第二层）：
+          // gateway 的 WS 读循环被长 turn 的 GIL 饥饿饿住时，prompt.submit
+          // 会在 120s 定点超时（日志实证：每对超时精确相隔 125s）。这类超时
+          // 是**暂时性调度拥塞**，不代表会话坏了，也不代表消息没被处理——
+          // gateway 可能已收到并在排队。过去的做法是直接抛给微信桥，用户
+          // 看到「Hermes 正忙于长任务…」。现在复用同一 hermesSessionId 重试
+          // 一次（不重建会话、不清映射，避免泄漏孤儿会话）；若第二次仍超时
+          // 才向上抛。
+          //
+          // 注意：这里**不重放 runOnce 的事件消费**——第一次的 waitForHermesTurn
+          // 已随 runOnce 抛错而 cleanup，不会重复消费。
+          log('agui-server', `prompt.submit timed out — retrying once on same session ${hermesSessionId}`);
+          await new Promise((r) => setTimeout(r, 3000));
+          translator = await runOnce(hermesSessionId, goalMode);
         } else {
           throw firstErr;
         }

@@ -25,8 +25,10 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import contextvars
 import json
 import logging
+import os
 import socket
 import threading
 from typing import Any
@@ -40,6 +42,21 @@ _log = logging.getLogger(__name__)
 # threads from a wedged socket.
 _WS_WRITE_TIMEOUT_S = 10.0
 _WS_LOG_PAYLOAD_PREVIEW = 240
+
+# 读循环专用 dispatch 线程池（2026-09-10）。每个连接共享，够大以保证
+# session.steer / session.status 这类轻量 RPC 永远不被长 turn 饿到。
+# 用独立池而非 asyncio 默认池：默认池是 to_thread 的，其他地方也在用，
+# 一起排队会让本已拥挤的默认池成为新的瓶颈。
+try:
+    _WS_DISPATCH_POOL_WORKERS = max(
+        4, int(os.environ.get("HERMES_WS_DISPATCH_WORKERS") or "16")
+    )
+except (ValueError, TypeError):
+    _WS_DISPATCH_POOL_WORKERS = 16
+_WS_DISPATCH_POOL = concurrent.futures.ThreadPoolExecutor(
+    max_workers=_WS_DISPATCH_POOL_WORKERS,
+    thread_name_prefix="ws-dispatch",
+)
 
 # Per-token streaming frames are coalesced: buffered and flushed as a batch on
 # a short timer instead of waking the event loop once per token. A model reply
@@ -252,6 +269,20 @@ class WSTransport:
             self._token_flush_handle = None
 
 
+def _log_dispatch_future_error(fut: "concurrent.futures.Future") -> None:
+    """Surface an unexpected exception from a read-loop dispatch future.
+
+    ``_dispatch_and_write`` already catches everything it expects; this only
+    fires for failures raised *before* it runs (pool shutdown, context
+    problems). Without it the Future swallows the traceback silently.
+    """
+    if fut.cancelled():
+        return
+    exc = fut.exception()
+    if exc is not None:
+        _log.exception("ws dispatch future failed", exc_info=exc)
+
+
 def _ws_peer_label(ws: Any) -> str:
     """Return ``host:port`` when available, else a stable placeholder."""
     client = getattr(ws, "client", None)
@@ -377,51 +408,85 @@ async def handle_ws(ws: Any) -> None:
                     break
                 continue
 
-            # dispatch() may schedule long handlers on the pool; it returns
-            # None in that case and the worker writes the response itself via
-            # the transport we pass in (a separate thread, so transport.write
-            # is the safe path there). For inline handlers it returns the
-            # response dict, which we write here from the loop.
+            # 2026-09-10 并发修复：dispatch 不再阻塞读循环。
+            #
+            # 旧写法 `await asyncio.to_thread(server.dispatch, ...)` 让读循环
+            # **串行等待每个 RPC 跑完**才去 receive_text() 读下一条。对不在
+            # _LONG_HANDLERS 里的方法（prompt.submit / session.steer /
+            # session.status …）dispatch 是**内联**执行的，于是一条慢 RPC
+            # 会把后面所有 RPC 堵在 socket 缓冲区里：
+            #   - session.steer 只写一个内存字符串，却报 15s 超时；
+            #   - session.status 5s 探针超时，agui-server 只能"信任缓存映射";
+            #   - prompt.submit 120s 超时（微信侧"gateway request timeout"）。
+            # 三者同时出现 ⟺ 读循环停摆，与 handler 自身快慢无关。
+            #
+            # 现在把 dispatch 交给线程池后就**立刻回去读下一条**，响应由
+            # worker 线程经 transport.write 自行发出（与 _LONG_HANDLERS 路径
+            # 完全一致的契约）。transport.write 是线程安全的，且非流式帧
+            # 会在锁内排空 token 缓冲，帧序保持不变。
+            #
+            # 注意：这里用一个独立的 executor 而不是默认的 asyncio 默认池，
+            # 避免与 to_thread 的默认池（其他 await asyncio.to_thread 调用）
+            # 抢线程；池大小给足，让 steer/status 这类轻量 RPC 永远不会被
+            # 长 turn 饿到。
+            #
+            # ⚠️ 必须用默认参数把本轮的 req/transport 固化进闭包：worker 是
+            # **异步**执行的，而循环下一轮会重新绑定 req——裸闭包捕获变量名
+            # 会让晚执行的 worker 读到下一帧的 req，导致「第二条 RPC 被处理
+            # 两次、第一条丢失」的串帧（本目录的回归测试
+            # test_ws_read_loop_drains_all_frames_after_slow_first 正是抓这个）。
             req_id = req.get("id") if isinstance(req, dict) else None
             req_method = req.get("method") if isinstance(req, dict) else None
+            loop = asyncio.get_running_loop()
+            ctx = contextvars.copy_context()
+
+            def _dispatch_and_write(
+                _req=req,
+                _transport=transport,
+                _req_id=req_id,
+                _req_method=req_method,
+                _peer=peer,
+            ) -> None:
+                try:
+                    resp = server.dispatch(_req, _transport)
+                except Exception:
+                    _log.exception(
+                        "ws dispatch crash peer=%s id=%s method=%s",
+                        _peer,
+                        _req_id,
+                        _req_method,
+                    )
+                    try:
+                        _transport.write(
+                            {
+                                "jsonrpc": "2.0",
+                                "error": {"code": -32603, "message": "internal error"},
+                                "id": _req_id if _req_id is not None else None,
+                            }
+                        )
+                    except Exception:
+                        pass
+                    return
+                # dispatch() 返回 dict → 内联处理完毕，我们自己写回；
+                # 返回 None → 已调度到 pool，worker 会自行写响应。
+                if resp is not None:
+                    _transport.write(resp)
+
             try:
-                resp = await asyncio.to_thread(server.dispatch, req, transport)
+                fut = loop.run_in_executor(
+                    _WS_DISPATCH_POOL, ctx.run, _dispatch_and_write
+                )
+                # 异常已在 _dispatch_and_write 内捕获；这里只兜底 run_in_executor
+                # 自身的极少数失败（池已关闭等），避免 Future 静默吞异常。
+                fut.add_done_callback(_log_dispatch_future_error)
             except Exception:
                 dispatch_crashes += 1
                 _log.exception(
-                    "ws dispatch crash peer=%s id=%s method=%s",
+                    "ws dispatch submit failed peer=%s id=%s method=%s",
                     peer,
                     req_id,
                     req_method,
                 )
-                ok = await transport.write_async(
-                    {
-                        "jsonrpc": "2.0",
-                        "error": {"code": -32603, "message": "internal error"},
-                        "id": req_id if req_id is not None else None,
-                    }
-                )
-                if not ok:
-                    disconnect_reason = "send_failed_after_dispatch_crash"
-                    send_failures += 1
-                    _log.warning(
-                        "ws dispatch-crash reply send failed peer=%s id=%s method=%s",
-                        peer,
-                        req_id,
-                        req_method,
-                    )
-                    break
-                continue
-            if resp is not None and not await transport.write_async(resp):
-                disconnect_reason = "send_failed_after_response"
-                send_failures += 1
-                _log.warning(
-                    "ws response send failed peer=%s id=%s method=%s",
-                    peer,
-                    req_id,
-                    req_method,
-                )
-                break
     finally:
         reaped_sessions = 0
         detached_sessions = 0
