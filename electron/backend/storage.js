@@ -137,10 +137,22 @@ class Storage {
   async updateAssistant(id, patch) {
     const data = await this._ensure();
     const idx = data.assistants.findIndex((a) => a.id === id);
-    if (idx === -1) return null;
-    data.assistants[idx] = { ...data.assistants[idx], ...patch };
+    if (idx === -1) {
+      // The built-in default assistant lives in code (_defaultAssistants) and
+      // is NOT materialized into abcyesno_assistants.json until the first
+      // mutation. findIndex therefore misses it and this used to return null
+      // without persisting anything — the frontend then reload assistants
+      // (still hardcoded defaults) and its sync effect snapped the model
+      // picker straight back, making the model switcher look dead (2026-09-10).
+      // Upsert the built-in entry so patches actually land on disk.
+      const base = this._defaultAssistants().find((a) => a.id === id);
+      if (!base) return null;
+      data.assistants.push({ ...base, ...patch, id });
+    } else {
+      data.assistants[idx] = { ...data.assistants[idx], ...patch };
+    }
     await this._save();
-    return data.assistants[idx];
+    return data.assistants[data.assistants.findIndex((a) => a.id === id)];
   }
 
   _defaultAssistants() {
