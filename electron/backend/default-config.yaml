@@ -49,5 +49,17 @@ toolsets:
 # 这里故意留空，避免把本机开发机的代理地址写死、随分发传染到新机器导致出站失败。
 # 需要代理时，把下行取消注释并填真实地址：
 #   proxy_url: http://127.0.0.1:7897/
+#
+# proxy_url 取值：
+#   留空 "" / direct / none → 强制直连，且**不再回退**到 Windows 系统代理
+#                             （注册表 Internet Settings）
+#   http://127.0.0.1:7890   → 使用该代理
+#
+# 注意：本机开着 Clash / v2rayN 等「系统代理」时会被自动采用（读注册表）。
+# 此时只有 no_proxy 里列出的域名仍走直连 —— 项目默认已包含
+# apihub.agnes-ai.com，因为 agnes 在国内可直连，经代理转发反而容易 TLS 中断
+# （表现为 APIConnectionError: Connection error. / 「API failed after 3
+# retries」）。可在此追加内网等其它直连端点，逗号分隔。
 network:
   proxy_url: ""
+  # no_proxy: "intranet.example.com"

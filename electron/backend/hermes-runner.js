@@ -21,6 +21,30 @@ const HOST = '127.0.0.1';
 const MAX_WAIT_MS = 300000;
 const POLL_MS = 600;
 
+// ── 代理绕过名单 ────────────────────────────────────────────────────────
+// 注入 HTTPS_PROXY 时必须同时下发 NO_PROXY，否则**连本项目自己的模型端点**
+// 都会被塞进代理。
+//
+// 2026-09-16 微信端事故：用户开着 Clash 系统代理 (127.0.0.1:7890)，本文件把它
+// 注入给 Hermes，而 NO_PROXY 只含回环 → httpx 经 Clash 访问
+// apihub.agnes-ai.com，TLS 握手被中断 (SSL: UNEXPECTED_EOF_WHILE_READING)，
+// SDK 包装成 "APIConnectionError: Connection error."，前端只看到
+// 「API failed after 3 retries — Connection error.」。
+//
+// 极难误判的一点：`curl` 不读 WinINET 系统代理，所以命令行手测「网络是通的」
+// 是**假阳性**——curl 直连 200，Python 却全挂。诊断必须走 httpx/urllib。
+//
+// agnes 域名从 AGNES_BASE_URL 推导而非写死：该变量本就可被覆盖，自建网关
+// 同样享受直连。
+function defaultNoProxyHosts() {
+  const hosts = ['localhost', '127.0.0.1', '::1'];
+  try {
+    const h = new URL(process.env.AGNES_BASE_URL || 'https://apihub.agnes-ai.com/v1').hostname;
+    if (h) hosts.push(h);
+  } catch (_) { /* 非 URL，只用回环 */ }
+  return hosts;
+}
+
 class HermesRunner {
   constructor({ app }) {
     this.app = app;
@@ -507,21 +531,29 @@ class HermesRunner {
       process.env.https_proxy ||
       process.env.http_proxy;
     let proxyFromConfig = '';
+    let directFromConfig = false;
+    let noProxyFromConfig = '';
     try {
       const cfgText = fs.readFileSync(path.join(this.hermesHome, 'config.yaml'), 'utf-8');
       const m = cfgText.match(/^\s*proxy_url:\s*(.+?)\s*$/m);
       if (m) {
         const v = m[1].trim().replace(/^["']|["']$/g, '');
-        // Empty / "direct" / unset → no proxy. Only a real http(s):// URL is used.
-        if (v && v !== 'direct' && /^https?:\/\//i.test(v)) proxyFromConfig = v;
+        // 空 / direct / none → 显式直连：终止回退链，不再读 Windows 注册表。
+        // 2026-09-16 之前这里把一切非 URL 值都当成"没配"，于是用户写
+        // `proxy_url: direct` 想强制直连，仍会被注册表代理覆盖 —— 声明失效。
+        if (!v || /^(direct|none|off|no|false)$/i.test(v)) directFromConfig = true;
+        else if (/^https?:\/\//i.test(v)) proxyFromConfig = v;
       }
+      // 额外直连域名（逗号分隔），与默认名单取并集。国内端点写在这里。
+      const np = cfgText.match(/^\s*no_proxy:\s*(.+?)\s*$/m);
+      if (np) noProxyFromConfig = np[1].trim().replace(/^["']|["']$/g, '');
     } catch (_) {}
     // 2026-08-31 微信端 agent「无法联网」根因之一：env 与 config.yaml 都没配
     // 代理 → Hermes 直连外网，terminal curl 全部超时（exit 28），agent 无限
     // 重试烧掉 20+ 分钟。第三优先级读 Windows 系统代理（Internet Settings
     // 注册表）——clash/v2rayN 开启系统代理时写入且端口动态变化也能跟上。
     let proxyFromRegistry = '';
-    if (process.platform === 'win32') {
+    if (!directFromConfig && process.platform === 'win32') {
       try {
         const { execSync } = require('child_process');
         const enOut = execSync(
@@ -556,15 +588,30 @@ class HermesRunner {
     if (proxyUrl) {
       env.HTTPS_PROXY = proxyUrl;
       env.HTTP_PROXY = proxyUrl;
-      if (!env.NO_PROXY && !env.no_proxy) {
-        env.NO_PROXY = 'localhost,127.0.0.1,::1';
-      }
-      log('hermes-runner', `proxy resolved: ${proxyUrl} (source: ${proxyEnv ? 'env' : proxyFromConfig ? 'config.yaml' : 'windows-registry'})`);    } else {
+      // NO_PROXY 取并集：调用方已有的 + 默认（回环 + 项目默认模型端点）+
+      // config.yaml 的 network.no_proxy。
+      // 注意不能写成"仅在为空时才设默认"——用户级环境变量里很可能已经有一个
+      // 只含回环的 NO_PROXY，那样 agnes 依旧会被代理劫走（本次事故成因）。
+      const mergedNoProxy = Array.from(new Set(
+        String(env.NO_PROXY || env.no_proxy || '')
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+          .concat(defaultNoProxyHosts())
+          .concat(noProxyFromConfig.split(',').map((s) => s.trim()).filter(Boolean))
+      ));
+      env.NO_PROXY = mergedNoProxy.join(',');
+      delete env.no_proxy; // 只保留一套，避免大小写两份不一致
+      log('hermes-runner', `proxy resolved: ${proxyUrl} (source: ${proxyEnv ? 'env' : proxyFromConfig ? 'config.yaml' : 'windows-registry'}) no_proxy: ${mergedNoProxy.join(',')}`);
+    } else {
       // Explicit direct: drop any inherited proxy so Hermes connects directly.
       delete env.HTTPS_PROXY;
       delete env.HTTP_PROXY;
       delete env.https_proxy;
       delete env.http_proxy;
+      if (directFromConfig) {
+        log('hermes-runner', 'proxy: explicit direct (config.yaml network.proxy_url) — windows-registry proxy ignored');
+      }
     }
 
     const hermesLogFile = path.join(logDir, 'hermes.log');
