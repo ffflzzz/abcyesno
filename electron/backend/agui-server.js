@@ -1083,6 +1083,20 @@ function createTurnTranslator(res, encoder, ctx, opts = {}) {
     const { goalMode = false, idleMs = Number(process.env.ABC_AGUI_GOAL_IDLE_MS || 600000) } = opts;
     const translator = createTurnTranslator(res, encoder, { ...ctx, hermesSessionId }, { multiRound: goalMode });
 
+    // 2026-08-30: set by markQueued() when prompt.submit lands behind an
+    // in-flight turn — every event is then dropped until the queued turn's
+    // first message.start, so stale tail events of the previous turn can
+    // never resolve this run with empty text.
+    //
+    // ⚠️ 必须声明在 waitForHermesTurn 的函数作用域（executor 之外）：
+    // markQueued() 定义在本函数体、executor 之外，靠闭包访问这个绑定。
+    // 2026-09-16 微信端「Claude 处理请求时出错：suppressUntilMessageStart is
+    // not defined」—— 该变量最初被写在 `new Promise((resolve, reject) => {`
+    // 内部，executor 内的 let 对 markQueued 不可见，一旦命中「忙时会话排队」
+    // 分支（submitRes.status === 'queued'）就 ReferenceError 整轮失败。
+    // handler 的闭包跨作用域读写同一个绑定（读写都要，故不能用常量/传参）。
+    let suppressUntilMessageStart = false;
+
     const promise = new Promise((resolve, reject) => {
       const turnStartedAt = Date.now();
       let lastBackendEventAt = Date.now();
@@ -1093,11 +1107,7 @@ function createTurnTranslator(res, encoder, ctx, opts = {}) {
       }, timeoutMs);
 
       let settled = false;
-      // 2026-08-30: set by markQueued() when prompt.submit lands behind an
-      // in-flight turn — every event is then dropped until the queued turn's
-      // first message.start, so stale tail events of the previous turn can
-      // never resolve this run with empty text.
-      let suppressUntilMessageStart = false;
+      // suppressUntilMessageStart 的声明在上方函数作用域（markQueued 也要用）。
       // Phase 2: in goal mode the gateway emits multiple message.start/complete
       // cycles back-to-back. We can't resolve on the first complete — instead
       // arm an idle timer that resets on every event; when no new events

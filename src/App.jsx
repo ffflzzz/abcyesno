@@ -180,6 +180,14 @@ function ChatShell({
   onToggleSkills,
   showMarket,
   setShowMarket,
+  // 下方 MarketPanel（约 1065/1067 行）渲染在本组件里，读取的是这两个值。
+  // 它们定义在主 App 组件中，此前忘记随 props 下发 → 一旦 showMarket 为 true
+  // （用户点开技能市场）就抛 ReferenceError: enabledSkills is not defined，
+  // 且该段 JSX 不在 ErrorBoundary 内，整个界面白屏。
+  // 2026-09-16 由「未解析引用」静态扫描发现（check-tdz 抓不到这类跨作用域错误）。
+  // 默认值兜底：即便调用方漏传，也只是禁用全部技能而不是崩溃。
+  enabledSkills = {},
+  handleToggleSkill = () => {},
   runError,
   onClearRunError,
   onApiKeySaved,
@@ -2084,6 +2092,8 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
           onSkillsChanged={refreshSkills}
           showMarket={showMarket}
           setShowMarket={setShowMarket}
+          enabledSkills={enabledSkills}
+          handleToggleSkill={handleToggleSkill}
           runError={runError}
           onClearRunError={() => setRunError(null)}
           manifests={manifests}

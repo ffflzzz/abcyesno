@@ -109,6 +109,11 @@ async function startApp() {
 }
 
 // ── 主流程 ────────────────────────────────────────────────────────────────
+// browser 必须在模块作用域：cleanup()（定义在 main 之外的顶层函数）也要用它。
+// 2026-09-16：此前它在 main() 内声明，cleanup() 的引用解析不到 →
+// ReferenceError 被 try/catch 静默吞掉，fresh 模式下 CDP 浏览器实例从不关闭。
+let browser = null;
+
 async function main() {
   console.log('════ Abcyesno 运行时自诊断 ════');
   console.log(`模式: ${ATTACH ? 'attach(连已在跑实例)' : 'fresh(全新启动)'} | 观察窗口: ${observeMs}ms | CDP: ${CDP_PORT}`);
@@ -123,7 +128,7 @@ async function main() {
     if (!ok) { add('harness', 'error', `attach 模式但 CDP(${CDP_PORT}) 不可达——请先启动 Abcyesno`); process.exit(1); }
   }
 
-  let browser, page;
+  let page; // browser 在模块作用域声明（cleanup 也要用）
   try {
     browser = await chromium.connectOverCDP(`http://127.0.0.1:${CDP_PORT}`);
     const ctx = browser.contexts()[0];
