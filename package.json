@@ -11,6 +11,8 @@
     "postinstall": "electron-builder install-app-deps",
     "selfdiag": "node scripts/runtime-diag.mjs",
     "selfdiag:attach": "node scripts/runtime-diag.mjs --attach",
+    "check:tdz": "node scripts/check-tdz.js",
+    "check:undef": "node scripts/check-undef.js",
     "bridge:build": "node electron/backend/wechat_bridge/build.mjs",
     "test:bridge": "node scripts/test-wechat-bridge-unit.mjs"
   },
