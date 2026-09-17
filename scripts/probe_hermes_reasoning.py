@@ -6,6 +6,35 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 os.environ.setdefault("HERMES_HOME", os.path.expanduser("~/.hermes_portable_data"))
 
+
+# 代理清理：Clash 系统代理会被 httpx 读取，agnes 请求被劫（TLS 中断）。
+for _k in list(os.environ.keys()):
+    if "proxy" in _k.lower():
+        del os.environ[_k]
+os.environ["no_proxy"] = "*"
+
+
+def _agnes_key() -> str:
+    """从 HERMES_HOME/.env 读 AGNES_API_KEY（不再硬编码：key 会轮换）。"""
+    # 不能只信 HERMES_HOME：宿主环境可能把它指向非便携目录（实测
+    # AppData\Local\hermes），那里的 .env 没有这个变量，盲信会静默拿到空 key。
+    homes = []
+    if os.environ.get("HERMES_HOME"):
+        homes.append(os.environ["HERMES_HOME"])
+    homes.append(os.path.expanduser("~/.hermes_portable_data"))
+    for home in homes:
+        try:
+            with open(os.path.join(home, ".env"), encoding="utf-8") as fh:
+                for line in fh:
+                    if line.startswith("AGNES_API_KEY="):
+                        k = line.split("=", 1)[1].strip().strip('"').strip("'")
+                        if k:
+                            return k
+        except OSError:
+            continue
+    return os.environ.get("AGNES_API_KEY", "")
+
+
 from run_agent import AIAgent
 
 fired = {"reasoning": [], "thinking": [], "stream": []}
@@ -21,7 +50,7 @@ agent = AIAgent(
     max_iterations=3,
     provider="custom",
     base_url="https://apihub.agnes-ai.com/v1",
-    api_key="cpk-VdOissJMrHBFsSi193GP7mxpLnwCqYW2hr9ybTqxXq9KDpno",
+    api_key=_agnes_key(),
     quiet_mode=True,
     verbose_logging=False,
     platform="tui",
