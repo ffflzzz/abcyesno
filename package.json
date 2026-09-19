@@ -14,7 +14,8 @@
     "check:tdz": "node scripts/check-tdz.js",
     "check:undef": "node scripts/check-undef.js",
     "bridge:build": "node electron/backend/wechat_bridge/build.mjs",
-    "test:bridge": "node scripts/test-wechat-bridge-unit.mjs"
+    "test:bridge": "node scripts/test-wechat-bridge-unit.mjs",
+    "test:browser-panel": "node scripts/test-browser-panel/build.mjs && node scripts/test-browser-panel/run.mjs"
   },
   "build": {
     "appId": "com.hermes.agent",
