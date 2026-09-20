@@ -1,0 +1,52 @@
+{
+  "name": "chinese-style-short-drama",
+  "display-name-zh": "国风短剧",
+  "version": "1.0.0-adapted",
+  "source": "Ported from MiniMax Design 'chinese-style-short-drama-generator' v1.2.6 (MiniMax-hub export; model-neutral adaptation)",
+  "trigger-words": [
+    "国风短剧",
+    "仙侠短剧",
+    "古风短剧",
+    "国风成片",
+    "古装甜宠",
+    "BJD 瓷肌",
+    "华丽古风妆造",
+    "chinese style short drama",
+    "xianxia short drama"
+  ],
+  "default-video-model": "minimax-h3",
+  "video-model-note": "minimax-h3 adapter 尚未接入；当前回退 Agnes（skill 规范允许：能力检查后使用可用模型）。注：本字段**代码不消费**（见 topics/pack-conventions.md），只供人读。",
+  "audio-modes": [
+    "dialogue-led",
+    "silent"
+  ],
+  "default-audio-mode": "dialogue-led",
+  "audio-mode-note": "★ 源 skill 是**对白驱动**的成片流程（它自己写明「台词与旁白只能通过声音呈现，不能渲染成画面文字」），落到本管线只有 `dialogue-led` / `silent` 两条实现路径：`grep 旁白|narration|tts|voice` 在 v5/ 下**零命中**（台词只经 `Audio:` 契约字段由视频模型烘焙）。⇒ **不提供 narration-led**：写了既不触发硬指令注入、也不触发 `roles._audio_mode_defect`，**无任何确定性门**；且写进「对白」列的文字会被视频模型当成**角色台词**念并驱动口型（与 wool-felt-story-short 同一个坑，见 topics/pack-conventions.md 的「narration 死区」）。",
+  "shot-duration": "4-12s",
+  "aspect-ratio": "9:16（本包主张竖屏；源 skill 亦支持 16:9）",
+  "aspect-ratio-note": "⚠️ 真实画幅**不由本字段决定**：成片由 `SHORTDRAMA_ASPECT`、静帧由 `SHORTDRAMA_STILL_RATIO` 控制。本字段仅声明本包主张，供前端展示（代码不消费）。",
+  "script-craft": [
+    "short-drama-opening",
+    "short-drama-hooks",
+    "short-drama-satisfaction"
+  ],
+  "script-craft-note": "本包是**商业国风短剧** → 启用短剧叙事判据（开场法则 / 钩子 / 爽点）。★ 这三份是**商业硬判据**——做微电影 / 音乐剧 / 商业短片时**不要复用**，应另行派生（用户 2026-09-16：「不要污染我的生产线」）。技法文件在 `skills/packs/craft/short-drama-*/SKILL.md`，由各自的 `inject-to` 决定注入给哪些角色。",
+  "still-refs": true,
+  "still-refs-note": "★ 本包是**正质量、唯美**审美（BJD 瓷肌 / 华丽古风妆造，「精致」= 正确），且源 skill 明确以**角色设定图**锁身份 → **应当绑参考图**。\n**别照抄牛来的结论**：牛来是反质量审美（「真诚的技术不足」，精致 = 失败）→ 参考图越精修越毁它 → 必须 `false`；国风相反，参考图越准越好。\n**与羊毛毡当初的疑虑不同**：羊毛毡设 false 的依据是「`cast.py` 硬编码『写实短剧质感』→ 参考图必是写实真人」，那条推断已被实测推翻（三样本全是干净毛毡）；国风更是**同向** —— 源 skill 本身就是**真人短剧画风**（只是面部精修、妆造华丽），与那句硬编码风格词不冲突。\n**本包为什么尤其需要参考图**：妆造是复杂系统（发冠 / 步摇 / 流苏珠饰 / 刺绣汉服 / 丝绸锦缎），纯文字描述**锁不住跨镜一致性** —— 这正是 felt-bach 的教训（false 期间双人镜 10/17 带残留：角色被复制 / 第二个角色丢失）。\n⚠️ `still-refs` 是 **pack 级、无 env override**（`style.still_refs_enabled` 只读 pack.json）；改动后**必须强制重画静帧**才生效（`stills.ensure` 幂等，盘上有图就跳过）→ `--rerender <全部镜号> --from still`。\n⏳ **本轮为移植，未实测** —— 首轮跑片后按实测定稿并回填依据（参照 wool-felt-story-short 的 `still-refs-note` 体例）。",
+  "still-tail": "material",
+  "still-tail-note": "静帧尾缀档位（见 `media/prompt.py` 的 `STILL_TAIL_PRESETS`）：本片所有表面都是**真实材质**（皮肤 / 丝绸 / 锦缎刺绣 / 金属发饰 / 木质家具）→ 走 `material` 档（正向重述「表面为真实材质」）。\n**切勿改 `flat`** —— 那会要求模型把表面画成平涂纯色块，与本包 style-block 的「真实材质」直接对打（noodle-night 事故：写实短剧的每张静帧同时收到两句反向指令，等于逐镜指令模型降级材质）。",
+  "style-watch": true,
+  "style-watch-note": "★ 本包审美是「**精致唯美 = 正确**」，方向与 `style-is-criterion` 的注入文本**相反** —— 后者的前提写死为「本片属于**反质量类型包**（粗糙、廉价、笨拙）」，判据是「呈写实照片质感 / 精致渲染 → P0」（见 `qc.STYLE_CRITERION_HINT`）。\n⇒ **绝不能开 `style-is-criterion`**：方向相反会**稳定误判**（把本包正确画面判成硬伤）→ 陷入「重画 N 轮 → 撞上限 → 带伤放行」，白烧生图配额。两者在 `style.style_watch_spec` 里本就互斥（前者开了后者返回空串）。\n⇒ 只用 `style-watch`（**只记不改**：静帧 QC 侧 P1 不触发重画、clipqc 侧 P1 只打印）—— 让风格漂移**可见**，但不误杀。\n**为什么需要这条通道**：`qc.PROMPT` 明文「风格、氛围、构图偏好一律不判」→ 不声明就等于**风格维度完全无人管**（实测 felt-frog LN02 出成写实真人照片、felt-bach 大特写的脸漂成「精细手办」，全套 QC 放行）。本包面临的是**两极漂移**：漂成纯动漫插画 / 扁平动漫脸，或漂成廉价网游 CG / 低精度服装。\n⏳ 未实测，首轮跑片复核。",
+  "hard-keys-note": "★ **本包刻意不加 `hard-keys-drop`**（与 wool-felt-story-short 相反，别照抄）。\n全局 `qc.HARD_KEYS` 含 `五官` / `面部特征` / `真人脸` / `写实照片` / `照片质感` / `精致渲染`，看似与「真人国风」审美抵触，但逐条核对后结论是**保持全局默认**：\n① `五官` / `面部特征` —— 羊毛毡删它们，是因为该包**契约明确要求「五官清晰可读」**，与判据自相矛盾（实测 felt-bach 青蛙巩膜被判「长出真人五官」）。**本包不同**：真人短剧里「五官模糊 / 扭曲 / 糊成一片」是**真缺陷**，删掉会丢掉一条有效判据。\n② `真人脸` —— 本包要的就是真人脸；真正要防的是**漂成动漫 / CG**，而那条由 `画风` / `审美` 两个 key 兜住（它们本来就在全局表里）。\n③ `写实照片` / `照片质感` / `精致渲染` —— 这三个是**反质量风格轴（`style-is-criterion`）专用判据词**；本包**没开**那个开关（开了会稳定误判，见 `style-watch-note`），因此它们不会被当成判据注入。\n⇒ 结论：`style.hard_keys()` 返回 None（用全局表），2026-09-16 已用脚本核对。⏳ 未实测，**首轮跑片后必须按实测复核**：若出现「写实照片质感」类 P0 误杀，再按 `hard-keys-drop` 收窄。",
+  "roles": [
+    "worldbuilder",
+    "plotdesigner",
+    "scriptwriter",
+    "dialogue",
+    "director",
+    "scenedesigner",
+    "assetdesigner",
+    "reviewer"
+  ],
+  "visual-style": "真人国风短剧画风：面部为精致 BJD / 瓷肌质感的精修面部（皮肤干净、柔和面部高光、五官清晰），华丽古风妆造（复杂发髻与发冠、步摇流苏、刺绣汉服、丝绸锦缎质感），电影化柔光配侧逆光轮廓光，浅景深与焦外虚化，高光处轻微 bloom 柔焦，竖屏 9:16 以中近景为主、对话用快速正反切。不是写实纪录片，也不是纯动漫插画、扁平动漫脸或廉价网游 CG。"
+}

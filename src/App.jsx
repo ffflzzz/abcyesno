@@ -1449,6 +1449,37 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
   // URL. The iconSrc is also forwarded into every tab created from this app
   // — see openAppAsNewTab/openApp above — so the launcher grid and the
   // browser-style tab strip always show the same artwork.
+  const [sdBoot, setSdBoot] = useState("idle"); // idle | booting | error
+  const sdBootRef = useRef(null);
+  // 短剧工厂: the backend is a lazily-started local FastAPI on a runtime-chosen
+  // port, so the URL cannot come from a build-time manifest — ask the main
+  // process for it, then open it in the built-in browser tab (Excalidraw path).
+  const openShortdrama = useCallback(async () => {
+    if (sdBootRef.current) return sdBootRef.current;
+    const attempt = (async () => {
+      setSdBoot("booting");
+      try {
+        const res = await window.hermes.ensureShortdrama();
+        if (!res || !res.ok) throw new Error((res && res.error) || "短剧后端未响应");
+        setSdBoot("idle");
+        createTab({
+          type: "browser",
+          title: "短剧工厂",
+          icon: "clapperboard",
+          browserUrl: res.url,
+        });
+      } catch (err) {
+        console.error("[shortdrama] boot failed:", err);
+        setSdBoot("error");
+        throw err;
+      } finally {
+        if (sdBootRef.current === attempt) sdBootRef.current = null;
+      }
+    })();
+    sdBootRef.current = attempt;
+    return attempt;
+  }, [createTab]);
+
   const homepageApps = useMemo(() => [
     {
       key: "chat",
@@ -1488,6 +1519,20 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
             });
       return { key: app.key, title: app.title, icon: app.icon, iconSrc, onClick };
     }),
+    // 短剧工厂 — vendored shortdrama pipeline (separate Python backend, opened
+    // in the built-in browser tab). Title doubles as the boot affordance: the
+    // Launcher grid has no spinner slot, so the label carries the state.
+    {
+      key: "shortdrama",
+      title:
+        sdBoot === "booting" ? "短剧启动中…"
+        : sdBoot === "error" ? "短剧启动失败"
+        : "短剧工厂",
+      icon: "clapperboard",
+      onClick: () => {
+        void openShortdrama().catch(() => {});
+      },
+    },
     // Excalidraw online whiteboard — opens as a NEW in-app tab with the
     // built-in browser (Electron <webview>), NOT the system browser. The
     // browser-type tab renders a fullscreen BrowserPanel pinned to the URL.
@@ -1525,7 +1570,7 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
         });
       },
     },
-  ], [openApp, openAppAsNewTab, createTab, selectedAssistantId]);
+  ], [openApp, openAppAsNewTab, createTab, selectedAssistantId, openShortdrama, sdBoot]);
 
   // ── Detach: owns the IPC + clears in-window workflow state ──
   // Lives in App (not ChatShell) because setSelectedWorkflowId /

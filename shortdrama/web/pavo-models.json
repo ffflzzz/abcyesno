@@ -1,0 +1,255 @@
+[
+  {
+    "code": "agnes-image",
+    "alias": "Agnes Image 2.5 Flash",
+    "type": "image",
+    "mode": "generate_image",
+    "online": true,
+    "credits": 0,
+    "res": [
+      "sd",
+      "hd",
+      "uhd"
+    ],
+    "dur": null
+  },
+  {
+    "code": "agnes-video-new",
+    "alias": "Agnes Video 2.5",
+    "type": "video",
+    "mode": "omni_to_video",
+    "online": true,
+    "credits": 2,
+    "res": [
+      "hd",
+      "fhd",
+      "qhd"
+    ],
+    "dur": [
+      4,
+      12
+    ]
+  },
+  {
+    "code": "gpt-image-2",
+    "alias": "全能图片G2",
+    "type": "image",
+    "mode": "generate_image",
+    "online": true,
+    "credits": 7,
+    "res": [
+      "sd",
+      "hd",
+      "uhd"
+    ],
+    "dur": null
+  },
+  {
+    "code": "gpt-image-2-5-flare",
+    "alias": "全能图片G2.5 Flare",
+    "type": "image",
+    "mode": "generate_image",
+    "online": true,
+    "credits": 5,
+    "res": [
+      "sd",
+      "hd",
+      "uhd"
+    ],
+    "dur": null
+  },
+  {
+    "code": "gpt-image-2-5-sunburst",
+    "alias": "全能图片G2.5 Sunburst",
+    "type": "image",
+    "mode": "generate_image",
+    "online": true,
+    "credits": 5,
+    "res": [
+      "sd",
+      "hd",
+      "uhd"
+    ],
+    "dur": null
+  },
+  {
+    "code": "happyhorse-1-1",
+    "alias": "HappyHorse 1.1",
+    "type": "video",
+    "mode": "omni_to_video",
+    "online": true,
+    "credits": 7,
+    "res": [
+      "hd",
+      "uhd"
+    ],
+    "dur": [
+      3,
+      15
+    ]
+  },
+  {
+    "code": "minimax-music-3-0",
+    "alias": "MiniMax Music 3.0",
+    "type": "audio",
+    "mode": "short_drama",
+    "online": true,
+    "credits": null,
+    "res": [],
+    "dur": null
+  },
+  {
+    "code": "nano2",
+    "alias": "NB 2",
+    "type": "image",
+    "mode": "generate_image",
+    "online": true,
+    "credits": 9,
+    "res": [
+      "sd",
+      "hd",
+      "uhd"
+    ],
+    "dur": null
+  },
+  {
+    "code": "qwen-image-3-pro",
+    "alias": "Qwen Image 3 Pro",
+    "type": "image",
+    "mode": "generate_image",
+    "online": true,
+    "credits": 4,
+    "res": [
+      "sd",
+      "hd"
+    ],
+    "dur": null
+  },
+  {
+    "code": "seedance-2-0",
+    "alias": "Seedance 2.0",
+    "type": "video",
+    "mode": "omni_to_video",
+    "online": true,
+    "credits": 9,
+    "res": [
+      "sd",
+      "hd",
+      "fhd",
+      "uhd"
+    ],
+    "dur": [
+      4,
+      15
+    ]
+  },
+  {
+    "code": "seedance-2-0-mini",
+    "alias": "Seedance 2.0 Mini",
+    "type": "video",
+    "mode": "omni_to_video",
+    "online": true,
+    "credits": 2,
+    "res": [
+      "sd",
+      "hd"
+    ],
+    "dur": [
+      4,
+      15
+    ]
+  },
+  {
+    "code": "seedance-2-5",
+    "alias": "Seedance 2.5",
+    "type": "video",
+    "mode": "omni_to_video",
+    "online": true,
+    "credits": 14,
+    "res": [
+      "sd",
+      "hd",
+      "fhd"
+    ],
+    "dur": [
+      4,
+      30
+    ]
+  },
+  {
+    "code": "seedream5-0",
+    "alias": "Seedream 5.0 Lite",
+    "type": "image",
+    "mode": "generate_image",
+    "online": true,
+    "credits": 5,
+    "res": [
+      "hd",
+      "uhd"
+    ],
+    "dur": null
+  },
+  {
+    "code": "seedream5-0-pro",
+    "alias": "Seedream 5.0 Pro",
+    "type": "image",
+    "mode": "generate_image",
+    "online": true,
+    "credits": 6,
+    "res": [
+      "sd",
+      "hd"
+    ],
+    "dur": null
+  },
+  {
+    "code": "wan-2-7",
+    "alias": "Wan 2.7",
+    "type": "video",
+    "mode": "omni_to_video",
+    "online": true,
+    "credits": 12,
+    "res": [
+      "hd",
+      "uhd"
+    ],
+    "dur": [
+      2,
+      15
+    ]
+  },
+  {
+    "code": "wan-3-0",
+    "alias": "Wan 3.0",
+    "type": "video",
+    "mode": "omni_to_video",
+    "online": true,
+    "credits": 5,
+    "res": [
+      "sd",
+      "hd",
+      "fhd"
+    ],
+    "dur": [
+      2,
+      30
+    ]
+  },
+  {
+    "code": "wan-3-0-prime",
+    "alias": "Wan 3.0 Prime",
+    "type": "video",
+    "mode": "omni_to_video",
+    "online": true,
+    "credits": 7,
+    "res": [
+      "sd",
+      "hd",
+      "fhd"
+    ],
+    "dur": [
+      2,
+      30
+    ]
+  }
+]

@@ -6,6 +6,7 @@ const net = require('net');
 const http = require('http');
 const { HermesRunner } = require('./backend/hermes-runner');
 const { PaperRewriterDashboardRunner } = require('./backend/paper-rewriter-dashboard-runner');
+const { ShortdramaRunner } = require('./backend/shortdrama-runner');
 const { createWechatBridgeRunner } = require('./backend/wechat-bridge-runner');
 const { GatewayClient } = require('./backend/gateway-client');
 const { createAgUIServer } = require('./backend/agui-server');
@@ -83,6 +84,7 @@ const storage = new Storage(userDataDir);
 let mainWindow = null;
 let hermesRunner = null;
 let paperDashboardRunner = null;
+let shortdramaRunner = null;
 let wechatBridgeRunner = null;
 // Latest wechat bridge status snapshot (masked payload from the runner's
 // onStatus callback). agui-server reads this synchronously when building the
@@ -915,6 +917,7 @@ app.on('window-all-closed', () => {
   }
   if (hermesRunner) hermesRunner.stop();
   if (paperDashboardRunner) paperDashboardRunner.stop();
+  if (shortdramaRunner) shortdramaRunner.stop();
   if (wechatBridgeRunner) wechatBridgeRunner.stop();
   stopBrowserDriver();
   if (process.platform !== 'darwin') {
@@ -933,6 +936,7 @@ app.on('before-quit', () => {
   }
   if (hermesRunner) hermesRunner.stop();
   if (paperDashboardRunner) paperDashboardRunner.stop();
+  if (shortdramaRunner) shortdramaRunner.stop();
   if (wechatBridgeRunner) wechatBridgeRunner.stop();
   stopBrowserDriver();
   globalShortcut.unregisterAll();
@@ -1006,6 +1010,23 @@ ipcMain.handle('get-agui-port', () => {
   // Hermes is still starting — causing the first message to hit
   // "Hermes gateway not connected".
   return gatewayReady ? aguiPort : 0;
+});
+
+// 短剧工厂 (vendored shortdrama): lazily boot its FastAPI shim and hand the URL
+// back to the launcher. Deliberately NOT started at app boot the way the
+// paper_rewriter dashboard is — the shim costs a Python process plus two
+// listeners (it manages its own `langgraph dev` child), so it only exists once
+// the launcher icon is actually clicked. Returns {ok,url} rather than throwing
+// so the renderer can show the reason instead of a dead tab.
+ipcMain.handle('ensure-shortdrama', async () => {
+  try {
+    if (!shortdramaRunner) shortdramaRunner = new ShortdramaRunner({ app });
+    const url = await shortdramaRunner.start();
+    return { ok: true, url };
+  } catch (err) {
+    log('shortdrama', `ensure failed: ${err.message}`);
+    return { ok: false, error: String(err.message || err) };
+  }
 });
 
 // Studio workbench: proxy Agnes calls through IPC (avoids renderer fetch/CSP issues)

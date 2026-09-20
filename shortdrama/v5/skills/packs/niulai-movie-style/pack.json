@@ -1,0 +1,50 @@
+{
+  "name": "niulai-movie-style",
+  "display-name-zh": "牛来电影风格",
+  "version": "1.0.0-adapted",
+  "source": "Ported from Kido G community pack 'niulai-movie-style' v1.0.0 (MiniMax-hub export; model-neutral adaptation)",
+  "trigger-words": [
+    "牛来电影风格",
+    "牛来低模转译",
+    "牛来运镜",
+    "主角运动",
+    "反向出圈画质",
+    "低画质重制",
+    "粗糙人物低模",
+    "早期三维游戏截图",
+    "失败低模"
+  ],
+  "default-video-model": "minimax-h3",
+  "video-model-note": "minimax-h3 adapter 尚未接入；当前回退 Agnes（skill 规范允许：能力检查后使用可用模型）",
+  "audio-modes": [
+    "silent",
+    "dialogue-led",
+    "narration-led"
+  ],
+  "default-audio-mode": "silent",
+  "shot-duration": "4-12s",
+  "aspect-ratio": "source_ratio（默认 9:16）",
+  "script-craft": [
+    "short-drama-opening",
+    "short-drama-hooks",
+    "short-drama-satisfaction"
+  ],
+  "script-craft-note": "本包是**商业微短剧**（反质量低模 + 搞笑向）→ 启用短剧叙事判据（开场法则 / 钩子 / 爽点）。★ 这三份是**商业硬判据**（含「每集必须有钩子」「密度递增」「反派要惨烈翻车」）——**做微电影 / 音乐剧 / 商业短片等追求质感的内容时不要复用**，应另行派生（用户 2026-09-16：「不要污染我的生产线」）。技法文件在 `skills/packs/craft/short-drama-*/SKILL.md`，各自的 `inject-to` 声明注入给哪些角色。",
+  "still-refs": false,
+  "still-refs-note": "本包核心是「真诚的技术不足」（反质量审美）。实测：图像模型会连参考图的渲染质量一起照抄，牛来化四视图虽低模但精修过（干净白底/均匀光照）→ 绑参考图必被拉回「精致低模」（本包判定为失败）。故静帧不绑参考图，审美由 style-block.md 逐镜锁定，身份一致性由分镜文字描述保证（块状黑发/矩形手指/黑色圆领T恤）。",
+  "still-tail": "flat",
+  "still-tail-note": "静帧尾缀档位（见 media/prompt.py 的 STILL_TAIL_PRESETS）：本包审美本来就是「平涂色块 / 低分辨率重复贴图」，故逐镜注入该正向描述（既锁住风格，又让画面无处挂可读文字）。写实/3D 包必须用 \"material\" —— 否则尾缀会与风格块「真实材质」直接对打。",
+  "style-is-criterion": true,
+  "style-is-criterion-note": "本包**核心审美就是**「粗糙低模 / 廉价渲染，精致即失败」——风格本身就是硬判据，故让静帧 QC 启用风格轴（用上方 `visual-style` 作为期望摘要）。实测依据：village-tractor LN24 画成**写实照片级** + 三个完全陌生的演员，因 QC 明文「风格一律不判」而**全部放行**、直接进成片。★ 写实/3D 包**不要**开这个开关（那会把正常的写实画面判成硬伤）。",
+  "roles": [
+    "worldbuilder",
+    "plotdesigner",
+    "scriptwriter",
+    "dialogue",
+    "director",
+    "scenedesigner",
+    "assetdesigner",
+    "reviewer"
+  ],
+  "visual-style": "primitive folk CGI / bootleg CGI（真诚的技术不足）：极低面数、失真比例、僵硬绑定、局部穿模（1-3 处）、粗糙脸部、低分辨率重复贴图、重度资产复用、朴素单光源、廉价渲染。结果必须可读且与源图有大关系；精致低模艺术/顺滑动画 = 失败。禁止像素化、VHS 滤镜、恐怖变形。"
+}

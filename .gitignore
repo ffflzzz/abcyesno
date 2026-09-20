@@ -65,3 +65,26 @@ selfdiag-report.md
 
 # bundled ffmpeg binary (large; deployed via copy, not versioned)
 bin/
+
+# --- shortdrama 模块（源码入库，运行时产物/依赖不入库）---
+# 依赖与虚拟环境：node_modules/ 与 __pycache__/ 已在上面全局忽略，
+# shortdrama/.venv 由 `npm run shortdrama:venv` 在本机重建（229MB）。
+shortdrama/.venv/
+# 每个项目的成片、静帧、中间产物（体积大且与具体项目绑定）
+shortdrama/projects/
+# langgraph 运行时数据与备份
+shortdrama/.langgraph_api/
+shortdrama/.langgraph_api.bak-*/
+# 临时工作区
+shortdrama/.tmp/
+# 凭据（与 settings.env 分离，settings.env 只放非密钥项，需入库）
+shortdrama/.env
+shortdrama/.env.*
+!shortdrama/.env.example
+
+# shortdrama 的 SPA 构建产物**必须入库**：shortdrama-runner.js 以
+# frontend/dist 作 --web-root，前端源码在独立 checkout 里构建后拷回。
+# 同 paper_rewriter dashboard 的处理（见上方 dist/ 段落）。裸 `dist/` 规则
+# 会连它一起吞掉，导致打包后短剧页 404。
+!shortdrama/frontend/dist/
+!shortdrama/frontend/dist/**

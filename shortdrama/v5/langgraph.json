@@ -1,0 +1,17 @@
+{
+  "dependencies": [
+    ".."
+  ],
+  "graphs": {
+    "supervisor": "v5.orchestrator:supervisor_graph",
+    "role_worldbuilder": "v5.orchestrator:role_worldbuilder",
+    "role_assetdesigner": "v5.orchestrator:role_assetdesigner",
+    "role_plotdesigner": "v5.orchestrator:role_plotdesigner",
+    "role_scriptwriter": "v5.orchestrator:role_scriptwriter",
+    "role_dialogue": "v5.orchestrator:role_dialogue",
+    "role_scenedesigner": "v5.orchestrator:role_scenedesigner",
+    "role_reviewer": "v5.orchestrator:role_reviewer",
+    "media_rerender": "v5.orchestrator:media_rerender_graph"
+  },
+  "env": "..\\.env"
+}

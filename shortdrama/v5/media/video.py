@@ -1,0 +1,463 @@
+# -*- coding: utf-8 -*-
+"""图生视频：每镜的 first_frame / last_frame 由镜间关系决定。
+
+旧架构：文字 + 参考图 → 视频（一次概率跳跃，构图不可控、镜间容易跳脱）
+新架构：静帧（已锁身份与构图）→ first_frame → 视频（只让它"动起来"）
+
+尾帧承接（2026-09-08 修）：
+  continuous/match 关系的首帧必须是**上一镜渲染成片的真实尾帧**，不是上一镜的
+  静帧——静帧是上一镜的首帧构图，直接拿它当下一镜首帧会让两镜画面逐帧重复
+  （实测 LN01/LN02 成片首帧完全相同）。因此连续镜必须**串行**：提交→等完成→
+  抽尾帧→下一镜首帧。keyframe 模式接受 base64 data URI，无需公网托管。
+"""
+from __future__ import annotations
+
+import base64
+import io
+import subprocess
+import time
+from pathlib import Path
+
+from .. import config
+from . import jobs as jobs_mod
+from . import keypool
+from . import prompt as prompt_mod
+from . import providers
+from . import video_plan
+
+
+# ─── 尾帧抽取（continuous 承接的唯一正确来源）─────────────────────────────────
+
+def extract_last_frame(clip: Path, max_side: int = 512) -> str | None:
+    """从**已渲染成片**抽真实尾帧，返回 JPEG data URI（keyframe 可直接吃）。
+
+    失败返回 None（调用方退化为本镜静帧，画面会重复但不阻断生产）。
+    """
+    if not clip.exists():
+        return None
+    frame = clip.with_name(clip.stem + ".last.jpg")
+    try:
+        r = subprocess.run(
+            ["ffmpeg", "-y", "-v", "error", "-sseof", "-1", "-i", str(clip),
+             "-frames:v", "1", "-q:v", "2", str(frame)],
+            capture_output=True, timeout=120)
+    except Exception:  # noqa: BLE001
+        return None
+    if r.returncode != 0 or not frame.exists():
+        return None
+    try:
+        from PIL import Image
+        im = Image.open(frame).convert("RGB")
+        im.thumbnail((max_side, max_side))
+        buf = io.BytesIO()
+        im.save(buf, "JPEG", quality=85)
+        return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _wait_one(video_id: str, dest: Path, rounds: int = 60, interval: int = 10,
+              log=print) -> str:
+    """轮询单个任务直到完成并落盘。
+
+    返回本地路径（**失败/超窗都返回空串**）。空串的原因由调用方按
+    jobs 状态机区分：failed（供应商报错）或 expired（窗口内没完成）。
+    """
+    import httpx
+    for _ in range(rounds):
+        try:
+            r = providers.query_video(video_id)
+        except Exception:  # noqa: BLE001
+            time.sleep(interval)
+            continue
+        st = r.get("status")
+        if st == "completed" and r.get("url"):
+            # 下载**必须有重试与异常捕获**（2026-09-13 事故）：
+            # 这段原本是裸奔的 `dest.write_bytes(c.get(url).content)`，
+            # 一次 `httpx.ProxyError: 502 Bad Gateway`（CDN 抖动 / 代理抽风）
+            # 就直接抛到顶层 → **整条媒体链垮掉**，46 镜项目里已经跑完的
+            # 40 张静帧 + 7 个视频全废。
+            # 与上面 `query_video` 那一支保持同样的宽容度：下载失败就等下一轮，
+            # rounds 用尽才返回 ""（由上层状态机判 failed/expired）。
+            try:
+                with httpx.Client(timeout=120, trust_env=False) as c:  # CDN 直连
+                    resp = c.get(r["url"])
+                    resp.raise_for_status()
+                    dest.write_bytes(resp.content)
+                return str(dest)
+            except Exception as e:  # noqa: BLE001
+                log("[video] %s 下载失败（将重试）：%s" % (dest.name, str(e)[:80]))
+                time.sleep(interval)
+                continue
+        if st in ("failed", "error"):
+            log("[video] FAILED: %s" % str(r.get("error"))[:100])
+            return ""
+        time.sleep(interval)
+    return ""
+
+
+# ─── 串行链式（默认；语义正确）───────────────────────────────────────────────
+
+def _tail_if_needed(clip: Path, plan: "video_plan.VideoPlan") -> str | None:
+    """要不要抽尾帧 —— 由 `VideoPlan.needs_tail_extract` 决定（**唯一决策点**）。
+
+    2026-09-13：`config.VIDEO_MODE` 默认切到 `reference` 后，"上一镜尾帧承接"
+    这条数据流已经取消（reference 不允许 `first_frame`）—— 抽出来**没人消费**，
+    每遇到一个已完成的镜就白解码一遍视频。keyframe 回退档仍需要它，故按 plan 分流。
+    """
+    if not plan.needs_tail_extract:
+        return None
+    return extract_last_frame(clip)
+
+
+def submit_chain(project_root: Path, shots: list[dict], stills: dict, planned: list[dict],
+                 ep: int = 1, log=print, rounds: int = 60,
+                 only: list[str] | None = None) -> dict:
+    """提交 → 等完成 →（keyframe 模式下）抽尾帧给下一镜当首帧。
+
+    返回 {name: local_path}。**两种模式（见 `config.VIDEO_MODE`）**：
+      · `reference`（默认，2026-09-13 起）—— 每镜用自己的静帧当 `<Picture 1>`
+        参考图，各镜**完全独立**；"抽尾帧承接"不参与（reference 不允许
+        first_frame/last_frame）。函数名里的"chain"在此时只是历史遗留。
+      · `keyframe`（回退档）—— 连续镜靠上一镜真实尾帧承接，跳切镜用自己的静帧。
+
+    `only`（2026-09-13，单镜重渲）：**只提交这些镜**。非目标镜即便
+    `jobs.done()` 判 False 也**绝不提交**（那会白烧视频配额）；但盘上已有的
+    clip 仍会进 `done` 并**取出尾帧**，否则 keyframe 档下目标镜取不到
+    "上一镜真实尾帧"、调用方也会因缺镜而拒绝拼接。
+
+    进度以 `video_jobs.json` 的**显式状态**为准（见 media/jobs.py）：
+    只有 state=completed 且成片在盘才算完成；submitted/failed/expired 都会
+    在续跑时被重新推进，不再出现"有 video_id 就永远跳过"的隐式黑洞。
+    """
+    out_dir = project_root / "media" / ("ep" + str(ep))
+    clip_dir = out_dir / "clips"
+    clip_dir.mkdir(parents=True, exist_ok=True)
+    jobs = jobs_mod.load(out_dir)
+    _only = set(only) if only else None
+
+    done: dict[str, str] = {}
+    prev_tail: str | None = None
+    last_submit = 0.0
+
+    shots = prompt_mod.resolve_styles(shots)   # 「同上」→ 上一镜实际风格
+    # 「模式」的**唯一决策点**（见 media/video_plan.py）：用什么图 / 要不要抽尾帧 /
+    # 能不能平铺，都在一次 `VideoPlan.of()` 里算清。下面只读字段，不再自己 `if mode ==`。
+    vplan = video_plan.VideoPlan.of()
+    video_mode = vplan.mode
+    for s, p in zip(shots, planned):
+        name = s["name"]
+        dest = jobs_mod.local_clip(clip_dir, name)
+        if _only is not None and name not in _only:
+            # 单镜重渲：非目标镜**永不提交**（哪怕 job 状态不是 completed）。
+            # 盘上有 clip 就照样进 `done` 并抽尾帧 —— 前者供调用方拼完整成片，
+            # 后者供 keyframe 档下目标镜承接。
+            if dest.exists():
+                done[name] = str(dest)
+                prev_tail = _tail_if_needed(dest, vplan) or prev_tail
+            continue
+        if jobs_mod.done(jobs, name, clip_dir):
+            done[name] = str(dest)
+            prev_tail = _tail_if_needed(dest, vplan) or prev_tail
+            continue
+        plan = p.get("frame_plan", {})
+        own = (stills.get(name) or {}).get("url")
+        if not own:
+            log("[video] %s 无静帧，跳过" % name)
+            jobs_mod.mark(jobs, name, "failed", error="无静帧")
+            continue
+        # 「图怎么用」按模式分流（2026-09-13，见 config.VIDEO_MODE）：
+        #   · reference（默认）：静帧进 `images`，在提示词里作 `<Picture 1>` 参考图。
+        #     **没有首帧锁定**，因此不做承接——各镜完全独立（这顺带消灭了
+        #     「连续镜必须等上一镜渲完」的串行瓶颈）。
+        #   · keyframe（回退档）：连续/匹配镜 first=上一镜真实尾帧（承接动作）、
+        #     last=本镜静帧（收在本镜该有的构图）——静帧因此不会被浪费。
+        images: list[str] = []
+        first = last = None
+        use_tail = False
+        if video_mode == "reference":
+            images = [own]
+        else:
+            use_tail = bool(plan.get("use_prev_last")) and bool(prev_tail)
+            # 首尾帧模式（连续/匹配镜）
+            first = prev_tail if use_tail else own
+            last = own if use_tail else None
+
+        rec = jobs.setdefault(name, {"state": "pending", "attempts": 0})
+        # 续跑认领：已提交但未完成的任务先接着轮询，不重复提交（省配额）
+        if rec.get("state") == "submitted" and rec.get("video_id"):
+            log("[video] %s 续跑认领已提交任务（attempts=%d）"
+                % (name, rec.get("attempts") or 1))
+            local = _wait_one(rec["video_id"], dest, rounds=rounds, log=log)
+            if local:
+                jobs_mod.mark(jobs, name, "completed", local=str(dest))
+                jobs_mod.save(out_dir, jobs)
+                done[name] = local
+                prev_tail = _tail_if_needed(Path(local), vplan) or prev_tail
+                log("[video] %s done（认领）" % name)
+                continue
+            jobs_mod.mark(jobs, name, "expired", error="续跑轮询超窗")
+            jobs_mod.save(out_dir, jobs)
+
+        # 提交：**队列满(503) 是可恢复的**——退避重试同一镜，而不是直接判死。
+        # 实测（2026-09-10）：批量重拍时反复收到 503 video_queue_full，原实现
+        # 立即 mark failed → 该镜缺席成片。队列满只意味着"稍后再来"。
+        vprompt = prompt_mod.build_video_prompt(s, p, mode=video_mode)
+        r = None
+        stop_chain = False
+        for q_try in range(config.VIDEO_QUEUE_RETRIES + 1):
+            # 平铺闸门：供应商 1rpm 的现实约束（串行等待通常已超过间隔）
+            if last_submit:
+                gap = config.VIDEO_SUBMIT_MIN_INTERVAL_S - (time.time() - last_submit)
+                if gap > 0:
+                    time.sleep(gap)
+            try:
+                if video_mode == "reference":
+                    r = providers.submit_video(vprompt, mode="reference",
+                                               images=images,
+                                               seconds=s.get("seconds") or 8)
+                else:
+                    r = providers.submit_video(vprompt, mode="keyframe",
+                                               first_frame=first, last_frame=last,
+                                               seconds=s.get("seconds") or 8)
+                break
+            except providers.QueueFullError:
+                if q_try >= config.VIDEO_QUEUE_RETRIES:
+                    log("[video] %s 队列持续满（%d 次），本轮放弃、下轮再补"
+                        % (name, q_try + 1))
+                    break
+                wait = min(120, 20 * (q_try + 1))
+                log("[video] %s 队列满，%ds 后重试（%d/%d）"
+                    % (name, wait, q_try + 1, config.VIDEO_QUEUE_RETRIES))
+                time.sleep(wait)
+            except providers.RateLimitError:
+                log("[video] %s 429：闸门/下一轮再补" % name)
+                stop_chain = True
+                break
+            except Exception as e:  # noqa: BLE001
+                log("[video] %s FAILED: %s" % (name, str(e)[:120]))
+                jobs_mod.mark(jobs, name, "failed", error=str(e)[:200])
+                jobs_mod.save(out_dir, jobs)
+                break
+        if stop_chain:
+            break
+        if r is None:
+            continue
+        last_submit = time.time()
+        vid = r.get("video_id") or r.get("task_id")
+        # 记账里的 `first_frame` 字段语义随模式变（两模式都必须有"驱动图"）：
+        #   reference → 记静帧 URL（它进的是 images，不是 first_frame）
+        #   keyframe  → 记真正的首帧（可能是上一镜尾帧）
+        anchor = own if video_mode == "reference" else first
+        jobs_mod.submitted(
+            jobs, name, vid,
+            first_frame_kind=("reference_still" if video_mode == "reference"
+                              else ("prev_tail" if use_tail else "own_still")),
+            has_last_frame=bool(last),
+            first_frame=anchor[:120] + ("..." if len(anchor) > 120 else ""),
+            seconds=s.get("seconds") or 8)
+        jobs_mod.save(out_dir, jobs)
+        log("[video] %s submitted (%s, %s%s)"
+            % (name, plan.get("relation"), jobs[name]["first_frame_kind"],
+               ", last=own_still" if last else ""))
+
+        local = _wait_one(vid, dest, rounds=rounds, log=log)
+        if local:
+            jobs_mod.mark(jobs, name, "completed", local=str(dest), error="")
+            done[name] = local
+            prev_tail = _tail_if_needed(Path(local), vplan) or prev_tail
+            log("[video] %s done" % name)
+        else:
+            jobs_mod.mark(jobs, name, "expired", error="轮询超窗")
+            log("[video] %s 未在轮询窗口内完成" % name)
+        jobs_mod.save(out_dir, jobs)
+    log("[video] 任务状态：%s" % jobs_mod.summary(jobs))
+    return done
+
+
+# ─── 并铺式（降级；各镜用自己的静帧，速度快但连续镜会重复）───────────────────
+
+def submit_all(project_root: Path, shots: list[dict], stills: dict, planned: list[dict],
+               ep: int = 1, log=print, tails: dict | None = None,
+               only: list[str] | None = None) -> dict:
+    """一次性平铺提交全部镜头。返回 jobs（显式状态机）。
+
+    **tails（落幅帧图，可选）**：给了就支持连续镜承接 ——
+    连续/匹配镜的 first_frame 取**上一镜的预生成落幅图**，last_frame 取本镜静帧。
+    这样各镜之间没有依赖，可以整批同时排队。
+
+    不给 tails 时退化为"各镜都用自己的静帧"：快，但连续镜的画面会重复
+    （首帧等于自己的构图，接不上上一镜的落点）——这是历史行为，保留为兜底。
+    详细取舍见 `config.TAIL_PREGEN`。
+
+    **模式（2026-09-13）**：与 `submit_chain` 使用**同一个** `config.VIDEO_MODE`。
+    两条提交路径必须同构 —— 否则开了 `TAIL_PREGEN` 就会走到这条路，用 keyframe
+    渲出与主路径不同的产物（keyframe 继承静帧画幅、reference 按 `aspect_ratio`
+    输出 → 同一部片画幅漂移）。reference 下 `tails` 不再有消费方。
+
+    **`only`（2026-09-13，单镜重渲）**：只提交这些镜；非目标镜**绝不提交**
+    （白烧配额），但仍会推进 `prev_name`，使目标镜能取到"上一镜预生成落幅图"。
+
+    **提交配速（2026-09-16）**：闸门从"**全局** sleep(`VIDEO_SUBMIT_MIN_INTERVAL_S`)"
+    改为"**per-key 闸门 + key 轮转**"（`keypool.KeyPool`）—— 实测 1rpm 是 per-key，
+    故提交段可按 key 数摊薄。未开 `VIDEO_KEY_ROTATE` 时池里只有第一条 key，
+    行为与改造前等价。详见 `keypool.py` 文件头与 `config.VIDEO_KEY_ROTATE`。
+    """
+    out_dir = project_root / "media" / ("ep" + str(ep))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    clip_dir = out_dir / "clips"
+    clip_dir.mkdir(parents=True, exist_ok=True)
+    jobs = jobs_mod.load(out_dir)
+    tails = tails or {}
+    _only = set(only) if only else None
+    # 「模式」的**唯一决策点**（见 media/video_plan.py）：用什么图 / 要不要抽尾帧 /
+    # 能不能平铺，都在一次 `VideoPlan.of()` 里算清。下面只读字段，不再自己 `if mode ==`。
+    vplan = video_plan.VideoPlan.of()
+    video_mode = vplan.mode
+
+    prev_name = None
+    # ── 提交配速：**per-key 闸门 + key 轮转**（2026-09-16）──────────────────────
+    # 旧实现是全局 `sleep(VIDEO_SUBMIT_MIN_INTERVAL_S)`：40 镜 × 65s ≈ **43 分钟**
+    # 纯等待。实测（`scripts/probe_multikey.py`）证明 1rpm 是 **per-key** ——
+    # 同 key 60s 内第二次 429、**不同 key 间隔 2s 都通过** ⇒ 让每镜轮流用不同 key，
+    # 提交段即按 key 数摊薄。**不需要多线程**（提交调用本身只占 1–2 秒，瓶颈 100%
+    # 是闸门），因此 `video_jobs.json` 的单写入者假设**不必动**。
+    # `VIDEO_KEY_ROTATE=0`（默认）时池里只有第一条 key ⇒ 闸门与旧行为等价。
+    pool = keypool.KeyPool.of()
+    log("[video] 提交配速：%d 条 key × 间隔 %ss%s"
+        % (len(pool), pool.interval_s,
+           "（轮转：提交段约摊薄 %d 倍）" % len(pool) if len(pool) > 1 else ""))
+    for s, p in zip(shots, planned):
+        name = s["name"]
+        if _only is not None and name not in _only:
+            # 单镜重渲：非目标镜绝不提交（白烧配额）；仍推进 `prev_name`，
+            # 使目标镜能取到"上一镜预生成落幅图"（keyframe 档的承接依据）。
+            prev_name = name
+            continue
+        if jobs_mod.done(jobs, name, clip_dir):
+            prev_name = name
+            continue
+        rec = jobs.setdefault(name, {"state": "pending", "attempts": 0})
+        if rec.get("state") == "submitted" and rec.get("video_id"):
+            prev_name = name
+            continue          # 已提交，等 poll_all 轮询，不重复提交
+        plan = p.get("frame_plan", {})
+        own = (stills.get(name) or {}).get("url")
+        # mixed 下逐镜选模式（其余模式恒等返回全局值）——见 video_plan.mode_for
+        shot_mode = vplan.mode_for(plan.get("relation"))
+        # 连续/匹配镜：承上一镜的**落幅图**（预生成），收在本镜自己的静帧。
+        # 没有落幅图就退回 own-still（不能因此不渲）。
+        tail_url = (tails.get(prev_name) or {}).get("url") if prev_name else None
+        first, last, first_kind = own, None, "own_still"
+        if shot_mode == "reference":
+            # reference 不允许 first_frame（见 providers.submit_video）→ 各镜独立，
+            # 静帧进 images 当 <Picture 1>。连带 `tails`（落幅预生成）在这条路径上
+            # 也不再有消费方。
+            first_kind = "reference_still"
+        elif plan.get("use_prev_last") and tail_url:
+            first, last, first_kind = tail_url, own, "prev_tail_pregen"
+        if not first:
+            log("[video] %s 无首帧，跳过" % name)
+            jobs_mod.mark(jobs, name, "failed", error="无首帧")
+            prev_name = name
+            continue
+        # 提交重试（队列满是**瞬时**故障，与 submit_chain 保持同一策略）。
+        # 2026-09-10 实测缺口：并铺式路径只特判了 429，队列满走通用异常 →
+        # 立即 mark failed → 该镜缺席（LN09/LN10 就这样丢的）。
+        r = None
+        # **领 key = 过闸门**：阻塞到这条 key 的窗口放开，返回即已占用。
+        # 选的是"最久没用过"的那条 ⇒ 多条 key 自然轮转。
+        key_idx, key = pool.claim()
+        vp = prompt_mod.build_video_prompt(s, p, mode=shot_mode)
+        for q_try in range(config.VIDEO_QUEUE_RETRIES + 1):
+            try:
+                if shot_mode == "reference":
+                    r = providers.submit_video(vp, mode="reference", images=[first],
+                                               seconds=s.get("seconds") or 8, key=key)
+                else:
+                    r = providers.submit_video(vp, mode="keyframe",
+                                               first_frame=first, last_frame=last,
+                                               seconds=s.get("seconds") or 8, key=key)
+                break
+            except providers.QueueFullError:
+                if q_try >= config.VIDEO_QUEUE_RETRIES:
+                    log("[video] %s 队列持续满（%d 次），本轮放弃、下轮再补"
+                        % (name, config.VIDEO_QUEUE_RETRIES))
+                    break
+                wait = min(120, 20 * (q_try + 1))
+                log("[video] %s 队列满，%ds 后重试（%d/%d）"
+                    % (name, wait, q_try + 1, config.VIDEO_QUEUE_RETRIES))
+                time.sleep(wait)
+            except providers.RateLimitError:
+                # 429 是配额闸门：**跳过本镜、继续提交其余镜**。
+                # 旧实现的 `break` 会让 429 直接中断整批提交——后面所有镜
+                # 连提交机会都没有（LN11 之后的镜就被这样挡掉了）。
+                # 2026-09-16：本镜撞的这个 key 先**拉黑一轮**，下一镜自动换 key ——
+                # 否则轮转会把 429 甩给别人、又被甩回来（三镜卡死在同一窗口里）。
+                pool.note_rate_limited(key_idx)
+                log("[video] %s 429（%s 拉黑一轮）：跳过本镜，其余镜继续提交"
+                    % (name, pool.label(key_idx)))
+                r = None
+                break
+            except Exception as e:  # noqa: BLE001
+                log("[video] %s FAILED: %s" % (name, str(e)[:100]))
+                jobs_mod.mark(jobs, name, "failed", error=str(e)[:200])
+                jobs_mod.save(out_dir, jobs)
+                r = None
+                break
+        if r is None:
+            prev_name = name
+            continue
+        jobs_mod.submitted(jobs, name, r.get("video_id") or r.get("task_id"),
+                           first_frame_kind=first_kind, first_frame=first[:120],
+                           has_last_frame=bool(last),
+                           seconds=s.get("seconds") or 8)
+        jobs_mod.save(out_dir, jobs)
+        log("[video] %s submitted (%s, first=%s%s, %s)"
+            % (name, plan.get("relation"), first_kind,
+               ", last=own_still" if last else "", pool.label(key_idx)))
+        prev_name = name
+    if len(pool) > 1:
+        log("[video] key 用量：%s" % pool.stats())
+    return jobs
+
+
+def poll_all(project_root: Path, jobs: dict, ep: int = 1, rounds: int = 40, log=print) -> dict:
+    """轮询 + 落盘（并铺式提交的收尾）。返回 {name: local_path}。"""
+    out_dir = project_root / "media" / ("ep" + str(ep))
+    clip_dir = out_dir / "clips"
+    clip_dir.mkdir(parents=True, exist_ok=True)
+    jobs = jobs_mod.migrate(jobs or jobs_mod.load(out_dir))
+    done: dict[str, str] = {}
+    for name in jobs:
+        if jobs_mod.done(jobs, name, clip_dir):
+            done[name] = str(jobs_mod.local_clip(clip_dir, name))
+    for _ in range(rounds):
+        pending = [n for n in jobs
+                   if jobs[n].get("state") == "submitted" and n not in done]
+        if not pending:
+            break
+        for name in pending:
+            try:
+                r = providers.query_video(jobs[name]["video_id"])
+            except Exception:  # noqa: BLE001
+                continue
+            if r.get("status") == "completed" and r.get("url"):
+                import httpx
+                dest = jobs_mod.local_clip(clip_dir, name)
+                with httpx.Client(timeout=120, trust_env=False) as c:  # CDN 直连
+                    dest.write_bytes(c.get(r["url"]).content)
+                jobs_mod.mark(jobs, name, "completed", local=str(dest), error="")
+                done[name] = str(dest)
+                log("[video] %s done" % name)
+            elif r.get("status") in ("failed", "error"):
+                log("[video] %s FAILED: %s" % (name, str(r.get("error"))[:80]))
+                jobs_mod.mark(jobs, name, "failed", error=str(r.get("error"))[:200])
+        jobs_mod.save(out_dir, jobs)
+        time.sleep(30)
+    for name in jobs:
+        if name not in done and jobs[name].get("state") == "submitted":
+            jobs_mod.mark(jobs, name, "expired", error="轮询超窗")
+    jobs_mod.save(out_dir, jobs)
+    log("[video] 任务状态：%s" % jobs_mod.summary(jobs))
+    return done

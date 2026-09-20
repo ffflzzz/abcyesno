@@ -1,0 +1,996 @@
+[
+  {
+    "method": "DELETE",
+    "path": "/api/v1/pixa/short-drama/art/art-versions/",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/pixa/short-drama/art/art-versions/{e}",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/pixa/short-drama/episodes/",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/pixa/short-drama/episodes/{e}",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/pixa/short-drama/projects/",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/pixa/short-drama/projects/{e}",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/pixa/short-drama/projects/{e}/assets/character-states/{t}",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/pixa/short-drama/projects/{e}/assets/characters/{t}",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/pixa/short-drama/projects/{e}/assets/prop-states/{t}",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/pixa/short-drama/projects/{e}/assets/props/{t}",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/pixa/short-drama/projects/{e}/assets/scene-states/{t}",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/pixa/short-drama/projects/{e}/assets/scenes/{t}",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/pixa/short-drama/segments/",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/pixa/short-drama/segments/{e}",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/pixa/short-drama/shots/",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/pixa/short-drama/shots/{e}",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/pixa/short-drama/voices/",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/pixa/short-drama/voices/{e}",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/pixa/short-drama/voices/{e}/favorite",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/user/account",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/aigc/model-capability-spec",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/im/user-sig",
+    "seen_in": [
+      "c_25.js"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/pixa/mode_support_models",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/pixa/models",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/pixa/promo",
+    "seen_in": [
+      "c_25.js"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/pixa/short-drama/episodes/",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/pixa/short-drama/episodes/{e}",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/pixa/short-drama/episodes/{e}/storyboard/detail",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/pixa/short-drama/projects/",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/pixa/short-drama/projects/{e}/asset-refs",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/pixa/short-drama/projects/{e}/assets",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/pixa/short-drama/projects/{e}/episodes/storyboard",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/pixa/short-drama/projects/{e}/progress?",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/pixa/short-drama/segments/",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/pixa/short-drama/segments/{e}/media?role={t}",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/pixa/short-drama/segments/{e}/reference-images",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/pixa/short-drama/styles",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/pixa/short-drama/voices/generate/credits",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/pixa/support_modes",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/pixa/user-group-qr",
+    "seen_in": [
+      "c_25.js"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/ugc/categories",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/ugc/list_by_category",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/ugc/list_by_ids",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/user/auth_methods",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/user/influencer-invite/eligibility",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v2/subscription/orders/",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v2/subscription/orders/{e}",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v2/user/profile",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v3/subscription/credits-balance",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "GET?",
+    "path": "/api/v1/agnes/chat/stream/edit-resend",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "GET?",
+    "path": "/api/v1/pixa/general-library",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "GET?",
+    "path": "/api/v1/visuals",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "GET?",
+    "path": "/api/v1/visuals/batch_delete",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "GET?",
+    "path": "/api/v1/visuals/remove_watermark",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/v1/pixa/short-drama/episodes/",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/v1/pixa/short-drama/episodes/{e}",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/v1/pixa/short-drama/projects/",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/v1/pixa/short-drama/projects/{e}",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/v1/pixa/short-drama/projects/{e}/assets/characters/{t}",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/v1/pixa/short-drama/projects/{e}/assets/props/{t}",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/v1/pixa/short-drama/projects/{e}/assets/scenes/{t}",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/v1/pixa/short-drama/projects/{e}/auto-sync-assets",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/v1/pixa/short-drama/projects/{e}/outline",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/v1/pixa/short-drama/shots",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/aigc/credits/calculate",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/aigc/credits/estimate",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/chat/conversation",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/chat/stream/cancel",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/file/inspect",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/file/presigned-url",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/pixa/canvas",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/pixa/short-drama/art/art-versions",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/pixa/short-drama/art/batch-generate-image",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/pixa/short-drama/art/cancel-generate-image",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/pixa/short-drama/art/characters/generate-cover",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/pixa/short-drama/art/characters/generate-fourview",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/pixa/short-drama/art/expand-description",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/pixa/short-drama/art/props/generate-image",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/pixa/short-drama/art/scenes/generate-image",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/pixa/short-drama/episodes/",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/pixa/short-drama/episodes/batch/storyboard/generate",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/pixa/short-drama/episodes/{e.episode_id}/segments/batch/keyframe/generate",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/pixa/short-drama/episodes/{e.episode_id}/segments/batch/video/generate",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/pixa/short-drama/episodes/{e}/compose",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/pixa/short-drama/episodes/{e}/generate",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/pixa/short-drama/episodes/{e}/segments",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/pixa/short-drama/episodes/{e}/storyboard/generate",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/pixa/short-drama/episodes/{e}/subtitle",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/pixa/short-drama/export",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/pixa/short-drama/projects/",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/pixa/short-drama/projects/ai-generate",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/pixa/short-drama/projects/batch-delete",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/pixa/short-drama/projects/paste",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/pixa/short-drama/projects/upload",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/pixa/short-drama/projects/{e.project_id}/assets/finalize",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/pixa/short-drama/projects/{e.project_id}/assets/import-from-master",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/pixa/short-drama/projects/{e}/asset-extract",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/pixa/short-drama/projects/{e}/assets/characters/{t}/states",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/pixa/short-drama/projects/{e}/assets/props/{t}/states",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/pixa/short-drama/projects/{e}/assets/scenes/{t}/states",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/pixa/short-drama/projects/{e}/episodes",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/pixa/short-drama/projects/{e}/episodes/retry",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/pixa/short-drama/projects/{e}/outline/confirm",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/pixa/short-drama/projects/{e}/outline/retry",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/pixa/short-drama/projects/{t}/assets/characters",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/pixa/short-drama/projects/{t}/assets/props",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/pixa/short-drama/projects/{t}/assets/scenes",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/pixa/short-drama/segments/",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/pixa/short-drama/segments/{e}/keyframe/generate",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/pixa/short-drama/segments/{e}/media/upload",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/pixa/short-drama/segments/{e}/shots",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/pixa/short-drama/segments/{e}/video/generate",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/pixa/short-drama/tasks/",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/pixa/short-drama/tasks/{e}/stop",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/pixa/short-drama/voices",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/pixa/short-drama/voices/",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/pixa/short-drama/voices/generate",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/pixa/short-drama/voices/{e}/favorite",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/security/parameter",
+    "seen_in": [
+      "c_25.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/subscription/credits-transactions",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/subscription/upgrade/preview",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/ugc/like",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/user/auth/phone-otp",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/user/avatar/presigned-url",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/user/bind_phone",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/user/bind_wechat",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/user/code/send",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/user/influencer-invite/bind",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/user/login",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/user/register",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/user/reset_password",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/visuals/batch_delete",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/visuals/download",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/visuals/remove_watermark",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v2/subscription/subscribe",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/v2/subscription/upgrade",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/pixa/short-drama/projects/",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/pixa/short-drama/projects/{e}/episodes",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/pixa/short-drama/projects/{e}/episodes/{t}/segments/reorder",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/pixa/short-drama/segments/",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/pixa/short-drama/segments/{e}/media/{t}/select",
+    "seen_in": [
+      "c_14.js"
+    ]
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/user/profile",
+    "seen_in": [
+      "c_14.js"
+    ]
+  }
+]

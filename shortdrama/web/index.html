@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-page-node-id="NyCBEhqEyzPp0TOM1w4QGV">
+<head data-page-node-id="IGeUiEsVhNcXS8J7Ba64vq">
+<meta charset="utf-8" data-page-node-id="hQgJH81ncgcP0AGwHlizNq">
+<meta name="viewport" content="width=device-width, initial-scale=1" data-page-node-id="UAxIHMzp06GLxyRHQiqyrx">
+<title>Pavo 短剧工作台 · 离线版</title>
+<meta name="description" content="对 app.pavo-ai.cn 短剧工作台的离线复刻：HTML/CSS/JS 逆向 + 本地数据层，零后端、零网络依赖。" data-page-node-id="hkfTriFRGAXVnfFDqGYopk">
+<link rel="stylesheet" href="assets/css/tokens.css" data-page-node-id="XE4EcMNolM4GHTF4bTC3K8">
+<link rel="stylesheet" href="assets/css/app.css" data-page-node-id="aNcgVjvmgNT4aAT3llX4TM">
+</head>
+<body data-page-node-id="US3Atl8zOt2sb2eMHkt7cV">
+
+<!-- 应用挂载点 -->
+<div id="app" data-page-node-id="J8xX2dzsEPQEweqe7uR0ww">
+  <div class="loading" data-page-node-id="P1rYKKHuAF1rO6uNb5tAC4">正在启动离线工作台…</div>
+</div>
+
+<!-- 数据层：种子数据（由线上真实接口响应转换而来） -->
+<script src="assets/js/data/seed.js"></script>
+<!-- v5 类型包快照（由 _tools/gen_packs.py 从 v5.webmap.styles() 生成，勿手改）。
+     离线模式下风格库显示它，而不是 seed 里那套线上站点的 20+ 中文风格名 ——
+     后者与 v5 实际能跑的包对不上，会造成「选了 A 实际跑 B」。 -->
+<script src="assets/js/data/packs.js"></script>
+
+<!-- 核心 -->
+<script src="assets/js/core/dom.js"></script>
+<!-- 剧本正文渲染器（零依赖，自带转义 ⇒ 位置不影响正确性） -->
+<script src="assets/js/core/scriptdoc.js"></script>
+<script src="assets/js/core/gen.js"></script>
+<script src="assets/js/core/store.js"></script>
+<script src="assets/js/core/api.js"></script>
+<!-- 模型厂商选择器（分镜页 / 资产页共用；必须在 store/api 之后） -->
+<script src="assets/js/core/vendor.js"></script>
+<script src="assets/js/core/quality.js"></script>
+<script src="assets/js/core/router.js"></script>
+
+<!-- UI -->
+<script src="assets/js/ui/icons.js"></script>
+<script src="assets/js/ui/overlay.js"></script>
+<!-- 步级「逐步人工确认」确认条（挂 body、不随视图重渲染消失；用 Overlay.prompt 收打回原因
+     ⇒ 必须在 overlay.js 之后、app.js 之前） -->
+<script src="assets/js/ui/hitl-bar.js"></script>
+<script src="assets/js/ui/gen-overlay.js"></script>
+<script src="assets/js/views/shell.js"></script>
+
+<!-- 视图 -->
+<script src="assets/js/views/playlet-list.js"></script>
+<script src="assets/js/views/wizard.js"></script>
+<script src="assets/js/views/storyboard.js"></script>
+<script src="assets/js/views/asset-drawer.js"></script>
+<script src="assets/js/views/placeholders.js"></script>
+
+<!-- 入口 -->
+<script src="assets/js/app.js"></script>
+
+</body>
+</html>

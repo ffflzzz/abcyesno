@@ -1,0 +1,20 @@
+# shortdrama 运行时依赖（Python 3.12+）
+# 现役系统 = v5/（supervisor 架构为唯一创作链；静态链已于 2026-09-12 废弃）。
+#
+# ⚠️ 本文件是**宽松下限**，给人读；**精确复现请用 requirements.lock.txt**
+#    （117 包精确版本）。重建 venv / 排障时以锁文件为准，否则可能装到更新版本、
+#    行为漂移。重建流程见 README §11。
+langgraph>=1.2                  # supervisor 图 + 7 角色图（v5/langgraph.json 注册）
+langgraph-prebuilt>=1.1
+langgraph-cli[inmem]>=0.4       # `langgraph dev`（Studio / dev server；须 --config v5/langgraph.json）
+deepagents>=0.7                 # 文件中间件 / 后端 + AsyncSubAgent（v5 orchestrator 用到
+                                # `deepagents.profiles.register_harness_profile`，0.5 系无此 API）
+langchain>=1.0                  # create_agent（角色图内部）
+langchain-openai>=1.6
+openai>=3.0
+httpx>=0.27                     # 生图 / 生视频 API 调用
+Pillow>=10                      # 静帧缩放、视频尾帧抽取
+PyYAML>=6                       # reviewer 结构化判定（YAML 块解析）
+# 说明：langsmith 由 langgraph 传递依赖（.env 里 LANGSMITH_TRACING=true 时用于 trace 上报）；
+#       python-dotenv 亦为传递依赖，v5/config.py 自带 .env 解析，不直接 import 它。
+# 外部依赖：ffmpeg / ffprobe 须在 PATH 中（拼接与抽帧）。

@@ -14,6 +14,8 @@
     "check:tdz": "node scripts/check-tdz.js",
     "check:undef": "node scripts/check-undef.js",
     "bridge:build": "node electron/backend/wechat_bridge/build.mjs",
+    "shortdrama:venv": "node scripts/setup-shortdrama-venv.mjs",
+    "shortdrama:web": "cd shortdrama/frontend && npm ci && npm run build",
     "test:bridge": "node scripts/test-wechat-bridge-unit.mjs",
     "test:browser-panel": "node scripts/test-browser-panel/build.mjs && node scripts/test-browser-panel/run.mjs"
   },
@@ -71,6 +73,13 @@
       "!electron/backend/wechat_bridge/.tmp-tests/**",
       "hermes-fork/**/*",
       "!hermes-fork/website/**",
+      "shortdrama/**/*",
+      "!shortdrama/projects/**",
+      "!shortdrama/**/__pycache__/**",
+      "!shortdrama/.tmp/**",
+      "!shortdrama/.langgraph_api/**",
+      "!shortdrama/.langgraph_api.bak-*/**",
+      "!shortdrama/.env",
       "package.json"
     ]
   },

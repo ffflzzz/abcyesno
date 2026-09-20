@@ -27,6 +27,10 @@ contextBridge.exposeInMainWorld('hermes', {
   clearBrowserWebview: () => ipcRenderer.send('browser-webview-destroyed'),
   getStatus: () => ipcRenderer.invoke('get-status'),
   getAguiPort: () => ipcRenderer.invoke('get-agui-port'),
+  // 短剧工厂: ask the main process to boot the vendored shortdrama shim if it
+  // isn't up yet. Resolves {ok,url|error}; the launcher awaits it before opening
+  // the browser tab, because the port is chosen at runtime (not hardcoded).
+  ensureShortdrama: () => ipcRenderer.invoke('ensure-shortdrama'),
   getApiKeyStatus: () => ipcRenderer.invoke('get-api-key-status'),
   validateApiKey: (key) => ipcRenderer.invoke('validate-api-key', key),
   setApiKey: (key) => ipcRenderer.invoke('set-api-key', key),

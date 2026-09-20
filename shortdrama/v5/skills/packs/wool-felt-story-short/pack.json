@@ -1,0 +1,49 @@
+{
+  "name": "wool-felt-story-short",
+  "display-name-zh": "羊毛毡故事短片",
+  "version": "1.0.0-adapted",
+  "source": "Ported from MiniMax Design 'wool-felt-story-short' v1.0.0 (MiniMax-hub export; model-neutral adaptation)",
+  "trigger-words": [
+    "羊毛毡短片",
+    "羊毛毡故事",
+    "毛毡动画",
+    "手工毛毡世界",
+    "羊毛毡旁白视频",
+    "wool felt animation",
+    "felt story short"
+  ],
+  "default-video-model": "minimax-h3",
+  "video-model-note": "minimax-h3 adapter 尚未接入；当前回退 Agnes（skill 规范允许：能力检查后使用可用模型）",
+  "audio-modes": [
+    "dialogue-led",
+    "silent"
+  ],
+  "default-audio-mode": "dialogue-led",
+  "audio-mode-note": "★ 源 skill 的主模式 `narration`（旁白）在本管线**无实现路径**：`grep 旁白|narration|tts` 在 v5/ 下零命中，台词只经 `Audio:` 契约字段由视频模型烘焙。故本包把源 skill 的 `dialogue` 模式映射为 `dialogue-led`、`silent` 映射为 `silent`，**不提供 narration-led**（写了也只会被当成角色台词念并驱动口型，且无任何确定性门校验）。",
+  "shot-duration": "4-12s",
+  "aspect-ratio": "9:16",
+  "still-refs": true,
+  "still-refs-note": "★ **2026-09-16 实测后由 false 改为 true**。原设 false 的依据是「`cast.py` 硬编码『写实短剧质感』→ 参考图会变成写实真人」——那只是**读代码得出的推断，已被实测推翻**：用真实代码路径（`cast._char_prompt` + `providers.gen_image`，与管线实际绑定的那张同一构造）逐个跑了三个角色（巴赫 / 抄谱员 / 风箱工），**三张全部是干净的羊毛毡**，且三人一眼可分、与各自角色卡逐项对得上（白卷筒假发黑袍加手杖 / 棕毡发灰蓝针织衫赤脚抱谱 / 半秃灰卷发土黄背心圆肚抹布）。⇒ 硬编码的风格词**权重压不过卡片里那段具体材质描述**。\n**为什么和牛来包相反（别照抄牛来的结论）**：差别在「精致」对两个包的含意。牛来是**反质量**审美（「真诚的技术不足」，精致 = 失败）→ 参考图风格虽对但太精修，会被照抄渲染质量 → **必须关，且不可修**。羊毛毡是**正质量**审美（做得很好的毛毡，精致 = 正确）→ 参考图正合适 → **应该开**。一句话：牛来是「参考图太好」的病，羊毛毡是「我以为参考图会错」的误判。\n**代价对照**：上一轮 false 时，felt-bach 17 镜中 14 镜双人 → **10 镜带 QC 残留**（角色被复制 / 第二个角色丢失）。开参考图正是为治这一条。",
+  "still-refs-limit": "本包此前（false 期间）拿不到「角色的脸跨镜锁死」，只能靠提示词层收口，对双人镜不足够。改 true 后由 `assets.bind` 逐镜绑参考图。\n⚠️ 注意：`still-refs` 是 **pack 级、无 env override**（`style.still_refs_enabled` 只读 `pack.json`）；改动后**必须强制重画静帧**才生效（`stills.ensure` 幂等，盘上有图就跳过）→ 用 `--rerender <全部镜号> --from still`。",
+  "worldbuilder-size-word-ban": "★ worldbuilder **会自己发明绝对尺寸词**：felt-bach 的巴赫卡被写成「一个手掌大的羊毛毡中年男性人形」，而 brief 里根本没有这句 —— 这直接违反本包第一条禁忌（不得微缩/摆件），并污染比例锚点。见 `worldbuilder/SKILL.md` 的显式禁令。",
+  "style-watch": true,
+  "style-watch-note": "★ 启用 QC 的**风格观察轴**（`style.style_watch_spec` / `qc.STYLE_WATCH_HINT`，2026-09-16 新增）：把下方 `visual-style` 作为「期望画面形态」注入 QC，但**明令只许报 P1**（静帧 QC 里 P1 不触发重画、clipqc 里只打印）。\n为什么本包不能用 `style-is-criterion` 那条 P0 风格轴：那条的注入文本**写死了「反质量类型包……粗糙廉价」的前提**，判据是「呈写实照片质感 → P0」——本包要的恰恰是「看起来像真拍的毛毡」，判据方向相反，开了会稳定误判。\n而没有这条观察轴时，**风格漂移完全无人管**：实测 felt-frog 出成写实真人照片、felt-bach 大特写的脸漂成「精细手办」，QC 全程一声没吭。",
+  "hard-keys-drop": [
+    "五官",
+    "面部特征"
+  ],
+  "hard-keys-note": "★ 从全局 `qc.HARD_KEYS` 里**移除**这两个词（`style.hard_keys`，2026-09-16 新增的 pack 级覆盖）。理由：本包契约**明确要求「五官清晰可读（眼、鼻、嘴完整可见）」**，而全局表把 `五官` / `面部特征` 当**子串**判硬伤 —— 两者自相矛盾。实测 felt-bach：青蛙按契约画了带白色巩膜的眼睛，被判「长出真人五官」不合格，白烧重画。\n注意只 drop 这两个：`真人脸` 仍然保留（本包下画出真人脸确实是失败）。且**闸门本身不能删** —— 它拦的是「模型标了 P0 但描述不指向真问题」的误报，只是词表要按包收窄。",
+  "still-tail": "material",
+  "still-tail-note": "静帧尾缀档位（见 media/prompt.py 的 STILL_TAIL_PRESETS）：本片所有表面都是**真实连续的羊毛纤维材质**，故走 material 档（正向重述「表面为真实材质」）。切勿改 \"flat\" —— 本包审美要求可见纤维，平涂色块档与之直接冲突。",
+  "roles": [
+    "worldbuilder",
+    "plotdesigner",
+    "scriptwriter",
+    "dialogue",
+    "director",
+    "scenedesigner",
+    "assetdesigner",
+    "reviewer"
+  ],
+  "visual-style": "现实世界比例的完整羊毛毡世界：所有表面为可见羊毛纤维的羊毛毡材质，柔和圆润、无锐利边缘，暖色低饱和。不是微缩模型、立体微缩景观、玩偶舞台、娃娃或玩具展示，也不是卡通/插画/CG 渲染。动作柔和流畅自然，不追求僵硬定格动画感。角色有清晰可读的五官。"
+}
