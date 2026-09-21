@@ -891,7 +891,8 @@ def _chars_from_worldbuilder(root: Path) -> list[dict]:
 
 
 def bind(root: Path, shots: list[dict], max_n: int = 5,
-         names_out: dict | None = None) -> dict[str, list[str]]:
+         names_out: dict | None = None,
+         types_out: dict | None = None) -> dict[str, list[str]]:
     """返回 {shot_name: [public_url, ...]}，供 stills.ensure 的 refs_by_shot 使用。
 
     **有人物图时参考图总数 ≤ 2**（2026-09-09 A/B 实测，同一分镜同一提示词）：
@@ -1000,4 +1001,10 @@ def bind(root: Path, shots: list[dict], max_n: int = 5,
             out[s["name"]] = urls
             if names_out is not None:
                 names_out[s["name"]] = names
+            if types_out is not None:
+                # ★ 2026-09-21：与 `names_out` 平行输出每张参考图的**资产类型**
+                #   （character/prop/location）。静帧提示词的逐张点名据此分流措辞——
+                #   旧实现把**道具**也声明成"人物设定表（头肩像三视图）"（画中人来
+                #   ep1 实测：残旧仕女图/白玉平安扣都被说成"角色"，模型困惑）。
+                types_out[s["name"]] = [str(h.get("type") or "prop") for h in picks]
     return out

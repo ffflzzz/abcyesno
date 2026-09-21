@@ -122,7 +122,7 @@ STILL_REF_RULE = (REF_USAGE_ZH + " 其中人物、服装与配件**一律以 <Pi
                   "文字只用于说明本镜的动作与画面内容。")
 
 
-def still_ref_rule(names: list | None = None) -> str:
+def still_ref_rule(names: list | None = None, types: list | None = None) -> str:
     """静帧的参考图使用规则。给了 `names` ⇒ **逐张点名角色**（官方多图合成结构）。
 
     为什么要点名（2026-09-19 实测，agnes-image-2.5-flash 官方文档）：
@@ -131,6 +131,13 @@ def still_ref_rule(names: list | None = None) -> str:
       只说"以第一张图为准"时，模型不知道那张图是谁、该保什么；
       实测同一提示词下「点名角色 + 2K 档」的出图，发际线/脸颊/眉形与源照片明显更接近。
     没给 names 时**返回历史常量**（行为一字不变）。
+
+    ★ 2026-09-21 类型分流：`types` 与 `names` 等长（来自 `assets.bind` 的
+      `types_out`）。**道具绝不能套用"人物设定表"措辞**——画中人来 ep1 实测：
+      残旧仕女图/白玉平安扣被声明成"角色的人设表（头肩像三视图）"，模型拿着
+      一幅仕女画被告知"这是一个人"，道具外观彻底漂移（同一幅画 LN01 白描 /
+      LN08 水墨山水）。道具措辞改为**定妆照**：形制/颜色/细节以图为准、
+      逐次出现保持同一外观。
     """
     if not names:
         return STILL_REF_RULE
@@ -139,15 +146,24 @@ def still_ref_rule(names: list | None = None) -> str:
         nm = str(nm or "").strip()
         if not nm:
             continue
-        roles.append("第 %d 张参考图=角色「%s」的人物设定表（同一人的头肩像与正/侧/背三视图）"
-                     "——以它锁定该角色的长相、发型、体型与服装形制，不得画成另一个人"
-                     % (i, nm))
+        typ = ""
+        if types is not None and i - 1 < len(types):
+            typ = str(types[i - 1] or "").strip().lower()
+        if typ == "prop":
+            roles.append("第 %d 张参考图=道具「%s」的定妆照——画面中该道具的形制、"
+                         "颜色与细节以这张图为准；它在本镜出现时保持同一外观，"
+                         "不得另画成别的物件" % (i, nm))
+        elif typ == "location":
+            roles.append("第 %d 张参考图=场景「%s」的环境参考——只取材质与陈设感觉"
+                         % (i, nm))
+        else:
+            roles.append("第 %d 张参考图=角色「%s」的人物设定表（同一人的头肩像与正/侧/背三视图）"
+                         "——以它锁定该角色的长相、发型、体型与服装形制，不得画成另一个人"
+                         % (i, nm))
     if not roles:
         return STILL_REF_RULE
     return (REF_USAGE_ZH + " 参考图分工：" + "；".join(roles) + "。"
-            "其余参考图是道具/场景参考，只提供材质与造型，不引入新人物。"
-            "画面内容按下面的文字描述组织：")
-# 静帧（生图）尾缀：图不需要 BGM 说法，只压风格一致性。
+            "画面内容按下面的文字描述组织：")# 静帧（生图）尾缀：图不需要 BGM 说法，只压风格一致性。
 # 注意：这里**不能提"文字/字幕/笔画"**——实测负面提法会诱发模型渲染文字。
 # 也**不能提任何物件名词**（板子/布条/纸张/屏幕/墙面）：它们会被模型当成
 # "画面里该有的东西"，于是自动补出招牌/贴纸并烧字。实测 LN29（夕阳全景）、

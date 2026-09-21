@@ -113,7 +113,7 @@ def tail_needed(planned: list[dict]) -> list[str]:
     return [n for n in need if n]
 
 
-def _with_ref_rule(prompt: str, refs, names=None) -> str:
+def _with_ref_rule(prompt: str, refs, names=None, types=None) -> str:
     """绑了参考图时，在提示词**最前面**声明"以这张图为准"；没绑就原样返回。
 
     ★ 2026-09-15 实测缺口（用户反馈「为什么样子都变了，不是和我给的照片完全一样的」）：
@@ -132,13 +132,14 @@ def _with_ref_rule(prompt: str, refs, names=None) -> str:
     """
     if not refs:
         return prompt
-    return prompt_mod.still_ref_rule(names) + prompt
+    return prompt_mod.still_ref_rule(names, types) + prompt
 
 
 def ensure_tails(project_root: Path, shots: list[dict], planned: list[dict],
                  ep: int = 1, refs_by_shot: dict[str, list[str]] | None = None,
                  log=print, retries: int = 2,
-                 ref_names_by_shot: dict[str, list[str]] | None = None) -> dict:
+                 ref_names_by_shot: dict[str, list[str]] | None = None,
+                 ref_types_by_shot: dict[str, list[str]] | None = None) -> dict:
     """为"将被下一镜承接"的镜预生成落幅帧图。幂等（按文件存在跳过）。
 
     返回 {镜名: {"path":..., "url":...}}。
@@ -162,7 +163,8 @@ def ensure_tails(project_root: Path, shots: list[dict], planned: list[dict],
         refs = (refs_by_shot or {}).get(name) or []
         prompt = _with_ref_rule(
             prompt_mod.build_tail_prompt(s, plan_by_name.get(name)), refs,
-            (ref_names_by_shot or {}).get(name))
+            (ref_names_by_shot or {}).get(name),
+            (ref_types_by_shot or {}).get(name))
         url = ""
         for attempt in range(retries + 1):
             try:
@@ -192,7 +194,8 @@ def ensure_tails(project_root: Path, shots: list[dict], planned: list[dict],
 def ensure(project_root: Path, shots: list[dict], refs_by_shot: dict[str, list[str]] | None = None,
            ep: int = 1, force: bool = False, log=print, retries: int = 2,
            extra: str = "", planned: list[dict] | None = None,
-           ref_names_by_shot: dict[str, list[str]] | None = None) -> dict:
+           ref_names_by_shot: dict[str, list[str]] | None = None,
+           ref_types_by_shot: dict[str, list[str]] | None = None) -> dict:
     """为每镜生成/复用静帧。返回 {name: {"path":..., "url":...}}。
 
     retries: 生图是概率性长任务（实测偶发 read timeout）——单次失败不能让
@@ -239,7 +242,8 @@ def ensure(project_root: Path, shots: list[dict], refs_by_shot: dict[str, list[s
         refs = (refs_by_shot or {}).get(name) or []
         base = _with_ref_rule(
             prompt_mod.build_still_prompt(s, plan_by_name.get(name)), refs,
-            (ref_names_by_shot or {}).get(name))
+            (ref_names_by_shot or {}).get(name),
+            (ref_types_by_shot or {}).get(name))
         prompt = base + (extra or "")
         url = ""
         for attempt in range(retries + 1):

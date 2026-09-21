@@ -710,9 +710,11 @@ def _run_impl(project_root: Path, ep: int = 1, log=print, max_regen: int = 2,
     #   **逐张点名角色**（官方多图合成结构要求点名角色才保身份）。放在分支外初始化，
     #   两条分支（开/关参考图）都能拿到，避免未定义。
     ref_names: dict = {}
+    ref_types: dict = {}   # 2026-09-21：每张参考图的资产类型（character/prop），供点名措辞分流
     if style.still_refs_enabled(project_root):
         try:
-            refs_by_shot = assets.bind(project_root, shots, names_out=ref_names)
+            refs_by_shot = assets.bind(project_root, shots, names_out=ref_names,
+                                       types_out=ref_types)
             log("[media] 参考图绑定 %d/%d 镜" % (len(refs_by_shot), len(shots)))
             # ★ **cast 之后的资产完整性校验**（2026-09-12 新增）。
             # 为什么必须在这里：资产契约门跑在 cast **之前**（那时注册表必然为空），
@@ -803,7 +805,8 @@ def _run_impl(project_root: Path, ep: int = 1, log=print, max_regen: int = 2,
     # 不额外烧配额，但会把"注册表里没有的镜"重新生成一遍 —— 重渲不该扩面。
     st = stills.ensure(project_root, scope, refs_by_shot=refs_by_shot, ep=ep,
                        force=from_still, planned=planned, log=log,
-                       ref_names_by_shot=ref_names)
+                       ref_names_by_shot=ref_names,
+                       ref_types_by_shot=ref_types)
     missing = [s["name"] for s in shots if not (st.get(s["name"]) or {}).get("url")]
     if missing:
         log("[media] 静帧缺失: %s" % ",".join(missing[:6]))
@@ -1083,7 +1086,8 @@ def _run_impl(project_root: Path, ep: int = 1, log=print, max_regen: int = 2,
             st = stills.ensure(project_root, [s], refs_by_shot=sub_refs, ep=ep,
                                force=True, extra=extra,
                                planned=[p for p in planned if p.get("name") == s["name"]],
-                               log=log, ref_names_by_shot=ref_names)
+                               log=log, ref_names_by_shot=ref_names,
+                               ref_types_by_shot=ref_types)
         # 记满这一轮的重画次数（跨进程持久化——上限依据，见上方 still_tally 注释）
         for b in bad:
             still_tally[b[0]] = still_tally.get(b[0], 0) + 1
@@ -1115,7 +1119,8 @@ def _run_impl(project_root: Path, ep: int = 1, log=print, max_regen: int = 2,
             log("[media] 落幅帧预生成：%d 镜将被下一镜承接 → 预生成落幅图" % len(need))
             tails = stills.ensure_tails(project_root, shots, planned, ep=ep,
                                        refs_by_shot=refs_by_shot, log=log,
-                                       ref_names_by_shot=ref_names)
+                                       ref_names_by_shot=ref_names,
+                                       ref_types_by_shot=ref_types)
             log("[media] 落幅帧就绪 %d/%d" % (len(tails), len(need)))
         else:
             log("[media] 落幅帧预生成已开，但本片无连续镜（全 cut）→ 无需生成")
