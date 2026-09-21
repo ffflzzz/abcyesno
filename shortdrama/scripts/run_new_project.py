@@ -108,6 +108,10 @@ def _env(project: str, *, qc_mode: str, ep: int = 1) -> dict:
         "SHORTDRAMA_V5_EPISODE": str(int(ep)),
         "SHORTDRAMA_OPEN_CHAIN": "1",
         "SHORTDRAMA_ALLOW_RESUME": "1",
+        # ★ 派发目标必须跟 dev 实际端口走（2026-09-21）：DEV_PORT 可被
+        #   SHORTDRAMA_DEV_PORT 覆盖（幽灵监听占 2024 时换端口），config 默认
+        #   2024 会在换端口后静默派发失败，故在这里显式对齐。
+        "SHORTDRAMA_V5_AGENT_URL": "http://127.0.0.1:%d" % DEV_PORT,
         "NO_PROXY": NOPROXY, "no_proxy": NOPROXY,
         "PYTHONIOENCODING": "utf-8",
     })
@@ -129,7 +133,7 @@ def wait_ok(timeout: float = 180.0) -> bool:
         s = socket.socket()
         s.settimeout(2)
         try:
-            s.connect(("127.0.0.1", 2024))
+            s.connect(("127.0.0.1", DEV_PORT))
             s.close()
             return True
         except Exception:  # noqa: BLE001
@@ -138,7 +142,7 @@ def wait_ok(timeout: float = 180.0) -> bool:
     return False
 
 
-DEV_PORT = 2024
+DEV_PORT = int(os.environ.get("SHORTDRAMA_DEV_PORT", "2024"))
 TASKKILL = r"C:/Windows/System32/taskkill.exe"
 NETSTAT = r"C:/Windows/System32/netstat.exe"
 
@@ -526,7 +530,7 @@ def main() -> int:
             % (DEV_PORT, "；".join(port_notes)))
     dev = subprocess.Popen(
         [LANGGRAPH, "dev", "--config", "v5/langgraph.json",
-         "--host", "127.0.0.1", "--port", "2024", "--no-browser"],
+         "--host", "127.0.0.1", "--port", str(DEV_PORT), "--no-browser"],
         cwd=str(ROOT), env=_env(project, qc_mode=qc_mode),
         stdout=(proj / "dev.log").open("w", encoding="utf-8"),
         stderr=subprocess.STDOUT)
