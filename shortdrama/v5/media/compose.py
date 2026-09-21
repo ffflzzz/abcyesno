@@ -132,6 +132,17 @@ def _compose(clips: list[Path], specs: list[dict], out: Path, clip_dir: Path) ->
             pass
 
 
+def _has_audio(p: Path) -> bool:
+    try:
+        r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a",
+                            "-show_entries", "stream=codec_name",
+                            "-of", "csv=p=0", str(p)],
+                           capture_output=True, timeout=30)
+        return bool(r.stdout.strip())
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _stage_one(src: Path, dst: Path, w: int, h: int, fps: float) -> None:
     s = _probe(src)
     dur = s["dur"]
@@ -155,10 +166,16 @@ def _stage_one(src: Path, dst: Path, w: int, h: int, fps: float) -> None:
     if trim_in:
         cmd += ["-ss", "%.3f" % trim_in, "-t", "%.3f" % keep]
     cmd += ["-i", str(src)]
-    # 统一补静音轨：保证所有 staged 片段都有音轨，acrossfade 链才成立
-    cmd += ["-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
-            "-map", "0:v:0", "-map", "1:a:0", "-shortest",
-            "-vf", ",".join(vf),
+    if _has_audio(src):
+        # ★ **保留原声**（2026-09-21 实测：Agnes keyframe 模式的视频自带声音，
+        #   13 镜里 10 镜峰值≈0dB）。旧实现无条件 map anullsrc 静音轨把原声
+        #   全顶掉 → 成片 -91dB「有轨无声」。仅当源片段**无**音轨时才补静音轨
+        #   （acrossfade 链硬要求每镜都有音轨）。
+        cmd += ["-map", "0:v:0", "-map", "0:a:0"]
+    else:
+        cmd += ["-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
+                "-map", "0:v:0", "-map", "1:a:0", "-shortest"]
+    cmd += ["-vf", ",".join(vf),
             "-c:v", "libx264", "-crf", "18", "-preset", "veryfast",
             "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
             str(dst)]
