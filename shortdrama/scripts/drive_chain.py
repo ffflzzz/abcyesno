@@ -346,6 +346,11 @@ async def main() -> int:
     resume_cmd = None          # 非 None → 本轮发 resume（步级 HITL），否则发新 input
     aborted = ""               # 非空 = **人工**结束（中止/打回失败/等超时）→ rc=4
     pending_n = 0              # 本次挂起的**待批动作数**（resume 要按它给决定，见 _pending_actions）
+    # ★ status 必须在循环外初始化（2026-09-21 实测）：产物全齐时第一轮就 break，
+    #   从未进过循环体 ⇒ 536 行 `if status in ("error","timeout")` 读到未初始化变量
+    #   → UnboundLocalError → 重跑**已完成的集**1 秒炸 rc=1（被误报"重跑必须加 --fresh"）。
+    #   空串语义 = "未跑任何 run"，error/timeout 判定自然不命中。
+    status = ""
     while time.time() - t0 < timeout:
         got = done_roles()
         if reached(got, until):
