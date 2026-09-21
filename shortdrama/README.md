@@ -295,6 +295,9 @@ projects/<项目名>/
 | `SHORTDRAMA_WEB_BASE` | （自动） | 媒体 URL 对外基础地址；不传用 `http://<host>:<port>` |
 | `SHORTDRAMA_WEB_MANUAL_STEPS` | 0 | `1` = webchain 全手动步进（每步等人确认） |
 | `SHORTDRAMA_WEB_ROOT` | （内置） | web 前端静态目录覆盖（server `--web-root` 的 env 默认值） |
+| `SHORTDRAMA_COMPOSE_FIT` | crop | 拼接规格统一方式：`crop` 等比放大居中裁切（竖屏推荐）/ `pad` 等比缩小补黑边 / `off` 不统一 |
+| `SHORTDRAMA_COMPOSE_TRIM` | 0.15 | 拼接时每镜首尾各剪秒数（掐头去尾）；`0` = 关。取小值防切 dialogue-led 台词 |
+| `SHORTDRAMA_COMPOSE_XFADE` | 0.3 | 相邻镜 xfade 叠化秒数（音频 acrossfade 同步交叉）；`0` = 关 |
 
 > **本表是环境变量的唯一完整清单**（2026-09-18 起；由 `scripts/check_docs.py` 强制对账：
 > 代码在用的 `SHORTDRAMA_*` 必须入表或入下方运维项，表内名字必须真实存在）。
