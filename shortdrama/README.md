@@ -171,7 +171,7 @@ python -m v5.series <项目名> --monitor --events 12     # 最多 12 次快照
 | `hard-keys` / `hard-keys-add` / `hard-keys-drop` | list[str] | **硬伤关键词表**的 pack 级覆盖（2026-09-16 新增）。全局表里的 `缺`/`五官`/`面部特征` 是**子串**，与「要求五官清晰可读」的包天然抵触。三者都没写 = 用全局 `qc.HARD_KEYS`。⚠️ **闸门本身不能删**（它拦的是「模型标了 P0 但描述不指向真问题」的误报），只能收窄词表 |
 | `name` / `version` / `source` / `display-name-zh` / `roles` / `trigger-words` / `audio-modes` / `default-audio-mode` / `default-video-model` / `shot-duration` / `aspect-ratio` | — | **元数据 / 前端展示**：只有 `display-name-zh` 被 `webmap` 读；其余**后端目前不消费**（`v5` 里 0 处读取）。⚠️ 改 `aspect-ratio` **不会**改画幅——画幅由 `SHORTDRAMA_ASPECT` 控制 |
 
-**`craft/` 不是类型包，是技法技能库**：`skills/packs/craft/<技法名>/SKILL.md` 提供可复用的具体手法（当前有 `pixar-lighting`：冷暖对比定场 / 表情路径逐秒推进 / 剪影优先 / 光比克制）。它**无 `pack.json`、不定义角色**，供 director 与 scenedesigner 的技能文档引用。注意：**当前代码尚未引用 `craft/`**，属预留扩展位。
+**`craft/` 不是类型包，是技法技能库**：`skills/packs/craft/<技法名>/SKILL.md` 提供可复用的具体手法。它**无 `pack.json`、不定义角色**。当前 **4 个**：`pixar-lighting` / `short-drama-hooks` / `short-drama-opening` / `short-drama-satisfaction`。**已接线**（2026-09-16 起，`v5/media/style.py` 的 `script_craft_of()`/`read_craft()` + `v5/roles.py` 注入）：brief.json 的 `script-craft` 列表（项目级，显式覆盖）> pack.json 的 `script-craft`（包级默认），**opt-in、未声明不注入**；每份技法 frontmatter 用 `inject-to: [角色, …]` 声明注入给谁（漏写=不注入任何角色并打告警）；技法名写错/文件缺失**响亮报错**，不静默。
 
 **角色 skill 回落**：某包缺某角色的 `SKILL.md` 时自动回落到 `shortdrama` 同名角色。例如 `niulai-movie-style` 只定义 5 个角色，其余 3 个走 shortdrama —— 这是设计内的。
 
@@ -281,8 +281,23 @@ projects/<项目名>/
 | `SHORTDRAMA_LEAN_PROMPT` | 0 | 视频提示词走**精简形态**（删反分屏前置 / reference 用途声明 / 类型包风格块；保留内容四段 + 台词 + 环境声 + 禁字幕）|
 | `SHORTDRAMA_ASSET_GATE` | 0 | 资产完整性缺失时**硬拦**（`return blocked`）。默认只强告警不拦——存量项目多有部分缺图，直接拦会把它们全卡住 |
 | `SHORTDRAMA_DIALOGUE_VERBATIM_STRICT` | 0 | 对白**逐字门**在 `_input_gates` 里阻断。默认只警告——存量项目的旧 `dialogue` 产物多为改写版 |
+| `SHORTDRAMA_CHAIN_TIMEOUT` | 9000 | `run_new_project.py` 传给创作链的整体超时秒数（`--timeout` 默认值） |
+| `SHORTDRAMA_DEV_PORT` | 2024 | `webchain.py` dev server 端口 |
+| `SHORTDRAMA_IMAGE_SIZE` | （空） | 生图尺寸覆盖；空 = 不传该参数，用供应商默认 |
+| `SHORTDRAMA_QC_WORKERS` | 3 | 静帧 QC / clipqc 并发 worker 数。**调高会撞供应商限速** |
+| `SHORTDRAMA_RECURSION_LIMIT` | 600 | `drive_chain.py` 全链递归上限 |
+| `SHORTDRAMA_ROLE_RECURSION_LIMIT` | 150 | supervisor 下各角色图的递归上限（长分镜项目可调大） |
+| `SHORTDRAMA_RUNTIME` | （空） | 运行时根目录覆盖（`v5/config.py` 的 `RUNTIME_ROOT`；空 = 项目根） |
+| `SHORTDRAMA_SOURCE_SHEET` | auto | 四宫格设定表：`auto` = 有源照片即走 / `0` 强制关（源照片直绑）/ `1` 强制开 |
+| `SHORTDRAMA_SUBAGENTS` | sync | supervisor 派发子代理模式；`async` 回退旧异步路径 |
+| `SHORTDRAMA_WEB_ALLOW_NULL_ORIGIN` | 0 | `1` = web server 放行 `Origin: null` 请求（**知道代价再开**） |
+| `SHORTDRAMA_WEB_ALLOW_ORIGIN` | （空） | 额外放行的 CORS Origin，逗号分隔 |
+| `SHORTDRAMA_WEB_BASE` | （自动） | 媒体 URL 对外基础地址；不传用 `http://<host>:<port>` |
+| `SHORTDRAMA_WEB_MANUAL_STEPS` | 0 | `1` = webchain 全手动步进（每步等人确认） |
+| `SHORTDRAMA_WEB_ROOT` | （内置） | web 前端静态目录覆盖（server `--web-root` 的 env 默认值） |
 
-> **本表是环境变量的唯一完整清单**（2026-09-18 起）。
+> **本表是环境变量的唯一完整清单**（2026-09-18 起；由 `scripts/check_docs.py` 强制对账：
+> 代码在用的 `SHORTDRAMA_*` 必须入表或入下方运维项，表内名字必须真实存在）。
 > 表外还有少量纯运维项（`SHORTDRAMA_PROJECTS` / `SHORTDRAMA_MEDIA_LOCK_TTL` / `SHORTDRAMA_VIDEO_PROVIDER`＝死配置 等），语义与理由见 `v5/config.py` 的注释。
 
 > ⚠️ 请勿把真实密钥提交进仓库；`.env` 已在 `.gitignore` 中。
@@ -291,6 +306,7 @@ projects/<项目名>/
 
 | 脚本 | 用途 |
 |---|---|
+| `check_docs.py` | **文档对账**（改结构后必跑，挂质量门）：数代码真实值（图数 / media 模块数 / craft 技法 / env 名单）对比 README+AGENTS 声明，漂移 exit 1；`--self-test` 验证检测器自身 |
 | `qc_sweep.py` | 全量静帧 QC 审查（只报告不生成，`--json` 出结构化结果） |
 | `reroll_list.py` | 按名单多轮重滚硬伤镜（`--names LN05,LN06` 或 `--from-qc <json>`） |
 | `gen_all_stills.py` | 全量强制重生成静帧（**不跑 QC**；风格块改动后必须用它） |
@@ -336,12 +352,12 @@ v5/
 ├── orchestrator.py         # **supervisor 架构**（director 主 agent + 7 角色图 · 唯一创作链）
 ├── roles.py                # 角色装配层（SKILL 装配 / 开工契约 / FS_TOOLS 白名单 / 音频守卫）
 ├── series.py               # **媒体链入口**（--resume-media / --monitor / 审批门 / resume 闸门）
-├── langgraph.json          # 图注册（8 图：supervisor + role_* ×7）
+├── langgraph.json          # 图注册（9 图：supervisor + role_* ×7 + media_rerender）
 ├── decision.py             # reviewer 结构化判定解析 / 回退目标路由
 ├── guards.py               # 记账 / 物化对账 / TokenBreaker / media_gate
 ├── validate.py             # brief 智能截断 / brief 完备性 / 产物忠实度 / 分镜契约
 ├── config.py  llm.py       # 配置与 LLM 供应商
-├── media/                  # 静态画面先行管线（18 个模块）
+├── media/                  # 静态画面先行管线（22 个模块，不含 __init__）
 │   ├── pipeline.py         #   **媒体链唯一入口**（media_gate + 审批门 + 记账都收在这里）
 │   ├── jobs.py             #   video_jobs 显式状态机
 │   ├── storyboard.py       #   分镜解析
@@ -371,7 +387,7 @@ SHORTDRAMA_V5_PROJECT=<项目名> .venv/Scripts/langgraph.exe dev \
     --config v5/langgraph.json --host 127.0.0.1 --port 2024 --no-browser
 ```
 
-- 注册 **8 张图**：`supervisor` + `role_*` ×7（角色图由 supervisor 经 Agent
+- 注册 **9 张图**：`supervisor` + `role_*` ×7 + `media_rerender`（角色图由 supervisor 经 Agent
   Protocol 调用，故 `AsyncSubAgent.url` 必填，默认指向本 dev：`http://127.0.0.1:2024`）。
 - **换项目必须重启**（`SHORTDRAMA_V5_PROJECT` 是起服时绑定的）；**换集不必**——
   集级产物路径由**每次开工注入**（`roles.role_input` 的【本集产物路径】），

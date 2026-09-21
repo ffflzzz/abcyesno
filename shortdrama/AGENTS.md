@@ -253,8 +253,12 @@ brief 是外部 Agent 唯一的强杠杆——它决定"拍什么"，而画质�
 这是设计内的（`niulai-movie-style` 只定义 5 个角色）。
 
 **另有 `craft/`——不是类型包，是技法库**：`v5/skills/packs/craft/<技法名>/SKILL.md`
-（当前有 `pixar-lighting`）。它**没有 `pack.json`、不定义角色**。
-注意：当前代码**未引用** `craft/`，属预留扩展位。
+（当前 **4 个**：`pixar-lighting` / `short-drama-hooks` / `short-drama-opening` /
+`short-drama-satisfaction`）。它**没有 `pack.json`、不定义角色**。
+**已接线**（`v5/media/style.py` `script_craft_of()`/`read_craft()` + `v5/roles.py` 注入）：
+brief.json 的 `script-craft` 列表（项目级）> pack.json 的 `script-craft`（包级默认），
+**opt-in、未声明不注入**；技法 frontmatter 的 `inject-to: [...]` 指定注入角色，
+漏写=不注入任何角色并打告警；技法名无效**响亮报错**。
 
 **导入新类型包**：在 `v5/skills/packs/<新包名>/` 建角色 `SKILL.md` + `pack.json`
 +（有强审美主张时**务必**）`style-block.md`（逐镜注入，是画质的主要锁定手段）。
@@ -427,3 +431,7 @@ python -m v5.series <项目名> --rerender LN03 --from still   # 连静帧一起
    又被复采翻判干净，白耗复核轮次）。
    **场景固有文字默认放行**；确需全片无字（如怕平台审核）在 brief 写 `on_screen_text: forbid`。
    这条已由 `tests_core.py` 的回归测试锁死
+7. **文档对账（2026-09-21 起）**：改了**结构类事实**（图注册 / media 模块 / craft 技法 /
+   env 名单）必须同步 `README.md` 与本文件，并跑 `python scripts/check_docs.py`——
+   对不上 exit 1，不许 commit。README 是权威快照；脚本只拦"机器可数"的漂移，
+   说法类（接线状态、语义）靠这条纪律兜底。

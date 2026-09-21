@@ -1,6 +1,7 @@
 ---
 name: pixar-lighting
 description: 皮克斯式电影感布光与表情节拍：冷暖对比定场、表情路径逐秒推进、剪影优先、光比克制。适用于 director 氛围设计与 scenedesigner 画面描述。
+inject-to: [director, scenedesigner]
 ---
 
 ## 冷暖对比定场
