@@ -8,6 +8,7 @@ const { EventEncoder } = require('@ag-ui/encoder');
 const { v4: uuidv4 } = require('uuid');
 const { log } = require('./logger');
 const agnes = require('./agnes');
+const { unpacked } = require('./app-paths');
 // edge-tts 云端语音客户端（自带 GEC 鉴权，替换坏的 edge-tts npm 包）。
 const { synth: edgeTtsSynth } = require('./edgeTtsClient');
 
@@ -209,7 +210,8 @@ function createAgUIServer(getGatewayClient, storage, options) {
       dirs.push(...(Array.isArray(opts.agentsDir) ? opts.agentsDir : [opts.agentsDir]));
     }
     const cands = [
-      path.resolve(__dirname, '../../hermes-fork/skills/langgraph_agents/agents'),
+      // unpacked(): asar 打包后 hermes-fork 在 app.asar.unpacked（fs.readdirSync 需真实目录）
+      unpacked(path.resolve(__dirname, '../../hermes-fork/skills/langgraph_agents/agents')),
       process.env.ABC_LANGGRAPH_AGENTS_DIR,
     ];
     for (const c of cands) if (c) dirs.push(c);

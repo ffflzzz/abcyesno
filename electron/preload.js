@@ -41,6 +41,13 @@ contextBridge.exposeInMainWorld('hermes', {
   openDevTools: () => ipcRenderer.invoke('open-devtools'),
   quitApp: () => ipcRenderer.invoke('quit-app'),
 
+  // Auto-update（NSIS 安装版可用；dev/绿色版 supported=false，UI 降级为打开 Releases 页）
+  getUpdaterState: () => ipcRenderer.invoke('updater-get-state'),
+  checkForUpdate: () => ipcRenderer.invoke('updater-check'),
+  installUpdate: () => ipcRenderer.invoke('updater-install'),
+  onUpdaterState: (cb) => on('updater-state', cb),
+  offUpdaterState: (cb) => off('updater-state', cb),
+
   // Static platform string so the renderer can branch mac/win chrome.
   platform: process.platform,
 

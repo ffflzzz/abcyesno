@@ -50,8 +50,12 @@
       "allowToChangeInstallationDirectory": true,
       "artifactName": "Abcyesno-Setup-${version}.${ext}"
     },
-    "asarUnpack": [],
-    "asar": false,
+    "asar": true,
+    "asarUnpack": [
+      "hermes-fork/**/*",
+      "shortdrama/**/*",
+      "bin/**/*"
+    ],
     "extraResources": [
       {
         "from": "build/playwright-browsers",
@@ -60,10 +64,6 @@
       {
         "from": "build/runtime/python",
         "to": "runtime/python"
-      },
-      {
-        "from": "bin",
-        "to": "app/bin"
       }
     ],
     "files": [
@@ -73,15 +73,27 @@
       "!electron/backend/wechat_bridge/.tmp-tests/**",
       "hermes-fork/**/*",
       "!hermes-fork/website/**",
+      "!hermes-fork/tests/**",
+      "!hermes-fork/.pytest_cache/**",
+      "!hermes-fork/hermes_agent.egg-info/**",
       "shortdrama/**/*",
       "!shortdrama/projects/**",
       "!shortdrama/**/__pycache__/**",
+      "!shortdrama/**/.pytest_cache/**",
       "!shortdrama/.tmp/**",
       "!shortdrama/.langgraph_api/**",
       "!shortdrama/.langgraph_api.bak-*/**",
       "!shortdrama/.env",
-      "package.json"
-    ]
+      "bin/**/*",
+      "package.json",
+      "!**/__pycache__/**",
+      "!**/*.pyc"
+    ],
+    "publish": {
+      "provider": "github",
+      "owner": "ffflzzz",
+      "repo": "abcyesno"
+    }
   },
   "dependencies": {
     "@ag-ui/client": "^0.0.57",
@@ -94,6 +106,7 @@
     "axios": "^1.7.0",
     "cors": "^2.8.5",
     "edge-tts": "^1.0.1",
+    "electron-updater": "^6.8.9",
     "express": "^4.21.0",
     "lucide-react": "^1.26.0",
     "qrcode": "^1.5.4",

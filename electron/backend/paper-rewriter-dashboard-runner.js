@@ -15,13 +15,15 @@ const http = require('http');
 const path = require('path');
 const fs = require('fs');
 const { log, logDir } = require('./logger');
+const { unpacked } = require('./app-paths');
 
 // dashboard lives beside the agent package, under hermes-fork/skills/...
-const DASHBOARD_DIR = path.join(
+// unpacked(): asar 打包后 hermes-fork 在 app.asar.unpacked（Python 只认真实磁盘路径）
+const DASHBOARD_DIR = unpacked(path.join(
   __dirname, '..', '..', 'hermes-fork', 'skills', 'langgraph_agents',
   'agents', 'paper_rewriter_agent', 'dashboard'
-);
-const HERMES_FORK = path.join(__dirname, '..', '..', 'hermes-fork');
+));
+const HERMES_FORK = unpacked(path.join(__dirname, '..', '..', 'hermes-fork'));
 const HERMES_VENV = path.join(HERMES_FORK, '.venv');
 const HERMES_PYTHON = path.join(HERMES_VENV, 'Scripts', 'python.exe');
 

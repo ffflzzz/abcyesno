@@ -5,8 +5,10 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const { log, logDir } = require('./logger');
+const { unpacked } = require('./app-paths');
 
-const HERMES_FORK = path.join(__dirname, '..', '..', 'hermes-fork');
+// unpacked(): asar 打包后 hermes-fork/.venv 必须从真实磁盘目录 spawn（见 app-paths.js）
+const HERMES_FORK = unpacked(path.join(__dirname, '..', '..', 'hermes-fork'));
 const HERMES_VENV = path.join(HERMES_FORK, '.venv');
 const HERMES_PYTHON = path.join(HERMES_VENV, 'Scripts', 'python.exe');
 const HERMES_EXE = path.join(HERMES_VENV, 'Scripts', 'hermes.exe');

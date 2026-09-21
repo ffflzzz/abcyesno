@@ -10,11 +10,28 @@ function maskKey(key) {
 
 export default function SettingsPanel({ apiKey = "", hasApiKey = false, model = "", theme = "dark", onThemeChange, onEditApiKey, onClose, version = "", onOpenWechatBind }) {
   const [openDirStatus, setOpenDirStatus] = useState("");
+  const [updater, setUpdater] = useState(null);
   const { ttsSettings, updateTtsSettings, voiceOptions } = useTts();
   const { autoRead, voice, rate } = ttsSettings;
 
   useEffect(() => {
     setOpenDirStatus("");
+  }, []);
+
+  // 自动更新状态订阅：主进程推送 state 快照（supported/status/progress/…）。
+  // 仅 NSIS 安装版 supported=true；dev/绿色版为 null/false → 按钮走旧版
+  // 「打开 Releases 页」行为。
+  useEffect(() => {
+    const h = window.hermes;
+    if (!h || !h.getUpdaterState) return undefined;
+    let alive = true;
+    h.getUpdaterState().then((s) => { if (alive) setUpdater(s); }).catch(() => {});
+    const onState = (s) => setUpdater(s);
+    h.onUpdaterState(onState);
+    return () => {
+      alive = false;
+      h.offUpdaterState(onState);
+    };
   }, []);
 
   async function handleOpenDevTools() {
@@ -48,14 +65,45 @@ export default function SettingsPanel({ apiKey = "", hasApiKey = false, model = 
     }
   }
 
-  // 检查更新：打开 GitHub Releases 页（当前分发方式 = win-unpacked 压缩包，
-  // 用户手动下载新版解压覆盖）。走系统浏览器而非内置 webview，便于下载。
+  // 检查更新：
+  // - NSIS 安装版（updater.supported=true）→ 应用内检查 + 后台下载 + 应用内重启安装；
+  // - dev/绿色解压版 → 保持旧行为：打开 GitHub Releases 页（系统浏览器），手动下载覆盖。
   function handleCheckUpdate() {
+    if (updater && updater.supported) {
+      window.hermes.checkForUpdate().catch(() => {});
+      return;
+    }
     const url = "https://github.com/ffflzzz/abcyesno/releases";
     if (window.hermes && window.hermes.openExternal) {
       window.hermes.openExternal(url);
     } else {
       window.open(url, "_blank", "noopener");
+    }
+  }
+
+  // 「重启更新」：退出并安装已下载的新版本（quitAndInstall 由主进程处理）。
+  function handleInstallUpdate() {
+    if (window.hermes && window.hermes.installUpdate) {
+      window.hermes.installUpdate().catch(() => {});
+    }
+  }
+
+  // 「关于 Abcyesno」条目的文案，随更新状态机变化。
+  function aboutDesc() {
+    const base = `Abcyesno ${version ? `v${version}` : "v-dev"} · 便携桌面 Agent 平台`;
+    if (!updater || !updater.supported) return base;
+    const u = updater;
+    const newV = u.info && u.info.version ? `v${u.info.version}` : "新版本";
+    switch (u.status) {
+      case "checking": return "正在检查更新…";
+      case "uptodate": return `${base} · 已是最新`;
+      case "downloading":
+        return u.progress
+          ? `正在下载 ${newV}… ${u.progress.percent}%`
+          : `发现 ${newV}，正在下载…`;
+      case "downloaded": return `${newV} 已就绪，点击「重启更新」安装（数据不受影响）`;
+      case "error": return `更新失败：${u.error || "未知错误"}`;
+      default: return base;
     }
   }
 
@@ -230,10 +278,43 @@ export default function SettingsPanel({ apiKey = "", hasApiKey = false, model = 
           <div className="settings-item">
             <div className="settings-item-text">
               <div className="settings-item-name">关于 Abcyesno</div>
-              <div className="settings-item-desc">Abcyesno {version ? `v${version}` : "v-dev"} · 便携桌面 Agent 平台</div>
+              <div className="settings-item-desc">{aboutDesc()}</div>
+              {updater && updater.supported && updater.status === "downloading" && updater.progress && (
+                <div
+                  style={{
+                    marginTop: 8,
+                    width: "100%",
+                    maxWidth: 320,
+                    height: 6,
+                    borderRadius: 3,
+                    background: "rgba(127,127,127,0.25)",
+                    overflow: "hidden",
+                  }}
+                >
+                  <div
+                    style={{
+                      width: `${Math.min(100, updater.progress.percent || 0)}%`,
+                      height: "100%",
+                      borderRadius: 3,
+                      background: "#4f8cff",
+                      transition: "width 0.3s ease",
+                    }}
+                  />
+                </div>
+              )}
             </div>
             <div className="settings-item-control">
-              <button className="ghost" onClick={handleCheckUpdate}>检查更新</button>
+              {updater && updater.supported && updater.status === "downloaded" ? (
+                <button className="primary" onClick={handleInstallUpdate}>重启更新</button>
+              ) : (
+                <button
+                  className="ghost"
+                  onClick={handleCheckUpdate}
+                  disabled={updater && updater.supported && (updater.status === "checking" || updater.status === "downloading")}
+                >
+                  {updater && updater.supported && updater.status === "error" ? "重试" : "检查更新"}
+                </button>
+              )}
             </div>
           </div>
           <div className="settings-item">

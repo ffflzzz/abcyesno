@@ -28,11 +28,14 @@ const net = require('net');
 const path = require('path');
 const fs = require('fs');
 const { log, logDir } = require('./logger');
+const { unpacked } = require('./app-paths');
 
-const SHORTDRAMA_DIR = path.join(__dirname, '..', '..', 'shortdrama');
+// unpacked(): asar 打包后 shortdrama/（含 .venv 的 python.exe）与 bin/ 必须从
+// 真实磁盘目录 spawn，不能走 asar 虚拟路径（见 app-paths.js）
+const SHORTDRAMA_DIR = unpacked(path.join(__dirname, '..', '..', 'shortdrama'));
 const VENV_PYTHON = path.join(SHORTDRAMA_DIR, '.venv', 'Scripts', 'python.exe');
 const SPA_ROOT = path.join(SHORTDRAMA_DIR, 'frontend', 'dist');
-const BIN_DIR = path.join(__dirname, '..', '..', 'bin');
+const BIN_DIR = unpacked(path.join(__dirname, '..', '..', 'bin'));
 
 const HOST = '127.0.0.1';
 const SHIM_PORT_PREFERRED = 8787;

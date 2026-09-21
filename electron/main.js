@@ -12,9 +12,12 @@ const { GatewayClient } = require('./backend/gateway-client');
 const { createAgUIServer } = require('./backend/agui-server');
 const { Storage } = require('./backend/storage');
 const { log } = require('./backend/logger');
+const { unpacked } = require('./backend/app-paths');
+const updater = require('./updater');
 
 // Hermes Python backend location (relative to electron/main.js -> project root)
-const HERMES_FORK = path.join(__dirname, '..', 'hermes-fork');
+// unpacked(): asar 打包后 hermes-fork 落在 app.asar.unpacked（Python 只认真实磁盘路径）
+const HERMES_FORK = unpacked(path.join(__dirname, '..', 'hermes-fork'));
 
 // GPU acceleration is ON by default so WebGL/Three.js sites (Anatomy
 // Atelier 3D models, Excalidraw, any in-app browser tab) render with
@@ -850,6 +853,10 @@ app.whenReady().then(async () => {
   // Hermes starts in the background. The frontend Bootstrap renders a
   // spinner until the backend is ready.
   createWindow();
+
+  // Auto-update (NSIS 安装版)：注册 IPC + 启动 30s 后静默检查。
+  // dev / 绿色解压版 supported=false，设置面板自动降级为打开 Releases 页。
+  updater.init(() => mainWindow);
 
   // Start the Electron-native browser driver service (127.0.0.1 only). The
   // 浏览器 panel reports its webview id via IPC once dom-ready; until then the

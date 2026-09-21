@@ -13,6 +13,7 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 const crypto = require("crypto");
+const { unpacked } = require("./app-paths");
 
 function hermesHome() {
   return process.env.HERMES_HOME || path.join(os.homedir(), ".hermes_portable_data");
@@ -85,10 +86,13 @@ function seedPath() {
     "built_in.json"
   );
   // Resolve relative to the app resources dir when packaged, else repo root.
+  // The unpacked() candidate handles asar builds (hermes-fork lands in
+  // app.asar.unpacked; the plain resources/app candidate is kept for older
+  // non-asar builds).
   const candidates = [
     path.join(libraryDir(), "seed", "built_in.json"),
     path.join(process.resourcesPath || "", "app", rel),
-    path.join(__dirname, "..", "..", rel),
+    unpacked(path.join(__dirname, "..", "..", rel)),
     path.join(__dirname, "..", "..", "..", rel),
   ];
   for (const c of candidates) {
