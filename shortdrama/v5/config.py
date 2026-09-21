@@ -20,9 +20,17 @@ SKILLS_DIR = PACKAGE_ROOT / "skills"
 
 # .env（gitignore；密钥不进源码）
 try:
-    _env = PROJECT_ROOT / ".env"
-    if _env.exists():
-        for _line in _env.read_text(encoding="utf-8").splitlines():
+    # ★ 双候选（2026-09-21 媒体链空 Bearer 事故）：key 文件的历史约定放**本目录**
+    #   （README「echo AGNES_API_KEY > .env」）；但**仓库根 .env** 也是合法布局
+    #   （langgraph.json `"env": "..\\.env"` 把它注入创作链进程）。旧实现只查本目录，
+    #   仓库根布局下创作链有 key、媒体链子进程读不到 → 39 次调用全发空 Bearer
+    #   （`Illegal header value b'Bearer '`）→ 36 秒烂尾一整轮。
+    #   查找顺序：本目录优先（旧约定），找不到再看仓库根；**读到第一个就停** ——
+    #   单一来源，防两处 .env 漂移（key 轮换只改一处的老坑，同 config.yaml 三份并存）。
+    _env_path = next((p for p in (PROJECT_ROOT / ".env",
+                                  PROJECT_ROOT.parent / ".env") if p.exists()), None)
+    if _env_path is not None:
+        for _line in _env_path.read_text(encoding="utf-8").splitlines():
             _s = _line.strip()
             if not _s or _s.startswith("#") or "=" not in _s:
                 continue

@@ -332,7 +332,7 @@ brief.json 的 `script-craft` 列表（项目级）> pack.json 的 `script-craft
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `AGNES_API_KEY` | — | **必需**（生图/生视频/LLM）。语义 = key 池中**第一条** |
+| `AGNES_API_KEY` | — | **必需**（生图/生视频/LLM）。语义 = key 池中**第一条**。key 文件 `.env` 允许两处：`shortdrama/.env` 优先，找不到再读仓库根 `.env`（读到即停，勿两处并存——防轮换漂移） |
 | `AGNES_API_KEYS` | — | 可选：多条 key（逗号/分号/换行分隔）。配合 `SHORTDRAMA_VIDEO_KEY_ROTATE`；未设则退回单条 |
 | `SHORTDRAMA_V5_PROJECT` | studio | supervisor 架构绑定的项目目录（**编译期绑定，换项目必须重启 dev**）|
 | `SHORTDRAMA_V5_AGENT_URL` | http://127.0.0.1:2024 | 派发子任务的目标 Agent Protocol server（**必填**，端口须与 dev server 一致）|

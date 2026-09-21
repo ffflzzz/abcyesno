@@ -926,6 +926,17 @@ def main() -> None:
                   "（前端起的 dev server 会自己带上它，故本提示不代表链路没开）")
         return
 
+    # ─── 以下路径都会**真调生图/生视频** → 空 key 必须在第一帧图之前响亮失败 ───
+    # （2026-09-21 国风片实测：key 只注入了创作链进程，媒体链子进程空 Bearer，
+    #   cast+13 镜静帧共 39 次调用全部 `Illegal header value b'Bearer '` 秒败，
+    #   36 秒烂尾一整轮。空 key 静默空跑是最贵的一类失败 —— 在这里当场拦下，
+    #   而不是让 39 个假调用把日志糊满再失败。）
+    if not config.AGNES_API_KEY:
+        raise SystemExit(
+            "[series] !! 生图/生视频 key 为空（AGNES_API_KEY / AGNES_API_KEYS）。\n"
+            "  v5.config 的 .env 查找顺序：shortdrama/.env → 仓库根 .env（读到即停）；\n"
+            "  也可由启动方显式注入（run_new_project._env / langgraph.json 的 env 字段）。")
+
     if a.rerender:
         # 单镜重渲：**同一入口的受限调用**（gate / 记账 / 幂等 / 限流全在
         # `pipeline.run` 里），落点与 Studio 里 director 派发 `media_rerender`

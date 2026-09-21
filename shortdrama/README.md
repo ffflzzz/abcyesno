@@ -233,7 +233,7 @@ projects/<项目名>/
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `AGNES_API_KEY` | — | **必需**（生图 / 生视频 / LLM）。语义 = key 池中**第一条** |
+| `AGNES_API_KEY` | — | **必需**（生图 / 生视频 / LLM）。语义 = key 池中**第一条**。key 文件 `.env` 允许两处：`shortdrama/.env` 优先，找不到再读仓库根 `.env`（读到即停，勿两处并存——防轮换漂移） |
 | `AGNES_API_KEYS` | — | 可选：多条 key（逗号/分号/换行分隔，去重有序）。配合 `SHORTDRAMA_VIDEO_KEY_ROTATE` 使用；未设则退回单条 `AGNES_API_KEY` |
 | `AGNES_VIDEO_MAX_SHOTS` | 20 | **超过 20 镜的项目必须调大**，否则静默截断 |
 | `AGNES_VIDEO_MAX_SECONDS` | 12 | 单镜秒数**上限**（供应商硬约束 `seconds ∈ [4,12]`；下限 4 固定）。★ **别调小**——设小于 12 会让超长的镜被**静默压短**（与分镜契约「单镜 4-12 秒」也不一致）|
