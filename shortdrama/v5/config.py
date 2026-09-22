@@ -60,34 +60,37 @@ def _split_keys(*raw: str) -> list[str]:
     return out
 
 
-def _split_keys_with_base(*raw: str) -> tuple[list[str], dict[str, str], dict[str, float]]:
-    """`key@base#rpm` 语法的**唯一解析点**（2026-09-22，国内/国际双入口）。
+def _split_keys_with_base(*raw: str) -> tuple[list[str], dict[str, str],
+                                              dict[str, float], dict[str, float]]:
+    """`key@base#video_rpm[:image_rpm]` 语法的**唯一解析点**（2026-09-22）。
 
-    `AGNES_API_KEYS="sk-a, cpk-b@https://api.agnes-ai.cn/v1#5"` →
+    `AGNES_API_KEYS="sk-a, cpk-b@https://api.agnes-ai.cn/v1#5:80"` →
       · keys = ["sk-a", "cpk-b"]（纯 key；`AGNES_API_KEYS` 的现有语义零变化）
       · bases = {"cpk-b": "https://api.agnes-ai.cn"}（**已剥尾部 /v1**）
-      · intervals = {"cpk-b": 12.0}（**rpm=5 → 60/5 秒**）
+      · v_intervals = {"cpk-b": 12.0}（视频 rpm=5 → 60/5 秒）
+      · i_rpm = {"cpk-b": 80.0}（图片 rpm=80 → 高配额生图通道）
 
     ★ 为什么剥 `/v1`：媒体侧路径自带 `/v1`（`vendors.AGNES["image_path"]` 等），
       而入口 base 常按 OpenAI 习惯写成 `.../v1` —— 不剥会拼成 `/v1/v1/...`（404）。
-    ★ 为什么需要 `#rpm`（2026-09-22 用户实测）：**两个入口的限速不同** ——
-      国际 key 实测 1rpm，国内 key 是 5rpm。旧实现所有 key 用**同一个** 65s 闸门，
-      国内那条的 5 倍能力被完全浪费。per-key 速率让每条 key 按自己的额度跑。
-    ★ `#` 安全性：本仓库 .env 是自家简易解析（**只有行首 `#` 算注释**），
-      值中间的 `#` 原样保留 —— 该语法安全（不用 python-dotenv 的注释规则）。
+    ★ 为什么视频/图片 rpm 分开（2026-09-22 用户实测）：**同一条国内 key 的两档
+      额度完全不同** —— 视频 5rpm，图片（2K 档）80rpm。合成一个数会把某一侧浪费掉。
+    ★ `#` / `:` 安全性：本仓库 .env 是自家简易解析（**只有行首 `#` 算注释**），
+      值中间原样保留 —— 该语法安全（不适用 python-dotenv 的注释规则）。
     """
     keys: list[str] = []
     bases: dict[str, str] = {}
-    intervals: dict[str, float] = {}
+    v_intervals: dict[str, float] = {}
+    img_rpm: dict[str, float] = {}
     for v in raw:
         for part in str(v or "").replace(";", ",").replace("\n", ",").split(","):
             part = part.strip().strip('"').strip("'")
             if not part:
                 continue
-            # 先切末尾的 `#N`（rpm），再切 `@base`；两段都可省。
+            # 先切末尾的 `#video_rpm[:image_rpm]`，再切 `@base`；各段都可省。
             key_base, _, rpm_s = part.rpartition("#")
-            if not (rpm_s.isdigit() and int(rpm_s) > 0):
-                key_base, rpm_s = part, ""
+            v_rpm_s, _, i_rpm_s = rpm_s.partition(":")
+            if not (v_rpm_s.isdigit() and int(v_rpm_s) > 0):
+                key_base, v_rpm_s, i_rpm_s = part, "", ""
             key, _, base = key_base.partition("@")
             key, base = key.strip(), base.strip().rstrip("/")
             if base.endswith("/v1"):
@@ -96,9 +99,11 @@ def _split_keys_with_base(*raw: str) -> tuple[list[str], dict[str, str], dict[st
                 keys.append(key)
                 if base:
                     bases[key] = base
-                if rpm_s:
-                    intervals[key] = 60.0 / float(rpm_s)
-    return keys, bases, intervals
+                if v_rpm_s:
+                    v_intervals[key] = 60.0 / float(v_rpm_s)
+                if i_rpm_s.isdigit() and int(i_rpm_s) > 0:
+                    img_rpm[key] = float(i_rpm_s)
+    return keys, bases, v_intervals, img_rpm
 
 
 # ── 多 key 池（2026-09-16）────────────────────────────────────────────────────
@@ -116,8 +121,9 @@ def _split_keys_with_base(*raw: str) -> tuple[list[str], dict[str, str], dict[st
 #
 # ⚠️ **多 key ≠ 必然提速**：只在"供应商限速是按 key 而非按账号"时才有效。
 #    该前提**尚未证实**，探测脚本：`scripts/probe_multikey.py`（前 3 阶段零配额）。
-AGNES_API_KEYS, AGNES_KEY_BASE, AGNES_KEY_INTERVAL_SEC = _split_keys_with_base(
-    os.environ.get("AGNES_API_KEYS"), os.environ.get("AGNES_API_KEY"))
+AGNES_API_KEYS, AGNES_KEY_BASE, AGNES_KEY_INTERVAL_SEC, AGNES_KEY_IMAGE_RPM = \
+    _split_keys_with_base(os.environ.get("AGNES_API_KEYS"),
+                          os.environ.get("AGNES_API_KEY"))
 AGNES_API_KEY = AGNES_API_KEYS[0] if AGNES_API_KEYS else ""
 
 
@@ -135,6 +141,20 @@ def video_interval_for_key(key: str | None) -> float:
     if sec:
         return float(sec)
     return float(video_submit_interval_per_key())
+
+
+def image_key() -> str | None:
+    """**静帧/资产图优先用的 key**：第一条标了图片 rpm 的（`#v:I` 的 I 段）。
+
+    2026-09-22：国内 cpk- 的图片额度与视频完全分开（**2K 档 80rpm、4000 张/天**），
+    静帧阶段此前死用池第一条国际 key、逐张顺序生成 —— 接上这条后 20 张静帧
+    从分钟级压到秒级（且不占视频的 500 秒/天配额）。
+    没标 → None（调用方回落 `_auth(None)` = 池第一条，行为逐字节不变）。
+    """
+    for k in AGNES_API_KEYS:
+        if AGNES_KEY_IMAGE_RPM.get(k):
+            return k
+    return None
 
 # 单条 key 的提交最小间隔（秒）——**多 key 并行时的闸门单位**。
 #

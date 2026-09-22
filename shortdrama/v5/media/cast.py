@@ -571,7 +571,7 @@ def _turnaround(root: Path, c: dict, ratio: str, log=print,
     for key, zh in VIEWS:
         p = base + "，%s视角，同一张脸、同一着装，保留人物特征" % zh
         try:
-            _, url = providers.gen_image(p, refs=refs, ratio=ratio)
+            _, url = providers.gen_image(p, refs=refs, ratio=ratio, key=config.image_key())
             data = _fetch(url)
             if not first_url:
                 first_url = url
@@ -647,7 +647,7 @@ def _asset_prompt(a: dict) -> str:
 
 def _single(root: Path, name: str, prompt: str, ratio: str, log=print) -> str:
     try:
-        _, url = providers.gen_image(prompt, ratio=ratio)
+        _, url = providers.gen_image(prompt, ratio=ratio, key=config.image_key())
         _save_ref(root, name, _fetch(url), url)
         return str(images_dir(root) / (name + ".png"))
     except Exception as e:  # noqa: BLE001

@@ -168,7 +168,8 @@ def ensure_tails(project_root: Path, shots: list[dict], planned: list[dict],
         url = ""
         for attempt in range(retries + 1):
             try:
-                _, url = providers.gen_image(prompt, refs=refs, ratio=config.STILL_RATIO)
+                _, url = providers.gen_image(prompt, refs=refs, ratio=config.STILL_RATIO,
+                                    key=config.image_key())
                 if url:
                     break
             except Exception as e:  # noqa: BLE001
@@ -248,7 +249,8 @@ def ensure(project_root: Path, shots: list[dict], refs_by_shot: dict[str, list[s
         url = ""
         for attempt in range(retries + 1):
             try:
-                _, url = providers.gen_image(prompt, refs=refs, ratio=config.STILL_RATIO)
+                _, url = providers.gen_image(prompt, refs=refs, ratio=config.STILL_RATIO,
+                                    key=config.image_key())
                 if url:
                     break
             except Exception as e:  # noqa: BLE001

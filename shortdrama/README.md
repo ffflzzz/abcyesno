@@ -234,7 +234,7 @@ projects/<项目名>/
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `AGNES_API_KEY` | — | **必需**（生图 / 生视频 / LLM）。语义 = key 池中**第一条**。key 文件 `.env` 允许两处：`shortdrama/.env` 优先，找不到再读仓库根 `.env`（读到即停，勿两处并存——防轮换漂移） |
-| `AGNES_API_KEYS` | — | 可选：多条 key（逗号/分号/换行分隔，去重有序）。**每条可带自己的地址与限速**：`key@base#rpm`（如 `cpk-xxx@https://api.agnes-ai.cn/v1#5` = 国内入口 5rpm；尾部 /v1 自动剥）。未标的走全局 `AGNES_BASE` 与全局闸门。配合 `SHORTDRAMA_VIDEO_KEY_ROTATE` 使用；未设则退回单条 `AGNES_API_KEY` |
+| `AGNES_API_KEYS` | — | 可选：多条 key（逗号/分号/换行分隔，去重有序）。**每条可带自己的地址与限速**：`key@base#video_rpm[:image_rpm]`（如 `cpk-xxx@https://api.agnes-ai.cn/v1#5:80` = 国内入口：视频 5rpm、图片 80rpm；尾部 /v1 自动剥）。标了 image_rpm 的 key 会被静帧/资产图自动优先使用（`config.image_key()`，不占视频配额）。未标的走全局 `AGNES_BASE` 与全局闸门。配合 `SHORTDRAMA_VIDEO_KEY_ROTATE` 使用；未设则退回单条 `AGNES_API_KEY` |
 | `AGNES_VIDEO_MAX_SHOTS` | 20 | **超过 20 镜的项目必须调大**，否则静默截断 |
 | `AGNES_VIDEO_MAX_SECONDS` | 12 | 单镜秒数**上限**（供应商硬约束 `seconds ∈ [4,12]`；下限 4 固定）。★ **别调小**——设小于 12 会让超长的镜被**静默压短**（与分镜契约「单镜 4-12 秒」也不一致）|
 | `SHORTDRAMA_OPEN_CHAIN` | 0 | **人用开关**：设 `1` 开放全链路（`--resume-media` 放行，输入过三道门） |
