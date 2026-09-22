@@ -136,6 +136,13 @@ VIDEO_MODE = os.environ.get("SHORTDRAMA_VIDEO_MODE", "reference").strip().lower(
 # pack 档单组最多吞几个镜（与旁路脚本 pack_render.py 的 --max-group 同义）。
 VIDEO_PACK_MAX_GROUP = int(os.environ.get("SHORTDRAMA_VIDEO_PACK_MAX_GROUP", "5"))
 
+# pack 档提交是否带 BGM/环境音指令（2026-09-22，对标官方出片拍板）。
+#   证据：官方同款模型示例提示词尾缀「必须保留协调统一的全程BGM和必要环境音，
+#   禁止静音段」→ 12s 产物音轨零静音（BGM+环境音被模型原生执行）。
+#   我方成片声音「干巴巴」是最大廉价感来源之一；此开关一句话让模型自带配乐。
+#   ⚠️ brief 明确禁 BGM 的项目设 `SHORTDRAMA_PACK_BGM=0` 关掉（禁忌不打架）。
+PACK_BGM = int(os.environ.get("SHORTDRAMA_PACK_BGM", "1"))
+
 # 单镜上限秒数。★ **2026-09-16 修：默认 10 → 12**。
 #   事故形态：**静默压短**。`providers.submit_video` 会把单镜秒数钳到
 #   `min(seconds, VIDEO_MAX_SECONDS)`，而它的注释自己写着「**API 硬约束 seconds ∈ [4, 12]**」

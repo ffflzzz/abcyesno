@@ -1406,4 +1406,12 @@ def build_pack_prompt(group: list[dict], declared: list[int], total: int) -> str
         "画面风格：电影级国风古装剧照质感；这是同一条连续素材，"
         "各节拍光线与色调随场景自然过渡，转场干脆利落，人物造型跨节拍完全一致。")
     segs.append("全片不得出现任何文字、字幕、水印；不得分屏；竖屏构图。")
+    # 声音指令（2026-09-22，对标官方出片拍板）：同款模型实测能原生执行
+    # 「全程 BGM+环境音、禁止静音段」（官方 12s 示例音轨零静音）。
+    # 我方成片声音干巴巴是最大廉价感来源之一。brief 明确禁 BGM 的项目
+    # 用 `SHORTDRAMA_PACK_BGM=0` 关掉（config.PACK_BGM）。
+    if config.PACK_BGM:
+        segs.append(
+            "音频：保留协调统一的全程背景音乐与必要环境音，"
+            "台词清晰不被音乐盖过，全程禁止静音段。")
     return "\n\n".join(segs)

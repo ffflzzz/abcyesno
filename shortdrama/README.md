@@ -264,6 +264,7 @@ projects/<项目名>/
 | `SHORTDRAMA_SLICE_SOFT` | 0 | 切片失败时的降级开关：默认（0）**响亮终止**；设 1 则「告警 + 注入全文」（应急用） |
 | `SHORTDRAMA_VIDEO_MODE` | reference | 静帧当**参考图**（各镜独立，可用 `audios`）vs `keyframe`（静帧当**首帧**，支持镜间承接但拿不到 `audios`）vs `pack`（**12s 打包**：相邻同场景镜合成一条 ≤12s 的 reference 请求，接戏变单请求内部问题；提交前自动生成跨组接缝静帧预检图 `seam_preview.jpg`）。前三者官方互斥关系同上 |
 | `SHORTDRAMA_VIDEO_PACK_MAX_GROUP` | 5 | `pack` 模式下单组最多吞几个镜（分组算法见 `media/video_plan.group_shots`；与旁路脚本 `scripts/pack_render.py --max-group` 同义） |
+| `SHORTDRAMA_PACK_BGM` | 1 | `pack` 档提交是否带「全程 BGM+环境音、禁止静音段」指令（官方同款模型实测可原生执行）；brief 明确禁 BGM 的项目设 0 关掉 |
 | `SHORTDRAMA_IMAGE_VENDOR` | agnes | 生图厂商（`v5/vendors.py` 注册表）。未注册的名字**响亮报错**，不静默回退 |
 | `SHORTDRAMA_VIDEO_VENDOR` | agnes | 生视频厂商（同上）。前端三个生成页面各自可选，随请求进该次 run 的子进程 env |
 | `SHORTDRAMA_CAST_ENSURE` | 1 | `0` = 跳过参考图确定性生成（复用已有 `images/`）|
