@@ -58,16 +58,20 @@ def extract_last_frame(clip: Path, max_side: int = 512) -> str | None:
 
 
 def _wait_one(video_id: str, dest: Path, rounds: int = 60, interval: int = 10,
-              log=print) -> str:
+              log=print, key: str | None = None) -> str:
     """轮询单个任务直到完成并落盘。
 
     返回本地路径（**失败/超窗都返回空串**）。空串的原因由调用方按
     jobs 状态机区分：failed（供应商报错）或 expired（窗口内没完成）。
+
+    `key`（2026-09-22）：**必须传创建该任务的那条 key** —— 国内/国际双入口下
+    key 带自己的地址（`config.AGNES_KEY_BASE`），不传会拿全局地址去查国内
+    创建的 video_id（403/404/查不到，任务假死）。
     """
     import httpx
     for _ in range(rounds):
         try:
-            r = providers.query_video(video_id)
+            r = providers.query_video(video_id, key=key)
         except Exception:  # noqa: BLE001
             time.sleep(interval)
             continue
@@ -189,7 +193,8 @@ def submit_chain(project_root: Path, shots: list[dict], stills: dict, planned: l
         if rec.get("state") == "submitted" and rec.get("video_id"):
             log("[video] %s 续跑认领已提交任务（attempts=%d）"
                 % (name, rec.get("attempts") or 1))
-            local = _wait_one(rec["video_id"], dest, rounds=rounds, log=log)
+            local = _wait_one(rec["video_id"], dest, rounds=rounds, log=log,
+                              key=rec.get("key"))
             if local:
                 jobs_mod.mark(jobs, name, "completed", local=str(dest))
                 jobs_mod.save(out_dir, jobs)
@@ -262,6 +267,9 @@ def submit_chain(project_root: Path, shots: list[dict], stills: dict, planned: l
             % (name, plan.get("relation"), jobs[name]["first_frame_kind"],
                ", last=own_still" if last else ""))
 
+        # 注：submit_chain 是**单 key 顺序路径**（提交不带 key ⇒ providers 走默认
+        # AGNES_API_KEY/全局地址），因此轮询也不传 key —— key 与地址同源自洽。
+        # 多 key/双入口走 submit_all / submit_packs（那边逐任务记 key）。
         local = _wait_one(vid, dest, rounds=rounds, log=log)
         if local:
             jobs_mod.mark(jobs, name, "completed", local=str(dest), error="")
@@ -412,7 +420,7 @@ def submit_all(project_root: Path, shots: list[dict], stills: dict, planned: lis
         jobs_mod.submitted(jobs, name, r.get("video_id") or r.get("task_id"),
                            first_frame_kind=first_kind, first_frame=first[:120],
                            has_last_frame=bool(last),
-                           seconds=s.get("seconds") or 8)
+                           seconds=s.get("seconds") or 8, key=key)
         jobs_mod.save(out_dir, jobs)
         log("[video] %s submitted (%s, first=%s%s, %s)"
             % (name, plan.get("relation"), first_kind,
@@ -604,7 +612,8 @@ def submit_packs(project_root: Path, shots: list[dict], stills: dict, planned: l
         vid = r.get("video_id") or r.get("task_id")
         jobs_mod.submitted(jobs, pname, vid,
                            first_frame_kind="reference_pack",
-                           shots=names, declared_seconds=declared, total_seconds=total)
+                           shots=names, declared_seconds=declared, total_seconds=total,
+                           key=key)
         jobs_mod.save(out_dir, jobs)
         log("[video] %s submitted（%d 镜打包，%ds，%s）"
             % (pname, len(names), total, pool.label(key_idx)))
@@ -651,7 +660,8 @@ def poll_all(project_root: Path, jobs: dict, ep: int = 1, rounds: int = 40, log=
             break
         for name in pending:
             try:
-                r = providers.query_video(jobs[name]["video_id"])
+                r = providers.query_video(jobs[name]["video_id"],
+                                          key=jobs[name].get("key"))
             except Exception:  # noqa: BLE001
                 continue
             if r.get("status") == "completed" and r.get("url"):

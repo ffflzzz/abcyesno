@@ -136,7 +136,7 @@ def _builtin_gen_image(prompt: str, refs: list[str] | None = None,
         body["extra_body"] = {"image": list(refs)[:spec["ref_max"]],
                               "response_format": "url"}
     with httpx.Client(timeout=timeout, trust_env=False) as c:  # 直连，见文件头
-        r = c.post(vendors.base_for("image") + spec["image_path"],
+        r = c.post(vendors.base_for("image", key) + spec["image_path"],
                    headers=_auth(key), json=body)
         if r.status_code == 429:
             raise RateLimitError("image 429")
@@ -234,7 +234,7 @@ def _builtin_submit_video(prompt: str, *, first_frame: str | None = None,
         if audios:
             body["audios"] = list(audios)
     with httpx.Client(timeout=timeout, trust_env=False) as c:  # 直连，见文件头
-        r = c.post(vendors.base_for("video") + spec["video_path"],
+        r = c.post(vendors.base_for("video", key) + spec["video_path"],
                    headers=_auth(key), json=body)
         if r.status_code == 429:
             raise RateLimitError("video 429")
@@ -264,7 +264,7 @@ def _builtin_query_video(video_id: str, timeout: int = 30,
     """内置（agnes 风格）查询 —— 改造前 `query_video` 的原逻辑。"""
     spec = vendors.spec_for("video")
     with httpx.Client(timeout=timeout, trust_env=False) as c:  # 直连，见文件头
-        r = c.get(vendors.base_for("video") + spec["query_path"],
+        r = c.get(vendors.base_for("video", key) + spec["query_path"],
                   params={"video_id": video_id,
                           spec["query_model_key"]: config.MODELS["video"]},
                   headers=_bearer(key))

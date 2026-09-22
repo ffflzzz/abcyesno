@@ -60,6 +60,36 @@ def _split_keys(*raw: str) -> list[str]:
     return out
 
 
+def _split_keys_with_base(*raw: str) -> tuple[list[str], dict[str, str]]:
+    """`key@base` 语法的**唯一解析点**（2026-09-22，国内/国际双入口）。
+
+    `AGNES_API_KEYS="sk-a, cpk-b@https://api.agnes-ai.cn/v1"` →
+      · keys = ["sk-a", "cpk-b"]（纯 key；`AGNES_API_KEYS` 的现有语义零变化）
+      · bases = {"cpk-b": "https://api.agnes-ai.cn"}（**已剥尾部 /v1**）
+
+    ★ 为什么剥 `/v1`：媒体侧路径自带 `/v1`（`vendors.AGNES["image_path"]` 等），
+      而入口 base 常按 OpenAI 习惯写成 `.../v1` —— 不剥会拼成 `/v1/v1/...`（404）。
+    ★ 为什么只给"标了地址的 key"建映射：没标的 key 走全局 `AGNES_BASE`
+      （现有行为逐字节不变；混用是**新增能力**，不是改默认）。
+    """
+    keys: list[str] = []
+    bases: dict[str, str] = {}
+    for v in raw:
+        for part in str(v or "").replace(";", ",").replace("\n", ",").split(","):
+            part = part.strip().strip('"').strip("'")
+            if not part:
+                continue
+            key, _, base = part.partition("@")
+            key, base = key.strip(), base.strip().rstrip("/")
+            if base.endswith("/v1"):
+                base = base[:-3].rstrip("/")
+            if key and key not in keys:
+                keys.append(key)
+                if base:
+                    bases[key] = base
+    return keys, bases
+
+
 # ── 多 key 池（2026-09-16）────────────────────────────────────────────────────
 #
 # `AGNES_API_KEYS="k1,k2,k3"` 优先；未设则退回单 key 变量（兼容旧 .env）。
@@ -67,11 +97,21 @@ def _split_keys(*raw: str) -> list[str]:
 # 的 agnes `chat` 段）与 `providers` 里那 3 处 Bearer 调用点**零改动、行为零变化**
 # （单 key 时与改造前逐字节等价）。池的消费方（per-key 配速 / 并发提交）另行接线。
 #
+# 2026-09-22 扩展：每条 key 可带**自己的服务地址**（`key@base`，见
+# `_split_keys_with_base`）—— 国内 key（cpk- 前缀）与国际 key（sk-）**入口不同**，
+# 混用必须让地址跟着 key 走。`AGNES_KEY_BASE` 只装标了地址的 key；未标的走全局。
+# 轮询天然安全：video_id 按创建它的 key 去查，同 key 同地址。
+#
 # ⚠️ **多 key ≠ 必然提速**：只在"供应商限速是按 key 而非按账号"时才有效。
 #    该前提**尚未证实**，探测脚本：`scripts/probe_multikey.py`（前 3 阶段零配额）。
-AGNES_API_KEYS = _split_keys(os.environ.get("AGNES_API_KEYS"),
-                             os.environ.get("AGNES_API_KEY"))
+AGNES_API_KEYS, AGNES_KEY_BASE = _split_keys_with_base(
+    os.environ.get("AGNES_API_KEYS"), os.environ.get("AGNES_API_KEY"))
 AGNES_API_KEY = AGNES_API_KEYS[0] if AGNES_API_KEYS else ""
+
+
+def base_for_key(key: str | None) -> str:
+    """该 key 的专属媒体地址（没配则空串 → 调用方回落全局 `AGNES_BASE`）。"""
+    return AGNES_KEY_BASE.get((key or "").strip(), "")
 
 # 单条 key 的提交最小间隔（秒）——**多 key 并行时的闸门单位**。
 #

@@ -247,10 +247,38 @@ def _pick(sec: dict, prefix: str) -> str:
     return str(sec.get(prefix + "_default") or "")
 
 
-def base_for(kind: str) -> str:
-    """当前厂商的**媒体**服务地址（`base_suffix` 补在末尾，文本通道才用得上）。"""
+def base_for(kind: str, key: str | None = None) -> str:
+    """当前厂商的**媒体**服务地址（`base_suffix` 补在末尾，文本通道才用得上）。
+
+    `key` 给了、且该 key 在 `config.AGNES_KEY_BASE` 里配了**专属地址**
+    （`AGNES_API_KEYS` 的 `key@base` 语法，2026-09-22 国内/国际混用）→ 用它；
+    否则走全局（`base_from_config` → `config.AGNES_BASE`）——**默认行为零变化**。
+    """
+    own = _own_base_for(key)
+    if own:
+        return own
     spec = spec_for(kind)
     return _pick(spec, "base") + str(spec.get("base_suffix") or "")
+
+
+def _own_base_for(key: str | None) -> str:
+    """该 key 的专属地址（没配/厂商非 agnes/非媒体通道 → 空串）。"""
+    k = (key or "").strip()
+    if not k:
+        return ""
+    try:
+        spec = spec_for("video")
+    except Exception:  # noqa: BLE001 —— 厂商未注册等场景不在这里响亮，交给正常路径
+        return ""
+    if not spec.get("base_from_config") == "AGNES_BASE":
+        return ""                     # 只有内置 agnes 档支持 key@base（别的厂商未接线）
+    return _config_get_base(k)
+
+
+def _config_get_base(key: str) -> str:
+    """读 `config.AGNES_KEY_BASE[key]`（**调用时**解析，测试可 patch）。"""
+    m = getattr(config, "AGNES_KEY_BASE", None) or {}
+    return str(m.get(key, "") or "")
 
 
 def chat_spec(name: str = "") -> dict:
