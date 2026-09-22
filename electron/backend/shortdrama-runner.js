@@ -85,7 +85,10 @@ class ShortdramaRunner {
       const text = fs.readFileSync(path.join(this.hermesHome, '.env'), 'utf-8');
       for (const line of text.split(/\r?\n/)) {
         const m = /^([A-Z][A-Z0-9_]*)=(.*)$/.exec(line.trim());
-        if (m && /^AGNES_API_KEY/.test(m[1]) && m[2].trim()) out[m[1]] = m[2].trim();
+        // Explicit key names: scoped media keys (IMAGE/VIDEO) must NOT be
+        // matched by a loose prefix — they only apply where shortdrama's
+        // config actually consumes them. Fallback stays for quota retries.
+        if (m && /^(AGNES_API_KEY|AGNES_IMAGE_API_KEY|AGNES_VIDEO_API_KEY|AGNES_FALLBACK_API_KEY)$/.test(m[1]) && m[2].trim()) out[m[1]] = m[2].trim();
       }
     } catch (_) {
       /* no .env yet — the shim still boots, generation just won't work */

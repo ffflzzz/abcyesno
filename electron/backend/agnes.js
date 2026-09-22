@@ -12,27 +12,46 @@ const os = require('os');
 const IMAGE_BASE = process.env.AGNES_BASE_URL || 'https://apihub.agnes-ai.com/v1';
 const VIDEO_STATUS_BASE = process.env.AGNES_VIDEO_STATUS_BASE || 'https://apihub.agnes-ai.com';
 
-function readAgnesApiKey() {
-  const home = process.env.HERMES_HOME || path.join(os.homedir(), '.hermes_portable_data');
+// Scoped key env names. Scoped (image/video) keys are OPTIONAL overrides:
+// when absent/empty they inherit the primary AGNES_API_KEY, so a new user
+// only ever sets the main key. The fallback key never inherits — it is an
+// independent public key for quota-exhaustion retries.
+const KEY_ENV_NAMES = {
+  main: 'AGNES_API_KEY',
+  image: 'AGNES_IMAGE_API_KEY',
+  video: 'AGNES_VIDEO_API_KEY',
+  fallback: 'AGNES_FALLBACK_API_KEY',
+};
+
+// Read an Agnes key by scope ('main' | 'image' | 'video' | 'fallback').
+// Precedence for image/video: .env scoped override -> primary key -> env var.
+// The key is re-read from HERMES_HOME/.env on EVERY call, so a key saved via
+// the settings UI takes effect immediately (no Hermes restart needed).
+function readAgnesKey(scope = 'main') {
+  const envName = KEY_ENV_NAMES[scope] || KEY_ENV_NAMES.main;
+  let fromFile = '';
   try {
+    const home = process.env.HERMES_HOME || path.join(os.homedir(), '.hermes_portable_data');
     const text = fs.readFileSync(path.join(home, '.env'), 'utf-8');
-    const m = text.match(/^AGNES_API_KEY=(.+)$/m);
-    if (m) return m[1].trim();
+    const m = text.match(new RegExp(`^${envName}=(.+)$`, 'm'));
+    if (m) fromFile = m[1].trim();
   } catch (_) {}
-  return process.env.AGNES_API_KEY || '';
+  if (fromFile) return fromFile;
+  if (scope === 'main' || scope === 'fallback') return process.env[envName] || '';
+  // Scoped media keys inherit the primary key when no override is set.
+  return readAgnesKey('main') || process.env[envName] || '';
+}
+
+// Back-compat alias: everything that used to read the primary key directly.
+function readAgnesApiKey() {
+  return readAgnesKey('main');
 }
 
 // Public/default key (sk- prefix) used when the Token Plan primary key's
 // daily video-second quota or RPM cap is exhausted. Read from the env (injected
 // by hermes-runner) or HERMES_HOME/.env. Returns '' when not configured.
 function readAgnesFallbackKey() {
-  const home = process.env.HERMES_HOME || path.join(os.homedir(), '.hermes_portable_data');
-  try {
-    const text = fs.readFileSync(path.join(home, '.env'), 'utf-8');
-    const m = text.match(/^AGNES_FALLBACK_API_KEY=(.+)$/m);
-    if (m) return m[1].trim();
-  } catch (_) {}
-  return process.env.AGNES_FALLBACK_API_KEY || '';
+  return readAgnesKey('fallback');
 }
 
 // Detect Agnes quota / rate-limit responses worth a key fallback. The video
@@ -123,7 +142,7 @@ function secondsForDuration(numFrames, frameRate) {
 //   body: { model, prompt, size, ratio, extra_body:{ response_format:"url" } }
 //   resp: { data:[{ url }] }
 async function generateImage({ prompt, size = '2K', ratio = '1:1' }, key) {
-  const apiKey = key || readAgnesApiKey();
+  const apiKey = key || readAgnesKey('image');
   if (!apiKey) throw new Error('AGNES_API_KEY 未配置');
   if (!prompt) throw new Error('prompt 必填');
   const res = await fetch(`${IMAGE_BASE}/images/generations`, {
@@ -244,7 +263,7 @@ async function _generateVideoWithKey(
 }
 
 async function generateVideo(opts, key) {
-  const primaryKey = key || readAgnesApiKey();
+  const primaryKey = key || readAgnesKey('video');
   if (!primaryKey) throw new Error('AGNES_API_KEY 未配置');
   const fbKey = readAgnesFallbackKey();
   // Build the key chain: primary first, then the public fallback key (if a
@@ -299,4 +318,4 @@ async function downloadMedia(url, destDir, name) {
   return dest;
 }
 
-module.exports = { readAgnesApiKey, generateImage, generateVideo, downloadMedia };
+module.exports = { readAgnesApiKey, readAgnesKey, generateImage, generateVideo, downloadMedia };

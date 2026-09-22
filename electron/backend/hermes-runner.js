@@ -57,6 +57,9 @@ class HermesRunner {
     this.hermesHome = '';
     this.apiKey = '';
     this._exitCode = null; // set by the 'exit' handler; signals a crash during startup
+    // Serializes all read-modify-write cycles on HERMES_HOME/.env so two API
+    // key saves (e.g. main + scoped) racing through IPC never drop a line.
+    this._envWriteQueue = Promise.resolve();
     this._computePaths();
   }
 
@@ -276,43 +279,94 @@ class HermesRunner {
     }
   }
 
-  getApiKeyStatus() {
-    try {
-      const text = fs.readFileSync(this._envFile(), 'utf-8');
-      const m = text.match(/^AGNES_API_KEY=(.+)$/m);
-      return !!(m && m[1].trim());
-    } catch (_) {
-      return false;
-    }
+  // All Agnes key scopes persisted to HERMES_HOME/.env. Scoped media keys
+  // (image/video) are optional overrides — consumers (agnes.js) inherit the
+  // main key when they are absent. The fallback key is an independent public
+  // key for quota-exhaustion retries and never inherits.
+  static KEY_ENV_NAMES = {
+    main: 'AGNES_API_KEY',
+    image: 'AGNES_IMAGE_API_KEY',
+    video: 'AGNES_VIDEO_API_KEY',
+    fallback: 'AGNES_FALLBACK_API_KEY',
+  };
+
+  _envNameForScope(scope) {
+    return HermesRunner.KEY_ENV_NAMES[scope] || HermesRunner.KEY_ENV_NAMES.main;
   }
 
-  _readFallbackKey() {
+  _readEnvKey(name) {
     try {
       const text = fs.readFileSync(this._envFile(), 'utf-8');
-      const m = text.match(/^AGNES_FALLBACK_API_KEY=(.+)$/m);
+      const m = text.match(new RegExp(`^${name}=(.+)$`, 'm'));
       return m ? m[1].trim() : '';
     } catch (_) {
       return '';
     }
   }
 
-  setApiKey(key) {
-    this.apiKey = (key || '').trim();
-    const file = this._envFile();
-    let text = '';
-    try {
-      text = fs.readFileSync(file, 'utf-8');
-    } catch (_) {}
-    const lines = text.split(/\r?\n/).filter((l) => !l.startsWith('AGNES_API_KEY='));
-    if (this.apiKey) {
-      lines.push(`AGNES_API_KEY=${this.apiKey}`);
+  // Serialized read-modify-write of a single KEY=VALUE line in .env.
+  // Empty/undefined `value` removes the line (scoped keys may be unset).
+  _writeEnvKeyLine(name, value) {
+    const run = () => {
+      let text = '';
+      try {
+        text = fs.readFileSync(this._envFile(), 'utf-8');
+      } catch (_) {}
+      const lines = text.split(/\r?\n/).filter((l) => !l.startsWith(`${name}=`));
+      const val = (value || '').trim();
+      if (val) lines.push(`${name}=${val}`);
+      fs.writeFileSync(this._envFile(), lines.join('\n') + '\n', 'utf-8');
+    };
+    const next = this._envWriteQueue.then(run, run);
+    // Keep the queue alive even if a write throws.
+    this._envWriteQueue = next.catch(() => {});
+    return next;
+  }
+
+  // Masked snapshot for the settings UI. Never returns full keys — the
+  // renderer only ever sees masked values (keys stay in the main process).
+  static maskKey(key) {
+    if (!key) return '';
+    if (key.length <= 8) return '****';
+    return `${key.slice(0, 4)}...${key.slice(-4)}`;
+  }
+
+  getApiKeySnapshot() {
+    const raw = {};
+    for (const [scope, name] of Object.entries(HermesRunner.KEY_ENV_NAMES)) {
+      raw[scope] = this._readEnvKey(name);
     }
-    fs.writeFileSync(file, lines.join('\n') + '\n', 'utf-8');
+    return {
+      main: { set: !!raw.main, masked: HermesRunner.maskKey(raw.main) },
+      image: { set: !!raw.image, masked: HermesRunner.maskKey(raw.image), inherited: !raw.image },
+      video: { set: !!raw.video, masked: HermesRunner.maskKey(raw.video), inherited: !raw.video },
+      fallback: { set: !!raw.fallback, masked: HermesRunner.maskKey(raw.fallback), inherited: false },
+    };
+  }
+
+  getApiKeyStatus() {
+    return !!this._readEnvKey('AGNES_API_KEY');
+  }
+
+  _readFallbackKey() {
+    return this._readEnvKey('AGNES_FALLBACK_API_KEY');
+  }
+
+  // Save an API key by scope. scope='main' additionally syncs Hermes'
+  // config.yaml (the chat provider reads it); scoped media keys deliberately
+  // stay .env-only so the chat provider can never pick up a media key.
+  // Async: the .env write goes through the serialized queue, so callers MUST
+  // await this before reporting success to the UI.
+  async setApiKey(key, scope = 'main') {
+    const name = this._envNameForScope(scope);
+    const val = (key || '').trim();
+    if (scope === 'main') this.apiKey = val;
+    await this._writeEnvKeyLine(name, val);
 
     // Keep Hermes config.yaml in sync so the Agnes provider uses the new key.
     this._ensureConfig();
-    if (this.apiKey) {
-      this._updateConfigApiKey(this.apiKey);
+    if (scope === 'main' && val) {
+      this._updateConfigApiKey(val);
     }
   }
 
@@ -444,14 +498,7 @@ class HermesRunner {
     // Refresh API key from disk in case it was set before start.
     this._syncBuiltinSkills();
 
-    this.apiKey = '';
-    if (this.getApiKeyStatus()) {
-      try {
-        const text = fs.readFileSync(this._envFile(), 'utf-8');
-        const m = text.match(/^AGNES_API_KEY=(.+)$/m);
-        this.apiKey = m ? m[1].trim() : '';
-      } catch (_) {}
-    }
+    this.apiKey = this._readEnvKey('AGNES_API_KEY');
 
     const env = {
       ...process.env,
@@ -459,6 +506,11 @@ class HermesRunner {
       HERMES_DASHBOARD_SESSION_TOKEN: this.sessionToken,
       AGNES_API_KEY: this.apiKey || process.env.AGNES_API_KEY || '',
       AGNES_BASE_URL: process.env.AGNES_BASE_URL || 'https://apihub.agnes-ai.com/v1',
+      // Scoped media key overrides (optional; consumers inherit the primary
+      // key when empty). agnes.js also re-reads .env per request, these env
+      // vars exist for consumers that only look at os.environ.
+      AGNES_IMAGE_API_KEY: process.env.AGNES_IMAGE_API_KEY || this._readEnvKey('AGNES_IMAGE_API_KEY') || '',
+      AGNES_VIDEO_API_KEY: process.env.AGNES_VIDEO_API_KEY || this._readEnvKey('AGNES_VIDEO_API_KEY') || '',
       // Public/default fallback key for video generation: used when the Token
       // Plan daily video-second quota (500s) is exhausted. Unlimited seconds
       // but 1 RPM, so the agent serializes fallback video calls.

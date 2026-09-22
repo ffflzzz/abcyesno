@@ -32,6 +32,10 @@ contextBridge.exposeInMainWorld('hermes', {
   // the browser tab, because the port is chosen at runtime (not hardcoded).
   ensureShortdrama: () => ipcRenderer.invoke('ensure-shortdrama'),
   getApiKeyStatus: () => ipcRenderer.invoke('get-api-key-status'),
+  // Settings-panel key management: masked snapshot + per-scope overrides.
+  // scope: 'main'(restarts Hermes) | 'image' | 'video' | 'fallback'(no restart)
+  getApiKeys: () => ipcRenderer.invoke('get-api-keys'),
+  setApiKeyScoped: (scope, key) => ipcRenderer.invoke('set-api-key-scoped', scope, key),
   validateApiKey: (key) => ipcRenderer.invoke('validate-api-key', key),
   setApiKey: (key) => ipcRenderer.invoke('set-api-key', key),
   logError: (msg) => ipcRenderer.invoke('log-error', msg),

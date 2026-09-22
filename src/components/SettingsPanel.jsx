@@ -8,11 +8,23 @@ function maskKey(key) {
   return `${key.slice(0, 4)}...${key.slice(-4)}`;
 }
 
-export default function SettingsPanel({ apiKey = "", hasApiKey = false, model = "", theme = "dark", onThemeChange, onEditApiKey, onClose, version = "", onOpenWechatBind }) {
+export default function SettingsPanel({ apiKey = "", hasApiKey = false, apiKeys = null, keyStatus = "", model = "", theme = "dark", onThemeChange, onEditApiKey, onClearApiKey, onClose, version = "", onOpenWechatBind }) {
   const [openDirStatus, setOpenDirStatus] = useState("");
   const [updater, setUpdater] = useState(null);
   const { ttsSettings, updateTtsSettings, voiceOptions } = useTts();
   const { autoRead, voice, rate } = ttsSettings;
+
+  // 主 Key 显示值：优先用主进程返回的掩码快照，回退到旧 props。
+  const mainDisplay = apiKeys && apiKeys.main
+    ? (apiKeys.main.set ? apiKeys.main.masked : "未设置")
+    : (apiKey ? maskKey(apiKey) : hasApiKey ? "已设置" : "未设置");
+
+  // 图片/视频 Key 行：有覆盖显示掩码，否则显示「跟随对话 Key」。
+  function scopedDisplay(scope) {
+    const s = apiKeys && apiKeys[scope];
+    if (!s) return "跟随对话 Key";
+    return s.set ? s.masked : "跟随对话 Key";
+  }
 
   useEffect(() => {
     setOpenDirStatus("");
@@ -115,23 +127,67 @@ export default function SettingsPanel({ apiKey = "", hasApiKey = false, model = 
           <button className="settings-close" onClick={onClose} title="关闭"><Icon name="close" size={14} /></button>
         </div>
 
-        {/* 账号 */}
+        {/* API 密钥：一个主 Key 全端通用，图片/视频/备用可按需单独覆盖 */}
         <div className="settings-group">
-          <div className="settings-group-title">账号</div>
+          <div className="settings-group-title">API 密钥</div>
           <div className="settings-item">
             <div className="settings-item-text">
-              <div className="settings-item-name">API Key</div>
-              <div className="settings-item-desc">用于连接 Agnes 模型的密钥，仅保存在本机。</div>
+              <div className="settings-item-name">对话（LLM）</div>
+              <div className="settings-item-desc">主 Key，所有应用共用；保存在本机，保存后重启后台。</div>
             </div>
             <div className="settings-item-control">
-              <span className="settings-value">
-                {apiKey ? maskKey(apiKey) : hasApiKey ? "已设置" : "未设置"}
-              </span>
-              <button className="ghost settings-inline-btn" onClick={onEditApiKey}>
-                {apiKey || hasApiKey ? "修改" : "设置"}
+              <span className="settings-value">{mainDisplay}</span>
+              <button className="ghost settings-inline-btn" onClick={() => onEditApiKey("main")}>
+                {mainDisplay !== "未设置" ? "修改" : "设置"}
               </button>
             </div>
           </div>
+          <div className="settings-item">
+            <div className="settings-item-text">
+              <div className="settings-item-name">图片生成</div>
+              <div className="settings-item-desc">不填则跟随对话 Key。适合给创作类应用单独隔离额度。</div>
+            </div>
+            <div className="settings-item-control">
+              <span className="settings-value">{scopedDisplay("image")}</span>
+              <button className="ghost settings-inline-btn" onClick={() => onEditApiKey("image")}>
+                {apiKeys && apiKeys.image && apiKeys.image.set ? "修改" : "覆盖"}
+              </button>
+              {apiKeys && apiKeys.image && apiKeys.image.set && (
+                <button className="ghost settings-inline-btn" onClick={() => onClearApiKey("image")}>清除</button>
+              )}
+            </div>
+          </div>
+          <div className="settings-item">
+            <div className="settings-item-text">
+              <div className="settings-item-name">视频生成</div>
+              <div className="settings-item-desc">不填则跟随对话 Key；覆盖后下次生成任务生效。</div>
+            </div>
+            <div className="settings-item-control">
+              <span className="settings-value">{scopedDisplay("video")}</span>
+              <button className="ghost settings-inline-btn" onClick={() => onEditApiKey("video")}>
+                {apiKeys && apiKeys.video && apiKeys.video.set ? "修改" : "覆盖"}
+              </button>
+              {apiKeys && apiKeys.video && apiKeys.video.set && (
+                <button className="ghost settings-inline-btn" onClick={() => onClearApiKey("video")}>清除</button>
+              )}
+            </div>
+          </div>
+          <div className="settings-item">
+            <div className="settings-item-text">
+              <div className="settings-item-name">备用 Key</div>
+              <div className="settings-item-desc">对话 Key 额度耗尽（429）时降级使用，可选。</div>
+            </div>
+            <div className="settings-item-control">
+              <span className="settings-value">{scopedDisplay("fallback")}</span>
+              <button className="ghost settings-inline-btn" onClick={() => onEditApiKey("fallback")}>
+                {apiKeys && apiKeys.fallback && apiKeys.fallback.set ? "修改" : "设置"}
+              </button>
+              {apiKeys && apiKeys.fallback && apiKeys.fallback.set && (
+                <button className="ghost settings-inline-btn" onClick={() => onClearApiKey("fallback")}>清除</button>
+              )}
+            </div>
+          </div>
+          {keyStatus && <div className="settings-status-error">{keyStatus}</div>}
         </div>
 
         {/* 模型 */}

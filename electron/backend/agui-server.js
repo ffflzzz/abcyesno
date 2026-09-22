@@ -1880,15 +1880,10 @@ function createTurnTranslator(res, encoder, ctx, opts = {}) {
   // The browser records audio and ships it as base64; we decode, then call
   // Agnes server-side so the API key never reaches the renderer. Agnes is
   // OpenAI-compatible Whisper, so multipart form-data with `file` works.
-  function readAgnesApiKey() {
-    const home = process.env.HERMES_HOME || path.join(os.homedir(), '.hermes_portable_data');
-    try {
-      const text = fs.readFileSync(path.join(home, '.env'), 'utf-8');
-      const m = text.match(/^AGNES_API_KEY=(.+)$/m);
-      if (m) return m[1].trim();
-    } catch (_) {}
-    return process.env.AGNES_API_KEY || '';
-  }
+  // Key source: agnes.readAgnesKey('main') — both consumers here (STT and
+  // session-title LLM) are main-scope by design; media scopes are for
+  // image/video generation only.
+  const readAgnesApiKey = () => agnes.readAgnesKey('main');
 
   // --- WeChat notify bridge (agent → bound WeChat user) -------------------
   // The agent learns about this endpoint from the env context line (see

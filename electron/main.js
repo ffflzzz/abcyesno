@@ -1182,9 +1182,13 @@ ipcMain.handle('get-api-key-status', () => {
   return hermesRunner ? hermesRunner.getApiKeyStatus() : false;
 });
 
-let apiKeyRestartPromise = null;
+// Settings-panel key management: masked snapshot + per-scope saves.
+// Scoped media keys (image/video) are optional overrides of the primary key;
+// saving them only touches HERMES_HOME/.env (agnes.js re-reads it per request)
+// so they take effect immediately without restarting Hermes. Only the main
+// key goes through the restart flow (chat provider + config.yaml).
 
-ipcMain.handle('validate-api-key', async (_event, key) => {
+async function validateAgnesKey(key) {
   try {
     const res = await fetch('https://apihub.agnes-ai.com/v1/models', {
       method: 'GET',
@@ -1198,7 +1202,36 @@ ipcMain.handle('validate-api-key', async (_event, key) => {
   } catch (err) {
     return { valid: false, error: err && err.message ? err.message : String(err) };
   }
+}
+
+ipcMain.handle('get-api-keys', () => {
+  if (!hermesRunner) return null;
+  return hermesRunner.getApiKeySnapshot();
 });
+
+ipcMain.handle('validate-api-key', (_event, key) => validateAgnesKey(key));
+
+ipcMain.handle('set-api-key-scoped', async (_event, scope, key) => {
+  if (!hermesRunner) return { success: false, error: 'runner not ready' };
+  if (!['image', 'video', 'fallback'].includes(scope)) {
+    return { success: false, error: `未知 scope: ${scope}（请走主 Key 流程 set-api-key）` };
+  }
+  const val = String(key || '').trim();
+  if (val) {
+    const check = await validateAgnesKey(val);
+    if (!check.valid) return { success: false, error: check.error };
+  }
+  try {
+    await hermesRunner.setApiKey(val, scope);
+    // agnes.js re-reads .env on every call -> immediate for Studio calls.
+    // shortdrama/paper child processes pick the key up at next spawn.
+    return { success: true, effective: 'next-run' };
+  } catch (err) {
+    return { success: false, error: err && err.message ? err.message : String(err) };
+  }
+});
+
+let apiKeyRestartPromise = null;
 
 ipcMain.handle('set-api-key', async (_event, key) => {
   if (!hermesRunner) return { success: false, error: 'runner not ready' };
@@ -1209,7 +1242,7 @@ ipcMain.handle('set-api-key', async (_event, key) => {
   }
 
   apiKeyRestartPromise = (async () => {
-    hermesRunner.setApiKey(key);
+    await hermesRunner.setApiKey(key);
     await hermesRunner.restart();
 
     if (gatewayClient) {

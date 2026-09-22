@@ -158,6 +158,10 @@ function ChatShell({
   setSidebarOpen,
   showKeyModal,
   setShowKeyModal,
+  // 密钥弹窗的 scope："main"（对话 Key）| "image" | "video" | "fallback"。
+  // 默认 main 兜底：旧调用方不传时仍走「主 Key 保存 + 重启」流程。
+  keyModalScope = "main",
+  onApiKeyChanged, // 任何 key 保存/清除成功后回调（App 刷新快照 + 状态提示）
   showSettings,
   setShowSettings,
   approval,
@@ -1065,7 +1069,23 @@ function ChatShell({
       )}
       </ResultPanelErrorBoundary>
       {showKeyModal && (
-        <ApiKeyModal onSave={async (key) => { await hermes.setApiKey(key); if (onApiKeySaved) onApiKeySaved(key); setShowKeyModal(false); }} onClose={() => setShowKeyModal(false)} />
+        <ApiKeyModal
+          scope={keyModalScope}
+          allowEmpty
+          onSave={async (key) => {
+            if (keyModalScope === "main") {
+              const r = await hermes.setApiKey(key);
+              if (r && r.success === false) throw new Error(r.error || "保存失败");
+              if (onApiKeySaved) onApiKeySaved(key);
+            } else {
+              const r = await hermes.setApiKeyScoped(keyModalScope, key);
+              if (!r || !r.success) throw new Error((r && r.error) || "保存失败");
+            }
+            if (onApiKeyChanged) onApiKeyChanged(keyModalScope, key);
+            setShowKeyModal(false);
+          }}
+          onClose={() => setShowKeyModal(false)}
+        />
       )}
       {showMarket && (
         <MarketPanel
@@ -1097,6 +1117,10 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
   const [apiKey, setApiKey] = useState("");
   const [apiKeySet, setApiKeySet] = useState(false);
   const [showKeyModal, setShowKeyModal] = useState(false);
+  // 密钥管理：掩码快照（主进程返回，renderer 永远拿不到明文）+ 弹窗 scope。
+  const [apiKeys, setApiKeys] = useState(null);
+  const [keyModalScope, setKeyModalScope] = useState("main");
+  const [keyStatus, setKeyStatus] = useState("");
   const [showSettings, setShowSettings] = useState(false);
   const [showWechatBind, setShowWechatBind] = useState(false);
   const [wechatStatus, setWechatStatus] = useState({ state: "idle", bound: false });
@@ -1619,6 +1643,44 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
     return () => mq.removeEventListener("change", apply);
   }, [theme]);
 
+  // ── API 密钥管理（设置页「API 密钥」列表） ──────────────────────────────
+  const KEY_SCOPE_LABELS = { main: "对话 Key", image: "图片 Key", video: "视频 Key", fallback: "备用 Key" };
+
+  function refreshApiKeys() {
+    try {
+      if (hermes && hermes.getApiKeys) hermes.getApiKeys().then(setApiKeys).catch(() => {});
+    } catch (_) {}
+  }
+
+  function openKeyModal(scope) {
+    setKeyModalScope(scope || "main");
+    setKeyStatus("");
+    setShowSettings(false);
+    setShowKeyModal(true);
+  }
+
+  async function clearScopedKey(scope) {
+    try {
+      const r = await hermes.setApiKeyScoped(scope, "");
+      if (r && r.success) {
+        setKeyStatus(`${KEY_SCOPE_LABELS[scope] || scope}已清除，恢复跟随对话 Key。`);
+      } else {
+        setKeyStatus(`清除失败：${(r && r.error) || "未知错误"}`);
+      }
+      refreshApiKeys();
+    } catch (e) {
+      setKeyStatus(`清除失败：${e && e.message ? e.message : String(e)}`);
+    }
+  }
+
+  // 保存成功回调（main 重启完成 / scoped 即刻写盘后触发）。
+  function handleApiKeyChanged(scope) {
+    refreshApiKeys();
+    if (scope && scope !== "main") {
+      setKeyStatus(`${KEY_SCOPE_LABELS[scope] || scope}已保存，下次生成任务生效。`);
+    }
+  }
+
   useEffect(() => {
     if (!hermes) return;
     hermes.getVersion().then(setVersion);
@@ -1626,6 +1688,7 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
       setApiKeySet(!!ok);
       setShowKeyModal(!ok);
     });
+    refreshApiKeys();
     loadAssistants();
     refreshSkills();
 
@@ -2049,15 +2112,15 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
         <SettingsPanel
           apiKey={apiKey}
           hasApiKey={apiKeySet || !!apiKey}
+          apiKeys={apiKeys}
+          keyStatus={keyStatus}
           model={model}
           theme={theme}
           onThemeChange={handleThemeChange}
-          onEditApiKey={() => {
-            setShowSettings(false);
-            setShowKeyModal(true);
-          }}
+          onEditApiKey={(scope) => openKeyModal(typeof scope === "string" ? scope : "main")}
+          onClearApiKey={clearScopedKey}
           onOpenWechatBind={() => setShowWechatBind(true)}
-          onClose={() => setShowSettings(false)}
+          onClose={() => { setShowSettings(false); refreshApiKeys(); setKeyStatus(""); }}
           version={version}
         />
       )}
@@ -2116,6 +2179,8 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
           setSidebarOpen={setSidebarOpen}
           showKeyModal={showKeyModal}
           setShowKeyModal={setShowKeyModal}
+          keyModalScope={keyModalScope}
+          onApiKeyChanged={handleApiKeyChanged}
           showSettings={showSettings}
           setShowSettings={setShowSettings}
           approval={approval}
