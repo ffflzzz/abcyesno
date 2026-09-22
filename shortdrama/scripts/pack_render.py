@@ -192,9 +192,24 @@ def main() -> int:
             prompt = build_prompt(g, declared, total)
             print("[pack%02d] %s 合计%ds prompt=%d字 images=%d 提交中…"
                   % (k, tag, total, len(prompt), len(urls)))
-            r = providers.submit_video(prompt, mode="reference",
-                                       images=[u for u in urls if u],
-                                       seconds=total, aspect_ratio=config.ASPECT_RATIO)
+            r = None
+            for attempt in range(1, 6):
+                try:
+                    r = providers.submit_video(prompt, mode="reference",
+                                               images=[u for u in urls if u],
+                                               seconds=total, aspect_ratio=config.ASPECT_RATIO)
+                    break
+                except providers.QueueFullError:
+                    wait_s = 60 * attempt
+                    print("[pack%02d] 队列满，%ds 后重试（第 %d/5 次）" % (k, wait_s, attempt))
+                    time.sleep(wait_s)
+            if r is None:
+                print("[pack%02d] 队列满重试 5 次仍失败" % k)
+                entry["status"] = "failed"
+                report.append(entry)
+                if k < len(groups):
+                    time.sleep(SUBMIT_GAP_S)
+                continue
             vid = r.get("video_id") or r.get("task_id")
             print("[pack%02d] submitted id=%s" % (k, vid))
             t0 = time.time()
