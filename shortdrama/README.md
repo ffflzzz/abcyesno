@@ -171,7 +171,7 @@ python -m v5.series <项目名> --monitor --events 12     # 最多 12 次快照
 | `hard-keys` / `hard-keys-add` / `hard-keys-drop` | list[str] | **硬伤关键词表**的 pack 级覆盖（2026-09-16 新增）。全局表里的 `缺`/`五官`/`面部特征` 是**子串**，与「要求五官清晰可读」的包天然抵触。三者都没写 = 用全局 `qc.HARD_KEYS`。⚠️ **闸门本身不能删**（它拦的是「模型标了 P0 但描述不指向真问题」的误报），只能收窄词表 |
 | `name` / `version` / `source` / `display-name-zh` / `roles` / `trigger-words` / `audio-modes` / `default-audio-mode` / `default-video-model` / `shot-duration` / `aspect-ratio` | — | **元数据 / 前端展示**：只有 `display-name-zh` 被 `webmap` 读；其余**后端目前不消费**（`v5` 里 0 处读取）。⚠️ 改 `aspect-ratio` **不会**改画幅——画幅由 `SHORTDRAMA_ASPECT` 控制 |
 
-**`craft/` 不是类型包，是技法技能库**：`skills/packs/craft/<技法名>/SKILL.md` 提供可复用的具体手法。它**无 `pack.json`、不定义角色**。当前 **4 个**：`pixar-lighting` / `short-drama-hooks` / `short-drama-opening` / `short-drama-satisfaction`。**已接线**（2026-09-16 起，`v5/media/style.py` 的 `script_craft_of()`/`read_craft()` + `v5/roles.py` 注入）：brief.json 的 `script-craft` 列表（项目级，显式覆盖）> pack.json 的 `script-craft`（包级默认），**opt-in、未声明不注入**；每份技法 frontmatter 用 `inject-to: [角色, …]` 声明注入给谁（漏写=不注入任何角色并打告警）；技法名写错/文件缺失**响亮报错**，不静默。
+**`craft/` 不是类型包，是技法技能库**：`skills/packs/craft/<技法名>/SKILL.md` 提供可复用的具体手法。它**无 `pack.json`、不定义角色**。当前 **5 个**：`pixar-lighting` / `short-drama-hooks` / `short-drama-opening` / `short-drama-satisfaction` / `micro-expression-acting`。**已接线**（2026-09-16 起，`v5/media/style.py` 的 `script_craft_of()`/`read_craft()` + `v5/roles.py` 注入）：brief.json 的 `script-craft` 列表（项目级，显式覆盖）> pack.json 的 `script-craft`（包级默认），**opt-in、未声明不注入**；每份技法 frontmatter 用 `inject-to: [角色, …]` 声明注入给谁（漏写=不注入任何角色并打告警）；技法名写错/文件缺失**响亮报错**，不静默。
 
 **角色 skill 回落**：某包缺某角色的 `SKILL.md` 时自动回落到 `shortdrama` 同名角色。例如 `niulai-movie-style` 只定义 5 个角色，其余 3 个走 shortdrama —— 这是设计内的。
 

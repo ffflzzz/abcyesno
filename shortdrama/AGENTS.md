@@ -253,8 +253,8 @@ brief 是外部 Agent 唯一的强杠杆——它决定"拍什么"，而画质�
 这是设计内的（`niulai-movie-style` 只定义 5 个角色）。
 
 **另有 `craft/`——不是类型包，是技法库**：`v5/skills/packs/craft/<技法名>/SKILL.md`
-（当前 **4 个**：`pixar-lighting` / `short-drama-hooks` / `short-drama-opening` /
-`short-drama-satisfaction`）。它**没有 `pack.json`、不定义角色**。
+（当前 **5 个**：`pixar-lighting` / `short-drama-hooks` / `short-drama-opening` /
+`short-drama-satisfaction` / `micro-expression-acting`）。它**没有 `pack.json`、不定义角色**。
 **已接线**（`v5/media/style.py` `script_craft_of()`/`read_craft()` + `v5/roles.py` 注入）：
 brief.json 的 `script-craft` 列表（项目级）> pack.json 的 `script-craft`（包级默认），
 **opt-in、未声明不注入**；技法 frontmatter 的 `inject-to: [...]` 指定注入角色，
