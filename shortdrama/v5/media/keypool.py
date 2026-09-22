@@ -39,12 +39,18 @@ class KeyPool:
     """
 
     def __init__(self, keys: list[str], interval_s: float, *,
+                 intervals: list[float] | None = None,
                  monotonic=time.monotonic, sleep=None):
         # 空池**不抛异常**：测试环境与无 .env 的干净 clone 里 `AGNES_API_KEYS` 是空的，
         # 而闸门逻辑与"key 是什么"无关。用一条空串占位，`providers` 侧的 `key=""`
         # 与 `config.AGNES_API_KEY` 为空时的行为一致（历史行为就是发空 Bearer）。
         self._keys = [k for k in keys if k] or [""]
         self._interval = max(0.0, float(interval_s))
+        # ★ per-key 闸门（2026-09-22）：国内 key（5rpm→12s）与国际 key（1rpm→65s）
+        #   限速不同。`intervals` 给了且长度匹配就用逐 key 值；否则全体用 `interval_s`
+        #   （旧行为逐字节等价——单 key/未配 rpm 时 intervals 为空）。
+        iv = [max(0.0, float(x)) for x in (intervals or [])]
+        self._intervals = iv if len(iv) == len(self._keys) else [self._interval] * len(self._keys)
         self._monotonic = monotonic
         # **不缓存 `time.sleep`**：必须在调用时查模块属性，否则 `mock.patch.object(
         # video.time, "sleep")` 这类测试打桩会失效（默认参数在 def 期就固化了）。
@@ -75,9 +81,15 @@ class KeyPool:
         keys = [k for k in keys if k]
         if not rotate:
             keys = keys[:1]          # 单 key：闸门与旧行为一致
+        # ★ per-key 间隔只在**缺省取配置**时启用；调用方显式传了 `interval_s`
+        #   （测试打桩 / 特殊场景）就用它统一 —— 否则测试传 0 会被 .env 的真实
+        #   rpm 配置顶成 12/65 秒，静默变慢。
+        explicit = interval_s is not None
         if interval_s is None:
             interval_s = config.video_submit_interval_per_key()
-        return cls(list(keys), interval_s, **kw)
+        intervals = (None if explicit
+                     else [config.video_interval_for_key(k) for k in keys])
+        return cls(list(keys), interval_s, intervals=intervals, **kw)
 
     # ── 只读 ──
     @property
@@ -120,8 +132,14 @@ class KeyPool:
         for _ in range(300):
             with self._cv:
                 now = self._monotonic()
-                idx = min(range(len(self._keys)), key=lambda i: self._last[i])
-                gap = self._interval - (now - self._last[idx])
+                # ★ 选「**最早到期**」的 key（`last + interval` 最小），不是「最久没用」
+                #   （2026-09-22 per-key 速率）：国内 5rpm（12s）与国际 1rpm（65s）
+                #   混池时，"最久没用"会把 65s 的慢 key 排在 12s 的快 key 前面，把
+                #   快 key 的优势**完全吃掉**（模拟实测：8 组任务仍等满 65s）。
+                #   "最早到期"让每个窗口先榨干快到期的 key —— 同一模拟压到 ~24s。
+                idx = min(range(len(self._keys)),
+                          key=lambda i: self._last[i] + self._intervals[i])
+                gap = (self._last[idx] + self._intervals[idx]) - now
                 if warm or gap <= 0:
                     return self._reserve_locked(idx) if not warm else (idx, self._keys[idx])
             # 让出锁再睡（不在持锁状态下阻塞别的线程）
@@ -133,7 +151,8 @@ class KeyPool:
                 # 的常规手法）。**失败开放**：这种环境下闸门无法生效，硬等会把整条链
                 # 挂死。真实运行时 monotonic 必然前进，走不到这一支。
                 with self._cv:
-                    idx = min(range(len(self._keys)), key=lambda i: self._last[i])
+                    idx = min(range(len(self._keys)),
+                              key=lambda i: self._last[i] + self._intervals[i])
                     return self._reserve_locked(idx)
         raise RuntimeError("KeyPool.claim 等待超限（累计 %.0fs）" % waited)
 
@@ -150,6 +169,6 @@ class KeyPool:
         换来的是不把 429 甩回来回弹；池里 3 条 key 时另两条照常顶上。
         """
         with self._cv:
-            self._last[idx] = self._monotonic() + self._interval
+            self._last[idx] = self._monotonic() + self._intervals[idx]
             self._rl[idx] += 1
             self._cv.notify_all()

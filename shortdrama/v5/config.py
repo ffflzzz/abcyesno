@@ -60,26 +60,35 @@ def _split_keys(*raw: str) -> list[str]:
     return out
 
 
-def _split_keys_with_base(*raw: str) -> tuple[list[str], dict[str, str]]:
-    """`key@base` 语法的**唯一解析点**（2026-09-22，国内/国际双入口）。
+def _split_keys_with_base(*raw: str) -> tuple[list[str], dict[str, str], dict[str, float]]:
+    """`key@base#rpm` 语法的**唯一解析点**（2026-09-22，国内/国际双入口）。
 
-    `AGNES_API_KEYS="sk-a, cpk-b@https://api.agnes-ai.cn/v1"` →
+    `AGNES_API_KEYS="sk-a, cpk-b@https://api.agnes-ai.cn/v1#5"` →
       · keys = ["sk-a", "cpk-b"]（纯 key；`AGNES_API_KEYS` 的现有语义零变化）
       · bases = {"cpk-b": "https://api.agnes-ai.cn"}（**已剥尾部 /v1**）
+      · intervals = {"cpk-b": 12.0}（**rpm=5 → 60/5 秒**）
 
     ★ 为什么剥 `/v1`：媒体侧路径自带 `/v1`（`vendors.AGNES["image_path"]` 等），
       而入口 base 常按 OpenAI 习惯写成 `.../v1` —— 不剥会拼成 `/v1/v1/...`（404）。
-    ★ 为什么只给"标了地址的 key"建映射：没标的 key 走全局 `AGNES_BASE`
-      （现有行为逐字节不变；混用是**新增能力**，不是改默认）。
+    ★ 为什么需要 `#rpm`（2026-09-22 用户实测）：**两个入口的限速不同** ——
+      国际 key 实测 1rpm，国内 key 是 5rpm。旧实现所有 key 用**同一个** 65s 闸门，
+      国内那条的 5 倍能力被完全浪费。per-key 速率让每条 key 按自己的额度跑。
+    ★ `#` 安全性：本仓库 .env 是自家简易解析（**只有行首 `#` 算注释**），
+      值中间的 `#` 原样保留 —— 该语法安全（不用 python-dotenv 的注释规则）。
     """
     keys: list[str] = []
     bases: dict[str, str] = {}
+    intervals: dict[str, float] = {}
     for v in raw:
         for part in str(v or "").replace(";", ",").replace("\n", ",").split(","):
             part = part.strip().strip('"').strip("'")
             if not part:
                 continue
-            key, _, base = part.partition("@")
+            # 先切末尾的 `#N`（rpm），再切 `@base`；两段都可省。
+            key_base, _, rpm_s = part.rpartition("#")
+            if not (rpm_s.isdigit() and int(rpm_s) > 0):
+                key_base, rpm_s = part, ""
+            key, _, base = key_base.partition("@")
             key, base = key.strip(), base.strip().rstrip("/")
             if base.endswith("/v1"):
                 base = base[:-3].rstrip("/")
@@ -87,7 +96,9 @@ def _split_keys_with_base(*raw: str) -> tuple[list[str], dict[str, str]]:
                 keys.append(key)
                 if base:
                     bases[key] = base
-    return keys, bases
+                if rpm_s:
+                    intervals[key] = 60.0 / float(rpm_s)
+    return keys, bases, intervals
 
 
 # ── 多 key 池（2026-09-16）────────────────────────────────────────────────────
@@ -97,14 +108,15 @@ def _split_keys_with_base(*raw: str) -> tuple[list[str], dict[str, str]]:
 # 的 agnes `chat` 段）与 `providers` 里那 3 处 Bearer 调用点**零改动、行为零变化**
 # （单 key 时与改造前逐字节等价）。池的消费方（per-key 配速 / 并发提交）另行接线。
 #
-# 2026-09-22 扩展：每条 key 可带**自己的服务地址**（`key@base`，见
-# `_split_keys_with_base`）—— 国内 key（cpk- 前缀）与国际 key（sk-）**入口不同**，
-# 混用必须让地址跟着 key 走。`AGNES_KEY_BASE` 只装标了地址的 key；未标的走全局。
+# 2026-09-22 扩展：每条 key 可带**自己的服务地址**与**自己的限速**
+# （`key@base#rpm`，见 `_split_keys_with_base`）—— 国内 key（cpk- 前缀、5rpm）
+# 与国际 key（sk-、1rpm）**入口与额度都不同**。`AGNES_KEY_BASE` / `AGNES_KEY_INTERVAL_SEC`
+# 只装标了的 key；未标的走全局（`AGNES_BASE` + 全局闸门）。
 # 轮询天然安全：video_id 按创建它的 key 去查，同 key 同地址。
 #
 # ⚠️ **多 key ≠ 必然提速**：只在"供应商限速是按 key 而非按账号"时才有效。
 #    该前提**尚未证实**，探测脚本：`scripts/probe_multikey.py`（前 3 阶段零配额）。
-AGNES_API_KEYS, AGNES_KEY_BASE = _split_keys_with_base(
+AGNES_API_KEYS, AGNES_KEY_BASE, AGNES_KEY_INTERVAL_SEC = _split_keys_with_base(
     os.environ.get("AGNES_API_KEYS"), os.environ.get("AGNES_API_KEY"))
 AGNES_API_KEY = AGNES_API_KEYS[0] if AGNES_API_KEYS else ""
 
@@ -112,6 +124,17 @@ AGNES_API_KEY = AGNES_API_KEYS[0] if AGNES_API_KEYS else ""
 def base_for_key(key: str | None) -> str:
     """该 key 的专属媒体地址（没配则空串 → 调用方回落全局 `AGNES_BASE`）。"""
     return AGNES_KEY_BASE.get((key or "").strip(), "")
+
+
+def video_interval_for_key(key: str | None) -> float:
+    """该 key 的提交间隔（秒）。配了 `#rpm` 的用 `60/rpm`；否则用全局闸门。
+
+    全局闸门 = `SHORTDRAMA_VIDEO_SUBMIT_MIN_INTERVAL_PER_KEY_S`（缺省 65s）。
+    """
+    sec = AGNES_KEY_INTERVAL_SEC.get((key or "").strip())
+    if sec:
+        return float(sec)
+    return float(video_submit_interval_per_key())
 
 # 单条 key 的提交最小间隔（秒）——**多 key 并行时的闸门单位**。
 #
