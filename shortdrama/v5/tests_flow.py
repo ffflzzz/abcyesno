@@ -2225,6 +2225,55 @@ class TestVideoQueueFullRetry(unittest.TestCase):
                              "队列满退避后应提交成功，而不是 failed")
             self.assertEqual(seq, [])
 
+    def test_submit_all_switches_key_on_queue_full(self):
+        """队列满时**换 key 重试**（2026-09-22 改造）。
+
+        依据：队列满是**每条通道各自的状态** —— 实测同一晚 pack03 撞满 2 次后由
+        另一条 key 提交成功；国际池堵死时国内入口（不同 endpoint）可能立刻就过。
+        旧逻辑一条 key 原地退避 60/120/180/240/300s（≈15 分钟）；现在每轮重新
+        claim（换通道）+ 该 key 冷却一轮（note_rate_limited）。
+        """
+        import contextlib
+        from unittest import mock
+
+        from v5 import config
+        from v5.media import providers, video
+
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            out = root / "media" / "ep1"
+            (out / "clips").mkdir(parents=True)
+            shots = [{"name": "LN01", "seconds": 5, "visual": "v",
+                      "shot_type": "全景", "angle": "平视", "camera": "固定"}]
+            planned = [{"name": "LN01", "frame_plan": {"relation": "cut",
+                                                       "use_prev_last": False}}]
+            stills = {"LN01": {"url": "http://x/a.png"}}
+            seen_keys: list = []
+
+            def fake_submit(*a_, **k_):
+                seen_keys.append(k_.get("key"))
+                if k_.get("key") == "k1":
+                    raise providers.QueueFullError("full")
+                return {"video_id": "vid1"}
+
+            with contextlib.ExitStack() as st:
+                st.enter_context(mock.patch.object(config, "AGNES_API_KEYS",
+                                                   ["k1", "k2"]))
+                st.enter_context(mock.patch.object(config, "VIDEO_KEY_ROTATE", True))
+                st.enter_context(mock.patch.object(providers, "submit_video",
+                                                   side_effect=fake_submit))
+                st.enter_context(mock.patch.object(video.time, "sleep",
+                                                   return_value=None))
+                with contextlib.redirect_stdout(io.StringIO()):
+                    jobs = video.submit_all(root, shots, stills, planned, ep=1)
+
+            self.assertEqual(jobs["LN01"]["state"], "submitted",
+                             "换 key 后应提交成功，而不是原地退避到放弃")
+            self.assertEqual(seen_keys, ["k1", "k2"],
+                             "队列满后必须换到**另一条** key（不是同一条原地等）")
+            self.assertEqual(jobs["LN01"]["key"], "k2",
+                             "记账里的 key 应是最终成功那条（轮询要按它查）")
+
     def test_submit_all_rate_limit_does_not_block_rest(self):
         """429 只能跳过本镜，不能中断整批提交。
 

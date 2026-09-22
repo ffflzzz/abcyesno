@@ -375,10 +375,14 @@ def submit_all(project_root: Path, shots: list[dict], stills: dict, planned: lis
         # 立即 mark failed → 该镜缺席（LN09/LN10 就这样丢的）。
         r = None
         # **领 key = 过闸门**：阻塞到这条 key 的窗口放开，返回即已占用。
-        # 选的是"最久没用过"的那条 ⇒ 多条 key 自然轮转。
-        key_idx, key = pool.claim()
+        # 选的是"最早到期"的那条（多条 key 自然轮转）。
         vp = prompt_mod.build_video_prompt(s, p, mode=shot_mode)
         for q_try in range(config.VIDEO_QUEUE_RETRIES + 1):
+            # ★ 每轮**重新领 key**（2026-09-22 队列满换通道改造）：队列满是
+            #   **每条通道各自的状态**（实测同一晚 pack03 撞满 2 次后由另一条 key
+            #   提交成功；国际池堵死时国内入口可能立刻就过）。旧逻辑一条 key 原地
+            #   退避 60/120/180/240/300s（≈15 分钟）——换通道能绕开单池拥堵。
+            key_idx, key = pool.claim()
             try:
                 if shot_mode == "reference":
                     r = providers.submit_video(vp, mode="reference", images=[first],
@@ -389,13 +393,19 @@ def submit_all(project_root: Path, shots: list[dict], stills: dict, planned: lis
                                                seconds=s.get("seconds") or 8, key=key)
                 break
             except providers.QueueFullError:
+                # 这条通道满了 → 冷却它一轮（下一轮 claim 自然换到别的 key）
+                pool.note_rate_limited(key_idx)
                 if q_try >= config.VIDEO_QUEUE_RETRIES:
                     log("[video] %s 队列持续满（%d 次），本轮放弃、下轮再补"
                         % (name, config.VIDEO_QUEUE_RETRIES))
                     break
-                wait = min(120, 20 * (q_try + 1))
-                log("[video] %s 队列满，%ds 后重试（%d/%d）"
-                    % (name, wait, q_try + 1, config.VIDEO_QUEUE_RETRIES))
+                # 池里还有没试过的通道 → 快试；一圈试完 → 回到长退避等队列恢复。
+                n_keys = max(1, len(pool))
+                tried = q_try + 1
+                wait = (8 * tried if tried < n_keys
+                        else min(300, 60 * (tried - n_keys + 1)))
+                log("[video] %s 队列满，换 key 重试（%d/%d）%ds 后"
+                    % (name, tried, config.VIDEO_QUEUE_RETRIES, wait))
                 time.sleep(wait)
             except providers.RateLimitError:
                 # 429 是配额闸门：**跳过本镜、继续提交其余镜**。
@@ -575,11 +585,11 @@ def submit_packs(project_root: Path, shots: list[dict], stills: dict, planned: l
             style_block=style_mod.wrap(style_mod.load(project_root)))
         log("[video] %s：%s 合计 %ds，prompt=%d 字，images=%d"
             % (pname, "+".join(names), total, len(prompt), len(urls)))
-        # 提交：队列满退避比单镜档更激进（pack 提交成本高、撞 queue full 实测
-        # 也更频繁 —— 捕梦师 pack09 曾 5 连败；60s 起步实测有效）
+        # 提交：队列满时**换 key 重试**（2026-09-22 改造，同 submit_all 的理由：
+        # 队列满是每条通道各自的状态，跨入口换通道能绕开单池拥堵）。
         r = None
-        key_idx, key = pool.claim()
         for q_try in range(config.VIDEO_QUEUE_RETRIES + 1):
+            key_idx, key = pool.claim()
             try:
                 r = providers.submit_video(prompt, mode="reference",
                                            images=[u for u in urls if u],
@@ -587,13 +597,17 @@ def submit_packs(project_root: Path, shots: list[dict], stills: dict, planned: l
                                            aspect_ratio=config.ASPECT_RATIO)
                 break
             except providers.QueueFullError:
+                pool.note_rate_limited(key_idx)      # 该通道满了 → 冷却一轮
                 if q_try >= config.VIDEO_QUEUE_RETRIES:
                     log("[video] %s 队列持续满（%d 次），本轮放弃、下轮再补"
                         % (pname, q_try + 1))
                     break
-                wait = min(300, 60 * (q_try + 1))
-                log("[video] %s 队列满，%ds 后重试（%d/%d）"
-                    % (pname, wait, q_try + 1, config.VIDEO_QUEUE_RETRIES))
+                n_keys = max(1, len(pool))
+                tried = q_try + 1
+                wait = (8 * tried if tried < n_keys
+                        else min(300, 60 * (tried - n_keys + 1)))
+                log("[video] %s 队列满，换 key 重试（%d/%d）%ds 后"
+                    % (pname, tried, config.VIDEO_QUEUE_RETRIES, wait))
                 time.sleep(wait)
             except providers.RateLimitError:
                 pool.note_rate_limited(key_idx)
