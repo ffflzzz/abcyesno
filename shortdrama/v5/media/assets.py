@@ -838,7 +838,17 @@ def _shot_cast_lines(shot: dict, reg: dict, prot: dict | None,
       有 @ 就按名字取注册表条目；没有则回退 keywords 子串（兼容旧分镜）。
       本镜没有任何角色命中时**强制带上主角**（否则纯道具/空景镜会没有身份约束）。
       注册表空 → 回落角色卡里的外貌描述（命中姓名/别名才算本镜出场）。
+
+    ★ 空镜豁免（2026-09-22，bumengzhe LN11 两轮回炉实测）：分镜 visual 写明
+      「空镜」的镜，**直接返回空**——不绑主角、不报人数。为什么：下方「强制带
+      主角」规则在 cast_counts 同源后（2026-09-15）会把空镜报成 1 人 →
+      `person_directive` 注入「画面中只有一个人物」→ 与分镜的空镜声明在
+      prompt 里直接打架，模型听了人数指令 → 空镜坐人（华丽清装姑娘坐进茶摊，
+      重画两次都复现——先验被人数指令锁死）。「强制带主角」的初衷是给道具镜
+      身份约束；分镜明确要空的镜，身份约束本身就是错的。
     """
+    if "空镜" in (shot.get("visual") or ""):
+        return []
     text = (shot.get("visual") or "") + " " + (shot.get("dialogue") or "")
     hits, _unresolved = hits_for_shot(reg, shot, max_n=max_n)
     if not any(h.get("type") == "character" for h in hits) and prot:
