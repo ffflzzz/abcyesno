@@ -11,6 +11,7 @@ import contextlib
 import io
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -3310,6 +3311,144 @@ class TestResumeMediaHonoursEp(unittest.TestCase):
         """反向：第 2 集绝不能拿到 ep=1（那就是"后一集覆盖前一集"的事故形态）。"""
         seen = self._run(2)
         self.assertNotEqual(seen.get("ep"), 1)
+
+
+class TestPackMode(unittest.TestCase):
+    """pack 档（2026-09-22，12s 打包法落管线）：分组 / 提交 / 展开 / 拼接识别。
+
+    判据来源：旁路脚本 `scripts/pack_render.py` 三项目实测闭环（37 次提交零拒绝、
+    捕梦师 213s 成片）。管线版与脚本版**分组与 prompt 必须逐字节一致**——
+    这是"同一判据绝不写两份"的验收底线（实测对账见 git 提交记录）。
+    """
+
+    # ── 分组 ──
+
+    def test_group_shots_merges_same_scene_and_clamps(self):
+        from v5.media import video_plan
+
+        shots = [
+            {"name": "LN01", "scene": "画室", "seconds": 6},
+            {"name": "LN02", "scene": "画室", "seconds": 5},
+            {"name": "LN03", "scene": "夜街", "seconds": 6},   # 跨场景 → 断开
+            {"name": "LN04", "scene": "夜街", "seconds": 99},  # 钳到 12；6+12=18
+        ]
+        groups = video_plan.group_shots(shots, 5)
+        # 18s 超限 → 等比压缩 4+8（两镜都 ≥60% 原声明）→ 仍合并（与旁路脚本一致）
+        self.assertEqual([["LN01", "LN02"], ["LN03", "LN04"]],
+                         [[s["name"] for s in g] for g, _ in groups])
+        self.assertEqual(groups[1][1], [4, 8])
+        # 合计 ≤12s 硬上限
+        for _, declared in groups:
+            self.assertLessEqual(sum(declared), 12)
+
+    def test_group_shots_compression_respects_speech_floor(self):
+        from v5.media import video_plan
+
+        # 6+6=12 恰好放得下；6+7=13 → 压缩，但每镜不得低于台词下限
+        shots = [{"name": "LN01", "scene": "画室", "seconds": 7,
+                  "dialogue": "一二三四五六七八九十" * 2},   # 20 字 → 需要 ≥5s
+                 {"name": "LN02", "scene": "画室", "seconds": 7}]
+        groups = video_plan.group_shots(shots, 5)
+        self.assertEqual(len(groups), 1, "13s 压缩后仍应合并")
+        declared = groups[0][1]
+        self.assertEqual(sum(declared), 12)
+        self.assertGreaterEqual(min(declared), 5, "台词镜不得压破语音下限")
+
+    # ── 提交（pack 粒度）──
+
+    def test_submit_packs_one_job_per_group(self):
+        from unittest import mock
+
+        from v5.media import jobs as jobs_mod, providers, video
+
+        shots = [{"name": "LN01", "scene": "画室", "seconds": 5},
+                 {"name": "LN02", "scene": "画室", "seconds": 5},
+                 {"name": "LN03", "scene": "夜街", "seconds": 5}]
+        planned = [{"name": s["name"], "frame_plan": {}} for s in shots]
+        st = {s["name"]: {"url": "u"} for s in shots}
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            with mock.patch.object(video.config, "VIDEO_MODE", "pack"), \
+                    mock.patch.object(providers, "submit_video",
+                                      return_value={"video_id": "v1"}) as sub:
+                jobs = video.submit_packs(root, shots, st, planned, ep=1,
+                                          log=lambda *_: None)
+            self.assertEqual(sub.call_count, 2, "同场景 2 镜打包 + 独立 1 组 = 2 次提交")
+            ep_dir = root / "media" / "ep1"
+            self.assertEqual(jobs["pack01"]["shots"], ["LN01", "LN02"])
+            self.assertEqual(jobs["pack02"]["shots"], ["LN03"])
+            self.assertEqual(jobs["pack01"]["state"], "submitted")
+            self.assertEqual(sub.call_args_list[0].kwargs.get("seconds"), 10)
+
+    def test_submit_packs_only_rerenders_containing_group(self):
+        from unittest import mock
+
+        from v5.media import jobs as jobs_mod, providers, video
+
+        shots = [{"name": "LN01", "scene": "画室", "seconds": 5},
+                 {"name": "LN02", "scene": "画室", "seconds": 5}]
+        planned = [{"name": s["name"], "frame_plan": {}} for s in shots]
+        st = {s["name"]: {"url": "u"} for s in shots}
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            ep_dir = root / "media" / "ep1"
+            clip_dir = ep_dir / "clips"
+            clip_dir.mkdir(parents=True)
+            (clip_dir / "pack01.mp4").write_bytes(b"OLD")
+            jobs_mod.save(ep_dir, {"pack01": {"state": "completed",
+                                              "shots": ["LN01", "LN02"]}})
+            with mock.patch.object(video.config, "VIDEO_MODE", "pack"), \
+                    mock.patch.object(providers, "submit_video",
+                                      return_value={"video_id": "v2"}) as sub:
+                video.submit_packs(root, shots, st, planned, ep=1,
+                                   log=lambda *_: None, only=["LN02"])
+            self.assertEqual(sub.call_count, 1, "only 镜所在组整组重渲")
+            self.assertFalse((clip_dir / "pack01.mp4").exists(),
+                             "重渲前必须作废旧组产物")
+
+    def test_expand_packs_maps_shots_to_group_clip(self):
+        from v5.media import video
+
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            ep_dir = root / "media" / "ep1"
+            ep_dir.mkdir(parents=True)
+            (ep_dir / "video_jobs.json").write_text(json.dumps({
+                "pack01": {"state": "completed", "shots": ["LN01", "LN02"]},
+                "LN09": {"state": "completed"},   # 旧逐镜记录：不得透传
+            }, ensure_ascii=False), encoding="utf-8")
+            out = video.expand_packs(root, 1, {"pack01": "/x/pack01.mp4",
+                                               "LN09": "/x/LN09.mp4"},
+                                     log=lambda *_: None)
+            self.assertEqual(out, {"LN01": "/x/pack01.mp4", "LN02": "/x/pack01.mp4"})
+
+    # ── 拼接识别 ──
+
+    def test_concat_glob_prefers_pack_clips(self):
+        from unittest import mock
+
+        from v5.media import compose
+
+        with tempfile.TemporaryDirectory() as d:
+            clip_dir = Path(d)
+            # 真 mp4 片段（假字节过不了 ffmpeg；0.5s 纯色片生成成本毫秒级）
+            for nm, c in (("pack01", "red"), ("pack02", "blue")):
+                subprocess.run(
+                    ["ffmpeg", "-y", "-v", "error", "-f", "lavfi",
+                     "-i", "color=c=%s:s=64x64:d=0.5" % c,
+                     "-c:v", "libx264", "-preset", "ultrafast",
+                     str(clip_dir / (nm + ".mp4"))],
+                    capture_output=True, timeout=60)
+            seen = (sorted(clip_dir.glob("pack*.mp4"), key=lambda p: p.stem)
+                    or sorted(clip_dir.glob("LN*.mp4"), key=lambda p: p.stem))
+            self.assertEqual([p.name for p in seen], ["pack01.mp4", "pack02.mp4"],
+                             "pack 产物按组序拼接；compose.concat 的 glob 选择逻辑同源")
+            # 真函数走一遍（TRIM/XFADE 关掉走 copy 快路径，隔离编码耗时）
+            with mock.patch.object(compose, "TRIM", 0.0), \
+                    mock.patch.object(compose, "XFADE", 0.0):
+                self.assertEqual(compose.concat(clip_dir, clip_dir / "out.mp4"), 2,
+                                 "pack 模式的 clips/ 必须能被 concat 识别并拼接")
+            self.assertTrue((clip_dir / "out.mp4").exists())
 
 
 if __name__ == "__main__":

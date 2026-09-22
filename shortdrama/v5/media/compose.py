@@ -41,7 +41,13 @@ XFADE = _env_seconds("SHORTDRAMA_COMPOSE_XFADE", 0.3)
 
 
 def concat(clip_dir: Path, out: Path) -> int:
-    clips = sorted(clip_dir.glob("LN*.mp4"), key=lambda p: p.stem)
+    # 产物识别（2026-09-22 起 pack 档）：clips/ 下若存在 `pack*.mp4`（组级产物，
+    # 一个文件含该组全部镜），按组编号顺序拼 —— pack 模式的 clips/ 里不会有
+    # LN*.mp4（submit_packs 不产单镜文件），两者互斥、pack 优先。
+    # pack%02d 两位编号保证字典序 = 组序；旁路脚本产物 `pack01_LN01-LN03.mp4`
+    # 若被手动放入 clips/，字典序同样按编号排，兼容。
+    clips = (sorted(clip_dir.glob("pack*.mp4"), key=lambda p: p.stem)
+             or sorted(clip_dir.glob("LN*.mp4"), key=lambda p: p.stem))
     if not clips:
         return 0
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -128,7 +134,8 @@ def _compose(clips: list[Path], specs: list[dict], out: Path, clip_dir: Path) ->
         try:
             shutil.rmtree(stage, ignore_errors=True)
         except BaseException:  # noqa: BLE001
-            # 清理失败不影响成片：stage 在子目录里，glob("LN*.mp4") 不会命中
+            # 清理失败不影响成片：stage 在子目录里，glob("LN*.mp4")/glob("pack*.mp4")
+            # 都不会命中
             pass
 
 

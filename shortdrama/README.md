@@ -262,7 +262,8 @@ projects/<项目名>/
 | `SHORTDRAMA_V5_EPISODE` | 1 | **本项目跑第几集**（多集连载）。M3 起产物路径由**每次开工注入**（`role_input` 的【本集产物路径】），故**一个 dev server 可连续跑 N 集**（`run_new_project.py --episodes 1-4`）；本变量只作起服时的默认值/调试固定用。取值优先级：env > manifest 的 `episode_index` > 1 |
 | `SHORTDRAMA_SLICE_THRESHOLD` | 4000 | **按集切片注入**的阈值（字符）：全剧级目录（`plotdesigner/episodes.md`）超过它就只注入「本集 ±1 + 本卷摘要」而非全文。**给真机验证用**，生产别设 |
 | `SHORTDRAMA_SLICE_SOFT` | 0 | 切片失败时的降级开关：默认（0）**响亮终止**；设 1 则「告警 + 注入全文」（应急用） |
-| `SHORTDRAMA_VIDEO_MODE` | reference | 静帧当**参考图**（各镜独立，可用 `audios`）vs `keyframe`（静帧当**首帧**，支持镜间承接但拿不到 `audios`）。两者**官方互斥** |
+| `SHORTDRAMA_VIDEO_MODE` | reference | 静帧当**参考图**（各镜独立，可用 `audios`）vs `keyframe`（静帧当**首帧**，支持镜间承接但拿不到 `audios`）vs `pack`（**12s 打包**：相邻同场景镜合成一条 ≤12s 的 reference 请求，接戏变单请求内部问题；提交前自动生成跨组接缝静帧预检图 `seam_preview.jpg`）。前三者官方互斥关系同上 |
+| `SHORTDRAMA_VIDEO_PACK_MAX_GROUP` | 5 | `pack` 模式下单组最多吞几个镜（分组算法见 `media/video_plan.group_shots`；与旁路脚本 `scripts/pack_render.py --max-group` 同义） |
 | `SHORTDRAMA_IMAGE_VENDOR` | agnes | 生图厂商（`v5/vendors.py` 注册表）。未注册的名字**响亮报错**，不静默回退 |
 | `SHORTDRAMA_VIDEO_VENDOR` | agnes | 生视频厂商（同上）。前端三个生成页面各自可选，随请求进该次 run 的子进程 env |
 | `SHORTDRAMA_CAST_ENSURE` | 1 | `0` = 跳过参考图确定性生成（复用已有 `images/`）|

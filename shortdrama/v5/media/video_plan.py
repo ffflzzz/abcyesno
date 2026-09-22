@@ -18,16 +18,96 @@
 """
 from __future__ import annotations
 
+import math
+import re
 from dataclasses import dataclass
 
 from .. import config
 
-#: 支持的三种模式（`text` 我们不使用：短剧必须有画面控制）。
+#: 支持的四种模式（`text` 我们不使用：短剧必须有画面控制）。
 #: `mixed`（2026-09-20，osmanthus-vow 三镜对照实验后立项）：**逐镜**在
 #: reference / keyframe 之间选择 —— 承接=continuous/match 的镜走 keyframe
 #: （首帧=上一镜落幅图、尾帧=本镜静帧，接戏），cut 镜走 reference（自由运镜 + 角色参考图）。
 #: 官方文档明确"每个 endpoint 调用独立，同一项目可逐次换工作流"。
-MODES = ("reference", "keyframe", "mixed")
+#: `pack`（2026-09-22，12s 打包法落管线）：相邻**同场景**镜打包成一条 ≤12s 的
+#: reference 请求（每镜一张静帧、逐拍 `<Picture i>` 点名+时间边界）——接戏从
+#: "跨请求问题"变成"单请求内部问题"。本质仍是 reference（图用法相同、无首帧锁定），
+#: 差别只在**提交粒度**：一个 job = 一组镜（详见 `group_shots`）。
+MODES = ("reference", "keyframe", "mixed", "pack")
+
+# ─── pack 档：压缩式分组算法（自 scripts/pack_render.py 搬入，判据逐字节一致）──
+# 旁路脚本（pack_render.py）保留为独立验证入口；两处判据若有改动必须同步。
+
+PACK_MAX_SECONDS = 12    # 单条请求硬上限（供应商 seconds ∈ [4, 12]）
+PACK_MIN_KEEP_RATIO = 0.6  # 压缩后每镜至少保留原声明的 60%
+
+
+def pack_clamp_sec(s: dict) -> int:
+    """分镜声明时长：解析失败按 4s 兜底，硬区间 4-12。"""
+    v = int(s.get("seconds") or 0) or 4
+    return max(4, min(12, v))
+
+
+def pack_speech_need(s: dict) -> int:
+    """镜最短可行秒数：台词语音（5 字/秒）+ 1s 余量；无声镜 2s 起步、下限 4s。"""
+    chars = len(re.sub(r"[^一-龥]", "", s.get("dialogue") or ""))
+    need = chars / 5.0 + 1.0 if chars else 2.0
+    return max(4, math.ceil(need))
+
+
+def _pack_fit(declared: list[int], mins: list[int]) -> list[int] | None:
+    """把 declared 等比压到 ≤12s；保每镜 ≥mins 且 ≥60% 原声明。失败返回 None。"""
+    total = sum(declared)
+    if total <= PACK_MAX_SECONDS:
+        return declared
+    scaled = [d * PACK_MAX_SECONDS / total for d in declared]
+    out = [max(m, round(x)) for x, m in zip(scaled, mins)]
+    while sum(out) > PACK_MAX_SECONDS:
+        idx = max(range(len(out)), key=lambda k: out[k] - mins[k])
+        if out[idx] - 1 < mins[idx] or out[idx] - 1 < declared[idx] * PACK_MIN_KEEP_RATIO:
+            return None
+        out[idx] -= 1
+    if any(o < declared[idx] * PACK_MIN_KEEP_RATIO for idx, o in enumerate(out)):
+        return None
+    return out if sum(out) <= PACK_MAX_SECONDS else None
+
+
+def group_shots(shots: list[dict], max_group: int | None = None) -> list[tuple[list[dict], list[int]]]:
+    """pack 档分组：**同场景**相邻镜贪心合并，返回 [(镜列表, 每镜分配秒)]。
+
+    规则（v2 压缩式，与旁路脚本实测闭环版本一致）：
+    - 仅同场景相邻镜合并（跨场景切换是分镜语义，不交给模型即兴）；
+    - 声明时长之和 ≤12s 直接合并；
+    - 超限时等比压缩到 12s，但每镜不得低于 `pack_speech_need`（台词时长下限），
+      且压幅不得超原声明 40% —— 否则放弃合并、该镜独立成组。
+    """
+    mg = int(max_group or config.VIDEO_PACK_MAX_GROUP)
+    groups: list[tuple[list[dict], list[int]]] = []
+    i, n = 0, len(shots)
+    while i < n:
+        cur = [shots[i]]
+        declared = [pack_clamp_sec(shots[i])]
+        while len(cur) < mg and i + len(cur) < n:
+            nxt = shots[i + len(cur)]
+            sc_cur = (cur[-1].get("scene") or "").strip()
+            sc_nxt = (nxt.get("scene") or "").strip()
+            if not sc_cur or sc_cur != sc_nxt:
+                break
+            trial_d = declared + [pack_clamp_sec(nxt)]
+            mins = [pack_speech_need(s) for s in cur + [nxt]]
+            fitted = _pack_fit(trial_d, mins)
+            if sum(trial_d) <= PACK_MAX_SECONDS:
+                cur.append(nxt)
+                declared = trial_d
+                continue
+            if fitted:
+                cur.append(nxt)
+                declared = fitted
+                break        # 压缩组 12s 已满，不再吞镜
+            break
+        groups.append((cur, declared))
+        i += len(cur)
+    return groups
 
 
 @dataclass(frozen=True)
@@ -66,6 +146,16 @@ class VideoPlan:
             return cls(mode=m, use_images=True, use_keyframes=False,
                        needs_tail_extract=False, can_submit_flat=True,
                        announce_picture=True)
+
+        if m == "pack":
+            # 打包档（2026-09-22）：本质是 reference（静帧进 images、无首帧锁定），
+            # 差别只在提交粒度 —— 一个 job = 一组同场景相邻镜（≤12s）。
+            # 组与组之间互不依赖 ⇒ 照样平铺（提交与等待解耦）。
+            # announce_picture=False：打包 prompt 由 `prompt.build_pack_prompt`
+            # 自行做 `<Picture i>` 逐拍声明，不走单镜六段式组装器。
+            return cls(mode=m, use_images=True, use_keyframes=False,
+                       needs_tail_extract=False, can_submit_flat=True,
+                       announce_picture=False)
 
         if m == "mixed":
             # 逐镜决策（见 `mode_for`）。串行依赖全靠"预生成落幅图"解除 ⇒ 必须平铺；

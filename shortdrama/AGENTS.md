@@ -276,6 +276,12 @@ brief.json 的 `script-craft` 列表（项目级）> pack.json 的 `script-craft
 |---|---|---|---|
 | **`reference`（当前默认）** | 静帧进 `images`，提示词里作 `<Picture 1>` | `images`(≤5) / `audios`(≤3) | `first_frame`、`last_frame` |
 | `keyframe`（回退档） | 静帧当首帧，构图被锁死 | `first_frame` / `last_frame` | `images`、`audios` |
+| `pack`（2026-09-22 落管线） | **相邻同场景镜打包**成一条 ≤12s 的 reference 请求（每镜一张静帧、逐拍 `<Picture i>` 点名+时间边界）；job 与产物都是**组级**（`clips/packNN.mp4`），提交前自动生成跨组接缝静帧预检图 `seam_preview.jpg`（人眼扫，不阻断） | 同 `reference`（≤5 张/请求 ⇒ 组上限默认 5） | 同 `reference` |
+
+分组算法在 `media/video_plan.group_shots`（同场景相邻贪心、≤12s、压缩保台词下限）；
+打包 prompt 在 `media/prompt.build_pack_prompt`；旁路脚本 `scripts/pack_render.py`
+保留为独立验证入口，两处判据改动必须同步。pack 档**跳过**逐镜 clipqc（组产物多镜
+合并、逐镜判据不适用）与落幅帧预生成。
 
 回退：`SHORTDRAMA_VIDEO_MODE=keyframe`。
 
@@ -346,7 +352,8 @@ brief.json 的 `script-craft` 列表（项目级）> pack.json 的 `script-craft
 | `AGNES_VIDEO_MAX_SHOTS` | 20 | **超过 20 镜的项目必须调大**，否则按上限**截断**（会打印醒目警告）|
 | `AGNES_VIDEO_MAX_SECONDS` | 12 | 单镜秒数**上限**（供应商硬约束 `seconds ∈ [4,12]`；下限 4 固定）。★ 设成小于 12 会让超长的镜被**静默压短**——2026-09-16 曾因误设 `10` 压短 620 镜中的 9 镜 |
 | `SHORTDRAMA_VIDEO_BGM` | 1 | 类型包禁忌 BGM 时设 `0` |
-| `SHORTDRAMA_VIDEO_MODE` | reference | `keyframe` 为回退档（见上文模式表）|
+| `SHORTDRAMA_VIDEO_MODE` | reference | `keyframe` 为回退档；`pack` 为 12s 打包档（见上文模式表）|
+| `SHORTDRAMA_VIDEO_PACK_MAX_GROUP` | 5 | `pack` 模式单组最多镜数（同 README §6）|
 | `SHORTDRAMA_STILL_QC` | 1 | `0` = 跳过静帧 QC。★ **前端路径（`v5/media/runner.start`）默认传 `0`**（人工模式：判断权在人），前端工具栏的「自动质检」开关可打开 |
 | `SHORTDRAMA_CLIP_QC` | 1 | `0` = 跳过成片抽帧复核。同上，前端默认 `0`、可开关 |
 | `SHORTDRAMA_SLICE_THRESHOLD` | 4000 | 按集切片注入阈值（字符）|

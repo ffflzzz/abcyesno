@@ -124,8 +124,17 @@ VIDEO_PROVIDER = os.environ.get("SHORTDRAMA_VIDEO_PROVIDER", "agnes")
 #           （连带 `STILL_CHAIN` / `TAIL_PREGEN` 两个为"缓解链式串行"而生的
 #            开关失去意义——没有链了，也就没有串行瓶颈了）。
 #   · keyframe（回退档）—— 静帧当首帧，构图被锁死、支持镜间承接，但无 audios。
+#   · pack（2026-09-22，12s 打包法落管线）—— 相邻**同场景**镜打包成一条 ≤12s 的
+#     reference 请求（每镜一张静帧、逐拍 `<Picture i>` 点名+时间边界）。依据：
+#     三项目 37 次提交零拒绝、捕梦师 213s 成片时长纪律 +1%、打包内部缝教科书级连续
+#     （对照组：逐镜 reference 的接缝形制跳变）。本质仍是 reference（静帧进
+#     `images`），只是"一次请求管多镜"⇒ 接戏从跨请求问题变成单请求内部问题。
+#     开关：`SHORTDRAMA_VIDEO_MODE=pack`；组上限 `SHORTDRAMA_VIDEO_PACK_MAX_GROUP`（默认 5）。
 # 回退方式：设 `SHORTDRAMA_VIDEO_MODE=keyframe`。
 VIDEO_MODE = os.environ.get("SHORTDRAMA_VIDEO_MODE", "reference").strip().lower()
+
+# pack 档单组最多吞几个镜（与旁路脚本 pack_render.py 的 --max-group 同义）。
+VIDEO_PACK_MAX_GROUP = int(os.environ.get("SHORTDRAMA_VIDEO_PACK_MAX_GROUP", "5"))
 
 # 单镜上限秒数。★ **2026-09-16 修：默认 10 → 12**。
 #   事故形态：**静默压短**。`providers.submit_video` 会把单镜秒数钳到

@@ -1345,3 +1345,65 @@ def build_all(shots: list[dict], planned: list[dict] | None = None) -> list[dict
         "still": build_still_prompt(s, p),
         "video": build_video_prompt(s, p),
     } for s, p in zip(shots, pl)]
+
+
+# ─── pack 档：打包 prompt（2026-09-22，自 scripts/pack_render.py 搬入）────────
+#
+# 12s 打包法（三项目 37 次提交零拒绝 + 捕梦师 213s 成片闭环）的 prompt 骨架：
+# 参考图逐拍点名 + 时间段边界（±1s 弹性）+ 逐拍完整内容（场景/镜头语言/画面/
+# 台词/音效/落幅）。与单镜六段式（build_video_prompt）的区别：
+#   · `<Picture i>` 不是"素材分工"而是"节拍锚点" —— 第 i 张图 = 第 i 拍的
+#     画面参考，模型按时间边界自然衔接；
+#   · 全局块声明"这是同一条连续素材"—— 人物/服装/道具跨节拍完全一致，
+#     光线色调随场景自然过渡（这是逐镜 reference 做不到的：它不知道相邻镜存在）。
+# 旁路脚本 pack_render.py 保留为独立验证入口；prompt 文本两处必须同步。
+
+def _pack_fmt_dialogue(d: str) -> str:
+    d = (d or "").strip()
+    if not d or "无声" in d:
+        return "无台词（环境音）"
+    return d
+
+
+def build_pack_prompt(group: list[dict], declared: list[int], total: int) -> str:
+    """打包 prompt：参考图逐拍点名 + 时间段边界 + 逐拍完整内容。
+
+    `group` = 同场景相邻镜列表；`declared` = 每镜分配秒（≤12s 合计）；
+    `total` = sum(declared)。
+    """
+    n = len(group)
+    bounds, maps = [], []
+    left = 0
+    for i, s in enumerate(group):
+        right = left + declared[i]
+        maps.append("<Picture %d> 为第 %d-%d 秒节拍的画面参考" % (i + 1, left, right))
+        bounds.append((left, right))
+        left = right
+    segs = [
+        "、".join(maps)
+        + "；共 %d 张参考图对应同一条 %d 秒片段的 %d 个节拍，"
+          "人物、服装、道具与场景一律以对应参考图为准。" % (n, total, n),
+        "本片段总长 %d 秒，由连续发生的 %d 个节拍组成，各节拍按下列时间分配自然衔接，"
+        "节拍边界允许 ±1 秒弹性：" % (total, n),
+    ]
+    for (l, r), s in zip(bounds, group):
+        scene = (s.get("scene") or "").strip()
+        head = "【第 %d-%d 秒" % (l, r)
+        if scene:
+            head += "｜%s" % scene
+        head += "｜%s·%s·%s】" % (s.get("shot_type"), s.get("angle"), s.get("camera"))
+        join = (s.get("join_note") or "").strip()
+        join_line = "\n转场承接：%s。" % join if join else ""
+        style = (s.get("visual_style") or "").strip()
+        style_line = "\n视觉风格：%s" % style if style else ""
+        segs.append(
+            "%s\n%s%s%s\n台词：%s\n音效：%s\n落幅：%s"
+            % (head, (s.get("visual") or "").strip(), join_line, style_line,
+               _pack_fmt_dialogue(s.get("dialogue")),
+               (s.get("sfx") or "").strip() or "无",
+               (s.get("tail") or "").strip() or "自然收在该拍动作结束处"))
+    segs.append(
+        "画面风格：电影级国风古装剧照质感；这是同一条连续素材，"
+        "各节拍光线与色调随场景自然过渡，转场干脆利落，人物造型跨节拍完全一致。")
+    segs.append("全片不得出现任何文字、字幕、水印；不得分屏；竖屏构图。")
+    return "\n\n".join(segs)

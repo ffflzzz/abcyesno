@@ -422,6 +422,213 @@ def submit_all(project_root: Path, shots: list[dict], stills: dict, planned: lis
     return jobs
 
 
+# ─── pack 档（2026-09-22）：相邻同场景镜打包 ≤12s reference 请求 ─────────────
+#
+# 依据（三项目实测闭环，详见 scripts/pack_render.py 与项目记忆）：
+#   · 逐镜 reference 时模型不知道相邻镜存在 → 跨请求接缝形制跳变；
+#   · 打包成一条 ≤12s 请求后接戏变成"单请求内部问题"——捕梦师 15/15 组零拒绝、
+#     打包内部缝教科书级连续、时长纪律 +1%；
+#   · 分组算法/prompt 骨架自旁路脚本搬入 `video_plan.group_shots` /
+#     `prompt.build_pack_prompt`（两处判据必须同步，脚本保留为独立验证入口）。
+#
+# 与 submit_all 同构（提交与等待解耦）：这里只提交，等待走 poll_all；
+# 产物是**组级** clip（clips/packNN.mp4，一个文件含该组全部镜），
+# `expand_packs` 负责把组级结果展开成"每镜→其组成片"，下游缺镜判定零改动。
+
+def _seam_preview(out_dir: Path, groups: list, stills: dict, log=print) -> Path | None:
+    """相邻组交界静帧并排预检图（修法①，默认档：纯拼图、零模型调用）。
+
+    组内接戏由打包内部保证；**跨组接缝**才是剩余风险点 —— 每对相邻组拼一行：
+    左=上一组末镜静帧，右=下一组首镜静帧。人眼 30 秒扫完全部组对（21 对 vs
+    2.7h 渲染 <3% 成本），把"渲完才发现接不上"的返工挪到提交前。
+    返回拼图路径；无 PIL 或组数 <2 时返回 None（不阻断）。
+    """
+    try:
+        from PIL import Image, ImageDraw
+    except ImportError:  # noqa: BLE001
+        log("[video] 无 PIL，跳过接缝预检图")
+        return None
+    pairs = []
+    for k in range(len(groups) - 1):
+        pairs.append((k + 1, groups[k][0][-1],        # 上一组末镜
+                      k + 2, groups[k + 1][0][0]))    # 下一组首镜
+    if not pairs:
+        return None
+
+    def _open(name: str):
+        rec = stills.get(name) or {}
+        for key in ("path", "local", "file"):       # 本地字段优先（url 是图床地址）
+            p = rec.get(key)
+            if p and Path(p).exists():
+                try:
+                    return Image.open(p).convert("RGB")
+                except Exception:  # noqa: BLE001
+                    break
+        return None
+
+    THUMB_H, LABEL_W, GAP = 256, 240, 8
+    rows: list = []
+    for pk, ls, nk, rs in pairs:
+        li, ri = _open(ls["name"]), _open(rs["name"])
+        w_l = int(li.width * THUMB_H / li.height) if li else THUMB_H
+        w_r = int(ri.width * THUMB_H / ri.height) if ri else THUMB_H
+        row_w = LABEL_W + w_l + GAP + w_r + 20
+        row = Image.new("RGB", (row_w, THUMB_H + 8), (24, 24, 24))
+        d = ImageDraw.Draw(row)
+        d.text((8, THUMB_H // 2 - 20),
+               "pack%02d -> pack%02d\n%s | %s" % (pk, nk, ls["name"], rs["name"]),
+               fill=(230, 230, 230))
+        x = LABEL_W
+        for im, w in ((li, w_l), (ri, w_r)):
+            if im:
+                row.paste(im.resize((w, THUMB_H)), (x, 4))
+            else:
+                d.rectangle([x, 4, x + w, 4 + THUMB_H], fill=(60, 60, 60))
+                d.text((x + 8, THUMB_H // 2), "缺静帧", fill=(255, 120, 120))
+            x += w + GAP
+        rows.append(row)
+    total_w = max(r.width for r in rows)
+    canvas = Image.new("RGB", (total_w, sum(r.height + 6 for r in rows)), (12, 12, 12))
+    y = 0
+    for r in rows:
+        canvas.paste(r, (0, y))
+        y += r.height + 6
+    out_dir.mkdir(parents=True, exist_ok=True)
+    p = out_dir / "seam_preview.jpg"
+    canvas.save(p, "JPEG", quality=85)
+    log("[video] 接缝预检图已生成：%s（%d 对相邻组，人眼 30 秒扫一遍 —— "
+        "看交界两侧人物/服装/场景是否接得上；发现问题先修静帧再提交，省 2.7h 渲染）"
+        % (p, len(pairs)))
+    return p
+
+
+def submit_packs(project_root: Path, shots: list[dict], stills: dict, planned: list[dict],
+                 ep: int = 1, log=print, only: list[str] | None = None,
+                 max_group: int | None = None) -> dict:
+    """pack 档提交：相邻同场景镜 → ≤12s 的 reference 请求（一个 job = 一组）。
+
+    job name = `pack01`/`pack02`…（组级）；产物 = `clips/packNN.mp4`（组级）。
+    jobs 记账里每条 pack 记录带 `shots`（组内镜名）与 `declared_seconds`
+    —— `expand_packs` 与补渲轮都从这里读分组事实，不重算分组（保证幂等：
+    分镜若中途改动，重算会错位，这里**以 jobs 表为准**）。
+
+    **`only`（补渲/单镜重渲）**：语义是"镜名"——组内**任一镜**在 only 里，
+    整组重渲（打包单位不可拆）。重渲前作废旧产物（删 clip + 状态回 pending）。
+
+    复用机制与 submit_all 逐项对齐：keypool per-key 闸门、队列满退避、
+    429 拉黑跳过、jobs 显式状态机、submitted 续跑认领（认领交给 poll_all）。
+    """
+    out_dir = project_root / "media" / ("ep" + str(ep))
+    clip_dir = out_dir / "clips"
+    clip_dir.mkdir(parents=True, exist_ok=True)
+    jobs = jobs_mod.load(out_dir)
+    _only = set(only) if only else None
+    shots = prompt_mod.resolve_styles(shots)
+    groups = video_plan.group_shots(shots, max_group)
+    log("[video] pack 档：%d 镜 → %d 组（max_group=%d）"
+        % (len(shots), len(groups), max_group or config.VIDEO_PACK_MAX_GROUP))
+
+    # 修法①（默认档预检）：提交前生成相邻组交界静帧并排图，人眼扫。
+    # 预检图是**辅助判断**，不自动阻断——但缺静帧会在下面提交层被拦。
+    _seam_preview(out_dir, groups, stills, log=log)
+
+    pool = keypool.KeyPool.of()
+    log("[video] 提交配速：%d 条 key × 间隔 %ss" % (len(pool), pool.interval_s))
+    for k, (g, declared) in enumerate(groups, 1):
+        pname = "pack%02d" % k
+        names = [s["name"] for s in g]
+        total = sum(declared)
+        dest = clip_dir / (pname + ".mp4")
+        if _only is not None and not (set(names) & _only):
+            continue                      # 补渲：只动包含目标镜的组
+        if _only is None and jobs_mod.done(jobs, pname, clip_dir):
+            continue                      # 幂等：组产物在盘且状态 completed
+        if _only is not None:
+            # 重渲该组：作废旧产物（防 jobs_mod.done 因文件在盘而跳过提交）
+            if dest.exists():
+                dest.unlink()
+            jobs_mod.mark(jobs, pname, "pending", error="")
+        rec = jobs.setdefault(pname, {"state": "pending", "attempts": 0})
+        if rec.get("state") == "submitted" and rec.get("video_id"):
+            log("[video] %s 续跑认领已提交任务（poll_all 接管）" % pname)
+            continue
+        urls = [(stills.get(n) or {}).get("url") for n in names]
+        missing = [n for n, u in zip(names, urls) if not u]
+        if missing:
+            log("[video] %s 缺静帧：%s → 标 failed（先补静帧）" % (pname, missing))
+            jobs_mod.mark(jobs, pname, "failed", error="缺静帧:" + ",".join(missing))
+            jobs_mod.save(out_dir, jobs)
+            continue
+        prompt = prompt_mod.build_pack_prompt(g, declared, total)
+        log("[video] %s：%s 合计 %ds，prompt=%d 字，images=%d"
+            % (pname, "+".join(names), total, len(prompt), len(urls)))
+        # 提交：队列满退避比单镜档更激进（pack 提交成本高、撞 queue full 实测
+        # 也更频繁 —— 捕梦师 pack09 曾 5 连败；60s 起步实测有效）
+        r = None
+        key_idx, key = pool.claim()
+        for q_try in range(config.VIDEO_QUEUE_RETRIES + 1):
+            try:
+                r = providers.submit_video(prompt, mode="reference",
+                                           images=[u for u in urls if u],
+                                           seconds=total, key=key,
+                                           aspect_ratio=config.ASPECT_RATIO)
+                break
+            except providers.QueueFullError:
+                if q_try >= config.VIDEO_QUEUE_RETRIES:
+                    log("[video] %s 队列持续满（%d 次），本轮放弃、下轮再补"
+                        % (pname, q_try + 1))
+                    break
+                wait = min(300, 60 * (q_try + 1))
+                log("[video] %s 队列满，%ds 后重试（%d/%d）"
+                    % (pname, wait, q_try + 1, config.VIDEO_QUEUE_RETRIES))
+                time.sleep(wait)
+            except providers.RateLimitError:
+                pool.note_rate_limited(key_idx)
+                log("[video] %s 429（%s 拉黑一轮）：跳过本组，其余组继续"
+                    % (pname, pool.label(key_idx)))
+                r = None
+                break
+            except Exception as e:  # noqa: BLE001
+                log("[video] %s FAILED: %s" % (pname, str(e)[:120]))
+                jobs_mod.mark(jobs, pname, "failed", error=str(e)[:200])
+                jobs_mod.save(out_dir, jobs)
+                r = None
+                break
+        if r is None:
+            continue
+        vid = r.get("video_id") or r.get("task_id")
+        jobs_mod.submitted(jobs, pname, vid,
+                           first_frame_kind="reference_pack",
+                           shots=names, declared_seconds=declared, total_seconds=total)
+        jobs_mod.save(out_dir, jobs)
+        log("[video] %s submitted（%d 镜打包，%ds，%s）"
+            % (pname, len(names), total, pool.label(key_idx)))
+    if len(pool) > 1:
+        log("[video] key 用量：%s" % pool.stats())
+    jobs_mod.save(out_dir, jobs)
+    return jobs
+
+
+def expand_packs(project_root: Path, ep: int, done: dict, log=print) -> dict:
+    """组级结果 → 镜级结果：{pack01: path} → {LN01: path, ...}。
+
+    每镜指向**其所在组的成片**（下游缺镜判定/成片路径消费零改动）。
+    分组事实读 jobs 表的 `shots` 字段（submit_packs 提交时写的），**不重算**
+    —— 分镜若在两轮之间改动，重算会错位；以磁盘记账为准。
+    只展开带 `shots` 字段的记录（pack 记录）；旧的逐镜 LN 记录不透传
+    —— 切到 pack 模式就是要按打包产物出片，历史单镜 clip 不顶包。
+    """
+    jobs = jobs_mod.load(project_root / "media" / ("ep" + str(ep)))
+    out: dict[str, str] = {}
+    for pname, path in (done or {}).items():
+        if not (pname.startswith("pack") and path):
+            continue
+        for n in (jobs.get(pname) or {}).get("shots") or []:
+            out[n] = path
+    log("[video] pack 展开：%d 组 → %d 镜" % (len(done or {}), len(out)))
+    return out
+
+
 def poll_all(project_root: Path, jobs: dict, ep: int = 1, rounds: int = 40, log=print) -> dict:
     """轮询 + 落盘（并铺式提交的收尾）。返回 {name: local_path}。"""
     out_dir = project_root / "media" / ("ep" + str(ep))

@@ -1113,7 +1113,11 @@ def _run_impl(project_root: Path, ep: int = 1, log=print, max_regen: int = 2,
     # 只对"会被下一镜承接"的镜生成（cut 镜生成了也没人用，白烧配额）。
     tails: dict = {}
     # mixed 逐镜模式**依赖落幅图**做连续镜的首帧 ⇒ 自动开启预生成（不必手动配 TAIL_PREGEN）
-    if config.TAIL_PREGEN or config.VIDEO_MODE == "mixed":
+    # pack 档（2026-09-22）不消费落幅图（打包 prompt 以每镜静帧为节拍锚点）→ 显式跳过，
+    # 防止 TAIL_PREGEN 开着时白烧生图配额。
+    if config.VIDEO_MODE == "pack":
+        log("[media] pack 档：跳过落幅帧预生成（打包请求以每镜静帧为节拍锚点）")
+    elif config.TAIL_PREGEN or config.VIDEO_MODE == "mixed":
         need = stills.tail_needed(planned)
         if need:
             log("[media] 落幅帧预生成：%d 镜将被下一镜承接 → 预生成落幅图" % len(need))
@@ -1130,12 +1134,25 @@ def _run_impl(project_root: Path, ep: int = 1, log=print, max_regen: int = 2,
     # 旧判据是 `bool(tails)`——而 TAIL_PREGEN 只给"会被下一镜承接"的镜生成落幅，
     # 于是**全 cut 的片 tails 恒为空 → 永远走串行**（明明没有任何尾帧依赖）。
     # 新判据用 need_tails 对齐：全 cut 时 0 >= 0 成立 → 正确走并铺式。
-    need_tails = stills.tail_needed(planned) if (config.TAIL_PREGEN or config.VIDEO_MODE == "mixed") else []
+    need_tails = (stills.tail_needed(planned)
+                  if config.VIDEO_MODE != "pack"
+                  and (config.TAIL_PREGEN or config.VIDEO_MODE == "mixed") else [])
     # 「视频怎么提交 / 用什么图 / 要不要抽尾帧」的**唯一决策点** —— 见 media/video_plan.py。
     # 这里只问一件事：能不能平铺（提交与等待解耦）。
     vplan = video_plan.VideoPlan.of(n_tails=len(tails), n_need=len(need_tails))
     parallel = vplan.can_submit_flat
-    if parallel:
+    if vplan.mode == "pack":
+        # pack 档（2026-09-22）：相邻同场景镜打包 ≤12s reference 请求。
+        # 提交与等待解耦（与并铺式同构）：submit_packs 只提交 → poll_all 统一轮询
+        # → expand_packs 把组级结果展开成 {镜名: 所在组成片}，下游缺镜判定/
+        # 拼接逻辑零改动（每镜都拿得到"本镜成片"）。
+        # 跨组接缝风险在提交前由 seam_preview.jpg 静帧并排预检前置（人眼扫）。
+        jobs_d = video.submit_packs(project_root, shots, st, planned, ep=ep, log=log,
+                                    only=only)
+        _raw = video.poll_all(project_root, jobs_d, ep=ep, log=log)
+        done = video.expand_packs(project_root, ep, _raw, log=log)
+        jobs = len(jobs_d)
+    elif parallel:
         jobs_d = video.submit_all(project_root, shots, st, planned, ep=ep, log=log,
                                   tails=tails, only=only)
         done = video.poll_all(project_root, jobs_d, ep=ep, log=log)
@@ -1164,7 +1181,14 @@ def _run_impl(project_root: Path, ep: int = 1, log=print, max_regen: int = 2,
             log("[media] %d 镜未渲出（%s）→ **补渲一轮**"
                 "（供应商偶发 `generation failed`；实测补渲一次即成功）"
                 % (len(_todo), ",".join(_todo[:8])))
-            if parallel:
+            if vplan.mode == "pack":
+                # pack 档补渲：only 传**镜名**，submit_packs 把含目标镜的组整组重渲
+                # （打包单位不可拆；组产物作废→重提→轮询→重新展开）。
+                _jobs2 = video.submit_packs(project_root, shots, st, planned, ep=ep,
+                                            log=log, only=_todo)
+                _raw2 = video.poll_all(project_root, _jobs2, ep=ep, log=log)
+                _done2 = video.expand_packs(project_root, ep, _raw2, log=log)
+            elif parallel:
                 _jobs2 = video.submit_all(project_root, shots, st, planned, ep=ep,
                                           log=log, tails=tails, only=_todo)
                 _done2 = video.poll_all(project_root, _jobs2, ep=ep, log=log)
@@ -1205,7 +1229,14 @@ def _run_impl(project_root: Path, ep: int = 1, log=print, max_regen: int = 2,
     #      自愈环路必须有收敛判定：每轮重拍后再审，直到通过或达 CLIP_QC_ROUNDS。
     requeued: list[str] = []
     residual: list[str] = []
-    if config.CLIP_QC:
+    if config.CLIP_QC and vplan.mode == "pack":
+        # pack 档（2026-09-22）：组产物是**多镜合并**的一条视频，逐镜 clipqc 的
+        # 抽帧/判据都不适用（它按镜名找分镜）。pack 的质量闸门另有三道：
+        # 静帧 QC（上游）→ seam_preview 跨组接缝预检（提交前）→ 组级零拒绝统计。
+        # 逐镜复核在这条路径上是"检查比生成贵 10 倍"的纯开销，显式跳过。
+        log("[media] pack 档跳过逐镜成片复核（组产物多镜合并，逐镜判据不适用；"
+            "接缝风险已由 seam_preview 预检前置）")
+    elif config.CLIP_QC:
         # 崩溃恢复：上一次运行若在"暂存了旧 clip 但重渲还没回来"时被单轮上限
         # 杀掉，暂存区里会留着 clip。先全部放回——**这正是原实现永久丢片的路径**。
         #
