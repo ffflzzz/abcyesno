@@ -22,6 +22,7 @@ from .. import config
 from . import jobs as jobs_mod
 from . import keypool
 from . import prompt as prompt_mod
+from . import style as style_mod
 from . import providers
 from . import video_plan
 
@@ -559,7 +560,11 @@ def submit_packs(project_root: Path, shots: list[dict], stills: dict, planned: l
             jobs_mod.mark(jobs, pname, "failed", error="缺静帧:" + ",".join(missing))
             jobs_mod.save(out_dir, jobs)
             continue
-        prompt = prompt_mod.build_pack_prompt(g, declared, total)
+        # 项目风格块（style-block / 项目 style.md）一次加载，逐组复用——
+        # 2026-09-22：替换 build_pack_prompt 里硬编码的「国风古装」句（题材污染）。
+        prompt = prompt_mod.build_pack_prompt(
+            g, declared, total,
+            style_block=style_mod.wrap(style_mod.load(project_root)))
         log("[video] %s：%s 合计 %ds，prompt=%d 字，images=%d"
             % (pname, "+".join(names), total, len(prompt), len(urls)))
         # 提交：队列满退避比单镜档更激进（pack 提交成本高、撞 queue full 实测

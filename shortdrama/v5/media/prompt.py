@@ -1365,11 +1365,17 @@ def _pack_fmt_dialogue(d: str) -> str:
     return d
 
 
-def build_pack_prompt(group: list[dict], declared: list[int], total: int) -> str:
+def build_pack_prompt(group: list[dict], declared: list[int], total: int,
+                      style_block: str = "") -> str:
     """打包 prompt：参考图逐拍点名 + 时间段边界 + 逐拍完整内容。
 
     `group` = 同场景相邻镜列表；`declared` = 每镜分配秒（≤12s 合计）；
     `total` = sum(declared)。
+    `style_block` = 本项目风格块（`style.wrap(style.load(root))`，2026-09-22 起
+    由调用方传入）。★ **为什么必须传**：旧实现硬编码「电影级国风古装剧照质感」
+    ——任何项目走 pack 档都被注入国风风格句（非国风项目直接被污染）。
+    传入后与静帧路径同源（style-block / 项目 style.md）；缺省回退**通用**
+    实拍句，不再点名任何题材。
     """
     n = len(group)
     bounds, maps = [], []
@@ -1402,9 +1408,15 @@ def build_pack_prompt(group: list[dict], declared: list[int], total: int) -> str
                _pack_fmt_dialogue(s.get("dialogue")),
                (s.get("sfx") or "").strip() or "无",
                (s.get("tail") or "").strip() or "自然收在该拍动作结束处"))
-    segs.append(
-        "画面风格：电影级国风古装剧照质感；这是同一条连续素材，"
-        "各节拍光线与色调随场景自然过渡，转场干脆利落，人物造型跨节拍完全一致。")
+    if style_block:
+        segs.append(
+            style_block.rstrip("。 ")
+            + "。这是同一条连续素材，"
+            "各节拍光线与色调随场景自然过渡，转场干脆利落，人物造型跨节拍完全一致。")
+    else:
+        segs.append(
+            "画面风格：电影级实拍剧照质感；这是同一条连续素材，"
+            "各节拍光线与色调随场景自然过渡，转场干脆利落，人物造型跨节拍完全一致。")
     segs.append("全片不得出现任何文字、字幕、水印；不得分屏；竖屏构图。")
     # 声音指令（2026-09-22，对标官方出片拍板）：同款模型实测能原生执行
     # 「全程 BGM+环境音、禁止静音段」（官方 12s 示例音轨零静音）。

@@ -34,6 +34,7 @@ sys.path.insert(0, str(ROOT))
 
 from v5 import config                                   # noqa: E402
 from v5.media import providers                          # noqa: E402
+from v5.media import style as style_mod                 # noqa: E402
 from v5.media.storyboard import parse                   # noqa: E402
 from v5.media.video import _wait_one                    # noqa: E402
 
@@ -109,8 +110,13 @@ def fmt_dialogue(d: str) -> str:
     return d
 
 
-def build_prompt(group: list[dict], declared: list[int], total: int) -> str:
-    """打包 prompt：参考图逐拍点名 + 时间段边界 + 逐拍完整内容。"""
+def build_prompt(group: list[dict], declared: list[int], total: int,
+                 style_block: str = "") -> str:
+    """打包 prompt：参考图逐拍点名 + 时间段边界 + 逐拍完整内容。
+
+    `style_block` = 项目风格块（与 v5.media.prompt.build_pack_prompt 同步，
+    2026-09-22：替换硬编码「国风古装」句，题材污染；缺省回退通用实拍句）。
+    """
     n = len(group)
     bounds, maps = [], []
     left = 0
@@ -142,9 +148,15 @@ def build_prompt(group: list[dict], declared: list[int], total: int) -> str:
                fmt_dialogue(s.get("dialogue")),
                (s.get("sfx") or "").strip() or "无",
                (s.get("tail") or "").strip() or "自然收在该拍动作结束处"))
-    segs.append(
-        "画面风格：电影级国风古装剧照质感；这是同一条连续素材，"
-        "各节拍光线与色调随场景自然过渡，转场干脆利落，人物造型跨节拍完全一致。")
+    if style_block:
+        segs.append(
+            style_block.rstrip("。 ")
+            + "。这是同一条连续素材，"
+            "各节拍光线与色调随场景自然过渡，转场干脆利落，人物造型跨节拍完全一致。")
+    else:
+        segs.append(
+            "画面风格：电影级实拍剧照质感；这是同一条连续素材，"
+            "各节拍光线与色调随场景自然过渡，转场干脆利落，人物造型跨节拍完全一致。")
     segs.append("全片不得出现任何文字、字幕、水印；不得分屏；竖屏构图。")
     return "\n\n".join(segs)
 
@@ -189,7 +201,8 @@ def main() -> int:
             entry["status"] = "skipped"
         else:
             urls = [(stills[s["name"]] or {}).get("url") for s in g]
-            prompt = build_prompt(g, declared, total)
+            prompt = build_prompt(g, declared, total,
+                                  style_block=style_mod.wrap(style_mod.load(root)))
             print("[pack%02d] %s 合计%ds prompt=%d字 images=%d 提交中…"
                   % (k, tag, total, len(prompt), len(urls)))
             r = None
