@@ -1364,7 +1364,12 @@ def _run_impl(project_root: Path, ep: int = 1, log=print, max_regen: int = 2,
     try:
         import json as _json
         _b = _json.loads((project_root / "brief.json").read_text(encoding="utf-8"))
-        if str(_b.get("audio_mode") or "") == "narration-led" and out.exists():
+        # ★ 默认**不混 TTS**（2026-09-24 实测：half-narrated 的画外音烘焙成功——
+        #   Agnes 按分镜「音效」列画外音格式合成了旁白声，再混 edge-tts 会双声重叠）。
+        #   TTS 混音只作为烘焙失败的回落：显式设 SHORTDRAMA_NARRATION_TTS=1 才启用。
+        _narr_tts = os.environ.get("SHORTDRAMA_NARRATION_TTS") == "1"
+        if (str(_b.get("audio_mode") or "") == "narration-led" and _narr_tts
+                and out.exists()):
             from v5.media import narration
             narration.attach(project_root, ep, out, log=log)
     except Exception as _ne:
