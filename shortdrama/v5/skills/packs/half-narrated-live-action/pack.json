@@ -1,0 +1,39 @@
+{
+ "name": "half-narrated-live-action",
+ "display-name-zh": "半解说真人短剧",
+ "version": "0.1.0-adapted",
+ "source": "Methodology ported from hub skill 'half-narrated-live-action-short-drama'（Design 平台版；模型中立适配：生图/视频走 Agnes，旁白音轨规划走 edge-tts——venv 已装 7.2.8）。参照 chinese-style-short-drama 的移植体例。",
+ "trigger-words": [
+  "半解说真人短剧",
+  "第一人称旁白短剧",
+  "第三人称旁白短剧",
+  "真人写实短剧",
+  "重生短剧",
+  "末世短剧",
+  "悬疑短剧",
+  "narrated live-action short drama"
+ ],
+ "default-video-model": "agnes",
+ "video-model-note": "源 skill 指定 MiniMax-H3（5–15s 拓扑），adapter 未接入；本管线视频层走 Agnes，时长沿用 Agnes 的 4–12s 硬约束。本字段代码不消费，只供人读。",
+ "audio-modes": [
+  "narration-led",
+  "dialogue-led",
+  "silent"
+ ],
+ "default-audio-mode": "narration-led",
+ "audio-mode-note": "★ narration-led 是本包核心（旁白推进剧情 + 对白补充情绪）。两条实现路径：①**画外音烘焙**——分镜「音效」列写「画外音（音色）：台词」，由 Agnes 音频生成，⏳ 未实测；②**独立旁白音轨**——拼接后按真实时间轴 edge-tts 逐句生成 + ffmpeg 混音，⏳ 二期（edge-tts 7.2.8 已在 venv，manju_craft 有封装参考）。\n⚠️「narration 死区」警示（topics/pack-conventions.md）：旁白台词**不得**写进「对白」列——会被视频模型当成角色台词念并驱动口型。旁白一律走「音效」列画外音格式 + 画面描述标注人物闭嘴。",
+ "visual-style": "真人写实短剧剧照——摄影级真实感，选角照 / 连续性参考图语言：真实光线、自然肤色与质感、可见毛孔与细发丝、可信衣料褶皱、正确镜头透视、克制色彩；构图与机位服务叙事。横屏 16:9。",
+ "style-watch": true,
+ "shot-duration": "4-12s",
+ "aspect-ratio": "16:9（本包主张横屏，与源 skill 一致；真实画幅由 SHORTDRAMA_ASPECT / SHORTDRAMA_STILL_RATIO 控制，本字段代码不消费）",
+ "script-craft": [
+  "short-drama-opening",
+  "short-drama-hooks",
+  "short-drama-satisfaction"
+ ],
+ "script-craft-note": "题材定位（重生 / 末世 / 悬疑 / 都市）= 商业短剧 → 启用商业三件套（开场法则 / 钩子 / 爽点）。微表情技法（micro-expression-acting）**不启用**：半解说的表演密度低于纯对白短剧（旁白镜人物闭嘴），面部细密指令收益低。",
+ "still-refs": true,
+ "still-refs-note": "真人写实包：**双向视觉锚定**——角色参考图（选角照语言：真实比例 / 真实手部 / 避免磨皮塑料感）+ 场景参考图（2026-09-23 新增的场景出图：环境全景空镜）。场景漂移与角色脸漂同为本包大敌，参考图越准越好。",
+ "still-tail": "material",
+ "still-tail-note": "静帧尾缀档位沿用 material（材质细节强化），与写实画风一致。"
+}
