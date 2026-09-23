@@ -204,6 +204,20 @@ def style_watch_spec(root: Path) -> str:
     """
     if style_is_criterion(root):
         return ""
+    # ★ 项目 brief.visual-style 优先（2026-09-23，guofeng-photo 误判定案）：
+    #   包级 visual-style 是**包的默认审美模板**；项目实际设定可能与它不同
+    #   （实测：guofeng-photo-0923 是「现代人穿越古风、全程现代装扮 + 16:9 横版」
+    #   ——QC 拿包默认的「古风 BJD 瓷肌、竖屏 9:16」当期望，把**正确的**现代装
+    #   横版画面判成「风格巨大偏差/画幅不符」）。brief 是项目级真相源：写了就用，
+    #   没写（空）回落包级。
+    try:
+        import json as _json
+        b = _json.loads((root / "brief.json").read_text(encoding="utf-8"))
+        bv = str(b.get("visual-style") or "").strip()
+        if bv:
+            return bv
+    except Exception:  # noqa: BLE001 —— brief 缺失/损坏时回落包级，不在这里响亮
+        pass
     cfg = pack_config(root)
     if not cfg or not _truthy(cfg.get("style-watch")):
         return ""
