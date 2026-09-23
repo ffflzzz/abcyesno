@@ -1366,7 +1366,8 @@ def _pack_fmt_dialogue(d: str) -> str:
 
 
 def build_pack_prompt(group: list[dict], declared: list[int], total: int,
-                      style_block: str = "") -> str:
+                      style_block: str = "",
+                      prev_shot_name: str | None = None) -> str:
     """打包 prompt：参考图逐拍点名 + 时间段边界 + 逐拍完整内容。
 
     `group` = 同场景相邻镜列表；`declared` = 每镜分配秒（≤12s 合计）；
@@ -1385,10 +1386,19 @@ def build_pack_prompt(group: list[dict], declared: list[int], total: int,
         maps.append("<Picture %d> 为第 %d-%d 秒节拍的画面参考" % (i + 1, left, right))
         bounds.append((left, right))
         left = right
+    # ★ 跨组静帧链（2026-09-23）：上一打包组末镜的静帧追加为**最后一张**参考图，
+    #   声明为"上一片段结束画面"——组与组独立生成互不知情（灯下棋实测：柳娘
+    #   坐/站组间跳变、玉佩位置漂移），这张图提供状态衔接锚点。图片本身由
+    #   submit_packs 追加在 images 末尾（Picture n+1）；ref_max=5 已由调用方把关。
+    tail_map = ""
+    if prev_shot_name:
+        tail_map = ("<Picture %d> 为**上一片段的结束画面**——仅用于衔接人物姿态、"
+                    "道具位置与场景连续性，**不对应本片段任何节拍**" % (n + 1))
     segs = [
         "、".join(maps)
-        + "；共 %d 张参考图对应同一条 %d 秒片段的 %d 个节拍，"
-          "人物、服装、道具与场景一律以对应参考图为准。" % (n, total, n),
+        + ("；" + tail_map if tail_map else "")
+        + "。人物、服装、道具与场景一律以对应参考图为准，"
+          "各节拍画面与本片段时间边界严格对应。",
         "本片段总长 %d 秒，由连续发生的 %d 个节拍组成，各节拍按下列时间分配自然衔接，"
         "节拍边界允许 ±1 秒弹性：" % (total, n),
     ]

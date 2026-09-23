@@ -543,7 +543,13 @@ def submit_packs(project_root: Path, shots: list[dict], stills: dict, planned: l
     jobs = jobs_mod.load(out_dir)
     _only = set(only) if only else None
     shots = prompt_mod.resolve_styles(shots)
-    groups = video_plan.group_shots(shots, max_group)
+    # ★ 分组切点优先落在分镜声明的切换点（2026-09-23）：planned 里每镜的
+    #   frame_plan.relation 描述它与**前镜**的关系（cut=视角/状态切换）。
+    #   continuous 链尽量同组（组内多拍共享一次生成，状态连贯）；
+    #   cut 处切组（组边界与叙事切换对齐，跨组衔接交给静帧链锚帧）。
+    _rel = {p.get("name"): (p.get("frame_plan") or {}).get("relation")
+            for p in (planned or [])}
+    groups = video_plan.group_shots(shots, max_group, cut_when=_rel)
     log("[video] pack 档：%d 镜 → %d 组（max_group=%d）"
         % (len(shots), len(groups), max_group or config.VIDEO_PACK_MAX_GROUP))
 
@@ -553,6 +559,7 @@ def submit_packs(project_root: Path, shots: list[dict], stills: dict, planned: l
 
     pool = keypool.KeyPool.of()
     log("[video] 提交配速：%d 条 key × 间隔 %ss" % (len(pool), pool.interval_s))
+    prev_last_name = None          # 跨组静帧链：上一组末镜名（提交时追加其静帧）
     for k, (g, declared) in enumerate(groups, 1):
         pname = "pack%02d" % k
         names = [s["name"] for s in g]
@@ -578,13 +585,25 @@ def submit_packs(project_root: Path, shots: list[dict], stills: dict, planned: l
             jobs_mod.mark(jobs, pname, "failed", error="缺静帧:" + ",".join(missing))
             jobs_mod.save(out_dir, jobs)
             continue
+        # ★ 跨组静帧链（2026-09-23）：把**上一组末镜的静帧**追加到参考图末尾
+        #   （Picture n+1，prompt 里声明为"上一片段结束画面"）。组与组独立生成
+        #   互不知情（灯下棋实测：柳娘坐/站组间跳变、玉佩位置漂移）——这张图给
+        #   模型一个状态衔接锚点。ref_max=5：组内已有 5 张时放弃追加（保组内完整）。
+        prev_url = None
+        if prev_last_name:
+            pu = (stills.get(prev_last_name) or {}).get("url")
+            if pu and pu not in urls and len(urls) < 5:
+                prev_url = pu
+                urls = urls + [prev_url]
         # 项目风格块（style-block / 项目 style.md）一次加载，逐组复用——
         # 2026-09-22：替换 build_pack_prompt 里硬编码的「国风古装」句（题材污染）。
         prompt = prompt_mod.build_pack_prompt(
             g, declared, total,
-            style_block=style_mod.wrap(style_mod.load(project_root)))
-        log("[video] %s：%s 合计 %ds，prompt=%d 字，images=%d"
-            % (pname, "+".join(names), total, len(prompt), len(urls)))
+            style_block=style_mod.wrap(style_mod.load(project_root)),
+            prev_shot_name=prev_last_name if prev_url else None)
+        log("[video] %s：%s 合计 %ds，prompt=%d 字，images=%d%s"
+            % (pname, "+".join(names), total, len(prompt), len(urls),
+               "（含前组末镜锚帧）" if prev_url else ""))
         # 提交：队列满时**换 key 重试**（2026-09-22 改造，同 submit_all 的理由：
         # 队列满是每条通道各自的状态，跨入口换通道能绕开单池拥堵）。
         r = None
@@ -631,6 +650,7 @@ def submit_packs(project_root: Path, shots: list[dict], stills: dict, planned: l
         jobs_mod.save(out_dir, jobs)
         log("[video] %s submitted（%d 镜打包，%ds，%s）"
             % (pname, len(names), total, pool.label(key_idx)))
+        prev_last_name = names[-1]     # 下一组的状态衔接锚（无条件更新：静帧链按分镜序）
     if len(pool) > 1:
         log("[video] key 用量：%s" % pool.stats())
     jobs_mod.save(out_dir, jobs)
