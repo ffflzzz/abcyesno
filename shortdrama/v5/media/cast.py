@@ -361,7 +361,10 @@ def _same_face_as(blk: str, appearance: str) -> str:
 # **必须排除 `#` 一级标题**：village-scale 的第一行是**文件标题**
 # `# 资产卡：村口那台会说话的磅秤（单集 3 分钟）`，用 `^#+` 会把它当卡片头
 # → 整个文件被切成 1 块（且那"1 块"是全文）→ 所有场景卡丢失（实测）。
-_CARD_HEAD_RE = re.compile(r"^#{2,4}\s*资产卡\s*[:：]", re.M)
+_CARD_HEAD_RE = re.compile(r"^#{2,4}\s*(?:资产卡|场景卡|道具卡|设施卡)\s*[:：]", re.M)
+# ★ 2026-09-23：分块锚扩展（half-narrated 包用「场景卡：/道具卡：」标题——
+#   只认「资产卡」会让 9 张卡静默丢 8 张，实测舞狮项目）。
+#   kind 识别交给 _KIND_HEAD_RE（场景卡→location、道具卡→prop）。
 # 三级标题里的 `（type）` 括号 —— 牛来 / 3D 包实际产物用它标类型
 _HEAD_TYPE_RE = re.compile(r"[（(]\s*(character|object|prop|location|scene)\s*[）)]", re.I)
 # **第三种标题写法**：`### <卡类型>：<名>`（village-scale 实测 `### 场景卡：收粮站（深夜）`）。
@@ -459,6 +462,26 @@ def _prompt_from_block(blk: str, fallback: str = "") -> str:
         txt = " ".join(x for x in buf if x)
         if len(txt) >= 20:
             return _strip_ref_boilerplate(txt)
+    # ★ 2026-09-23：格式 ③ half-narrated 字段列表（- **脸型**：…）——字段列表
+    #   本身就是选角照描述（无独立「外形提示词」段），拼接字段名+值。
+    #   注意：这段在 if m: 之外——half-narrated 条目根本没有「外形提示词」标题。
+    body_lines: list[str] = []
+    for ln2 in (blk or "").splitlines():
+        s2 = ln2.strip()
+        if not s2 or s2.startswith("#") or s2.startswith("---"):
+            if body_lines:
+                break
+            continue
+        if s2.startswith("|"):
+            continue
+        m2 = re.match(r"^[-*]\s*\*{0,2}([^*：:]+?)\*{0,2}\s*[:：]\s*(.+)$", s2)
+        if m2:
+            body_lines.append("%s：%s" % (m2.group(1).strip(" *"), m2.group(2).strip()))
+        elif body_lines:
+            body_lines.append(s2)
+    txt = "，".join(x for x in body_lines if x)
+    if len(txt) >= 20:
+        return _strip_ref_boilerplate(txt)
     return fallback
 
 
