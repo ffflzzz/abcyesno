@@ -127,6 +127,20 @@ AGNES_API_KEYS, AGNES_KEY_BASE, AGNES_KEY_INTERVAL_SEC, AGNES_KEY_IMAGE_RPM = \
 AGNES_API_KEY = AGNES_API_KEYS[0] if AGNES_API_KEYS else ""
 
 
+# ★ 文本通道（chat/QC 审片）端点（2026-09-23）：池里有带专属地址的 key（国内）
+#   就让文本走国内入口——文本 1000rpm 且入口稳（当日实测 chat 200/2.9s）；
+#   无带地址的 key → 空串回落 AGNES_BASE + AGNES_API_KEY（旧行为零变化）。
+def _chat_endpoint_of() -> tuple[str, str]:
+    for k in AGNES_API_KEYS:
+        base = AGNES_KEY_BASE.get(k)
+        if base:
+            return base, k
+    return "", ""
+
+
+CHAT_BASE_EFFECTIVE, CHAT_KEY_EFFECTIVE = _chat_endpoint_of()
+
+
 def base_for_key(key: str | None) -> str:
     """该 key 的专属媒体地址（没配则空串 → 调用方回落全局 `AGNES_BASE`）。"""
     return AGNES_KEY_BASE.get((key or "").strip(), "")

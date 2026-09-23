@@ -128,8 +128,10 @@ AGNES = {
     # `base_suffix` 是**文本通道特有**的：OpenAI 兼容端点在 `/v1/chat/completions`，
     # 而媒体侧是直接 `base + image_path`（路径里自带 `/v1`），故这里要单独补 `/v1`。
     "chat": {
-        "base_from_config": "AGNES_BASE", "base_suffix": "/v1",
-        "key_from_config": "AGNES_API_KEY",
+        # ★ 文本走国内入口优先（config.CHAT_BASE_EFFECTIVE/CHAT_KEY_EFFECTIVE）：
+        #   国内文本 1000rpm、入口稳（09-23 实测 chat 200/2.9s）；无带地址 key 回落旧行为。
+        "base_from_config": "CHAT_BASE_EFFECTIVE", "base_suffix": "/v1",
+        "key_from_config": "CHAT_KEY_EFFECTIVE",
         "model_from_config": "MODELS.chat",
     },
 }
