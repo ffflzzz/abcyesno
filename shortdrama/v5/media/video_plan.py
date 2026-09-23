@@ -72,21 +72,19 @@ def _pack_fit(declared: list[int], mins: list[int]) -> list[int] | None:
     return out if sum(out) <= PACK_MAX_SECONDS else None
 
 
-def group_shots(shots: list[dict], max_group: int | None = None,
-                cut_when: dict | None = None) -> list[tuple[list[dict], list[int]]]:
+def group_shots(shots: list[dict], max_group: int | None = None) -> list[tuple[list[dict], list[int]]]:
     """pack 档分组：**同场景**相邻镜贪心合并，返回 [(镜列表, 每镜分配秒)]。
 
     规则（v2 压缩式，与旁路脚本实测闭环版本一致）：
     - 仅同场景相邻镜合并（跨场景切换是分镜语义，不交给模型即兴）；
-    - ★ 分镜声明 `cut`（视角/状态切换）的镜**不并入本组**（2026-09-23）——
-      组边界优先落在叙事切换点上；continuous 链尽量同组（组内多拍共享一次
-      生成，人物姿态与道具状态连贯），跨组衔接交给"前组末镜静帧锚"。
     - 声明时长之和 ≤12s 直接合并；
     - 超限时等比压缩到 12s，但每镜不得低于 `pack_speech_need`（台词时长下限），
       且压幅不得超原声明 40% —— 否则放弃合并、该镜独立成组。
 
-    `cut_when` = {镜名: relation}（来自 planned 的 frame_plan；缺省 None =
-    旧行为，只按场景与时长切）。
+    ⚠️ 2026-09-23 撤销记录：曾试过「分镜声明 cut 的镜不并入本组」（组边界对齐
+    叙事切换点）——**实测错误**：写实主包的分镜把普通镜头切换都标 cut（几乎
+    每两镜一个），20 镜被切成 18 组（每组 1-2 镜），合并省时的意义全失。
+    "镜间关系 cut" ≠ "状态切换"，正反打对切也标 cut——组切分只看场景与时长。
     """
     mg = int(max_group or config.VIDEO_PACK_MAX_GROUP)
     groups: list[tuple[list[dict], list[int]]] = []
@@ -96,8 +94,6 @@ def group_shots(shots: list[dict], max_group: int | None = None,
         declared = [pack_clamp_sec(shots[i])]
         while len(cur) < mg and i + len(cur) < n:
             nxt = shots[i + len(cur)]
-            if cut_when and (cut_when.get(nxt.get("name") or "") == "cut"):
-                break                      # 分镜声明切换 → 组边界落在这里
             sc_cur = (cur[-1].get("scene") or "").strip()
             sc_nxt = (nxt.get("scene") or "").strip()
             if not sc_cur or sc_cur != sc_nxt:

@@ -543,13 +543,7 @@ def submit_packs(project_root: Path, shots: list[dict], stills: dict, planned: l
     jobs = jobs_mod.load(out_dir)
     _only = set(only) if only else None
     shots = prompt_mod.resolve_styles(shots)
-    # ★ 分组切点优先落在分镜声明的切换点（2026-09-23）：planned 里每镜的
-    #   frame_plan.relation 描述它与**前镜**的关系（cut=视角/状态切换）。
-    #   continuous 链尽量同组（组内多拍共享一次生成，状态连贯）；
-    #   cut 处切组（组边界与叙事切换对齐，跨组衔接交给静帧链锚帧）。
-    _rel = {p.get("name"): (p.get("frame_plan") or {}).get("relation")
-            for p in (planned or [])}
-    groups = video_plan.group_shots(shots, max_group, cut_when=_rel)
+    groups = video_plan.group_shots(shots, max_group)
     log("[video] pack 档：%d 镜 → %d 组（max_group=%d）"
         % (len(shots), len(groups), max_group or config.VIDEO_PACK_MAX_GROUP))
 
