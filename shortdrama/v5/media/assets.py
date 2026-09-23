@@ -995,6 +995,20 @@ def bind(root: Path, shots: list[dict], max_n: int = 5,
             cap = min(max_n, 2)
         else:
             cap = min(max_n, 3)
+        # ★ 2026-09-23：场景图**按景别选择性绑定**（用户要求三类资产出图锚定；
+        #   但 2026-09-09/09-14 的实测教训仍在——场景空镜自带机位会污染构图）。
+        #   折中：**全景/远景/大全景/空镜**绑场景图（构图本来就是 Wide，不打架，
+        #   且空镜/交代镜正是场景漂移的重灾区）；中近景/特写不绑（文字锚点兜底）。
+        #   场景图占道具位（others 首位），cap 照旧约束总数。
+        wide_shot = any(w in (s.get("shot_type") or "")
+                        for w in ("大全景", "全景", "远景", "空镜"))
+        scene_pick = None
+        if wide_shot:
+            locs = [h for h in hits if h.get("type") == "location" and h.get("name")]
+            if locs:
+                scene_pick = locs[0]
+        if scene_pick:
+            others = [scene_pick] + others
         picks = (chars + others)[:cap]
         urls = []
         # ★ `names_out`（2026-09-19 新增，**可选**）：把每张参考图**对应哪个资产**记下来，

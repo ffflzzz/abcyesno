@@ -626,6 +626,25 @@ _ASSET_BAD_WORDS = ("主角", "分身", "店员", "顾客", "人物", "同框", 
                     "字迹", "可读", "数字")
 
 
+def _scene_prompt(a: dict) -> str:
+    """场景参考图提示词：**环境全景空镜**——与 _asset_prompt（单一物件、竖版、
+    浅灰背景）完全不同。无人物、无文字；画幅不写在文字里（由 ratio 参数控制，
+    与项目静帧同画幅）。"""
+    chunks = []
+    for cl in re.split(r"[。；，、]", a.get("prompt") or a.get("appearance") or ""):
+        cl = cl.strip()
+        if not cl or any(w in cl for w in _ASSET_BAD_WORDS):
+            continue
+        chunks.append(cl)
+    desc = "，".join(chunks)
+    desc = re.sub(r"[（(][^）)]*[）)]?", "", desc).strip(" ，、；。")
+    names = [a.get("name") or ""] + list(a.get("keywords") or [])[:4]
+    head = "、".join(dict.fromkeys(n for n in names if n))
+    body = ("%s：%s" % (head, desc)) if desc else head
+    return ("%s。环境全景空镜，画面中没有任何人物，光线与陈设细节清晰，"
+            "可作为同场景所有镜头的视觉基准。%s" % (body, _ASSET_NO_PERSON))
+
+
 def _asset_prompt(a: dict) -> str:
     """资产参考图提示词：单一物件 + 无人物 + 无文字。"""
     chunks = []
@@ -1022,14 +1041,29 @@ def ensure(root: Path, *, log=print, force: bool = False,
         # **仍要 `_register`**：注册表条目是 `scene_lines` 的关键词来源，也是
         # 资产契约门「注册表有条目」的判据。描述由 `_register` 一起写进去。
         if str(a.get("type") or "") == "location":
+            # ★ 2026-09-23：场景升级为**视觉锚定**（用户要求：人物/场景/关键道具
+            #   三类全部出图锚定）——location 也生图（照抄资产生图路径），参考图
+            #   随静帧/视频传给生成端。此前场景只有文字锚点，实测灯下棋场景跨镜
+            #   漂移（老虎机/灯光每镜凭文字想象）。refs_on=False 的包（牛来反
+            #   质量）保持旧路径（仅登记）；生图失败 → 回落文字锚点，不挡链。
             rec = reg.get(a["name"]) or {}
-            if (not force) and str(rec.get("type") or "") == "location" and rec.get("prompt"):
+            dest_s = images_dir(root) / (a["name"] + ".png")
+            if (not force) and _ref_is_current(reg, a["name"], dest_s):
                 made["skipped"] += 1
                 continue
-            _register(root, a, a["name"])
-            made["scenes"] = made.get("scenes", 0) + 1
-            log("[cast] 登记场景（不生图）：%s —— 场景走文本锚点，参考图从不被绑定"
-                % a["name"])
+            if not refs_on:
+                _register(root, a, a["name"], with_image=False)
+                made["noimg"] += 1
+                log("[cast] 登记场景（不生图）：%s —— pack 关闭参考图" % a["name"])
+                continue
+            log("[cast] 生成场景参考图：%s（location）" % a["name"])
+            if _single(root, a["name"], _scene_prompt(a), ratio, log=log):
+                _register(root, a, a["name"])
+                made["scenes_img"] = made.get("scenes_img", 0) + 1
+            else:
+                _register(root, a, a["name"], with_image=False)
+                made["failed"] += 1
+                log("[cast] 场景生图失败：%s → 回落文字锚点" % a["name"])
             continue
         dest = images_dir(root) / (a["name"] + ".png")
         if not refs_on:
