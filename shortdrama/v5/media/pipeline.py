@@ -1358,6 +1358,17 @@ def _run_impl(project_root: Path, ep: int = 1, log=print, max_regen: int = 2,
         log("[approvals] media 门通过：%s" % m_why)
 
     n = compose.concat(Path(ok[next(iter(ok))]).parent, out)
+    # ★ 旁白音轨（2026-09-23，half-narrated-live-action 包）：audio_mode=narration-led
+    #   时按真实时间轴生成旁白配音并混入成片（edge-tts + ffmpeg amix）。
+    #   失败不挡链（保留原声成片）；audio_mode 从 brief 现读。
+    try:
+        import json as _json
+        _b = _json.loads((project_root / "brief.json").read_text(encoding="utf-8"))
+        if str(_b.get("audio_mode") or "") == "narration-led" and out.exists():
+            from v5.media import narration
+            narration.attach(project_root, ep, out, log=log)
+    except Exception as _ne:
+        log("[narration] 旁白音轨失败（保留原声成片）：%s" % str(_ne)[:120])
     return {"status": "ok", "shots": len(ok), "expected": len(shots),
             "seconds": round(compose.duration(out), 1) if out.exists() else 0.0,
             "final": str(out), "clips": n, "requeued": requeued,

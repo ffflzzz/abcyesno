@@ -582,6 +582,15 @@ def check_brief_fidelity(artifact_text: str, brief: dict | None = None,
     return {"coverage_missing": missing, "ok": not missing}
 
 
+def _shot_num_of(s: str) -> int:
+    """镜号 → 阿拉伯数字（兼容圈号 ①②③…⑳，half-narrated 产物）。"""
+    s = s.strip()
+    if "①" <= s <= "⑳":
+        return ord(s) - ord("①") + 1
+    m = re.match(r"^(?:LN|S|镜)?(\d+)", s)
+    return int(m.group(1)) if m else 0
+
+
 def check_storyboard(md: str, brief: dict | None = None,
                      style_keywords: list | None = None) -> dict:
     """分镜表契约校验：schema / 镜序 / must_have 覆盖 / 空对白 / 画内文字 / 节奏。
@@ -647,7 +656,7 @@ def check_storyboard(md: str, brief: dict | None = None,
     for l in shots:
         m = _SB_ROW_RE.match(l.strip())
         if m:
-            scenes.append(int(m.group(1)))
+            scenes.append(_shot_num_of(m.group(1)))
     order_ok = scenes == sorted(scenes)
 
     # ★ 忠实度**复用 `check_brief_fidelity` 这份唯一实现**（2026-09-14 收口）：
@@ -663,14 +672,32 @@ def check_storyboard(md: str, brief: dict | None = None,
                     if "画面" in c or "visual" in c.lower()), None)
     empty_dialog = 0
     spoken_shots = 0
+    # ★ 2026-09-23：narration-led（half-narrated 包）——旁白镜「对白」列合法为空
+    #   （旁白走「音效」列画外音，narration 死区规避），画外音台词**计入口播**
+    #   （它也是要念出来的，长短节奏同样要校验）。
+    sfx_idx = next((i for i, c in enumerate(headers)
+                    if "音效" in c or "sfx" in c.lower()), None)
+    narr_mode = False
+    try:
+        narr_mode = str(audio_mode_of(brief) or "") == "narration-led"
+    except Exception:
+        narr_mode = False
+
+    def _vo_text(sfx: str) -> str:
+        """从音效列提取画外音台词（格式「画外音（音色）：台词」）。"""
+        m = re.match(r"画外音[（(][^）)]*[）)][：:](.+)", sfx.strip())
+        return m.group(1).strip() if m else ""
+
     if dlg_idx is not None and vis_idx is not None:
         for l in shots:
             cells = [x.strip() for x in l.split("|")]
             dv = cells[dlg_idx] if dlg_idx < len(cells) else ""
             vv = cells[vis_idx] if vis_idx < len(cells) else ""
+            sfx = cells[sfx_idx] if (sfx_idx is not None and sfx_idx < len(cells)) else ""
+            vo = _vo_text(sfx) if narr_mode else ""
             if len(vv) >= 15 and (dv == "" or dv.isspace()):
                 empty_dialog += 1
-            if len(vv) >= 15 and _has_line(dv):
+            if len(vv) >= 15 and (_has_line(dv) or vo):
                 spoken_shots += 1
 
     dur_idx = next((i for i, c in enumerate(headers)
@@ -742,7 +769,13 @@ def check_storyboard(md: str, brief: dict | None = None,
             cells = [x.strip() for x in l.split("|")]
             dv = cells[dlg_idx] if dlg_idx < len(cells) else ""
             vv = cells[vis_idx] if vis_idx < len(cells) else ""
-            if len(vv) < 15 or not _has_line(dv):
+            sfx = cells[sfx_idx] if (sfx_idx is not None and sfx_idx < len(cells)) else ""
+            vo = _vo_text(sfx) if narr_mode else ""
+            # narration-led：旁白镜对白列可为空/占位（旁白在音效列）——不判短句；
+            # 画外音文本参与长短统计。对白与画外音都没有的镜不参与。
+            if len(vv) < 15:
+                continue
+            if not _has_line(dv) and not vo:
                 continue
             sid = cells[1] if len(cells) > 1 else "?"
             sec = 0.0
@@ -750,7 +783,13 @@ def check_storyboard(md: str, brief: dict | None = None,
                 m = re.search(r"\d+(?:\.\d+)?", cells[dur_idx])
                 if m:
                     sec = float(m.group(0))
-            body = _dialogue_body(dv)
+            body = _dialogue_body(dv) if _has_line(dv) else vo
+            # narration-led：对白列的旁白占位（（旁白·人物闭嘴））被 _dialogue_body
+            # 剥成空串 → 用画外音文本替代（旁白才是这段的口播内容）。
+            if narr_mode and vo and (not body or "旁白" in (dv or "")):
+                body = vo
+            if not body:
+                continue
             n = len(body)
             cap = int(min(DIALOGUE_MAX_CHARS,
                           sec * DIALOGUE_CHARS_PER_SEC if sec else DIALOGUE_MAX_CHARS))

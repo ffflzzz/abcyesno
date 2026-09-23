@@ -19,7 +19,9 @@ import re
 #   S 前缀 `| S10 |` —— maskparade（分镜师跟着小节标题 `## S10 / 6s` 写）
 #   **镜前缀 `| 镜7 |`** —— dawn-broadcast（2026-09-14）；不认它会让**整张表解析不出**
 #   旧实现只认前两种 → `S10` 静默丢镜、整轮 media 解析出 0 镜、创作链白跑。
-_ROW_RE = re.compile(r"^\|\s*(?:LN|S|镜)?\s*(\d+)(?:-(\d+))?\s*\|")
+_ROW_RE = re.compile(r"^\|\s*(?:LN|S|镜)?\s*([\u2460-\u2473]|\d+)(?:-(\d+))?\s*\|")
+# ★ 2026-09-23：兼容圈号镜号（①②③…⑳，half-narrated 舞狮项目实测产物）——
+#   消费处统一转成阿拉伯数字，下游 int() 不会崩。
 _SEP_RE = re.compile(r"^\|[\s:\-|]+\|$")
 
 
@@ -150,8 +152,11 @@ def parse(md: str) -> list[dict]:
             msec = re.search(r"(\d+(?:\.\d+)?)", cells[i_sec])
             if msec:
                 sec = int(float(msec.group(1)))
+        _shot_num = m.group(1)
+        if "①" <= _shot_num <= "⑳":      # 圈号镜号 ①②③… → 阿拉伯数字
+            _shot_num = str(ord(_shot_num) - ord("①") + 1)
         shots.append({
-            "index": int(m.group(1)),
+            "index": int(_shot_num),
             "name": "LN%02d" % (len(shots) + 1),
             "heading": heading,
             #: 该行在原文 `splitlines()` 里的下标（0 基）。
