@@ -1,0 +1,46 @@
+{
+  "name": "madfate-grim",
+  "display-name-zh": "命案·都市残酷惊悚",
+  "version": "0.1.0",
+  "source": "2026-09-24 从《命案》（Mad Fate, 2023, 郑保瑞）解说版参考片抽帧逆向（风格卡 styles/madfate-grim.md，实测数据在 tmp/mingan-0924/）。只取美学（色调/光照/构图/节奏），不复刻任何剧情与角色。",
+  "trigger-words": [
+    "命案风",
+    "郑保瑞",
+    "智齿风",
+    "都市残酷",
+    "银河系残酷惊悚",
+    "mad fate",
+    "limbo grim",
+    "urban grim thriller",
+    "霓虹雨夜旧街",
+    "憋闷惊悚"
+  ],
+  "audio-modes": [
+    "silent",
+    "dialogue-led"
+  ],
+  "default-audio-mode": "silent",
+  "audio-mode-note": "本片气质『人狠话不多』⇒ 默认 silent（无台词，全靠画面与音景）。silent 不是无声：分镜「音效」列逐镜写具体音源（雨声/低频嗡鸣/电流声），PACK_BGM=1 模型自带全程配乐。要台词的项目在 brief 写 dialogue-led。",
+  "shot-duration": "4-12s",
+  "aspect-ratio": "source_ratio（默认 9:16）",
+  "script-craft-note": "★ 本包刻意不启用 short-drama-hooks / 爽点等商业短剧判据——『憋闷』靠压抑铺垫，跟『每集必有钩子/密度递增/反派惨烈翻车』直接对打（用户 2026-09-16『不要污染我的生产线』的镜像场景）。要加的项目在 brief.json 显式声明 script-craft。",
+  "still-refs": true,
+  "still-refs-note": "正质量审美（写实质感，精致 = 正确）→ 开参考图锁脸。cast._char_prompt 的『写实短剧质感』与本包同向，无冲突。",
+  "still-tail": "material",
+  "still-tail-note": "皮肤/雨水/水泥都是真实材质，走 material 档；flat 平涂档与本包『实拍残酷质感』直接冲突。",
+  "style-is-criterion": false,
+  "style-is-criterion-note": "不用 P0 风格轴：那条注入文本写死『反质量类型包』前提，本包是正质量（要拍得像真电影）。风格漂移走 style-watch 观察轴（只报 P1）。",
+  "style-watch": true,
+  "style-watch-note": "启用 QC 风格观察轴：把 visual-style 作为期望画面形态注入 QC，明令只报 P1。防漂移目标：漂成明亮通透的普通都市剧 / 漂成日系清新 / 漂成恐怖 jump-scan 片。",
+  "visual-style": "gritty 香港都市残酷惊悚：死黑压顶（暗部黑到底）、无纯白、重暗角（四角明显压暗）、高光去饱和；夜戏被青绿荧光灯与品红霓虹对冲浸泡，日戏高照度残酷硬光，高潮过曝白天空压人物成剪影；贴脸特写头顶切边、笼式构图（窗框/栏杆/门框困住人）；血只做小面积红色暗示（血痕/血泊反光/包扎），绝无过程性血腥。不是明亮通透的都市剧，不是日系清新，不是 jump-scare 恐怖片。",
+  "roles": [
+    "worldbuilder",
+    "plotdesigner",
+    "scriptwriter",
+    "dialogue",
+    "director",
+    "scenedesigner",
+    "assetdesigner",
+    "reviewer"
+  ]
+}
