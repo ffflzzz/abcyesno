@@ -697,8 +697,11 @@ def check_storyboard(md: str, brief: dict | None = None,
             vo = _vo_text(sfx) if narr_mode else ""
             if len(vv) >= 15 and (dv == "" or dv.isspace()):
                 empty_dialog += 1
-            if len(vv) >= 15 and (_has_line(dv) or vo):
+            if len(vv) >= 15 and (_has_line(dv) or vo) \
+                    and not dv.startswith("（无声"):
                 spoken_shots += 1
+                import sys as _sys
+                print('DEBUG spoken:', repr(dv[:20]), file=_sys.stderr)
 
     dur_idx = next((i for i, c in enumerate(headers)
                     if "时长" in c or "seconds" in c.lower()), None)
@@ -775,7 +778,7 @@ def check_storyboard(md: str, brief: dict | None = None,
             # 画外音文本参与长短统计。对白与画外音都没有的镜不参与。
             if len(vv) < 15:
                 continue
-            if not _has_line(dv) and not vo:
+            if (not _has_line(dv) and not vo) or dv.startswith("（无声"):
                 continue
             sid = cells[1] if len(cells) > 1 else "?"
             sec = 0.0

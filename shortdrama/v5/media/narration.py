@@ -101,7 +101,7 @@ def _schedule(entries: list[tuple[str, str]], durs: dict[str, float]) -> list[di
 
 # ─────────────────────────── TTS 与音轨 ───────────────────────────
 
-def _tts_sapi(text: str, path: Path) -> None:
+def _tts_sapi(text: str, path: Path, log=print) -> None:
     """Windows SAPI 回落（离线必成；音色机械但可读，MVP 够用）。
 
     用 -EncodedCommand（base64 UTF-16LE）避免中文/引号转义问题。
@@ -123,7 +123,7 @@ def _tts_sapi(text: str, path: Path) -> None:
            check=True, capture_output=True)
 
 
-def _tts_one(text: str, path: Path, voice: str, rate: str) -> None:
+def _tts_one(text: str, path: Path, voice: str, rate: str, log=print) -> None:
     try:
         import asyncio
         import edge_tts
@@ -137,7 +137,7 @@ def _tts_one(text: str, path: Path, voice: str, rate: str) -> None:
         raise RuntimeError("edge-tts 空输出")
     except Exception as e:
         log("[narration] edge-tts 失败（%s）→ 回落 Windows SAPI" % str(e)[:60])
-        _tts_sapi(text, path)
+        _tts_sapi(text, path, log=log)
 
 
 def _run_ffmpeg(args: list[str]) -> None:
@@ -210,7 +210,7 @@ def attach(project_root: Path, ep: int, final: Path,
                 _silence(gp, gap)
                 segs.append(gp)
             mp3 = work / f"v_{i:03d}.mp3"
-            _tts_one(item["text"], mp3, voice, rate)
+            _tts_one(item["text"], mp3, voice, rate, log=log)
             wav = work / f"v_{i:03d}.wav"
             _run_ffmpeg(["-i", str(mp3), "-ar", "24000", "-ac", "1", str(wav)])
             ln = _wav_len(wav)
