@@ -21,7 +21,7 @@
     "silent"
   ],
   "default-audio-mode": "dialogue-led",
-  "audio-mode-note": "★ 源 skill 是**对白驱动**的成片流程（它自己写明「台词与旁白只能通过声音呈现，不能渲染成画面文字」），落到本管线只有 `dialogue-led` / `silent` 两条实现路径：`grep 旁白|narration|tts|voice` 在 v5/ 下**零命中**（台词只经 `Audio:` 契约字段由视频模型烘焙）。⇒ **不提供 narration-led**：写了既不触发硬指令注入、也不触发 `roles._audio_mode_defect`，**无任何确定性门**；且写进「对白」列的文字会被视频模型当成**角色台词**念并驱动口型（与 wool-felt-story-short 同一个坑，见 topics/pack-conventions.md 的「narration 死区」）。",
+  "audio-mode-note": "★ 源 skill 是**对白驱动**的成片流程（它自己写明「台词与旁白只能通过声音呈现，不能渲染成画面文字」），落到本管线只有 `dialogue-led` / `silent` 两条实现路径：`grep 旁白|narration|tts|voice` 在 v5/ 下**零命中**（台词只经 `Audio:` 契约字段由视频模型烘焙）。⇒ **不提供 narration-led**：写了既不触发硬指令注入、也不触发 `roles._audio_mode_defect`，**无任何确定性门**；且写进「对白」列的文字会被视频模型当成**角色台词**念并驱动口型（与 wool-felt-story-short 同一个坑，见 topics/pack-conventions.md 的「narration 死区」）。\n★★★ 2026-09-25 更正：上文已过期——narration 已实现（v5/media/narration.py：拼接后按真实时间轴 edge-tts 逐句生成 + amix 混音，参考 half-narrated-live-action 包）。本包维持 dialogue-led 默认是包级选择（对白驱动成片），不再是技术限制。",
   "shot-duration": "4-12s",
   "aspect-ratio": "9:16（本包主张竖屏；源 skill 亦支持 16:9）",
   "aspect-ratio-note": "⚠️ 真实画幅**不由本字段决定**：成片由 `SHORTDRAMA_ASPECT`、静帧由 `SHORTDRAMA_STILL_RATIO` 控制。本字段仅声明本包主张，供前端展示（代码不消费）。",
