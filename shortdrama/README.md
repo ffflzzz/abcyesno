@@ -250,6 +250,7 @@ projects/<项目名>/
 | `SHORTDRAMA_STILL_CHAIN` | 1 | `0` = 并铺式（快，但连续镜画面重复） |
 | `SHORTDRAMA_TAIL_PREGEN` | 0 | 落幅帧预生成 → 视频可平铺。**代价**：预生成落幅 ≠ 实际尾帧，承接由"事实"降为"预期"；无连续镜则零收益 |
 | `SHORTDRAMA_STILL_RATIO` | 3:4 | 静帧比例 |
+| `SHORTDRAMA_DIALOGUE_LANG` | Mandarin Chinese | 台词烘焙语言声明（纯**英文**语言名，如 `Cantonese`——含中文字形会被烧上屏幕，见 prompt.py LANG_SUFFIX 注释）。粤语项目设 `Cantonese` |
 | `SHORTDRAMA_STILL_QC` | 1 | `0` = 跳过静帧 QC |
 | `SHORTDRAMA_STILL_QC_MAX_REGEN` | 3 | 单镜累计重画上限（跨进程） |
 | `SHORTDRAMA_QC_STOP_REPEAT` | 1 | `1` = 同一镜**连续两轮报同一类**问题时不再重画（直接记 `still_residual`）。理由：重画的强化约束只由"类别"决定 ⇒ 同类 ⇒ 提示词完全一致 ⇒ 再画一次只是**换种子抽奖**。设 `0` 回到"一路重画到上限" |

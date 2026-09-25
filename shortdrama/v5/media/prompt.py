@@ -84,12 +84,16 @@ GLOBAL_VIDEO_NO_BGM = (" Text-to-video directive: no on-screen text, no subtitle
                        "dialogue only, never go silent.")
 # 有台词的镜头：禁字幕指令**前置**（实测前置才不被念；尾部会被当台词尾音读出）
 VIDEO_NO_SUB_PREFIX = "No on-screen text, no subtitles. "
-# 普通话声明：不声明时模型可能念错语言/带口音。
+# 对白语言声明：不声明时模型可能念错语言/带口音。
 # **不能带中文字形**（2026-09-10 maskparade）：这里原本写 "Mandarin Chinese (普通话)"，
 # 于是每一镜有台词的提示词都多出两个汉字——和"老周"一样，只会被烧到画面上。
-# 用 "Mandarin Chinese" 纯英文即可，语义无损。
-LANG_SUFFIX = (" LANGUAGE: Mandarin Chinese spoken dialogue only — natural "
-               "pacing, plain conversational tone, NO singing, NO accent.")
+# 用纯英文语言名即可，语义无损。
+# 2026-09-25：语言可配（粤语项目实测需求）——`SHORTDRAMA_DIALOGUE_LANG`
+# 环境变量覆盖，值必须是**纯英文语言名**（含中文字形会被烧上屏幕），
+# 如 "Cantonese"。默认普通话，行为不变。
+LANG_SUFFIX = (" LANGUAGE: %s spoken dialogue only — natural "
+               "pacing, plain conversational tone, NO singing, NO accent."
+               % config.DIALOGUE_LANG)
 
 # ─── reference 模式的素材用途声明（2026-09-13）───────────────────────────────
 # 官方文档明确要求："在 `reference` 模式中，应在提示词里明确写出素材占位符及其用途，

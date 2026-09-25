@@ -543,6 +543,11 @@ MAX_REVISIONS_PER_PHASE = int(os.environ.get("SHORTDRAMA_MAX_REVISIONS", "3"))
 
 ASPECT_RATIO = os.environ.get("SHORTDRAMA_ASPECT", "9:16")
 
+#: 对白语言（2026-09-25，粤语项目需求）：视频模型烘焙台词时的语言声明。
+#: 值必须是**纯英文语言名**（"Cantonese" / "Mandarin Chinese"）——带中文字形
+#: 会被烧上屏幕（见 media/prompt.py LANG_SUFFIX 的事故记录）。默认普通话。
+DIALOGUE_LANG = os.environ.get("SHORTDRAMA_DIALOGUE_LANG", "Mandarin Chinese")
+
 #: 前端可选的画幅。**取 agnes 两个接口接受值的交集**（2026-09-20 查官方文档）：
 #:   · 生图 `ratio`        : 1:1 3:4 4:3 16:9 9:16 **2:3 3:2** 21:9   （默认 1:1）
 #:   · 生视频 `aspect_ratio`: 21:9 16:9 4:3 1:1 3:4 9:16              （默认 16:9）
