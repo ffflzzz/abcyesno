@@ -26,6 +26,7 @@ import appChatIcon from "./assets/app-chat.png";
 import appManjuIcon from "./assets/app-manju.png";
 import appPaperIcon from "./assets/app-paper.png";
 import aihotIcon from "./assets/aihot.png";
+import openrouterIcon from "./assets/openrouter.png";
 
 // Map of manifest id / special key → vite-imported PNG so the same launcher
 // art shows in BOTH the homepage grid AND the browser-style tab strip.
@@ -1591,6 +1592,25 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
           title: "AI 热点",
           iconSrc: aihotIcon,
           browserUrl: "https://aihot.virxact.com/",
+        });
+      },
+    },
+    // OpenRouter — opens the model gateway / marketplace in the built-in
+    // browser tab (Electron <webview> via BrowserPanel), same pattern as
+    // Excalidraw / AI 热点. Icon is OpenRouter's own brand mark (their lime
+    // glyph on their own near-black tile), assembled from openrouter.ai's
+    // public assets by scripts/gen_openrouter_icon.cjs → src/assets/openrouter.png.
+    {
+      key: "openrouter",
+      title: "OpenRouter",
+      icon: "default",
+      iconSrc: openrouterIcon,
+      onClick: () => {
+        createTab({
+          type: "browser",
+          title: "OpenRouter",
+          iconSrc: openrouterIcon,
+          browserUrl: "https://openrouter.ai/",
         });
       },
     },
