@@ -60,6 +60,9 @@ description: 命案·都市残酷惊悚片的评审门：检查压迫感光照/�
    brief.target_duration 合格区间内。第二张汇总/校验表 → advisory 建议删除。
 9. **光源只有一个出处。** 同一场景不同镜的「视觉风格」列光源不得互相矛盾，
    也不得与场景卡的「光源/色温」矛盾；夜戏镜混入日戏光照描述 → 阻断。
+10. **场景卡纪律。** 每个场景条目 `type` 必须为 `location` 且**绑了场景全景参考图**；
+    出现「同名场景同时登记 location + prop」的重复条目 → 阻断（rerun assetdesigner）。
+    brief 点名的每个场景都必须有一张场景卡，缺卡 → 阻断。
 
 ## Output Format（路径由 system prompt 的【本角色产物路径】给出）
 
