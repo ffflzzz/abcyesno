@@ -242,10 +242,6 @@ def registry(root: Path) -> dict:
         return {}
 
 
-def asset_names(root: Path) -> list:
-    return [str(a.get("name") or "") for a in (registry(root).get("assets") or [])]
-
-
 # ─────────────────────────────────────────────────────────── 步骤推导
 
 #: 与前端的步骤 key 对齐（`wizard.js` 的 STEPS：script / assets / episodes）

@@ -275,7 +275,7 @@ def run_one_episode(project: str, proj: Path, run_log: Path, ep: int,
 
     为什么这件事值得做（spec M3）：N 集在同一项目里 ⇒ **只需起服一次** ⇒
     顺带规避当前最大的运维坑（"一项目一起服、沙箱内杀不掉持口进程"，
-    见 `topics/ops-and-admission.md`）。
+    见 git 历史）。
     """
     # 3) 创作链（supervisor 7 角色）
     log(run_log, "创作链开始")

@@ -50,7 +50,6 @@ from .. import config
 from . import providers
 
 SHEET_DIR = "_sheets"          # 与 `cast.SHEET_DIR` 同义：人工查看用，不被 auto_sync 收编
-PIECES = ("face", "front", "side", "back")
 DEFAULT_SIZE = "4K"            # 设定表是一次性产物，用最高档（该厂商文档称各档当前免费）
 
 # ── 提示词（逐条对应文件头的"为什么"）─────────────────────────────────────────

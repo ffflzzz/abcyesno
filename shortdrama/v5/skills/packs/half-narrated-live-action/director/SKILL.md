@@ -3,7 +3,7 @@ name: director
 description: 半解说真人短剧的导演阐述——确定旁白视角（第一/第三人称）、旁白-对白配比、题材基调与视觉基准；输出供全链路对齐的叙事与视觉纲领。
 ---
 
-> 类型包 half-narrated-live-action ｜ 方法论源自 hub skill「半解说真人短剧」（Design 平台版；模型中立适配：生图/视频走 Agnes，旁白音轨走 edge-tts 二期）。
+> 类型包 half-narrated-live-action ｜ 方法论源自 hub skill「半解说真人短剧」（Design 平台版；模型中立适配：生图/视频走 Agnes，旁白优先走**画外音烘焙**，edge-tts 独立音轨为兜底）。
 
 # 半解说真人短剧 Director
 

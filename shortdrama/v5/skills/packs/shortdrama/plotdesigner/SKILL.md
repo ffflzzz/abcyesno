@@ -12,7 +12,7 @@ description: 把大纲扩展为逐集剧情节拍表：节拍结构（冲突→�
 > 它们住在 `craft/short-drama-*`，由 `brief.json` 或 `pack.json` 的 `script-craft`
 > **显式声明才注入**（**默认不注入**；`shortdrama` 包自己也不开）。
 > ⚠️ 也**不要在本文件里复述**那些判据的措辞（负面引用同样会扩散）。
-> 详细事故记录见 `topics/pack-conventions.md` 的「回落基准包只写中性契约」。
+> 详细事故记录见 git 历史（`git log --grep=中性契约`）。
 
 ## When to Use
 After Director Agent and WorldBuilder Agent complete, when detailed episode-by-episode plot design is needed.

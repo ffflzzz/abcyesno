@@ -24,7 +24,7 @@ description: 命案·都市残酷惊悚片的 supervisor：锁定制作规格（
 |---|---|---|
 | 画幅 | 以 brief 与系统默认为准 | 不自行改画幅 |
 | 目标时长 | brief.target_duration | 只取目标值；合格区间由系统门判定，**不要写"至少/不少于"** |
-| 音频模式 | brief.audio_mode | 只允许 silent / dialogue-led，不得改判；本包默认 silent（无台词，全靠画面与音景） |
+| 音频模式 | brief.audio_mode | 只允许 silent / dialogue-led / narration-led，不得改判；**本包主张 narration-led**（旁白推进剧情、对白补情绪）。⚠️ pack.json 的 `default-audio-mode` 代码不消费 —— 必须在 **brief.json 显式写** `audio_mode`，否则链上会回落 `dialogue-led` |
 | 视觉基准 | 见下 | 世界宣言，一字不改写进规格文档 |
 | 双峰节奏 | 见下 | 本包核心契约，逐条写进规格 |
 

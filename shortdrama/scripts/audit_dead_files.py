@@ -70,6 +70,8 @@ for _p in walk({".json"}):
         d = json.loads(CORPUS.get(_p, "") or "{}")
     except Exception:
         continue
+    if not isinstance(d, dict):        # 有些 .json 顶层是数组（如 pack 清单快照）
+        continue
     v = d.get("script-craft")
     if isinstance(v, list):
         DECLARED.update(str(x).strip() for x in v)
@@ -77,6 +79,8 @@ for _b in sorted((ROOT / "projects").glob("*/brief.json")):
     try:
         d = json.loads(_b.read_text(encoding="utf-8", errors="ignore"))
     except Exception:
+        continue
+    if not isinstance(d, dict):
         continue
     v = d.get("script-craft")
     if isinstance(v, list):

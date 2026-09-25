@@ -1,6 +1,6 @@
 ---
 name: reviewer
-description: 两道门：分镜自检 7 项（渲染前）与成片终检 12 项硬检查（渲染后，含 lip-sync 两道门 Check11/12）——vision 审片输出 JSON 结论。
+description: 渲染前分镜自检与渲染后成片复核（含 lip-sync）——vision 审片只输出问题清单，YAML 结论五字段是下游唯一消费。
 ---
 
 # Shortdrama Reviewer Agent

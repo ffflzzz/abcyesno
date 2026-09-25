@@ -182,7 +182,7 @@ brief 是外部 Agent 唯一的强杠杆——它决定"拍什么"，而画质�
 | `on_screen_text` | 建议 | `allow`（默认）/ `forbid`。默认**只禁烧录型文字**（成行字幕条、元指令文字），**场景固有文字**（门牌 / 面板读数 / 文件抬头 / 包装标签）**放行**；`forbid` = 画面里**任何**可读文字都算硬伤（怕平台审核时用）。 |
 | `tone` | ✅ | 渲染风格 + 光线色彩叙事 + 情绪弧 |
 | `结局` | ✅ | 定格画面描述 |
-| `audio_mode` | 建议 | `dialogue-led`（默认，**必须有台词**，台词镜 ≥20%，低于 50% 出警告）/ `silent`（不出台词，对白列统一「（无声，环境音）」）|
+| `audio_mode` | 建议 | `dialogue-led`（**必须有台词**，台词镜 ≥20%，低于 50% 出警告）/ `silent`（不出台词，对白列统一「（无声，环境音）」）/ `narration-led`（旁白推进剧情：旁白写进「音效」列的画外音格式，**「对白」列统一「（无声，环境音）」**）。⚠️ **brief 不写该字段时一律回落 `dialogue-led`**（`validate.audio_mode_of`）——`pack.json` 的 `default-audio-mode` **代码不消费**，想要旁白必须**在 brief 里显式写** |
 | `visual-style` | 建议 | 渲染风格声明（按包定义填写） |
 | `second_character` | 有配角时 | 第二角色设定，写法同 `protagonist` |
 | `reference_photo` | 有照片时 | 用户照片路径（先拷到项目 `images/`） |
@@ -233,15 +233,18 @@ brief 是外部 Agent 唯一的强杠杆——它决定"拍什么"，而画质�
 | 包 | 风格 | 音频模式 | 关键开关 |
 |---|---|---|---|
 | `shortdrama`（默认）| 写实电影感、竖屏真人质感 | silent / dialogue-led | **回落基准**：缺 `pack.json`；有 `style-block.md`（`still-tail` 走缺省 `material`）|
-| `niulai-movie-style` | primitive folk CGI（故意低质的 bootleg 3D，**精致 = 失败**）| silent / dialogue-led | `still-refs: false`、`still-tail: flat`、`style-is-criterion: true` |
+| `niulai-movie-style` | primitive folk CGI（故意低质的 bootleg 3D，**精致 = 失败**）| silent / dialogue-led / narration-led | `still-refs: false`、`still-tail: flat`、`style-is-criterion: true` |
 | `wool-felt-story-short` | 现实世界比例的羊毛毡世界（**精致 = 正确**）| dialogue-led / silent | `still-refs: true`、`still-tail: material`、`style-watch: true`、`hard-keys-drop: [五官, 面部特征]` |
 | `chinese-style-short-drama` | 真人国风短剧（BJD 瓷肌 + 华丽古风妆造）| dialogue-led / silent | `still-refs: true`、`still-tail: material`、`style-watch: true`；**不开** `style-is-criterion`。**未实测**，首跑需按换包验收走一遍 |
 | `laofuzi-hk-retro` | 老夫子 IP 老港片复古风 | 按包定义 | 4 个角色（`director`/`worldbuilder`/`assetdesigner`/`reviewer`），其余回落 `shortdrama`。⚠️ 含第三方 IP，**商用需授权** |
+| `half-narrated-live-action` | 半解说真人短剧（旁白推进剧情 + 对白补情绪）| **narration-led** / dialogue-led / silent | `still-refs: true`、`still-tail: material`、`style-watch: true`；启用商业三件套 `script-craft`（**不含**微表情）|
+| `madfate-grim` | 命案·都市残酷惊悚（gritty 现代老城）| **narration-led** / silent / dialogue-led | `still-refs: true`、`still-tail: material`、`style-watch: true`、**不开** `style-is-criterion`；**刻意不启用**商业短剧 `script-craft` |
 
-**`pack.json` 里真正生效的只有六项**：`still-refs` / `still-tail` /
-`style-is-criterion` / `style-watch` / `visual-style` / `hard-keys*`。
-**其余字段（`trigger-words` / `aspect-ratio` / `shot-duration` / `default-*-model` 等）
-后端目前不消费**，填了不影响出片（完整字段表见 `README.md` §4）。
+**`pack.json` 里真正生效的只有七项**：`still-refs` / `still-tail` /
+`style-is-criterion` / `style-watch` / `visual-style` / `hard-keys*` / `script-craft`。
+**其余字段（`trigger-words` / `aspect-ratio` / `shot-duration` / `default-*-model` /
+`audio-modes` / `default-audio-mode` 等）后端不消费**（`name` / `display-name-zh` /
+`audio-modes` 只被 `webmap` 读去给前端展示），填了不影响出片（完整字段表见 `README.md` §4）。
 
 - **`still-tail`**：`material`（真实连续材质）/ `flat`（平涂纯色块）/ `none`，缺省 `material`。
   **写实与 3D 包必须用 `material`**；`flat` 只给反质量包用。
@@ -306,8 +309,11 @@ brief.json 的 `script-craft` 列表（项目级）> pack.json 的 `script-craft
 **参考图绑定规则**（必须遵守，否则同一个人会在多镜里长成多个人）：
 
 - 角色参考图 = **单格正面像**（不是四视图拼图）；四视图归档到 `images/_sheets/` 仅供人工查看。
-- **每镜最多绑 1 张人物参考图**，且**有人物图时参考图总数 ≤ 2**（`assets.bind`）。
-- **location 类资产一律不绑**（场景图自带固定机位，会覆盖分镜的景别/机位）。
+- **参考图条数按 `assets.bind` 分档**：**纯道具镜**不限；**1 个人物**封顶 2 张（脸 + 道具）；
+  **≥2 个人物**封顶 3 张且**先满足人脸**。
+- **`location`（场景）图只在宽景绑**：全景 / 远景 / 大全景 / 空镜才绑（构图本来就是 Wide、
+  不打架，且空镜正是场景漂移的重灾区）；中近景与特写**不绑**、靠文本锚点
+  （场景图自带固定机位，绑进近景会把构图拉回大 Wide）。
 - **同脸角色**（分身/替身/克隆）自动复用源角色参考图，不重新生成。
 - 升级参考图规则后，把注册表里的 `ref_ver` 删掉即可触发重生成（不必手工删图）。
 - 角色卡里**不要写人物关系**（"两件制服必须完全一致"会被画成两个穿制服的人）。

@@ -522,7 +522,7 @@ def role_input(role: str, root: Path, m: dict, reasons: list[str] | None = None)
     #     ⇒ 改为**内容驱动**：默认 4 秒；**有台词的镜按「字数 ÷ 4」自适配**
     #       （台词定信息量，镜头去装它）；长镜需**写明理由**才允许 6–12 秒。
     #   ⚠️ 物理天花板（必须显式预告，否则排出被截断的镜数）：
-    #     4 秒/镜 × `AGNES_VIDEO_MAX_SHOTS`（现 60）⇒ **支持快切的最长片只有 240 秒**；
+    #     4 秒/镜 × `AGNES_VIDEO_MAX_SHOTS`（默认 20）⇒ 缺省**支持快切的最长片只有 80 秒**；
     #     更长的片必须退让镜长，故下方在 `fast > cap` 时单独告警。
     #   ⚠️ 同步点：`packs/shortdrama/scenedesigner/SKILL.md`、
     #     `packs/chinese-style-short-drama/scenedesigner/SKILL.md`、

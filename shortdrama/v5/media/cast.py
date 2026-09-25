@@ -508,6 +508,12 @@ def parse_assets(assets_md: str) -> list[dict]:
     from . import assets as _assets_mod   # 函数内导入：类型口径只定义在一处
     out: list[dict] = []
     for blk in _split_asset_blocks(assets_md):
+        # ★ 2026-09-25：`- 参考图：images/xxx.png` 是**产物声明**，不是外观描述 ——
+        #   必须在解析前整行剔除。`_REF_LINE`（2026-09-14）本就为此而定义，
+        #   却**从未接到任何调用点**（死正则）⇒ 格式③（字段列表即描述）
+        #   把它拼进了生图提示词；格式①② 只是恰好靠"撞到 `-` 字段就收束"躲过。
+        #   `tests_cast.test_ref_line_not_in_prompt` 锁着这条。
+        blk = _REF_LINE.sub("", blk)
         head = blk.split("\n", 1)[0].strip()
 
         def field(key: str) -> str:
@@ -728,7 +734,7 @@ def _register(root: Path, item: dict, ref_name: str, *,
     ref_ver 记录参考图生成规则版本：升级规则后（如从 2x2 拼图改单格正面像）
     旧图不再符合要求，靠它判定"该图需要重生成"——否则续跑会一直跳过旧图。
 
-    `with_image=False`：**登记但没生图**（`still-refs: false` 的包 / location 类）。
+    `with_image=False`：**登记但没生图**（`still-refs: false` 的包，或生图失败的资产）。
     此时 `ref_image` 置空 —— 语义诚实：这个资产**没有图**，它有描述/identity。
     """
     from . import assets as assets_mod
@@ -750,10 +756,13 @@ def _register(root: Path, item: dict, ref_name: str, *,
     # ★ **场景把描述一起带进注册表**（2026-09-14）：`assets.scene_lines()` 需要它
     #   做提示词的场景锚点，而注册表原本只有 `ref_image`、**没有描述字段**
     #   → 锚点命中实测 **0/49**（描述只躺在 assetdesigner 的契约里）。
-    #   场景**不生图**（见 `ensure` 里的说明），故 `ref_image` 留空 ——
-    #   语义诚实：这个资产没有图，它有**描述**。
+    #   ★ 2026-09-25：**不再无条件清空 `ref_image`**。原实现对 location 恒置空，
+    #     于是 2026-09-23 新增的「场景出图 + 宽景选择性绑定」链路（`ensure` 的
+    #     location 生图分支 + `bind()` 的 `scene_pick` + `prompt.py` 的场景参考图
+    #     分工措辞）**全部落空**：图生成了却永远绑不上（实测 38 个 location 条目
+    #     `ref_image` 全空、其中 13 个磁盘上确有 png = 纯烧配额）。
+    #     `with_image=False` 时置空已由上面构造 `rec` 时覆盖，这里不必再插一句。
     if item.get("type") == "location":
-        rec["ref_image"] = ""
         rec["prompt"] = str(item.get("prompt") or item.get("appearance") or "")
     elif not with_image:
         # 同理：不生图的角色/道具也把描述留下（`identity_lines` 与人工排查都用得上）
@@ -1074,6 +1083,10 @@ def ensure(root: Path, *, log=print, force: bool = False,
             if (not force) and _ref_is_current(reg, a["name"], dest_s):
                 made["skipped"] += 1
                 continue
+            # ★ 2026-09-25：补回 `scenes` 计数 —— 09-23 新写的这个分支漏了它，
+            #   导致 `scenes` 恒为 0（末尾统计日志与实际不符）。放在跳过判定**之后**：
+            #   `scenes` 的语义是「本轮实际处理的场景数」，图已在盘的算 `skipped`、不重复计。
+            made["scenes"] += 1
             if not refs_on:
                 _register(root, a, a["name"], with_image=False)
                 made["noimg"] += 1

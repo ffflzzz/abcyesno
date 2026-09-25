@@ -221,7 +221,6 @@ DIALOGUE_LONG_WARN_PER_SEC = 5.0
 #:   因 **2 句超长**直接把整条链拦下、**创作链已跑 50 分钟白等**。
 #:   ⇒ 改成同一套：**占比 > FATAL 才阻断**，单句只告警。
 DIALOGUE_LONG_FATAL_RATIO = 0.34
-DIALOGUE_LONG_WARN_RATIO = 0.0
 
 #: 「过短台词」的**占比**容忍度（超过 FATAL 阻断，超过 WARN 只告警）。
 #:

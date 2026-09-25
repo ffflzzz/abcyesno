@@ -19,7 +19,7 @@ import re
 #   S 前缀 `| S10 |` —— maskparade（分镜师跟着小节标题 `## S10 / 6s` 写）
 #   **镜前缀 `| 镜7 |`** —— dawn-broadcast（2026-09-14）；不认它会让**整张表解析不出**
 #   旧实现只认前两种 → `S10` 静默丢镜、整轮 media 解析出 0 镜、创作链白跑。
-_ROW_RE = re.compile(r"^\|\s*(?:LN|S|镜)?\s*([\u2460-\u2473]|\d+)(?:-(\d+))?\s*\|")
+_ROW_RE = re.compile(r"^\|\s*(?:LN|S|镜|J)?\s*([\u2460-\u2473]|\d+)(?:-(\d+))?\s*\|")
 # ★ 2026-09-23：兼容圈号镜号（①②③…⑳，half-narrated 舞狮项目实测产物）——
 #   消费处统一转成阿拉伯数字，下游 int() 不会崩。
 _SEP_RE = re.compile(r"^\|[\s:\-|]+\|$")
@@ -52,8 +52,6 @@ def normalize_table_line(line: str, min_pipes: int = 2) -> str:
         return s
     return "| " + s + " |"
 HEADER_KEYS = ("镜头号", "景别", "角度", "运镜", "时长", "画面描述", "对白", "音效")
-# 可选列（2026-09-08 新增）：缺失时回落空串，旧分镜不受影响
-OPTIONAL_KEYS = ("场景", "视觉风格", "落幅", "文字镜", "承接")
 
 
 def _col(headers: list[str], *keys: str) -> int | None:

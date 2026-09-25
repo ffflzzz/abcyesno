@@ -7,7 +7,7 @@ description: 把剧本改编为镜头表并应用牛来运镜规则（锁定机�
 
 ## 管线适配（本工作流专属约定）
 
-- 输出 `director/director.md`：7 列镜头表（Shot ID & Duration | Continuity Handoff | Reference Anchors | Hook Type | Shot Description(每秒指令) | Audio & Dialogue Track | Audio Mode）——**列结构不可变**（渲染层解析依赖）。
+- 输出 `director/director.md`：7 列镜头表（Shot ID & Duration | Continuity Handoff | Reference Anchors | Hook Type | Shot Description(每秒指令) | Audio & Dialogue Track | Audio Mode）——列结构是本包内部约定（下游 `scenedesigner` 按它写分镜；**媒体链不解析 `director.md`**）。
 - 每秒指令的运镜/动作维度按下方牛来规则执行（僵硬分段运动、整身转动、匀速直线、姿势弹出、滑步、空洞眼神；锁定机位跳切、线性运镜、突兀启停、穿模机位、尴尬低角近景）。
 - 时长 4-12s 按剧情节拍灵活分配，避免全表等长。
 - **反文字模拟（硬性）**：镜头描述与每秒指令中禁止「模拟文字/标题/logo」类要求——会渲染出真实可读文字（P0）；招牌/标题一律为纯色粗糙几何块。

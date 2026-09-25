@@ -1336,17 +1336,6 @@ def resolve_styles(shots: list[dict]) -> list[dict]:
     return out
 
 
-def build_all(shots: list[dict], planned: list[dict] | None = None) -> list[dict]:
-    """为每镜产出 {name, still, video}。planned 缺省时按 cut 处理。"""
-    pl = planned or [{} for _ in shots]
-    shots = resolve_styles(shots)
-    return [{
-        "name": s.get("name"),
-        "still": build_still_prompt(s, p),
-        "video": build_video_prompt(s, p),
-    } for s, p in zip(shots, pl)]
-
-
 # ─── pack 档：打包 prompt（2026-09-22，自 scripts/pack_render.py 搬入）────────
 #
 # 12s 打包法（三项目 37 次提交零拒绝 + 捕梦师 213s 成片闭环）的 prompt 骨架：

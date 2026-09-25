@@ -307,12 +307,19 @@ class TestHitlState(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.proj = self.root / "demo-project"
         self.proj.mkdir(parents=True)
-        # `hitl_state` 会读 dev server 状态文件（`config.PROJECT_ROOT/.tmp/...`）
-        # ⇒ 指到临时目录，免得读到本机真实状态（测试不该依赖环境）
+        # `hitl_state` 会读 dev server 状态文件（`webchain._state_path()` →
+        # `config.RUNTIME_ROOT / .tmp/web-devserver.json`）⇒ 两个根都指到临时目录，
+        # 免得读到本机真实状态（测试不该依赖环境）。
+        # ⚠️ 只 patch `PROJECT_ROOT` **不生效**：`RUNTIME_ROOT` 在 **import 期**就由
+        #    `PROJECT_ROOT` 求值定下来了（`Path(os.environ.get(...) or PROJECT_ROOT)`），
+        #    事后改 `PROJECT_ROOT` 不会重算它 —— 这是本测试 2026-09-25 前失败的原因。
         self._p = mock.patch.object(config, "PROJECT_ROOT", self.root)
         self._p.start()
+        self._p2 = mock.patch.object(config, "RUNTIME_ROOT", self.root)
+        self._p2.start()
 
     def tearDown(self):
+        self._p2.stop()
         self._p.stop()
         self.tmp.cleanup()
 

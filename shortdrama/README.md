@@ -100,6 +100,7 @@ python scripts/run_new_project.py <项目> --ep 2 --stills-qc
 |---|---|---|
 | 全链路（`scripts/run_new_project.py`） | ✅ 默认可用 | 推荐路径：写 brief.json → 调脚本 → 验收产物 |
 | `--monitor` / `--watch` | ✅ 可用 | 只读观察，不写盘、不推进图，发现问题只报告 |
+| `--rerender <镜号>` | ✅ 默认可用 | **单镜重渲**（`--from still` 连静帧一起重做；逗号分隔多镜）。媒体链唯一入口的**受限调用**——gate / 记账 / 幂等 / 限流全部照常 |
 | `--resume-media` / `--stills-only` | ⛔ 默认拒绝 | 需 `SHORTDRAMA_OPEN_CHAIN=1` 或 `SHORTDRAMA_ALLOW_RESUME=1` |
 
 **三道输入门**（`series._input_gates`）：
@@ -153,6 +154,9 @@ python -m v5.series <项目名> --monitor --events 12     # 最多 12 次快照
 | `niulai-movie-style` | primitive folk CGI（故意低质的 bootleg 3D，**精致 = 失败**） | `still-refs: false`：不绑参考图，改由 `style-block.md` 逐镜锁定审美；`still-tail: flat`、`style-is-criterion: true` |
 | `wool-felt-story-short` | 现实世界比例的羊毛毡世界（**精致 = 正确**） | `still-refs: true`、`still-tail: material`、`style-watch: true`（只记不改）、`hard-keys-drop: [五官, 面部特征]` |
 | `chinese-style-short-drama` | 真人国风短剧（BJD 瓷肌 + 华丽古风妆造） | 移植自 MiniMax Design v1.2.6；`still-refs: true`、`still-tail: material`、`style-watch: true`、**不开** `style-is-criterion`；另有 `references/`（源 skill 全文 + 表情/眨眼速查）。**未实测** |
+| `half-narrated-live-action` | 半解说真人短剧（旁白推进剧情，对白补情绪） | `still-refs: true`、`still-tail: material`、`style-watch: true`；`audio_mode` 主张 `narration-led`（**需在 brief 显式声明**）；`script-craft` = 开场法则 / 钩子 / 爽点（**不启用**微表情）|
+| `madfate-grim` | 命案·都市残酷惊悚（港产残酷犯罪剧质感） | `still-refs: true`、`still-tail: material`、`style-watch: true`、**不开** `style-is-criterion`；**刻意不启用**商业短剧 `script-craft`（「憋闷」与「每集必有钩子」对打）；风格卡 `styles/madfate-grim.md` |
+| `laofuzi-hk-retro` | 老夫子 IP 老港片复古风 | 4 个角色（director / worldbuilder / assetdesigner / reviewer），其余回落 `shortdrama`；风格卡 `styles/laofuzi-ai-remake.md`。⚠️ 含第三方 IP，商用需授权 |
 
 **静帧尾缀 `still-tail`**（pack.json 字段，2026-09-12 新增）：每张静帧提示词的收尾约束，
 `material`=「表面为真实连续的材质」/ `flat`=「表面只是平涂纯色块」/ `none`=不注入；
@@ -168,8 +172,9 @@ python -m v5.series <项目名> --monitor --events 12     # 最多 12 次快照
 | `style-is-criterion` | bool，缺省 `false` | 风格当**硬判据**：QC 追加该节后"画风被拉向写实/精致"可判 **P0**。它的注入文本写死了「反质量类型包」前提，**只给反质量包用**（追求真实质感的包用它判据方向相反，会稳定误判） |
 | `style-watch` | bool，缺省 `false` | 风格**只记不改**轴（2026-09-16 新增）：把 `visual-style` 作为「期望形态」注入 QC，但**只许报 P1** —— 静帧 QC 不重画、clipqc 只打印。**它只让漂移可见，不自动纠正** |
 | `visual-style` | str | 上两条风格轴的**判据文本**，也是前端风格预览的说明。用 `style-watch`/`style-is-criterion` 时必须写，否则该轴为空 = 不判 |
+| `script-craft` | list[str] | 技法库的**包级默认**注入清单（项目 `brief.json` 的同名字段可覆盖）。见下方 craft 段 |
 | `hard-keys` / `hard-keys-add` / `hard-keys-drop` | list[str] | **硬伤关键词表**的 pack 级覆盖（2026-09-16 新增）。全局表里的 `缺`/`五官`/`面部特征` 是**子串**，与「要求五官清晰可读」的包天然抵触。三者都没写 = 用全局 `qc.HARD_KEYS`。⚠️ **闸门本身不能删**（它拦的是「模型标了 P0 但描述不指向真问题」的误报），只能收窄词表 |
-| `name` / `version` / `source` / `display-name-zh` / `roles` / `trigger-words` / `audio-modes` / `default-audio-mode` / `default-video-model` / `shot-duration` / `aspect-ratio` | — | **元数据 / 前端展示**：只有 `display-name-zh` 被 `webmap` 读；其余**后端目前不消费**（`v5` 里 0 处读取）。⚠️ 改 `aspect-ratio` **不会**改画幅——画幅由 `SHORTDRAMA_ASPECT` 控制 |
+| `name` / `version` / `source` / `display-name-zh` / `roles` / `trigger-words` / `audio-modes` / `default-audio-mode` / `default-video-model` / `shot-duration` / `aspect-ratio` | — | **元数据 / 前端展示**：`webmap` 只读 `display-name-zh`（回落 `name`）与 `audio-modes`；其余**后端不消费**（`v5` 里 0 处读取）。⚠️ 改 `aspect-ratio` **不会**改画幅（画幅由 `SHORTDRAMA_ASPECT` 控制）；改 `default-audio-mode` **不会**改音频模式（模式只认 `brief.audio_mode`，缺省回落 `dialogue-led`）|
 
 **`craft/` 不是类型包，是技法技能库**：`skills/packs/craft/<技法名>/SKILL.md` 提供可复用的具体手法。它**无 `pack.json`、不定义角色**。当前 **5 个**：`pixar-lighting` / `short-drama-hooks` / `short-drama-opening` / `short-drama-satisfaction` / `micro-expression-acting`。**已接线**（2026-09-16 起，`v5/media/style.py` 的 `script_craft_of()`/`read_craft()` + `v5/roles.py` 注入）：brief.json 的 `script-craft` 列表（项目级，显式覆盖）> pack.json 的 `script-craft`（包级默认），**opt-in、未声明不注入**；每份技法 frontmatter 用 `inject-to: [角色, …]` 声明注入给谁（漏写=不注入任何角色并打告警）；技法名写错/文件缺失**响亮报错**，不静默。
 
@@ -183,7 +188,8 @@ python -m v5.series <项目名> --monitor --events 12     # 最多 12 次快照
 |---|---|
 | `dialogue-led`（默认） | **必须有台词**：台词镜占比 ≥20%；20%~50% 出警告；<20% 判违规 |
 | `silent` | **不出台词**：对白列统一「（无声，环境音）」，靠音效叙事；出现台词判违规 |
-| 缺失 / 未识别 | 按 `dialogue-led` 处理（默认要台词，不再默默无声） |
+| `narration-led` | **旁白推进剧情**：旁白写进分镜「音效」列的画外音格式（`画外音（音色）：台词`），由视频模型**直接烘焙成音轨**；旁白镜「对白」列写「（无声，环境音）」、画面描述标注**人物闭嘴**。⚠️ 旁白文本**绝不进「对白」列**（会被当角色台词念 + 驱动口型）。独立 TTS 音轨（`v5/media/narration.py`）是**烘焙失败时的兜底**，默认关（见 §6 `SHORTDRAMA_NARRATION_TTS`）|
+| 缺失 / 未识别 | 按 `dialogue-led` 处理（默认要台词，不再默默无声）。⚠️ `pack.json` 的 `default-audio-mode` **代码不消费** —— 想要 `narration-led` 必须在 **brief.json 显式写** `audio_mode` |
 
 生效点有三处，缺一不可：
 
@@ -192,7 +198,7 @@ python -m v5.series <项目名> --monitor --events 12     # 最多 12 次快照
 3. **续跑路径同判据**（`series._storyboard_gate`）——`STORYBOARD-REJECT` 里包含该条。
 
 > 历史教训：`audio_mode` 曾是**空转字段**（只在字段名白名单里，无人消费）。实测 paperface-2（0/19）与 umbrella（0/9）brief 写着 `dialogue-led` 却全片无声，成片被用户当场退回。
-> （其中 `umbrella` 是老架构项目，产物已于 2026-09-14 随老架构清理删除；`paperface-2` 仍在 `projects/` 下。）
+> （两个项目的产物均已不在 `projects/` 下。）
 
 ## 5. 产物布局
 
@@ -263,6 +269,9 @@ projects/<项目名>/
 | `SHORTDRAMA_SLICE_THRESHOLD` | 4000 | **按集切片注入**的阈值（字符）：全剧级目录（`plotdesigner/episodes.md`）超过它就只注入「本集 ±1 + 本卷摘要」而非全文。**给真机验证用**，生产别设 |
 | `SHORTDRAMA_SLICE_SOFT` | 0 | 切片失败时的降级开关：默认（0）**响亮终止**；设 1 则「告警 + 注入全文」（应急用） |
 | `SHORTDRAMA_VIDEO_MODE` | reference | 静帧当**参考图**（各镜独立，可用 `audios`）vs `keyframe`（静帧当**首帧**，支持镜间承接但拿不到 `audios`）vs `pack`（**12s 打包**：相邻同场景镜合成一条 ≤12s 的 reference 请求，接戏变单请求内部问题；提交前自动生成跨组接缝静帧预检图 `seam_preview.jpg`）。前三者官方互斥关系同上 |
+| `SHORTDRAMA_NARRATION_TTS` | 0 | `1` = 启用**独立旁白音轨**（`v5/media/narration.py`：按真实时间轴 edge-tts 逐句生成 + ffmpeg amix 混入成片）。**默认关**——agnes 画外音烘焙已验证，再混 TTS 会**双声重叠**（实测）。仅 `audio_mode=narration-led` 时生效；失败不挡链（保留原声成片）|
+| `SHORTDRAMA_NARRATION_VOICE` | zh-CN-YunxiNeural | 旁白音色（edge-tts 音色名，低沉男声）|
+| `SHORTDRAMA_NARRATION_RATE` | +0% | 旁白语速（edge-tts 语法，如 `+10%`）|
 | `SHORTDRAMA_VIDEO_PACK_MAX_GROUP` | 5 | `pack` 模式下单组最多吞几个镜（分组算法见 `media/video_plan.group_shots`；与旁路脚本 `scripts/pack_render.py --max-group` 同义） |
 | `SHORTDRAMA_PACK_BGM` | 1 | `pack` 档提交是否带「全程 BGM+环境音、禁止静音段」指令（官方同款模型实测可原生执行）；brief 明确禁 BGM 的项目设 0 关掉 |
 | `SHORTDRAMA_IMAGE_VENDOR` | agnes | 生图厂商（`v5/vendors.py` 注册表）。未注册的名字**响亮报错**，不静默回退 |
@@ -283,7 +292,7 @@ projects/<项目名>/
 | `SHORTDRAMA_LEAN_PROMPT` | 0 | 视频提示词走**精简形态**（删反分屏前置 / reference 用途声明 / 类型包风格块；保留内容四段 + 台词 + 环境声 + 禁字幕）|
 | `SHORTDRAMA_ASSET_GATE` | 0 | 资产完整性缺失时**硬拦**（`return blocked`）。默认只强告警不拦——存量项目多有部分缺图，直接拦会把它们全卡住 |
 | `SHORTDRAMA_DIALOGUE_VERBATIM_STRICT` | 0 | 对白**逐字门**在 `_input_gates` 里阻断。默认只警告——存量项目的旧 `dialogue` 产物多为改写版 |
-| `SHORTDRAMA_CHAIN_TIMEOUT` | 9000 | `run_new_project.py` 传给创作链的整体超时秒数（`--timeout` 默认值） |
+| `SHORTDRAMA_CHAIN_TIMEOUT` | 9000 | `run_new_project.py` 传给创作链的整体超时秒数（它据此给 `scripts/drive_chain.py` 传 `--timeout`）。⚠️ `run_new_project.py` **自身不解析** `--timeout`，直接传它会被静默忽略 |
 | `SHORTDRAMA_DEV_PORT` | 2024 | dev server 端口（`webchain.py` 与 `run_new_project.py` 通用；换端口时派发目标 `SHORTDRAMA_V5_AGENT_URL` 由脚本自动对齐） |
 | `SHORTDRAMA_IMAGE_SIZE` | （空） | 生图尺寸覆盖；空 = 不传该参数，用供应商默认 |
 | `SHORTDRAMA_QC_WORKERS` | 3 | 静帧 QC / clipqc 并发 worker 数。**调高会撞供应商限速** |
@@ -324,14 +333,14 @@ projects/<项目名>/
 python -m unittest discover -s v5 -p 'tests_*.py' -t .
 ```
 
-**866 个用例 / 15 个测试文件**，纯离线（不打网络，实测约 17s 全绿）：`tests_flow`(159)、`tests_server`(78)、`tests_core`(73)、`tests_webmap`(73)、`tests_cast`(68)、`tests_validate`(62)、`tests_webchain`(55)、`tests_graph`(53)、`tests_guards`(48)、`tests_webwrite`(42)、`tests_assets`(40)、`tests_roles`(29)、`tests_rerender_agent`(20)、`tests_hitl`(7)。
+**973 个用例 / 16 个测试文件**，纯离线（不打网络）：`tests_flow`(168)、`tests_server`(112)、`tests_webmap`(84)、`tests_core`(73)、`tests_cast`(69)、`tests_webchain`(64)、`tests_validate`(62)、`tests_webwrite`(61)、`tests_graph`(53)、`tests_guards`(49)、`tests_hitl`(42)、`tests_assets`(40)、`tests_roles`(35)、`tests_vendors`(33)、`tests_rerender_agent`(20)、`tests_sheet`(8)。
 
 值得留意的回归保护：
 
 - `tests_core.py` 锁死两条反烧字铁律：提示词中不得出现「文字/字符/字幕」，也不得出现「招牌/摊位/纸张」等载体名词——**负面提法会诱发模型烧字**，这是实测结论，改动提示词时勿违反。
 - `tests_flow.py::TestStillRegenConvergence` / `TestStillQcNarrowReview` 锁死**静帧 QC 的重画纪律**：未归类硬伤也必须重画（不能空转）、跨进程累计上限、只复审上一轮重画过的镜；2026-09-16 另加两条锁「**同类连续两轮判停**」与「类别变了仍重画」。
 - `tests_validate.py` 锁死 brief 注入契约与音频模式契约：输出必须是合法 JSON、核心字段放不下必须报错、低价值字段先被丢弃；`dialogue-led` 零台词/占比过低必须被判违规，`silent` 出现台词同样违规，`（无声）` 类标记不得被算作台词。
-- `tests_graph.py` / `tests_flow.py` 锁死编排契约：8 角色必须全绿才允许渲染、评审不通过按条件边回退、回退超限强制放行不死循环、`video_jobs.json` 状态机不把失败任务当完成跳过；`audio_mode` 违规必须回退 `scenedesigner`，开工前必须把模式写进 `dialogue` / `scenedesigner` 的输入。
+- `tests_graph.py` / `tests_flow.py` 锁死编排契约：**被派发的 7 个角色**（`guards.GATE_ROLES`，不含 `director`）必须全绿才允许渲染、评审不通过按条件边回退、回退超限强制放行不死循环、`video_jobs.json` 状态机不把失败任务当完成跳过；`audio_mode` 违规必须回退 `scenedesigner`，开工前必须把模式写进 `dialogue` / `scenedesigner` 的输入。
 - `tests_flow.py::TestExternalAgentLockout`（6 例）锁死**准入契约**：`--media-only` 不存在、`--resume-media` / `--stills-only` 无放行环境变量时拒绝、`--monitor` 严格只读（不改 manifest、不代建项目、发现问题只报告）。
 - `tests_flow.py::TestMediaGateAtSingleEntry`（6 例）+ `TestMediaIsOutsideGraph`（3 例）锁死**媒体链唯一入口**：8 角色未齐 / 评审未过被拦、`force_passed` 放行、`stills_only` 不受 render 门约束、`rendered` 记账落盘、**输入指纹变则自动解除闩锁**；并防 `MEDIA_NODE` 旁路复活。
 - `tests_flow.py::TestApprovalGates`（8 例）锁死三道审批门：**上游产物一变，批文自动作废**。
@@ -345,7 +354,7 @@ python -m unittest discover -s v5 -p 'tests_*.py' -t .
   `felt-bach-serial` LN07/LN09（首判"谱面可读五线谱/音符 = 可读字符，P0"→ 翻判干净 → 出厂，
   而该包禁忌第 1 条明确禁止任何可读字符）。⇒ 复采本意是"减小误报"，实际也**放过了真硬伤**。
   **人眼抽帧仍是唯一可靠手段。**
-- **`location` 类资产从不绑参考图**（既有设计：场景图自带固定机位，会覆盖分镜的景别/机位）。连带后果：**环境的材质与比例只由 `style-block.md` 的文字承担**，没有任何参考图约束；而角色参考图是"浅灰底、干净的拟真手办"，会把整张画面往**拟真**方向带。实测 wool-felt 项目出现「角色是毛毡、环境却是真木/真金属/真油画」，与本包"所有表面都是羊毛毡"的风格块要求不符。
+- **`location` 类资产的参考图只在宽景绑**（2026-09-23 起：全景 / 远景 / 大全景 / 空镜；中近景与特写不绑 —— 场景图自带固定机位，绑进近景会把构图拉回大 Wide）。⇒ **中近景的环境材质与比例仍只由 `style-block.md` 的文字承担**；而角色参考图是"浅灰底、干净的拟真手办"，会把整张画面往**拟真**方向带。实测 wool-felt 项目出现「角色是毛毡、环境却是真木/真金属/真油画」，与本包"所有表面都是羊毛毡"的风格块要求不符 —— **这是中近景仍存在的风险，别指望场景图解决它**。
 - **keyframe 输出高度不统一**（同一批出现过 704×960 / 992 / 1024 / 1056 / 1088 五种）。`compose.concat` 的 `-c copy` 直接拼会导致画面尺寸跳动，成片请用 `concat_robust.py`。
 - **FIDELITY 门是"忠实度"门不是"质量"门**：它校验产物有没有覆盖 brief 的 must_have，**不校验 brief 本身好不好**。烂 brief 被忠实执行 = 烂成片，门照样过——质量责任仍在调用方。
 - 连续镜串行等待是主要耗时来源。`cut` 镜本身无依赖，但默认的串行链仍按序推进；开 `SHORTDRAMA_TAIL_PREGEN=1` 可解除串行依赖、让视频整批平铺（**代价**：承接从"上一镜真实尾帧"降级为"预生成落幅图"，视频运动的随机偏差会计入成片）。
@@ -362,7 +371,7 @@ v5/
 ├── guards.py               # 记账 / 物化对账 / TokenBreaker / media_gate
 ├── validate.py             # brief 智能截断 / brief 完备性 / 产物忠实度 / 分镜契约
 ├── config.py  llm.py       # 配置与 LLM 供应商
-├── media/                  # 静态画面先行管线（22 个模块，不含 __init__）
+├── media/                  # 静态画面先行管线（23 个模块，不含 __init__）
 │   ├── pipeline.py         #   **媒体链唯一入口**（media_gate + 审批门 + 记账都收在这里）
 │   ├── jobs.py             #   video_jobs 显式状态机
 │   ├── storyboard.py       #   分镜解析

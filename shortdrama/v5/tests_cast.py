@@ -654,11 +654,11 @@ class TestBindSingleCharacterRef(unittest.TestCase):
 
 
 class TestBindExcludesLocation(unittest.TestCase):
-    """location 类资产不得绑进 refs（2026-09-09 实测）。
+    """**中近景**不得绑 location（2026-09-09 实测；2026-09-23 收窄为「只在宽景绑」）。
 
-    LN01 是「店内全景」，只因正文写了"透过玻璃门洒入"就命中「玻璃门入口」，
-    而那张图是**店外视角**——绑进去后静帧直接画成站在店门外，机位被场景图
-    覆盖。场景机位必须由分镜字段（景别/角度）决定。
+    LN01 只因正文写了"透过玻璃门洒入"就命中「玻璃门入口」，而那张图是**店外
+    视角**——绑进去后静帧直接画成站在店门外，机位被场景图覆盖。场景机位必须
+    由分镜字段（景别/角度）决定 ⇒ 本例没有 `shot_type`（非宽景），故仍不绑。
     """
 
     def test_location_not_bound(self):
@@ -786,8 +786,9 @@ class TestNoRefsPackSkipsAllImages(unittest.TestCase):
             with mock.patch.object(cast, "_single", side_effect=_boom), \
                  mock.patch.object(cast, "_turnaround", side_effect=_boom):
                 made = cast.ensure(root, log=lambda *_: None)
-            self.assertEqual(made.get("noimg"), 2, "角色 + 道具各登记 1 个（不生图）")
-            self.assertEqual(made.get("scenes"), 1, "location 走原路径（本就不生图）")
+            self.assertEqual(made.get("noimg"), 3,
+                             "角色 + 道具 + 场景各登记 1 个（refs 关闭时不生图）")
+            self.assertEqual(made.get("scenes"), 1, "场景登记 1 个（但不出图）")
             self.assertEqual(made.get("characters"), 0)
             self.assertEqual(made.get("assets"), 0)
             reg = {a["name"]: a for a in assets_mod.load_registry(root)["assets"]}
@@ -839,9 +840,11 @@ class TestNoRefsPackSkipsAllImages(unittest.TestCase):
                 made = cast.ensure(root, log=lambda *_: None)
             self.assertEqual([c.args[1]["name"] for c in g2.call_args_list], ["马德胜"],
                              "角色走 _turnaround（三视图）")
-            self.assertEqual([c.args[1] for c in g1.call_args_list], ["老磅秤"],
-                             "道具走 _single")
+            self.assertEqual([c.args[1] for c in g1.call_args_list],
+                             ["收粮站", "老磅秤"],
+                             "场景 + 道具都走 _single（refs 打开时三大类都出图）")
             self.assertEqual(made.get("noimg"), 0)
+            self.assertEqual(made.get("scenes"), 1)
 
 
 class TestCastCounts(unittest.TestCase):
@@ -992,8 +995,9 @@ class TestEnsureKeepsAllLocations(unittest.TestCase):
             reg = {a["name"]: a for a in assets_mod.load_registry(root)["assets"]}
             locs = sorted(n for n, a in reg.items() if a.get("type") == "location")
             self.assertEqual(len(locs), 6, "场景被 max_assets 截断了：%s" % locs)
-            self.assertEqual(made["scenes"], 6)
-            self.assertEqual(made["noimg"], 9, "9 个道具仍走不生图登记")
+            self.assertEqual(made["scenes"], 6, "6 个场景全部登记")
+            self.assertEqual(made["noimg"], 15,
+                             "9 个道具 + 6 个场景（本包 refs 关闭，都不生图）")
 
     def test_budget_still_caps_image_assets(self):
         """回归：预算对**真正会生图的那部分**依然生效（15 道具 → 只登记 12）。"""
@@ -1186,17 +1190,21 @@ class TestSourcePhotoPlumbing(unittest.TestCase):
             self.assertIn("老周", names)
 
 
-class TestCastSkipsLocationImages(unittest.TestCase):
-    """★ 场景（`location`）**只登记、不生图**（2026-09-14）。
+class TestCastGeneratesLocationImages(unittest.TestCase):
+    """★ 场景（`location`）**出图 + 按景别选择性绑定**（2026-09-23 改定，2026-09-25 修通）。
 
-    两条依据都是**既定事实**，不是我新加的判断：
-      · `bind()` **从不绑定 location** —— 场景图是**空镜内景**、自带机位，
-        喂进"近景人物特写"这类镜会把构图拉回大 Wide，与分镜景别打架；
-      · `validate_assets` **专门豁免** location 的"图在盘"检查。
-    → 为它生图 = **每个项目白烧 N 次生图配额**（实测 paper-crane：4 个 location）。
+    演化三步（**别照抄旧结论**）：
+      1. 2026-09-14 起「只登记、不生图」—— 依据是 `bind()` 从不绑 location，
+         且实测 paper-crane 里有场景图把「近景人物」拉回大 Wide；
+      2. 2026-09-23 用户要求「人物 / 场景 / 关键道具三类全部出图锚定」→
+         `ensure` 给 location 加了生图分支，`bind()` 加了 `scene_pick`
+         （**只在全景 / 远景 / 大全景 / 空镜等宽景才绑**，中近景与特写仍不绑）；
+      3. 2026-09-25 补上缺失的一环：`_register` 原先对 location **无条件清空
+         `ref_image`** → 上面那条链路取不到 URL、图白生成（实测 38 个 location
+         条目 `ref_image` 全空、其中 13 个磁盘有图却用不上）。
 
-    场景的作用改由**文本锚点**承担（`assets.scene_lines`）—— 所以注册表里
-    **必须带上描述**（原先只有 `ref_image`、没有描述字段，导致锚点命中 0/49）。
+    文本锚点（`assets.scene_lines`）**始终有效**，与出图是两条并行的腿 ——
+    注册表仍**必须带描述**（原先没有描述字段，锚点命中 0/49）。
     """
 
     CONTRACT = json.dumps({"characters": [], "assets": [
@@ -1227,7 +1235,7 @@ class TestCastSkipsLocationImages(unittest.TestCase):
             return True
         return _fn
 
-    def test_location_registered_but_never_generated(self):
+    def test_location_generated_and_registered_with_image(self):
         from unittest import mock
 
         from v5.media import assets as assets_mod
@@ -1237,15 +1245,48 @@ class TestCastSkipsLocationImages(unittest.TestCase):
             with mock.patch.object(cast, "_single",
                                    side_effect=self._fake_single(None)) as gen:
                 made = cast.ensure(root, log=lambda *_: None)
-            self.assertEqual([c.args[1] for c in gen.call_args_list], ["旧钥匙"],
-                             "location 一次都不该调生图")
+            self.assertEqual([c.args[1] for c in gen.call_args_list],
+                             ["洗衣店内部", "旧钥匙"],
+                             "场景与道具都要出图（场景在前：先处理 _locs）")
             self.assertEqual(made.get("scenes"), 1)
             reg = {a["name"]: a for a in assets_mod.load_registry(root)["assets"]}
-            self.assertIn("洗衣店内部", reg, "仍要登记（scene_lines 的关键词来源）")
-            self.assertEqual(reg["洗衣店内部"]["ref_image"], "",
-                             "没有图就别写 ref_image")
+            self.assertIn("洗衣店内部", reg, "要登记（scene_lines 的关键词来源）")
+            self.assertEqual(reg["洗衣店内部"]["ref_image"], "洗衣店内部.png",
+                             "★ 注册表必须带 ref_image —— bind() 就靠它取场景图")
             self.assertIn("冷白荧光灯", reg["洗衣店内部"]["prompt"],
-                          "描述必须进注册表（锚点就靠它）")
+                          "描述仍要进注册表（文本锚点靠它）")
+
+    def test_wide_shot_binds_scene_image_but_closeup_does_not(self):
+        """★ 宽景绑场景图、中近景不绑（`bind()` 的 `scene_pick` 分档）。
+
+        这条锁的是 2026-09-23 的原意 + 2026-09-25 修通的那一环：注册表里
+        `ref_image` 有值 ⇒ 宽景镜真的能拿到场景图 URL。
+        """
+        import json as _json
+
+        from v5.media import assets
+
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "images").mkdir()
+            from PIL import Image
+            Image.new("RGB", (32, 32), (180, 180, 180)).save(
+                root / "images" / "洗衣店内部.png")
+            (root / "assets.json").write_text(_json.dumps({"assets": [
+                {"id": "洗衣店内部", "name": "洗衣店内部", "type": "location",
+                 "keywords": ["洗衣店"], "priority": 8,
+                 "ref_image": "洗衣店内部.png"},
+            ]}, ensure_ascii=False), encoding="utf-8")
+            types: dict = {}
+            wide = [{"name": "LN01", "shot_type": "全景",
+                     "visual": "洗衣店内景，冷白荧光灯下空无一人。", "dialogue": ""}]
+            near = [{"name": "LN02", "shot_type": "特写",
+                     "visual": "洗衣店内景，林宇低头看着手里的纸条。", "dialogue": ""}]
+            out = assets.bind(root, wide + near, types_out=types)
+            self.assertEqual(len(out.get("LN01") or []), 1, "宽景应绑上场景图")
+            self.assertIn("location", types.get("LN01") or [],
+                          "并按 location 措辞逐张点名")
+            self.assertEqual(out.get("LN02") or [], [], "中近景不绑场景图")
 
     def test_scene_anchor_works_from_registry_after_cast(self):
         """跨模块闭环：`cast` 登记 → `scene_lines` 取到描述。

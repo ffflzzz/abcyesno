@@ -17,16 +17,16 @@ v5 **不是"只有新架构"**，它是 **fork 底座 + 新架构层**：
    （SKILL 装配）、`role_input`（开工契约）、`FS_TOOLS`（工具白名单）都定义在 **`roles.py`**。
 2. v5 要能**自包含地出片**：媒体链入口（`series.py`）必须自带。
 
-**`v5/langgraph.json` 只注册 8 张图**（supervisor + role_* ×7）。原静态链 DAG 已于
+**`v5/langgraph.json` 只注册 9 张图**（supervisor + role_* ×7 + media_rerender）。原静态链 DAG 已于
 2026-09-12 完全废弃（`graph.py` / `studio_graph.py` 已删除）；`roles.py` 保留装配层。
 
 | 维度 | 现状 |
 |------|------|
 | 对外引用 | v5 不 import 任何已删包（零处，含函数体内延迟 import） |
-| 代码 | 自包含（36 个 .py：orchestrator / graph / guards / validate / decision / config / llm / media/* × 18） |
+| 代码 | 自包含（36 个 .py，不含两处 `__init__`：orchestrator / roles / guards / validate / decision / config / llm / hitl / series / server / vendors / webchain / webmap / webwrite + `media/*` × 23） |
 | 角色 SKILL | 自带 `v5/skills/packs/` |
-| 图注册 | **`v5/langgraph.json` 是全仓唯一图注册入口**（8 图：supervisor + role_* ×7）；根 langgraph.json 已删 |
-| 质量保证 | 自带 `v5/tests_*.py`（255 例，实测全绿） |
+| 图注册 | **`v5/langgraph.json` 是全仓唯一图注册入口**（9 图：supervisor + role_* ×7 + media_rerender）；根 langgraph.json 已删 |
+| 质量保证 | 自带 `v5/tests_*.py`（973 例；建议**逐文件**跑，全量 discover 一次跑完很慢） |
 | 共享运行时资源 | `projects/` 产物目录、`.env`（密钥只存一份） |
 
 ## 基线
@@ -36,14 +36,14 @@ fork 自 `new_deep_agent` @ commit `23e8360`（2026-09-11）。**该包已于 `9
 
 ## 启动
 
-`v5/langgraph.json` 注册 8 张图，需用 `--config` 显式指定（仓库根没有 langgraph.json）：
+`v5/langgraph.json` 注册 9 张图，需用 `--config` 显式指定（仓库根没有 langgraph.json）：
 
 ```bash
 # 从仓库根启动 dev server（端口 2024——与 supervisor 的 AsyncSubAgent 默认 url 一致）
 SHORTDRAMA_V5_PROJECT=<项目名> .venv/Scripts/langgraph.exe dev \
     --config v5/langgraph.json --host 127.0.0.1 --port 2024 --no-browser
 
-# 自测（255 例，纯离线）
+# 自测（972 例，纯离线）
 .venv/Scripts/python.exe -m unittest discover -s v5 -p "tests_*.py" -t .
 ```
 
@@ -102,5 +102,5 @@ supervisor 默认配置会把三类**不该有的能力**一并挂上；三处�
   `_audio_mode_defect`），supervisor 与媒体链守卫依赖它
 - **保留**：`series.py` 的媒体链入口（`--resume-media` / `--monitor` / 审批 CLI）；
   其创作链入口改为**废弃报错**并指引 supervisor
-- **唯一创作链**：supervisor（`v5/langgraph.json` 8 图）
-- 测试：240 例全绿（删 15 例静态链专属用例）
+- **唯一创作链**：supervisor（`v5/langgraph.json` 9 图）
+- 测试：973 例（`python -m unittest discover -s v5 -p "tests_*.py" -t .`，或逐文件 `python -m unittest v5.tests_<名>`）

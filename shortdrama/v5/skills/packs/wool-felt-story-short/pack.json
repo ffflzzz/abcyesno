@@ -19,7 +19,7 @@
     "silent"
   ],
   "default-audio-mode": "dialogue-led",
-  "audio-mode-note": "★ 源 skill 的主模式 `narration`（旁白）在本管线**无实现路径**：`grep 旁白|narration|tts` 在 v5/ 下零命中，台词只经 `Audio:` 契约字段由视频模型烘焙。故本包把源 skill 的 `dialogue` 模式映射为 `dialogue-led`、`silent` 映射为 `silent`，**不提供 narration-led**（写了也只会被当成角色台词念并驱动口型，且无任何确定性门校验）。\n★★★ 2026-09-25 更正：上文已**过期**——narration 已实现（`v5/media/narration.py`：拼接后按真实时间轴 edge-tts 逐句生成 + amix 混音，参考 `half-narrated-live-action` 包）。本包维持不提供 narration-led 是**包级选择**（羊毛毡是氛围叙事，不是旁白解说），不再是技术限制。",
+  "audio-mode-note": "本包走 `dialogue-led` —— 源 skill 的主模式是 `narration`（旁白），本包是**氛围叙事而非旁白解说**，故映射到 `dialogue-led` / `silent` 两档。管线**已支持** `narration-led`（旁白走分镜「音效」列画外音格式烘焙），本包不启用纯属**包级选择**。",
   "shot-duration": "4-12s",
   "aspect-ratio": "9:16",
   "still-refs": true,

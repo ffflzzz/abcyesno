@@ -333,11 +333,6 @@ def impl_for(kind: str):
     return importlib.import_module(full)
 
 
-def impl_dir() -> Path:
-    """自有协议厂商实现模块的落点（给"从这里开始写"的提示用）。"""
-    return Path(__file__).resolve().parent / "vendors"
-
-
 def describe(kind: str = "") -> str:
     """一行清单（日志/排查用）：当前选了谁、有哪些可选。
 

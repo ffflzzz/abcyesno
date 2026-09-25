@@ -92,7 +92,6 @@ d.polygon(body_pts, fill=(49, 46, 129, 235))  # deep indigo body
 slit_end = p(nib_l * 0.9, 0)
 d.line([(px, py), slit_end], fill=WHITE, width=int(S * 0.012))
 # tail band
-band_c = p(tail_l * 0.86, 0)
 bw2a = p(tail_l * 0.86, -pen_w * 0.66)
 bw2b = p(tail_l * 0.86, pen_w * 0.66)
 d.line([bw2a, bw2b], fill=WHITE, width=int(S * 0.016))

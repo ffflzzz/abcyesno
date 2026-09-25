@@ -364,7 +364,7 @@ ORCHESTRATOR_DISCIPLINE = """
 #      第 2 集起因全剧级产物已在盘（`drive_chain.WHOLE_DRAMA`）—— 本来也不重跑。
 #
 # 保留这条记录是因为：它是「**提示词里两条相反指令 → 模型任选一条 → 判据静默失配**」
-# 的完整样本，与 `topics/parse-robustness.md` 同型。
+# 的完整样本（同型事故见 git 历史）。
 def make_async_subagents() -> list[AsyncSubAgent]:
     """构造 7 个角色的 AsyncSubAgent 声明。
 

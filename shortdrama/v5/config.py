@@ -45,21 +45,6 @@ except Exception:  # noqa: BLE001
 AGNES_BASE = os.environ.get("AGNES_BASE", "https://apihub.agnes-ai.com")
 
 
-def _split_keys(*raw: str) -> list[str]:
-    """把若干「逗号 / 分号 / 换行」分隔的 key 串拆成**去重有序**列表。
-
-    多 key 的**唯一解析点**（2026-09-16）—— 别处不要再自己 `split(",")`，
-    否则分隔符支持范围会在两处漂移（同型事故见 `topics/parse-robustness.md`）。
-    """
-    out: list[str] = []
-    for v in raw:
-        for part in str(v or "").replace(";", ",").replace("\n", ",").split(","):
-            part = part.strip().strip('"').strip("'")
-            if part and part not in out:
-                out.append(part)
-    return out
-
-
 def _split_keys_with_base(*raw: str) -> tuple[list[str], dict[str, str],
                                               dict[str, float], dict[str, float]]:
     """`key@base#video_rpm[:image_rpm]` 语法的**唯一解析点**（2026-09-22）。
@@ -141,11 +126,6 @@ def _chat_endpoint_of() -> tuple[str, str]:
 CHAT_BASE_EFFECTIVE, CHAT_KEY_EFFECTIVE = _chat_endpoint_of()
 
 
-def base_for_key(key: str | None) -> str:
-    """该 key 的专属媒体地址（没配则空串 → 调用方回落全局 `AGNES_BASE`）。"""
-    return AGNES_KEY_BASE.get((key or "").strip(), "")
-
-
 def video_interval_for_key(key: str | None) -> float:
     """该 key 的提交间隔（秒）。配了 `#rpm` 的用 `60/rpm`；否则用全局闸门。
 
@@ -206,10 +186,8 @@ MODELS = {
 # per-role 覆盖：值 = `v5/vendors.py` 里**已注册的厂商名**（不是模型名）。
 # 能力已就位（`role_chat` 读它），但**至今无人填** ⇒ 8 角色 + supervisor 共用同一家。
 ROLE_PROVIDER: dict[str, str] = {}
-ORCH_PROVIDER = ""
 
 # ─── Video / image ───────────────────────────────────────────────────────────
-VIDEO_PROVIDER = os.environ.get("SHORTDRAMA_VIDEO_PROVIDER", "agnes")
 
 # 视频生成模式（2026-09-13 切换为 reference，对齐官方示例）。
 # 官方文档：`keyframe` 与 `reference` **互斥**，同一请求不能混用。

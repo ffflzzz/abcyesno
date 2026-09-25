@@ -177,18 +177,6 @@ class VideoPlan:
                    needs_tail_extract=True, can_submit_flat=flat,
                    announce_picture=False)
 
-    def wants_prev_tail(self, relation: str, use_prev_last: bool,
-                        has_prev_tail: bool) -> bool:
-        """**本镜**要不要用上一镜的真实尾帧当首帧（keyframe 专用）。
-
-        这是"本镜决策"而非"模式决策"，所以留在方法里：只有 keyframe 且
-        本镜关系是连续/匹配、且上一镜尾帧确实在手时，才成立。
-        reference 下恒 False（不允许 first_frame）。
-        """
-        if not self.use_keyframes:
-            return False
-        return bool(use_prev_last) and bool(has_prev_tail)
-
     def mode_for(self, relation: str) -> str:
         """mixed 的**逐镜**决策：被承接关系连住的镜走 keyframe（帧锁接戏），
         其余走 reference（自由运镜 + 角色参考图）。非 mixed 模式恒返回全局 mode。

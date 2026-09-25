@@ -9,7 +9,7 @@ description: 把剧本里的对白**逐字提取**为纯对白清单（Speaker/�
 After ScriptWriter Agent completes. 本角色是**提取器**，不参与创作。
 
 ## Role
-从 `scriptwriter_ep1.md` **逐字**摘出每个人物的台词，产出一份**纯对白清单**
+从 `scriptwriter/scriptwriter_ep{N}.md` **逐字**摘出每个人物的台词，产出一份**纯对白清单**
 （只含人物台词，不含场景 / 动作 / 音效）。
 
 **★ 你唯一的职责是「搬运」，不是「优化」**（2026-09-14 契约修正，实测事故）：
@@ -23,11 +23,11 @@ After ScriptWriter Agent completes. 本角色是**提取器**，不参与创作�
     → **台词唯一真相源 = scriptwriter 的剧本。** 本角色只搬运，不改一个字。
 
 ## Context
-- 已有完整剧本（`scriptwriter_ep1.md`），**它的对白就是最终台词**
+- 已有完整剧本（`scriptwriter/scriptwriter_ep{N}.md`），**它的对白就是最终台词**
 - 需要一份**逐字**的对白清单，供分镜配镜与渲染层配音使用
 
 ## Steps
-1. 逐场读剧本 `scriptwriter_ep1.md`。
+1. 逐场读剧本 `scriptwriter/scriptwriter_ep{N}.md`。
 2. 按出现顺序，**逐字**摘出每一句台词，标明说话人。
 3. 一句话一行，场次顺序与剧本完全一致。
 4. **自检（必做）**：把清单里任意一行拿去剧本里搜，**必须能原样搜到**。
@@ -37,7 +37,7 @@ After ScriptWriter Agent completes. 本角色是**提取器**，不参与创作�
 ```markdown
 # 对白清单：《片名》第N集
 
-> 上游：/scriptwriter/scriptwriter_ep1.md（逐字提取，未作任何改写）
+> 上游：/scriptwriter/scriptwriter_ep{N}.md（逐字提取，未作任何改写）
 
 ### 第1场
 - 陈默：收到。
@@ -54,7 +54,7 @@ After ScriptWriter Agent completes. 本角色是**提取器**，不参与创作�
 - 每行一条 `角色：台词`；**禁止输出场景描述、人物动作、【音效】、镜头说明等任何非对白内容**。
 - 不同角色说话方式要有明显区分 —— 这是**剧本该做到的事**，你只需忠实反映。
 - **音频模式（brief.audio_mode，硬性）**：先读 brief.json 的 `audio_mode`。
-  - `dialogue-led`：**每个有人的场次都要给台词**，全片台词场占比不低于 50%。
+  - `dialogue-led`：**每个有人的场次都要给台词**，全片台词场占比不低于 **20%**（20%~50% 只警告；低于 20% 判违规）。
     只有确实无人开口的纯动作场才写 `（无对白）`。**全片零台词 = 废案**。
   - `silent`：本片不出台词，全片写 `（无对白）`，交付空清单并在报告中说明。
   - 缺失或未识别：按 `dialogue-led` 处理（默认要台词）。

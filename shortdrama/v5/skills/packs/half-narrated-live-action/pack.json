@@ -2,7 +2,7 @@
  "name": "half-narrated-live-action",
  "display-name-zh": "半解说真人短剧",
  "version": "0.1.0-adapted",
- "source": "Methodology ported from hub skill 'half-narrated-live-action-short-drama'（Design 平台版；模型中立适配：生图/视频走 Agnes，旁白音轨规划走 edge-tts——venv 已装 7.2.8）。参照 chinese-style-short-drama 的移植体例。",
+ "source": "Methodology ported from hub skill 'half-narrated-live-action-short-drama'（Design 平台版；模型中立适配：生图/视频走 Agnes，旁白优先画外音烘焙、edge-tts 独立音轨兜底）。参照 chinese-style-short-drama 的移植体例。",
  "trigger-words": [
   "半解说真人短剧",
   "第一人称旁白短剧",
@@ -21,7 +21,7 @@
   "silent"
  ],
  "default-audio-mode": "narration-led",
- "audio-mode-note": "★ narration-led 是本包核心（旁白推进剧情 + 对白补充情绪）。两条实现路径：①**画外音烘焙**——分镜「音效」列写「画外音（音色）：台词」，由 Agnes 音频生成，⏳ 未实测；②**独立旁白音轨**——拼接后按真实时间轴 edge-tts 逐句生成 + ffmpeg 混音，⏳ 二期（edge-tts 7.2.8 已在 venv，manju_craft 有封装参考）。\n⚠️「narration 死区」警示（topics/pack-conventions.md）：旁白台词**不得**写进「对白」列——会被视频模型当成角色台词念并驱动口型。旁白一律走「音效」列画外音格式 + 画面描述标注人物闭嘴。",
+ "audio-mode-note": "★ narration-led 是本包核心（旁白推进剧情 + 对白补充情绪）。主实现路径：**画外音烘焙**——分镜「音效」列写「画外音（音色）：台词」，由 Agnes 视频模型在生成时直接烘焙成音轨（画面描述同步标注人物闭嘴）。兜底路径：**独立旁白音轨**——`v5/media/narration.py`，拼接后按真实时间轴 edge-tts 逐句生成 + ffmpeg amix 混入成片；**默认关**（会用 `SHORTDRAMA_NARRATION_TTS=1` 显式启用），因为烘焙成功后再混会双声重叠（实测）。\n⚠️ 铁律：旁白台词**不得**写进「对白」列——会被视频模型当成角色台词念并驱动口型。旁白一律走「音效」列画外音格式 + 画面描述标注人物闭嘴。",
  "visual-style": "真人写实短剧剧照——摄影级真实感，选角照 / 连续性参考图语言：真实光线、自然肤色与质感、可见毛孔与细发丝、可信衣料褶皱、正确镜头透视、克制色彩；构图与机位服务叙事。横屏 16:9。",
  "style-watch": true,
  "shot-duration": "4-12s",
