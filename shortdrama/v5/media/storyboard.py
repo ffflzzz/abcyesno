@@ -54,6 +54,75 @@ def normalize_table_line(line: str, min_pipes: int = 2) -> str:
 HEADER_KEYS = ("镜头号", "景别", "角度", "运镜", "时长", "画面描述", "对白", "音效")
 
 
+# ─── 镜内节拍（2026-09-25：分镜智能体的节奏设计权下放）──────────────────────
+#
+# 背景：Pavo 参考片实证（同 agnes 模型）——一条 12s 生成里塞 6 个逐秒节拍
+# （2s/拍），模型精确执行且身份一致。旧管线每镜下限 4s（pack_clamp_sec），
+# 一条 12s 请求最多 3 拍，密度差 2-3 倍。现在把「拍怎么切」交给 scenedesigner
+# 按剧本节奏设计：画面描述列写镜内节拍，格式：
+#
+#     0-2秒：@婆婆右手捏着一炷香凑近火盆；2-4秒：右手把香插回盆里。
+#
+# 契约（门在 validate.check_storyboard 校验，见 beat_violations）：
+#   · 节拍必须从 0 开始、首尾相接、覆盖整镜时长（时长列数字）；
+#   · 不写节拍的镜（旧格式）完全合法——向后兼容，零影响。
+# 消费：
+#   · 静帧路径取**最后一拍**（单动作描述，防多拍序列诱发分屏——clockmaker
+#     事故同类）；
+#   · pack 视频路径把节拍时间戳重映射到整条请求的全局时间轴（prompt.py）。
+# 格式两种都认（实测产物两种都有）：`0-2秒：` 与 `0-4s：`（拉丁 s）。
+# ★ 必须跟冒号：`2-3秒后他转身` 这类**时长描述**不是节拍标记——
+#   认错了会被静帧/pack 路径当节拍切割（误伤面大）；不满足完整格式
+#   （数字-数字+秒/s+冒号）的文本一律当普通描述，安全降级。
+_BEAT_RE = re.compile(r"(\d+)\s*[-–—]\s*(\d+)\s*(?:秒|s)\s*[：:]")
+
+
+def split_beats(visual: str) -> list[tuple[int, int, str]]:
+    """解析画面描述里的镜内节拍：`0-2秒：…；2-4秒：…` → [(0,2,文本), (2,4,文本)]。
+
+    没有节拍标记（旧格式 / 标记不完整如缺冒号）返回空列表——安全降级为
+    「无节拍镜」，原有路径原样消费。文本取标记之后到下一个标记（或结尾）。
+    """
+    text = visual or ""
+    marks = list(_BEAT_RE.finditer(text))
+    if not marks:
+        return []
+    beats: list[tuple[int, int, str]] = []
+    for i, m in enumerate(marks):
+        # 标记含尾部冒号，正文从其后开始
+        body_start = m.end()
+        body = text[body_start:]
+        # 截到下一个标记（若有）
+        if i + 1 < len(marks):
+            body = body[:marks[i + 1].start() - body_start]
+        body = body.strip("；;。 \n\t")
+        beats.append((int(m.group(1)), int(m.group(2)), body))
+    return beats
+
+
+def beats_tiling_error(beats: list[tuple[int, int, str]], seconds: float) -> str:
+    """校验节拍铺满整镜：从 0 起、首尾相接、终于时长列。返回错误描述（空=通过）。
+
+    纯确定性判据：写不写节拍是自由，写了就必须自洽（时间轴是渲染层硬依赖，
+    pack 提示词按它做全局重映射）。
+    """
+    if not beats:
+        return ""
+    if beats[0][0] != 0:
+        return "第一节拍未从 0 秒开始（起点 %d 秒）" % beats[0][0]
+    for (a, b, _), (c, d, _) in zip(beats, beats[1:]):
+        if b != c:
+            return "节拍 %d-%d 秒与 %d-%d 秒之间不连续（应首尾相接）" % (a, b, c, d)
+        if d <= c:
+            return "节拍 %d-%d 秒时长为零或为负" % (c, d)
+    if beats[0][1] <= beats[0][0]:
+        return "首节拍 %d-%d 秒时长为零或为负" % beats[0][:2]
+    if abs(beats[-1][1] - seconds) > 0.5:
+        return ("节拍只覆盖到 %d 秒，本镜时长 %s 秒——节拍必须覆盖整镜"
+                % (beats[-1][1], seconds))
+    return ""
+
+
 def _col(headers: list[str], *keys: str) -> int | None:
     low = [h.strip().lower() for h in headers]
     for i, h in enumerate(low):

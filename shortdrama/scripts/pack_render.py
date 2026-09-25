@@ -7,11 +7,12 @@
 
 本脚本**不改 v5 管线**：读盘上分镜与静帧 → 分组 → 提交 → 轮询落盘。
 
-分组规则（v2 压缩式）：
+分组规则（v2 压缩式；2026-09-25 与 video_plan.group_shots 同步放权：每拍下限
+4→2s，单镜成组补到 ≥4s——供应商 [4,12] 管整条请求不管拍内边界）：
 - 仅**同场景**相邻镜合并（跨场景切换是分镜语义，不交给模型即兴）；
 - 声明时长之和 ≤12s 直接合并；
 - 超限时**等比压缩**到 12s，但每镜不得低于 `speech_need`（台词字数/5 + 1s，
-  无声镜 4s），且压幅不得超原声明 40%——否则放弃合并、该镜独立成组。
+  无声镜 2s），且压幅不得超原声明 40%——否则放弃合并、该镜独立成组。
 
 用法：
     python pack_render.py <project> --ep N [--dry-run] [--max-group 5]
@@ -35,25 +36,27 @@ sys.path.insert(0, str(ROOT))
 from v5 import config                                   # noqa: E402
 from v5.media import providers                          # noqa: E402
 from v5.media import style as style_mod                 # noqa: E402
+from v5.media.prompt import _remap_beats                # noqa: E402
 from v5.media.storyboard import parse                   # noqa: E402
 from v5.media.video import _wait_one                    # noqa: E402
 
 SUBMIT_GAP_S = int(getattr(config, "VIDEO_SUBMIT_MIN_INTERVAL_S", 65))
 MAX_SECONDS = 12
 MIN_KEEP_RATIO = 0.6     # 压缩后每镜至少保留原声明的 60%
+MIN_SHOT_SECONDS = 2     # 与 video_plan.PACK_MIN_SHOT_SECONDS 同步
 
 
 def clamp_sec(s: dict) -> int:
-    """分镜声明时长：解析失败按 4s 兜底，硬区间 4-12。"""
+    """分镜声明时长：解析失败按 4s 兜底，硬区间 2-12（组内可到 2s）。"""
     v = int(s.get("seconds") or 0) or 4
-    return max(4, min(12, v))
+    return max(MIN_SHOT_SECONDS, min(12, v))
 
 
 def speech_need(s: dict) -> int:
-    """镜最短可行秒数：台词语音（5 字/秒）+ 1s 余量；无声镜 4s。"""
+    """镜最短可行秒数：台词语音（5 字/秒）+ 1s 余量；无声镜 2s。"""
     chars = len(re.sub(r"[^一-龥]", "", s.get("dialogue") or ""))
     need = chars / 5.0 + 1.0 if chars else 2.0
-    return max(4, math.ceil(need))
+    return max(MIN_SHOT_SECONDS, math.ceil(need))
 
 
 def _fit(declared: list[int], mins: list[int]) -> list[int] | None:
@@ -98,6 +101,8 @@ def group_shots(shots: list[dict], max_group: int) -> list[tuple[list[dict], lis
                 declared = fitted
                 break        # 压缩组 12s 已满，不再吞镜
             break
+        if len(cur) == 1 and declared[0] < 4:
+            declared[0] = 4     # 单镜成组：请求级供应商下限（与 video_plan 同步）
         groups.append((cur, declared))
         i += len(cur)
     return groups
@@ -132,7 +137,7 @@ def build_prompt(group: list[dict], declared: list[int], total: int,
         "本片段总长 %d 秒，由连续发生的 %d 个节拍组成，各节拍按下列时间分配自然衔接，"
         "节拍边界允许 ±1 秒弹性：" % (total, n),
     ]
-    for (l, r), s in zip(bounds, group):
+    for i, ((l, r), s) in enumerate(zip(bounds, group)):
         scene = (s.get("scene") or "").strip()
         head = "【第 %d-%d 秒" % (l, r)
         if scene:
@@ -142,9 +147,11 @@ def build_prompt(group: list[dict], declared: list[int], total: int,
         join_line = "\n转场承接：%s。" % join if join else ""
         style = (s.get("visual_style") or "").strip()
         style_line = "\n视觉风格：%s" % style if style else ""
+        # ★ 镜内节拍全局重映射（2026-09-25，与 v5.media.prompt 同步）
         segs.append(
             "%s\n%s%s%s\n台词：%s\n音效：%s\n落幅：%s"
-            % (head, (s.get("visual") or "").strip(), join_line, style_line,
+            % (head, _remap_beats((s.get("visual") or "").strip(), l, declared[i]),
+               join_line, style_line,
                fmt_dialogue(s.get("dialogue")),
                (s.get("sfx") or "").strip() or "无",
                (s.get("tail") or "").strip() or "自然收在该拍动作结束处"))

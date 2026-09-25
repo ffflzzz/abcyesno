@@ -3403,6 +3403,72 @@ class TestPackMode(unittest.TestCase):
         self.assertEqual(sum(declared), 12)
         self.assertGreaterEqual(min(declared), 5, "台词镜不得压破语音下限")
 
+    def test_group_shots_two_second_shots_and_single_floor(self):
+        """★ 2026-09-25 放权：每拍下限 4→2s（Pavo 参考片实证 12s 六拍可行）。
+
+        组内 2s 镜合法（凑成 ≥4s 的请求即可）；**单镜成组**必须补到 ≥4s——
+        供应商 seconds ∈ [4,12] 管的是整条请求，独立成组的 2s 镜会直接被拒。
+        """
+        from v5.media import video_plan
+
+        shots = [
+            {"name": "LN01", "scene": "画室", "seconds": 6},
+            {"name": "LN02", "scene": "画室", "seconds": 2},   # 组内 2s 合法
+            {"name": "LN03", "scene": "夜街", "seconds": 2},   # 跨场景独立成组 → 补 4
+        ]
+        groups = video_plan.group_shots(shots, 5)
+        self.assertEqual([[s["name"] for s in g] for g, _ in groups],
+                         [["LN01", "LN02"], ["LN03"]])
+        self.assertEqual(groups[0][1], [6, 2])
+        self.assertEqual(groups[1][1], [4], "单镜成组必须补到供应商请求下限")
+        for _, declared in groups:
+            self.assertGreaterEqual(sum(declared), 4)
+            self.assertLessEqual(sum(declared), 12)
+
+    def test_pack_prompt_remaps_beats_to_global_timeline(self):
+        """★ 2026-09-25：镜内节拍时间戳必须平移到 pack 全局时间轴。
+
+        组级声明「<Picture i> 为第 X-Y 秒」是全局的；镜内 `0-2秒：` 是镜本地 0 起。
+        组内第 2 镜不平移会同时收到「第 6-8 秒」边界和「0-2秒」正文——互相打架。
+        压缩过的镜（_pack_fit 等比压秒）节拍也要跟着等比重标。
+        """
+        from v5.media.prompt import build_pack_prompt
+
+        group = [
+            {"name": "LN01", "scene": "画室", "seconds": 6, "shot_type": "中景",
+             "angle": "平视", "camera": "固定",
+             "visual": "0-2秒：@陈默抬手按住@画纸；2-6秒：右手把@画笔搁下。",
+             "dialogue": "", "sfx": "", "tail": ""},
+            {"name": "LN02", "scene": "画室", "seconds": 2, "shot_type": "近景",
+             "angle": "平视", "camera": "固定",
+             "visual": "0-2秒：@画笔在笔架上停稳。",
+             "dialogue": "", "sfx": "", "tail": ""},
+        ]
+        p = build_pack_prompt(group, [6, 2], 8, style_block="")
+        self.assertIn("0-2秒：@陈默抬手按住@画纸；2-6秒：右手把@画笔搁下", p)
+        self.assertIn("6-8秒：@画笔在笔架上停稳", p,
+                      "组内第 2 镜的节拍必须平移到全局时间轴")
+        self.assertNotIn("第 6-8 秒｜画室｜近景】\n0-2秒", p,
+                         "组级边界与镜内节拍时间戳不一致 = 打架")
+        # 压缩重标：4s 节拍压进 2s 分配
+        p2 = build_pack_prompt([dict(group[0], seconds=4)], [2], 2, style_block="")
+        self.assertIn("0-1秒：@陈默抬手按住@画纸；1-2秒：右手把@画笔搁下", p2)
+
+    def test_still_prompt_takes_last_beat_only(self):
+        """★ 2026-09-25：静帧只取最后一拍——多拍序列是「时间性描述」，
+        会诱发分屏（clockmaker 事故同类：18 镜 14 镜上下两格）。"""
+        from v5.media import prompt
+
+        shot = {"name": "LN01", "scene": "画室", "seconds": 6,
+                "shot_type": "中景", "angle": "平视", "camera": "固定",
+                "visual": ("0-2秒：@陈默抬手按住@画纸；"
+                           "2-6秒：右手把@画笔搁下，指尖停在笔架上。"),
+                "dialogue": "", "sfx": "", "tail": ""}
+        p = prompt.build_still_prompt(shot)
+        self.assertIn("指尖停在笔架上", p)
+        self.assertNotIn("0-2秒", p, "静帧不得携带节拍时间戳（分屏诱因）")
+        self.assertNotIn("抬手按住", p, "前一拍不得进静帧（只取最后一拍）")
+
     # ── 提交（pack 粒度）──
 
     def test_submit_packs_one_job_per_group(self):

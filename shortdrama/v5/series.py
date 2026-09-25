@@ -573,6 +573,15 @@ def _storyboard_gate(root: Path, brief: dict, ep: int | None = None) -> None:
     #   这两条都是**渲染层硬依赖**，且纯确定性、零误判风险（详见 `check_storyboard`）。
     for _v in (r.get("row_violations") or []):
         fatal.append(_v)
+    # ★ 镜内节拍契约（2026-09-25，节奏设计权下放后的守门）：写了节拍的镜
+    #   时间轴必须自洽（0 起 / 首尾相接 / 终于本镜时长）——pack 提示词按它
+    #   做全局时间轴重映射，写歪了模型收到的时间轴就是错的。
+    #   不写节拍 = 旧格式，零影响（向后兼容）。
+    if r.get("beat_violations"):
+        fatal.append("镜内节拍不自洽（时间轴是 pack 重映射的硬依赖）：%s ｜ "
+                     "节拍必须从 0 秒开始、首尾相接、终于本镜时长；"
+                     "要改就回 **scenedesigner**（或删掉节拍标记退回整镜描述）"
+                     % "；".join(r["beat_violations"][:6]))
     # ★ 台词**长度**契约（2026-09-15 实测，用户反馈"对白太短、不能表达剧情"）：
     #   `DIALOGUE_MIN_RATIO` 只查"有多少镜有台词"，**不查每句多长** →
     #   「沉。」「开。」这类残句天然合法（实测 village-bridge 22 句平均 7.0 字，占比却达标）。

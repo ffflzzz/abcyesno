@@ -22,6 +22,7 @@ from __future__ import annotations
 import re
 
 from .. import config
+from . import storyboard
 from . import video_plan
 
 # ─── 全局尾缀（每镜统一，不写进画面描述正文）─────────────────────────────────
@@ -927,9 +928,22 @@ def _visualize_state_words(text: str) -> str:
     return text
 
 
-def content_line(shot: dict) -> str:
-    """画面内容段：剥掉风格前缀与全局约束后剩下的动作描述。"""
+def content_line(shot: dict, beat_pick: str | None = None) -> str:
+    """画面内容段：剥掉风格前缀与全局约束后剩下的动作描述。
+
+    beat_pick（2026-09-25，镜内节拍消费分路）：
+      · None（默认）——保留全部节拍文本（视频路径：单镜从 0 起无需平移；
+        pack 档在 build_pack_prompt 里另做全局时间轴重映射）；
+      · "last" —— 只取**最后一拍**的描述。静帧/预生成尾帧是**单幅图**，
+        多拍序列是「时间性描述」——与 clockmaker 分屏事故同源
+        （18 镜 14 镜上下两格）。最后一拍 = 本镜收定状态，与「上一组末镜
+        静帧作衔接锚」的跨组链语义一致。
+    """
     v = _clean(shot.get("visual") or "")
+    if beat_pick == "last":
+        _beats = storyboard.split_beats(v)
+        if _beats:
+            v = _beats[-1][2]
     # 去掉【镜N】标记
     v = re.sub(r"^【[^】]*】", "", v).strip()
     # 去掉风格前缀（已在 style_line 里单独给）
@@ -1113,7 +1127,8 @@ def build_still_prompt(shot: dict, plan: dict | None = None,
     # `fix(prompt): 段序改回官方真实分镜实例的顺序`），场景锚点插在
     # 「机位」之后、「视觉风格」之前 —— 空间与取景连在一起读最自然。
     segs = [style_block_line(shot), camera_line(shot), scene_line(shot),
-            style_line(shot), content_line(shot), identity_line(shot)]
+            style_line(shot), content_line(shot, beat_pick="last"),
+            identity_line(shot)]
     # 人物数量声明：0 → 空镜 / 1 → 单人 / ≥2 → 多人（2026-09-15 按人数分流）。
     # 修的是"有人就注单人"——那会把多人镜推向主体复制/拼贴（LN17 出现 9 张脸）。
     segs.append(person_directive(shot))
@@ -1175,7 +1190,8 @@ def build_tail_prompt(shot: dict, plan: dict | None = None,
     core = tail_content(shot)
     if not core:
         # 分镜没写落幅：退化成用本镜静帧描述（等价于"停在开场构图"）
-        core = content_line(shot)
+        # 2026-09-25：镜内节拍取最后一拍（收定状态，与尾帧语义一致）
+        core = content_line(shot, beat_pick="last")
     segs = [style_block_line(shot), camera_line(shot), style_line(shot),
             core, identity_line(shot)]
     # 人物数量声明：0 → 空镜 / 1 → 单人 / ≥2 → 多人（2026-09-15 按人数分流）。
@@ -1354,6 +1370,37 @@ def _pack_fmt_dialogue(d: str) -> str:
     return d
 
 
+def _remap_beats(visual: str, offset: int, span: int) -> str:
+    """镜内节拍时间戳 → pack 全局时间轴（2026-09-25）。
+
+    为什么必须做：组级声明「<Picture i> 为第 X-Y 秒节拍」用的是**全局**时间轴，
+    而镜内节拍（`0-2秒：…`）是镜本地 0 起的。组内第 2 镜不重映射会同时收到
+    「第 4-8 秒」边界和「0-2秒」正文——模型两边打架。
+    `_pack_fit` 等比压缩过秒数时（如 7s 压到 5s），节拍按 span/节拍总长
+    等比重标（±1 秒弹性由组级声明兜底）。零长节拍（重标后挤成 0 秒）并入
+    前一拍的收尾，不产生 `3-3秒` 这类噪声标记。
+    无节拍的镜（旧格式）原样返回——零影响。
+    """
+    beats = storyboard.split_beats(visual or "")
+    if not beats:
+        return visual or ""
+    total = float(beats[-1][1])
+    if total <= 0 or span <= 0:
+        return visual or ""
+    scale = span / total
+    parts: list[str] = []
+    prev_end = None
+    for a, b, body in beats:
+        na = round(a * scale) if prev_end is None else prev_end
+        nb = max(na + 1, min(span, round(b * scale)))
+        if nb <= na:            # 并入前一拍（span 已满）
+            break
+        if body:
+            parts.append("%d-%d秒：%s" % (offset + na, offset + nb, body))
+        prev_end = nb
+    return "；".join(parts)
+
+
 def build_pack_prompt(group: list[dict], declared: list[int], total: int,
                       style_block: str = "",
                       prev_shot_name: str | None = None) -> str:
@@ -1391,7 +1438,7 @@ def build_pack_prompt(group: list[dict], declared: list[int], total: int,
         "本片段总长 %d 秒，由连续发生的 %d 个节拍组成，各节拍按下列时间分配自然衔接，"
         "节拍边界允许 ±1 秒弹性：" % (total, n),
     ]
-    for (l, r), s in zip(bounds, group):
+    for i, ((l, r), s) in enumerate(zip(bounds, group)):
         scene = (s.get("scene") or "").strip()
         head = "【第 %d-%d 秒" % (l, r)
         if scene:
@@ -1401,9 +1448,12 @@ def build_pack_prompt(group: list[dict], declared: list[int], total: int,
         join_line = "\n转场承接：%s。" % join if join else ""
         style = (s.get("visual_style") or "").strip()
         style_line = "\n视觉风格：%s" % style if style else ""
+        # ★ 镜内节拍全局重映射（2026-09-25）：镜本地 `0-2秒：` → 组内绝对时间
         segs.append(
             "%s\n%s%s%s\n台词：%s\n音效：%s\n落幅：%s"
-            % (head, (s.get("visual") or "").strip(), join_line, style_line,
+            % (head, _remap_beats((s.get("visual") or "").strip(),
+                                 l, declared[i]),
+               join_line, style_line,
                _pack_fmt_dialogue(s.get("dialogue")),
                (s.get("sfx") or "").strip() or "无",
                (s.get("tail") or "").strip() or "自然收在该拍动作结束处"))

@@ -699,8 +699,6 @@ def check_storyboard(md: str, brief: dict | None = None,
             if len(vv) >= 15 and (_has_line(dv) or vo) \
                     and not dv.startswith("（无声"):
                 spoken_shots += 1
-                import sys as _sys
-                print('DEBUG spoken:', repr(dv[:20]), file=_sys.stderr)
 
     dur_idx = next((i for i, c in enumerate(headers)
                     if "时长" in c or "seconds" in c.lower()), None)
@@ -727,23 +725,37 @@ def check_storyboard(md: str, brief: dict | None = None,
             "不得写 `—` 或留空" % "、".join(missing_dur[:8]))
     text_dep: list[str] = []
     style_drift: list[str] = []
+    # ★ 镜内节拍契约（2026-09-25，节奏设计权下放）：写了 `0-2秒：…` 节拍的镜，
+    #   时间轴必须从 0 起、首尾相接、终于本镜时长——pack 提示词按它做全局重映射
+    #   （prompt._remap_beats），写歪了模型收到的时间轴就是错的。不写节拍 = 旧格式，
+    #   完全合法（向后兼容）。解析与判据复用媒体链那一份（`storyboard.split_beats`）。
+    from .media.storyboard import split_beats as _sb_split_beats
+    from .media.storyboard import beats_tiling_error as _sb_beats_err
+    beat_violations: list[str] = []
     seconds_total = 0.0
     durations: list[float] = []
     for l in shots:
         cells = [x.strip() for x in l.split("|")]
         shot_id = cells[1] if len(cells) > 1 else "?"
+        sec = 0.0
+        if dur_idx is not None and dur_idx < len(cells):
+            m = re.search(r"(\d+(?:\.\d+)?)", cells[dur_idx])
+            if m:
+                sec = float(m.group(1))
+                seconds_total += sec
+                durations.append(sec)
         if vis_idx is not None and vis_idx < len(cells):
             vv = cells[vis_idx]
             if any(k in vv for k in _TEXT_TRAPS):
                 text_dep.append(shot_id)
             if style_keywords and not any(k in vv for k in style_keywords):
                 style_drift.append(shot_id)
-        if dur_idx is not None and dur_idx < len(cells):
-            m = re.search(r"(\d+(?:\.\d+)?)", cells[dur_idx])
-            if m:
-                d = float(m.group(1))
-                seconds_total += d
-                durations.append(d)
+            if sec > 0:
+                _beats = _sb_split_beats(vv)
+                if _beats:
+                    _err = _sb_beats_err(_beats, sec)
+                    if _err:
+                        beat_violations.append("%s：%s" % (shot_id, _err))
 
     # 全表等长 = 节奏呆板（分镜偷懒）。真实节拍有呼吸：反应镜短、铺陈长。
     uniform_pacing = len(durations) >= 4 and len(set(durations)) == 1
@@ -828,10 +840,11 @@ def check_storyboard(md: str, brief: dict | None = None,
             "duration_off": dur["off"], "unparsed": unparsed,
             "row_violations": row_violations, "deduped_rows": deduped_rows,
             "uniform_pacing": uniform_pacing, "style_drift": style_drift,
+            "beat_violations": beat_violations,
             "audio_mode": mode, "spoken_shots": spoken_shots,
             "n_shots": n_shot, "dialogue_ratio": round(dialogue_ratio, 3),
             "dialogue_short": dialogue_short, "dialogue_thin": dialogue_thin,
             "short_lines": short_lines, "long_lines": long_lines,
             "ok": (not missing_cols and order_ok and not missing
                    and empty_dialog == 0 and not text_dep and not unparsed
-                   and not row_violations)}
+                   and not row_violations and not beat_violations)}

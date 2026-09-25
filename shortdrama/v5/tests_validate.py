@@ -295,6 +295,33 @@ class TestStoryboard(unittest.TestCase):
         self.assertEqual(r["scene_count"], 2)
         self.assertAlmostEqual(r["seconds_total"], 18.0)
 
+    def test_beats_tiling_ok_and_legacy_untouched(self):
+        """★ 镜内节拍（2026-09-25 放权后的守门）：秒 / 拉丁 s 两种格式都认；
+        旧格式（无节拍标记、含 `2-3秒后` 这类时长描述）必须零影响。"""
+        md = self._md([
+            "| 1 | 中景 | 平视 | 固定 | 6 | 0-2秒：陈默抬手按住画纸；2-6秒：右手把画笔搁下 | （无声，环境音） | 风声 |",
+            "| 2 | 近景 | 平视 | 固定 | 5 | 0-3s：陈默低头看向画纸；3-5s：指尖停在笔架上 | （无声，环境音） | 无 |",
+        ])
+        r = validate.check_storyboard(md, None)
+        self.assertEqual(r["beat_violations"], [], r["beat_violations"])
+        self.assertTrue(r["ok"])
+        # 旧格式：时长描述不是节拍标记，安全降级
+        md2 = self._md([
+            "| 1 | 中景 | 平视 | 固定 | 6 | 陈默在画室里画了 2-3 秒后抬头看向门口 | （无声，环境音） | 风声 |",
+        ])
+        r2 = validate.check_storyboard(md2, None)
+        self.assertEqual(r2["beat_violations"], [])
+
+    def test_beats_must_tile_whole_shot(self):
+        """节拍不自洽 = 阻断（pack 重映射按时间轴算，写歪了模型收到错的时间轴）。"""
+        md = self._md([
+            "| 1 | 中景 | 平视 | 固定 | 7 | 0-2秒：陈默抬手按住画纸；2-4秒：右手把画笔搁下 | （无声，环境音） | 风声 |",
+        ])
+        r = validate.check_storyboard(md, None)
+        self.assertTrue(r["beat_violations"], "未铺满整镜必须拦下")
+        self.assertIn("只覆盖到 4", r["beat_violations"][0])
+        self.assertFalse(r["ok"])
+
     def test_missing_column(self):
         md = ("| 镜头号 | 景别 | 画面描述 | 对白 |\n|---|---|---|---|\n"
               "| 1 | 全景 | 陈默醒来 | （无声） |\n")

@@ -40,19 +40,25 @@ MODES = ("reference", "keyframe", "mixed", "pack")
 
 PACK_MAX_SECONDS = 12    # 单条请求硬上限（供应商 seconds ∈ [4, 12]）
 PACK_MIN_KEEP_RATIO = 0.6  # 压缩后每镜至少保留原声明的 60%
+# ★ 2026-09-25 放权：每拍（镜）下限 4→2s。Pavo 参考片实证同 agnes 模型
+#   12s 里 6 拍×2s 精确执行；旧 4s 下限是**我们的保守钳制**，不是供应商约束
+#   （[4,12] 管的是整条请求时长，拍内边界只是提示词文本）。节奏设计权交给
+#   scenedesigner（镜内节拍见 storyboard.split_beats）。供应商请求级下限
+#   由 group_shots 的「单镜成组补到 4s」兜底。
+PACK_MIN_SHOT_SECONDS = 2
 
 
 def pack_clamp_sec(s: dict) -> int:
-    """分镜声明时长：解析失败按 4s 兜底，硬区间 4-12。"""
+    """分镜声明时长：解析失败按 4s 兜底，硬区间 2-12（组内可到 2s）。"""
     v = int(s.get("seconds") or 0) or 4
-    return max(4, min(12, v))
+    return max(PACK_MIN_SHOT_SECONDS, min(12, v))
 
 
 def pack_speech_need(s: dict) -> int:
-    """镜最短可行秒数：台词语音（5 字/秒）+ 1s 余量；无声镜 2s 起步、下限 4s。"""
+    """镜最短可行秒数：台词语音（5 字/秒）+ 1s 余量；无声镜 2s 起步。"""
     chars = len(re.sub(r"[^一-龥]", "", s.get("dialogue") or ""))
     need = chars / 5.0 + 1.0 if chars else 2.0
-    return max(4, math.ceil(need))
+    return max(PACK_MIN_SHOT_SECONDS, math.ceil(need))
 
 
 def _pack_fit(declared: list[int], mins: list[int]) -> list[int] | None:
@@ -80,6 +86,9 @@ def group_shots(shots: list[dict], max_group: int | None = None) -> list[tuple[l
     - 声明时长之和 ≤12s 直接合并；
     - 超限时等比压缩到 12s，但每镜不得低于 `pack_speech_need`（台词时长下限），
       且压幅不得超原声明 40% —— 否则放弃合并、该镜独立成组。
+    - ★ 单镜成组补到 ≥4s（2026-09-25）：供应商请求级 seconds ∈ [4,12]，
+      组内每拍可以 2s，但**独立成组的镜**整条请求就是它自己 → 不足 4s 会直接
+      被供应商拒（组内两拍 2s+2s=4s 合法，单拍 2s 不合法）。
 
     ⚠️ 2026-09-23 撤销记录：曾试过「分镜声明 cut 的镜不并入本组」（组边界对齐
     叙事切换点）——**实测错误**：写实主包的分镜把普通镜头切换都标 cut（几乎
@@ -110,6 +119,8 @@ def group_shots(shots: list[dict], max_group: int | None = None) -> list[tuple[l
                 declared = fitted
                 break        # 压缩组 12s 已满，不再吞镜
             break
+        if len(cur) == 1 and declared[0] < 4:
+            declared[0] = 4     # 单镜成组：请求级供应商下限
         groups.append((cur, declared))
         i += len(cur)
     return groups
