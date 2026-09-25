@@ -372,6 +372,14 @@ _HEAD_TYPE_RE = re.compile(r"[（(]\s*(character|object|prop|location|scene)\s*[
 _KIND_TYPE = {"角色卡": "character", "场景卡": "location", "道具卡": "prop",
               "设施卡": "prop", "资产卡": "prop"}
 _KIND_HEAD_RE = re.compile(r"^(角色卡|场景卡|道具卡|设施卡|资产卡)\s*[:：]\s*(.+?)\s*$")
+# ★ 2026-09-26 第四种标题写法：`### 场景 S1：后巷雨夜伏击点`（命案包实测产物）。
+#   小节标题是 `## 场景条目`，三级标题只写「场景 + 编号 + 名」——**没有任何类型标记**
+#   （既无 `（scene）` 括号、也无「场景卡」前缀）→ 上面三个正则全不认 → 4 个场景
+#   **静默掉出注册表** → `scene_lines()` 无场景可注 → 每一镜的光源/陈设全靠模型
+#   自由发挥（用户反馈"场景没有锚定"）。
+#   修法：认这个写法并**归一成带类型标记的标题**（`名（scene）`），
+#   后续的类型归一（scene→location）与描述提取（字段列表格式 ③）全部照旧可用。
+_SCENE_HEAD_RE = re.compile(r"^场景\s*(?:[A-Za-z]?\d+)?\s*[:：]\s*(.+?)\s*$")
 # 出图提示词段标题（`**外形提示词（出图 prompt）**` / `- 外形/材质/结构（出图提示词，…）：`）。
 # 前缀放宽到 20 字：village-scale 的 `- 外形/材质/结构（出图` 正好 13 字，
 # 用 `{0,12}` 会漏掉整张卡的描述（实测）。
@@ -407,6 +415,12 @@ def _split_asset_blocks(md: str) -> list[str]:
                 out.append(cur)
             # 只收"标题自带类型信息"的三级标题 —— 那才是资产条目；
             # 其余三级标题（如「全片视觉风格锁」下的行）不是卡片。
+            # ★ 2026-09-26：`### 场景 S1：<名>` 无类型标记但**确实是场景条目**
+            #   → 归一成 `<名>（scene）`，让后续按类型标记的路径照常处理。
+            _ms = _SCENE_HEAD_RE.match(head)
+            if _ms:
+                cur = "%s（scene）" % _ms.group(1)
+                continue
             cur = head if (_HEAD_TYPE_RE.search(head) or _KIND_HEAD_RE.match(head)) else None
             continue
         if cur is not None:
@@ -863,6 +877,25 @@ def ensure(root: Path, *, log=print, force: bool = False,
         chars = parse_characters(wb.read_text(encoding="utf-8")) if wb.exists() else []
     if items is None:
         items = parse_assets(ad.read_text(encoding="utf-8")) if ad.exists() else []
+    # ★ **场景卡静默丢失必须响亮**（2026-09-26，brawl 实测）：
+    #   `assets.md` 里明明有 `### 场景 S1：名` 这类场景小节，但解析器不认 →
+    #   `items` 里 0 个 location → `scene_lines()` 无场景锚点 → 每镜光源/陈设
+    #   全靠模型自由发挥（用户反馈"场景没有锚定"），而**全程零报错**。
+    #   **判据看不见的东西不能算通过** —— 这里按"文件里有场景小节 vs 解析出
+    #   几个 location"对账，对不上就打红字（不阻断：场景缺失不该杀整条链）。
+    if ad.exists():
+        _src = ad.read_text(encoding="utf-8")
+        _declared = len(re.findall(r"^#{2,4}\s*场景\s*(?:[A-Za-z]?\d+)?\s*[:：]",
+                                   _src, re.M))
+        _got = len([a for a in items
+                    if str(a.get("type") or "") == "location"])
+        if _declared and not _got:
+            log("[cast] ⚠️ assets.md 有 %d 个场景小节，但**一个 location 都没解析出来** "
+                "→ 场景锚点空、每镜场景由模型自由发挥。查 `### 场景…` 标题写法与 "
+                "`cast._split_asset_blocks` 的识别规则。" % _declared)
+        elif _declared > _got:
+            log("[cast] ⚠️ assets.md 有 %d 个场景小节，只解析出 %d 个 location（丢了 %d 个）"
+                % (_declared, _got, _declared - _got))
     # 角色卡的姓名若已出现在资产卡里，以角色卡为准（避免重复生成同一人）
     char_names = {c["name"] for c in chars}
     items = [a for a in items if a["name"] not in char_names]

@@ -227,6 +227,57 @@ class TestParseAssets(unittest.TestCase):
         self.assertEqual(cast.parse_assets(md)[0]["type"], "prop")
 
 
+class TestParseAssetsSceneHeading(unittest.TestCase):
+    """★ 第四种标题写法：`### 场景 S1：<名>`（命案包实测产物，2026-09-26）。
+
+    事故：assetdesigner 把场景写在 `## 场景条目` 小节下，三级标题是
+    「场景 + 编号 + 名」——**没有任何类型标记**（无 `（scene）` 括号、
+    无「场景卡」前缀）→ 三个识别正则全不认 → 4 个场景**静默掉出注册表**
+    → `scene_lines()` 无锚点 → 每镜光源/陈设靠模型自由发挥（用户反馈
+    「场景没有锚定」），且全程零报错。
+    """
+
+    MD = (
+        "# 资产卡\n\n"
+        "## 场景条目\n\n"
+        "### 场景 S1：后巷雨夜伏击点\n"
+        "- **type**: location\n"
+        "- **时间**: 雨夜\n"
+        "- **地理特征**: 旧城区后巷入口；湿砖地、死黑暗部、脏绿日光灯管、"
+        "塑料雨棚边缘；窄巷两侧为旧城区砖墙与铁皮卷闸门。\n"
+        "- **光照主句**: 主光来自头顶偏右的脏绿日光灯管，光柱斜切巷道，"
+        "形成局部孤岛亮区；暗部黑到底。\n"
+        "- **陈设清单**:\n"
+        "  - 左侧：砖墙，表面有水痕与霉斑\n"
+        "  - 地面：湿砖地，哑光水渍，无反光\n"
+        "\n---\n\n"
+        "### 场景 S2：街面围观收束点\n"
+        "- **type**: location\n"
+        "- **地理特征**: 后巷出口到旧城街面；繁体招牌虚化、街坊虚化背影、"
+        "潮湿砖面；街面较宽，两侧为旧城店铺。\n"
+        "- **光照主句**: 主光来自街面日光灯管与远处霓虹虚光，潮湿砖面哑光反光。\n"
+    )
+
+    def test_numbered_scene_headings_are_registered(self):
+        items = cast.parse_assets(self.MD)
+        names = [a["name"] for a in items]
+        self.assertEqual(names, ["后巷雨夜伏击点", "街面围观收束点"], names)
+
+    def test_scene_type_is_location(self):
+        """`scene` 必须归一成注册表口径的 `location`——
+        否则 `_location_entries` / `scene_lines()` 取不到它。"""
+        items = cast.parse_assets(self.MD)
+        self.assertEqual({a["type"] for a in items}, {"location"})
+
+    def test_scene_description_carries_light_and_props(self):
+        """场景锚点的价值全在描述里：光源 + 陈设必须进 prompt，
+        不然锚点存在也等于没有。"""
+        p = cast.parse_assets(self.MD)[0]["prompt"]
+        self.assertIn("地理特征", p)
+        self.assertIn("脏绿日光灯管", p)
+        self.assertIn("光照主句", p)
+
+
 class TestParseAssetsFormatCompat(unittest.TestCase):
     """牛来 / 3D 包的**实际产物格式**（2026-09-14 实测事故）。
 
