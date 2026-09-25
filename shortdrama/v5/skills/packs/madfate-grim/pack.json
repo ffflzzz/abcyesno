@@ -17,10 +17,11 @@
   ],
   "audio-modes": [
     "silent",
-    "dialogue-led"
+    "dialogue-led",
+    "narration-led"
   ],
-  "default-audio-mode": "silent",
-  "audio-mode-note": "本片气质『人狠话不多』⇒ 默认 silent（无台词，全靠画面与音景）。silent 不是无声：分镜「音效」列逐镜写具体音源（雨声/低频嗡鸣/电流声），PACK_BGM=1 模型自带全程配乐。要台词的项目在 brief 写 dialogue-led。",
+  "default-audio-mode": "narration-led",
+  "audio-mode-note": "★ 2026-09-25 起默认 narration-led（用户拍板：旁白推进剧情，解决无声片可读性）。实现走 **agnes 画外音烘焙**：旁白台词写进分镜「音效」列的画外音格式（`画外音（音色）：台词`），由视频模型直接烘焙；画面描述标注人物闭嘴。红线：旁白文本**绝不进「对白」列**（会被当角色台词念+驱动口型）。edge-tts（v5/media/narration.py）为烘焙失败时的兜底。silent / dialogue-led 仍可选。",
   "shot-duration": "4-12s",
   "aspect-ratio": "source_ratio（默认 9:16）",
   "script-craft-note": "★ 本包刻意不启用 short-drama-hooks / 爽点等商业短剧判据——『憋闷』靠压抑铺垫，跟『每集必有钩子/密度递增/反派惨烈翻车』直接对打（用户 2026-09-16『不要污染我的生产线』的镜像场景）。要加的项目在 brief.json 显式声明 script-craft。",
