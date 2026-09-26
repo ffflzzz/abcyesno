@@ -935,19 +935,23 @@ def _visualize_state_words(text: str) -> str:
 def content_line(shot: dict, beat_pick: str | None = None) -> str:
     """画面内容段：剥掉风格前缀与全局约束后剩下的动作描述。
 
-    beat_pick（2026-09-25，镜内节拍消费分路）：
+    beat_pick（2026-09-25/26，镜内节拍消费分路）：
       · None（默认）——保留全部节拍文本（视频路径：单镜从 0 起无需平移；
         pack 档在 build_pack_prompt 里另做全局时间轴重映射）；
-      · "last" —— 只取**最后一拍**的描述。静帧/预生成尾帧是**单幅图**，
+      · "first" —— 只取**第一拍**的描述。静帧/预生成尾帧是**单幅图**，
         多拍序列是「时间性描述」——与 clockmaker 分屏事故同源
-        （18 镜 14 镜上下两格）。最后一拍 = 本镜收定状态，与「上一组末镜
-        静帧作衔接锚」的跨组链语义一致。
+        （18 镜 14 镜上下两格）。取第一拍的两个理由：
+        ① 身份锚点（衣装/随身道具）按契约写在**第一拍**（后续拍用代词），
+           取第一拍才能拿到锚点；② 静帧是这一镜的**开场构图**，视频从它出发。
+      · （历史）曾取 `"last"`——**已废弃**（2026-09-26 brawl 实测）：最后一拍
+        不带身份锚点 → 静帧提示词里没有任何服装词（「运动外套/夹克/工装裤」全缺）
+        → 同组三张静帧穿出两套外套。
     """
     v = _clean(shot.get("visual") or "")
-    if beat_pick == "last":
+    if beat_pick in ("first", "last"):
         _beats = storyboard.split_beats(v)
         if _beats:
-            v = _beats[-1][2]
+            v = _beats[0][2] if beat_pick == "first" else _beats[-1][2]
     # 去掉【镜N】标记
     v = re.sub(r"^【[^】]*】", "", v).strip()
     # 去掉风格前缀（已在 style_line 里单独给）
@@ -1131,7 +1135,7 @@ def build_still_prompt(shot: dict, plan: dict | None = None,
     # `fix(prompt): 段序改回官方真实分镜实例的顺序`），场景锚点插在
     # 「机位」之后、「视觉风格」之前 —— 空间与取景连在一起读最自然。
     segs = [style_block_line(shot), camera_line(shot), scene_line(shot),
-            style_line(shot), content_line(shot, beat_pick="last"),
+            style_line(shot), content_line(shot, beat_pick="first"),
             identity_line(shot)]
     # 人物数量声明：0 → 空镜 / 1 → 单人 / ≥2 → 多人（2026-09-15 按人数分流）。
     # 修的是"有人就注单人"——那会把多人镜推向主体复制/拼贴（LN17 出现 9 张脸）。
@@ -1195,7 +1199,7 @@ def build_tail_prompt(shot: dict, plan: dict | None = None,
     if not core:
         # 分镜没写落幅：退化成用本镜静帧描述（等价于"停在开场构图"）
         # 2026-09-25：镜内节拍取最后一拍（收定状态，与尾帧语义一致）
-        core = content_line(shot, beat_pick="last")
+        core = content_line(shot, beat_pick="first")
     segs = [style_block_line(shot), camera_line(shot), style_line(shot),
             core, identity_line(shot)]
     # 人物数量声明：0 → 空镜 / 1 → 单人 / ≥2 → 多人（2026-09-15 按人数分流）。

@@ -3454,9 +3454,11 @@ class TestPackMode(unittest.TestCase):
         p2 = build_pack_prompt([dict(group[0], seconds=4)], [2], 2, style_block="")
         self.assertIn("0-1秒：@陈默抬手按住@画纸；1-2秒：右手把@画笔搁下", p2)
 
-    def test_still_prompt_takes_last_beat_only(self):
-        """★ 2026-09-25：静帧只取最后一拍——多拍序列是「时间性描述」，
-        会诱发分屏（clockmaker 事故同类：18 镜 14 镜上下两格）。"""
+    def test_still_prompt_takes_first_beat_only(self):
+        """★ 2026-09-25/26：静帧只取**一拍**——多拍序列是「时间性描述」，
+        会诱发分屏（clockmaker 事故同类）。取**第一拍**（2026-09-26 改）：
+        身份锚点（衣装/随身道具）按契约写在第一拍、后续拍用代词；
+        取最后一拍会让静帧丢服装（brawl 实测：同组三张静帧穿出两套外套）。"""
         from v5.media import prompt
 
         shot = {"name": "LN01", "scene": "画室", "seconds": 6,
@@ -3465,9 +3467,9 @@ class TestPackMode(unittest.TestCase):
                            "2-6秒：右手把@画笔搁下，指尖停在笔架上。"),
                 "dialogue": "", "sfx": "", "tail": ""}
         p = prompt.build_still_prompt(shot)
-        self.assertIn("指尖停在笔架上", p)
+        self.assertIn("抬手按住", p)
         self.assertNotIn("0-2秒", p, "静帧不得携带节拍时间戳（分屏诱因）")
-        self.assertNotIn("抬手按住", p, "前一拍不得进静帧（只取最后一拍）")
+        self.assertNotIn("指尖停在笔架上", p, "后续拍不得进静帧（只取第一拍）")
 
     # ── 提交（pack 粒度）──
 
