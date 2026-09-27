@@ -157,6 +157,7 @@ python -m v5.series <项目名> --monitor --events 12     # 最多 12 次快照
 | `half-narrated-live-action` | 半解说真人短剧（旁白推进剧情，对白补情绪） | `still-refs: true`、`still-tail: material`、`style-watch: true`；`audio_mode` 主张 `narration-led`（**需在 brief 显式声明**）；`script-craft` = 开场法则 / 钩子 / 爽点（**不启用**微表情）|
 | `madfate-grim` | 命案·都市残酷惊悚（港产残酷犯罪剧质感） | `still-refs: true`、`still-tail: material`、`style-watch: true`、**不开** `style-is-criterion`；**刻意不启用**商业短剧 `script-craft`（「憋闷」与「每集必有钩子」对打）；风格卡 `styles/madfate-grim.md` |
 | `laofuzi-hk-retro` | 老夫子 IP 老港片复古风 | 4 个角色（director / worldbuilder / assetdesigner / reviewer），其余回落 `shortdrama`；风格卡 `styles/laofuzi-ai-remake.md`。⚠️ 含第三方 IP，商用需授权 |
+| `xianxia-vfx-action` | UE5-Niagara 仙侠特效动作·高精度游戏 CG（**横屏**、**无对白**） | 2026-09-26 从用户提供的两条 Ref2VA 提示词蒸馏；自带 5 个角色（director / worldbuilder / assetdesigner / scenedesigner / reviewer），其余回落 `shortdrama`；`still-refs: true`、`still-tail: material`、`style-watch: true`、`script-craft: []`；**主资产是镜头语法不是氛围词**（六条律 + `At 00:02.200` 式时间码必须翻译成 `0-3秒：`），依据档案 `.../references/vfx-shot-grammar.md`。**未实测** |
 
 **静帧尾缀 `still-tail`**（pack.json 字段，2026-09-12 新增）：每张静帧提示词的收尾约束，
 `material`=「表面为真实连续的材质」/ `flat`=「表面只是平涂纯色块」/ `none`=不注入；
@@ -274,6 +275,7 @@ projects/<项目名>/
 | `SHORTDRAMA_NARRATION_VOICE` | zh-CN-YunxiNeural | 旁白音色（edge-tts 音色名，低沉男声）|
 | `SHORTDRAMA_NARRATION_RATE` | +0% | 旁白语速（edge-tts 语法，如 `+10%`）|
 | `SHORTDRAMA_VIDEO_PACK_MAX_GROUP` | 5 | `pack` 模式下单组最多吞几个镜（分组算法见 `media/video_plan.group_shots`；与旁路脚本 `scripts/pack_render.py --max-group` 同义） |
+| `SHORTDRAMA_VIDEO_SUBMIT_TIMEOUT` | 60 | 生视频**提交**的读超时（秒）。2026-09-26 实测：pack 档多参考图组（3–4 张 16:9 静帧）提交时服务端要先拉齐素材，60 秒谈不完 —— 同轮里单图组正常完成、多图组两次都恰好卡满 60s 报 `read operation timed out` 且 `attempts=0`（没拿到 `video_id`）。**多图组建议 180**；默认 60 = 历史行为不变 |
 | `SHORTDRAMA_PACK_BGM` | 1 | `pack` 档提交是否带「全程 BGM+环境音、禁止静音段」指令（官方同款模型实测可原生执行）；brief 明确禁 BGM 的项目设 0 关掉 |
 | `SHORTDRAMA_IMAGE_VENDOR` | agnes | 生图厂商（`v5/vendors.py` 注册表）。未注册的名字**响亮报错**，不静默回退 |
 | `SHORTDRAMA_VIDEO_VENDOR` | agnes | 生视频厂商（同上）。前端三个生成页面各自可选，随请求进该次 run 的子进程 env |

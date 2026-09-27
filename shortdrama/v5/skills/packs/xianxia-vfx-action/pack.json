@@ -1,0 +1,49 @@
+{
+  "name": "xianxia-vfx-action",
+  "display-name-zh": "仙侠特效动作·游戏CG",
+  "version": "0.1.0",
+  "source": "2026-09-26 从用户提供的两条 Ref2VA 生成提示词（同一条 30 秒片的前/后 15 秒分段）逆向蒸馏。**只取美学与镜头语法**（渲染基准/能量色编码/剑罡形态律/运镜库/尾镜接续），不复刻其剧情、角色名与具体编排。原始两条与逐条对照表见 `references/vfx-shot-grammar.md`。",
+  "trigger-words": [
+    "仙侠特效",
+    "修仙打斗",
+    "御剑斗法",
+    "剑罡",
+    "游戏CG质感",
+    "UE5特效",
+    " Niagara 仙侠",
+    "云海斗剑",
+    "xianxia vfx action",
+    "game cinematic duel"
+  ],
+  "audio-modes": [
+    "silent",
+    "narration-led",
+    "dialogue-led"
+  ],
+  "default-audio-mode": "silent",
+  "audio-mode-note": "★ 本包主张 `silent`：参考片两条提示词都写死「Nobody speaks anywhere in this clip / non_diegetic_music: None」，叙事全靠动作与能量形态，声音只有 foley（破空、雷暴、瓦雨、崩塌、音爆环、飓风吼、喘息闷哼）。⚠️ **`default-audio-mode` 代码不消费**（`validate.audio_mode_of` 只读 brief）——要 silent 必须在 **brief.json 显式写** `\"audio_mode\": \"silent\"`，否则回落 `dialogue-led`。silent 下分镜「对白」列**每一格**必须是 `（无声，环境音）`（`roles._audio_mode_defect` 逐格判，出现任何台词即回退 scenedesigner）。`narration-led`（特效解说体）与 `dialogue-led`（斗法前喊招）可选，未实测。",
+  "shot-duration": "3-12s",
+  "aspect-ratio": "16:9（本包主张横屏宽画幅；参考片两条均写死 16:9 60fps）",
+  "aspect-ratio-note": "⚠️ 真实画幅**不由本字段决定**：视频由 `SHORTDRAMA_ASPECT`、静帧由 `SHORTDRAMA_STILL_RATIO` 控制，**两个都要设**（只改一个会让静帧与成片画幅不一致）。且分镜正文自带的 `Ratio: 16:9` 字样会被 `prompt._clean_prompt` **正则清掉**（防模型用「画两格」同时满足两个比例）⇒ 横屏只能在 env 里定，写进分镜无效。本字段只供前端展示（代码不消费）。",
+  "still-refs": true,
+  "still-refs-note": "本包是**正质量、精修**审美（stylized high-precision game CG，「精致」= 正确）→ 绑参考图。理由与国风包同源：本包身份是**复杂造型系统**（发髻+花簪+垂珠链、渐变色纱袖长裙、两把形制不同的灵剑），纯文字锁不住跨镜一致（felt-bach 双人不绑图期间 10/17 镜带残留：角色被复制/第二角色丢失）。\n⚠️ **已知冲突，首跑必查**：`cast._char_prompt` / `_asset_prompt` 的提示词里**硬编码**「写实短剧质感」（cast.py:587/706），与本包「非真人实拍的 CG 渲染」相反。缓解手段 = 角色卡 `appearance` 里**自带渲染声明**（`3D 游戏 CG 渲染造型，非真人实拍`），它拼在硬编码词之前。若首跑静帧被拉回真人实拍，把本项改 `false` 后用 `--rerender <全部镜号> --from still` 重做（`stills.ensure` 幂等，盘上有图就跳过，改开关不重画看不出来）。\n⏳ 未实测。\n★ 2026-09-26 首跑实测：硬编码的「写实短剧质感」**没有**把角色参考图拉成真人实拍（出图是干净的 3D CG 质感、白金色长裙正确），本项维持 true。真正的染色发生在**静帧**阶段，根因是风格块把人说成能量色（见 style-block 的分层声明与 references §4.5），与参考图开关无关。",
+  "still-tail": "material",
+  "still-tail-note": "`material` 档（追加「画面表面为真实连续的材质」）。本包是高精度 3D 渲染：丝绸纱袖、金铜斗拱、玉石石台、雷电等离子体都必须是**连续材质**，不能平涂。⛔ 勿改 `flat` —— 那是反质量包（牛来）的档位，会把本包最贵的两层材质（纱袖/云海绵延）抹成色块。",
+  "style-is-criterion": false,
+  "style-is-criterion-note": "⛔ **绝不开**。`qc.STYLE_CRITERION_HINT` 的注入文本前提写死「本片属于**反质量类型包**……要拍成粗糙、廉价、笨拙」，判据是「呈**写实照片质感 / 精致渲染** → P0」。本包的**正面主张恰恰是「精致渲染的高精度 CG」** ⇒ 方向相反会稳定误判、陷入重画撞上限后带伤放行，白烧生图配额。风格漂移走 `style-watch`（只报 P1）。",
+  "style-watch": true,
+  "style-watch-note": "启用风格观察轴（期望形态 = `visual-style`，**只记不改**：静帧 QC 侧 P1 不触发重画、clipqc 侧 P1 只打印）。\n本包防的三种漂移：① 漂成**真人实拍古装剧**（丢了游戏 CG 渲染层）；② 漂成**2D 动漫/扁平插画**（丢了 PBR 材质与体积雾）；③ 漂成**廉价页游低模 CG**（参考片是 high-precision，低模 = 失败）；④ 漂成**暗调写实武侠**（参考片是云海之上高对比日光，暗调 = 反向）。\n⏳ 未实测，首跑后按 P1 记录复核是否需要收窄。",
+  "visual-style": "UE5-Niagara 仙侠动作特效：高精度游戏 CG 渲染（非真人实拍）、电影级 PBR 材质、横屏宽画幅；云海之上明亮高对比日光，人物剪影由自身能量光勾边。每人全片一种能量色（暗赤 dark-crimson／深蓝白 deep-blue-white），雷光、图腾、化身与地面反馈全部同色；远程攻击只有板状剑罡（三倍人身、边沿与剑尖清晰）；每帧恰好两名战斗者，残影半透明。不是真人实拍古装剧、2D 动漫、廉价低模页游 CG、暗调写实武侠。",
+  "hard-keys-note": "★ v0.1.0 **不改硬伤词表**（`hard-keys`/`-add`/`-drop` 三者都不写 → `style.hard_keys()` 返回 None，走全局 `qc.HARD_KEYS`）。\n已知两处**潜在对打**，首跑必须核对，不要现在就预防性删词：\n① 全局表含「重影 / 分身 / 两个一模一样」，而本包契约**允许半透明残影**（afterimages）。判据靠 `qc.review` 会把**本镜分镜原文**喂给 QC（「它明确要求的内容不算硬伤」）兜住 —— 前提是分镜第一拍写了「残影为半透明能量拖尾，非实体分身」。⚠️ 若实测出现「残影被判 P0 → 反复重画」，再上 `hard-keys-drop: [\"重影\"]`（**只 drop 这一条**，别把「分身/克隆」一起删，那是主体被复制的真判据）。\n② 「血腥」在本表内，本包是剑斗 → 参考片自己就写「wounds shallow grazes only」⇒ 本包把「无血、无伤口」列为**硬约束**（brief 禁忌），删词反而是错的。",
+  "script-craft": [],
+  "script-craft-note": "★ 本包**不启用**任何商业短剧叙事判据（`short-drama-hooks` / `-satisfaction` / `-opening` / `micro-expression-acting`）。理由：30 秒纯特效动作段的结构单位是**招式升级链**（起手→互搏→化身→大招），不是「每集必有钩子/密度递增/反派惨烈翻车」；而 `micro-expression-acting` 的微表情指令与本包主体形态相冲（战斗者多为大远景剪影、脸由能量光勾边，微表情读不到）。项目确需可在 brief.json 显式声明 `script-craft`。",
+  "roles": [
+    "director",
+    "worldbuilder",
+    "assetdesigner",
+    "scenedesigner",
+    "reviewer"
+  ],
+  "roles-note": "本包自带 5 个角色契约。**未自带的** `plotdesigner` / `scriptwriter` / `dialogue` 回落到 `shortdrama` 同名 SKILL（这是设计内的：本包是风格包不是剧作包，回落层里没有商业短剧判据——那些已剥离到 `craft/`，本包 `script-craft` 为空）。",
+  "notes": "★ 本包的**主资产是镜头语法**，不是氛围词。风格块只管「长什么样」；真正让成片像参考片的是 scenedesigner 的六条律（起始态声明 / 能量色编码 / 板状剑罡 / 一镜一招升级 / 运镜库 / 尾镜接续），它们**必须同时写进 brief 的 `分镜格式硬要求`** —— 2026-09-25 brawl 实测：只写在包 SKILL 里执行率 1/18，写进 brief 是 20/20。"
+}

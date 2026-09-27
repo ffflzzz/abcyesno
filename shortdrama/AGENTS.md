@@ -242,6 +242,7 @@ brief 是外部 Agent 唯一的强杠杆——它决定"拍什么"，而画质�
 | `laofuzi-hk-retro` | 老夫子 IP 老港片复古风 | 按包定义 | 4 个角色（`director`/`worldbuilder`/`assetdesigner`/`reviewer`），其余回落 `shortdrama`。⚠️ 含第三方 IP，**商用需授权** |
 | `half-narrated-live-action` | 半解说真人短剧（旁白推进剧情 + 对白补情绪）| **narration-led** / dialogue-led / silent | `still-refs: true`、`still-tail: material`、`style-watch: true`；启用商业三件套 `script-craft`（**不含**微表情）|
 | `madfate-grim` | 命案·都市残酷惊悚（gritty 现代老城）| **narration-led** / silent / dialogue-led | `still-refs: true`、`still-tail: material`、`style-watch: true`、**不开** `style-is-criterion`；**刻意不启用**商业短剧 `script-craft` |
+| `xianxia-vfx-action` | UE5-Niagara 仙侠特效动作·高精度游戏 CG（**横屏**、**无对白**）| **silent** / narration-led / dialogue-led | `still-refs: true`、`still-tail: material`、`style-watch: true`、`script-craft: []`；自带 5 个角色契约。**主资产是镜头语法**（能量色编码／板状剑罡／第一拍锚点／尾镜接续）——六条律**必须压进 brief 的 `分镜格式硬要求`**（brawl 实测：只写包 SKILL 执行率 1/18）。跑横屏必须**同时**设 `SHORTDRAMA_ASPECT=16:9` + `SHORTDRAMA_STILL_RATIO=16:9`。**未实测**，首跑按换包验收走一遍 |
 
 **`pack.json` 里真正生效的只有七项**：`still-refs` / `still-tail` /
 `style-is-criterion` / `style-watch` / `visual-style` / `hard-keys*` / `script-craft`。
@@ -317,6 +318,17 @@ brief.json 的 `script-craft` 列表（项目级）> pack.json 的 `script-craft
 - **`location`（场景）图只在宽景绑**：全景 / 远景 / 大全景 / 空镜才绑（构图本来就是 Wide、
   不打架，且空镜正是场景漂移的重灾区）；中近景与特写**不绑**、靠文本锚点
   （场景图自带固定机位，绑进近景会把构图拉回大 Wide）。
+  ⚠️ **但宽景要绑上，前提是分镜在「画面描述」里 `@场景名`**（2026-09-27 实测）：
+  `assets.hits_for_shot` 只在「@ 一个都没命中」时才回退按 keywords 匹配资产名 ⇒
+  只要本镜 `@` 了角色，「场景」列的名字就**永不参与匹配**，场景图一张都绑不上
+  （实测：资产已登记 `location`、场景图已生成，6 镜仍各只绑 2 张人脸，
+  "云海双塔"画成地面庭院而**日志全绿**）。这是**跨包通用**的陷阱，不只本包。
+- **`【无人像】` 标记**（`storyboard.NO_HUMAN_MARKS`，2026-09-27 新增）：写在「画面描述」里，
+  解析时剥掉不进提示词，该镜**不绑任何角色设定表**、`cast_counts` 记 0、
+  `person_directive` **不注入人数声明**。用于"人化作能量体/无脸主体"的镜。
+  ★ 为什么需要它而不是靠措辞：分镜不写 `@角色名` 时，角色补漏与 keywords 兜底**照样**
+  把人脸捞回来，"锁定长相与服装形制"会压过"没有站立的人形"（本包化身镜实测两轮）。
+  不写该标记 = 行为与历史一字不变。
 - **同脸角色**（分身/替身/克隆）自动复用源角色参考图，不重新生成。
 - 升级参考图规则后，把注册表里的 `ref_ver` 删掉即可触发重生成（不必手工删图）。
 - 角色卡里**不要写人物关系**（"两件制服必须完全一致"会被画成两个穿制服的人）。
@@ -333,6 +345,10 @@ brief.json 的 `script-craft` 列表（项目级）> pack.json 的 `script-craft
 血腥 / 分屏多格」，另加**景别跨档校验**。**模型只负责"看图描述"，判不判由代码定**
 （`qc.is_hard_issue` 三道闸门，可在 `pack.json` 收窄词表）。
 **`P1` 只记录、不处置**（`[media] LNxx 警告（P1，不重画）`）。
+负面判定默认走**复采确认**（`QC_CONFIRM_NEGATIVE`，两次都判负面才算硬伤——误报要重画图）。
+★ **例外（2026-09-27）**：「**人数 / 主体复制**」类硬伤**豁免复采**（`qc.is_count_issue`），
+抓到即重画——它的成本方向相反：多画一个人会顺着 静帧→视频→整组打包素材 一路带下去。
+实测：同一轮 LN02/LN06 都被首轮报出"三名女性"，复采一次翻判成"干净"就放行了。
 发现硬伤会自动定向重生成（单轮最多 2 次；**跨进程累计上限**
 `SHORTDRAMA_STILL_QC_MAX_REGEN`，达上限或判停的镜保留现有静帧并记 `still_residual`）。
 
@@ -363,6 +379,7 @@ brief.json 的 `script-craft` 列表（项目级）> pack.json 的 `script-craft
 | `SHORTDRAMA_VIDEO_BGM` | 1 | 类型包禁忌 BGM 时设 `0` |
 | `SHORTDRAMA_VIDEO_MODE` | reference | `keyframe` 为回退档；`pack` 为 12s 打包档（见上文模式表）|
 | `SHORTDRAMA_VIDEO_PACK_MAX_GROUP` | 5 | `pack` 模式单组最多镜数（同 README §6）|
+| `SHORTDRAMA_VIDEO_SUBMIT_TIMEOUT` | 60 | 生视频**提交**读超时（秒）。多参考图的 pack 组建议 180（60s 会把多图提交判成失败，同 README §6）|
 | `SHORTDRAMA_STILL_QC` | 1 | `0` = 跳过静帧 QC。★ **前端路径（`v5/media/runner.start`）默认传 `0`**（人工模式：判断权在人），前端工具栏的「自动质检」开关可打开 |
 | `SHORTDRAMA_CLIP_QC` | 1 | `0` = 跳过成片抽帧复核。同上，前端默认 `0`、可开关 |
 | `SHORTDRAMA_SLICE_THRESHOLD` | 4000 | 按集切片注入阈值（字符）|
