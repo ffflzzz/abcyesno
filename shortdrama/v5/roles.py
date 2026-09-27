@@ -8,6 +8,7 @@ build + _route_after_review）属**静态链 DAG**。抽出后静态链成为孤
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import re
 
@@ -298,6 +299,22 @@ def _upstream_block(root: Path, role: str, ep: int) -> str:
     import os
     msg = ("[slice] ⚠️ %s 有 %d 字符（> %d 阈值）**必须切片**，但切不出来：%s"
            % (rel, len(body), _thr, r["why"]))
+    # ★ 多集连载豁免（2026-09-26 实测，shiguan-series-0926 第 2 集被 RuntimeError 硬终止）：
+    #   half-narrated 等包的 plotdesigner 契约是「只写本集」——全剧级产物 2..N 集又被
+    #   跳过重生成（多集硬契约 2）→ 目录里**永远**没有 2..N 集条目，切片必然失败。
+    #   这是包契约与切片契约的结构性冲突，模型再听话也做不出来；且本集剧情来源
+    #   （brief 分集大纲）注入方本就有 → 降级为注入全文，语义无损。
+    try:
+        _episodes_total = int(json.loads((root / "brief.json").read_text(
+            encoding="utf-8")).get("episodes", 1))
+    except Exception:
+        _episodes_total = 1
+    if _episodes_total > 1 and r["why"].startswith("目录里没有第"):
+        print(msg + "\n  → brief episodes=%d 但目录只有 %d 集条目（包契约=单集产物、"
+              "后续集被跳过重生成）⇒ **自动降级为注入全文**（不再硬终止；"
+              "本集剧情以 brief 分集大纲为准）。"
+              % (_episodes_total, r["diag"].get("n_eps", "?")))
+        return "### %s（**多集连载·切片不可行·注入全文**）\n%s" % (rel, body)
     if os.environ.get(SLICE_SOFT_ENV, "") == "1":
         print(msg + "\n  → %s=1 ⇒ 降级为**注入全文**（会失去切片收益，且上下文可能被挤爆）。"
               % SLICE_SOFT_ENV)

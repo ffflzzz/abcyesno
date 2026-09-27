@@ -516,7 +516,10 @@ def _content_bigrams(s: str) -> set[str]:
 
 # 对白格的「无台词」写法（都要算作无台词，不能算台词镜）
 # 注意：**不能把空串放进这个元组**——`"" in s` 恒为真，会让所有台词都判成无声。
-_NO_LINE = ("无声", "无对白", "环境音", "无台词", "none", "silent", "-", "—")
+# 「静音」（2026-09-26）：half-narrated 包的静音镜对白列写「无（静音镜）」——
+# 剥括号后是「无静音镜」，旧词表不含「静音」→ 被当成 1 字残句计入 short_lines，
+# 7/19 静音镜直接把「台词过短」占比顶过容忍线（实测 shiguan-series-0926）。
+_NO_LINE = ("无声", "无对白", "环境音", "无台词", "静音", "none", "silent", "-", "—")
 
 
 def _has_line(cell: str) -> bool:
@@ -800,11 +803,20 @@ def check_storyboard(md: str, brief: dict | None = None,
             body = _dialogue_body(dv) if _has_line(dv) else vo
             # narration-led：对白列的旁白占位（（旁白·人物闭嘴））被 _dialogue_body
             # 剥成空串 → 用画外音文本替代（旁白才是这段的口播内容）。
-            if narr_mode and vo and (not body or "旁白" in (dv or "")):
+            _is_narr = bool(narr_mode and vo and (not _has_line(dv) or "旁白" in (dv or "")))
+            if _is_narr:
                 body = vo
             if not body:
                 continue
             n = len(body)
+            # ★ narration-led 旁白豁免（2026-09-26 实测，shiguan-series-0926 第 2 集
+            #   10/14 旁白句超对白 5 字/秒上限被误拦）：旁白是**画外音**，物理上可
+            #   跨镜衔接（念不完的句拖到下一镜），不适用角色对白「本镜必须念完才切镜」
+            #   的 5 字/秒判据——对白驱动口型、旁白不驱动，两者约束不同。
+            #   故旁白句**不计入 long_lines/short_lines 阻断统计**（保留为 tips 提示），
+            #   角色对白照旧 5 字/秒、下限照旧。
+            if _is_narr:
+                continue
             cap = int(min(DIALOGUE_MAX_CHARS,
                           sec * DIALOGUE_CHARS_PER_SEC if sec else DIALOGUE_MAX_CHARS))
             if n < DIALOGUE_MIN_CHARS:
