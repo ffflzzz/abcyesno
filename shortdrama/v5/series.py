@@ -233,11 +233,15 @@ async def run(project: str, brief: str | None = None, pack: str = "shortdrama",
         return pipeline.run(root, stills_only=stills_only, ep=ep)
 
     if data:
-        # 智能截断：按字段优先级组装，核心字段放不下就报错（不静默丢内容）
-        text, dropped = validate.pack_brief(data)
-        if dropped:
-            print("[brief] 预算 %d 字符，已省略低价值字段：%s"
-                  % (validate.DEFAULT_BUDGET, "、".join(dropped)))
+        # ⚠️ 这里**不做**任何长度截断（2026-09-27 查证后删掉原先的 `pack_brief` 调用）。
+        #   原代码 `text, dropped = validate.pack_brief(data)` 算出的 `text`
+        #   **在本函数里从未被使用**（AST 核对：整个 run() 只有赋值那一处引用），
+        #   而下一行落盘的是**未截断的完整 brief**——角色侧走
+        #   `roles._inline_file(root,"brief.json")` + `read_file /brief.json` 读全文。
+        #   ⇒ 那个 `DEFAULT_BUDGET = 3000` 保护的是一个不存在的注入通道，
+        #     它唯一的实际作用是：核心字段超过 3000 字时抛 `BriefTooLarge` **中止整条链**。
+        #   真要有 token 预算意识，该管的是 `roles.role_input` 拼起来的注入总量，
+        #   不是这里。`pack_brief()` 仍留给调用方显式使用（函数本身有测试覆盖）。
         # brief 落到项目根：角色节点开工前自己 read_file /brief.json
         (root / "brief.json").write_text(
             json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
