@@ -211,6 +211,14 @@ VIDEO_MODE = os.environ.get("SHORTDRAMA_VIDEO_MODE", "reference").strip().lower(
 # pack 档单组最多吞几个镜（与旁路脚本 pack_render.py 的 --max-group 同义）。
 VIDEO_PACK_MAX_GROUP = int(os.environ.get("SHORTDRAMA_VIDEO_PACK_MAX_GROUP", "5"))
 
+# 生视频**提交**的读超时（秒）。默认 60 = 历史行为（`providers.submit_video` 的旧写死值）。
+# 为什么开这个口（2026-09-26 xianxia-vfx-action 首跑实测）：pack 档多参考图组
+# （3–4 张 16:9 静帧 + 上一组末帧）提交时服务端要先把素材拉齐，60 秒**不够**——
+# 同一轮里单图的 pack01 正常完成，3 图的 pack02 / 2 图的 pack03 两次都恰好卡满
+# 60 秒报 `The read operation timed out`，且 `attempts=0`、没拿到 `video_id`
+# （= 请求没谈完，不是生成失败）。抬到 180 让提交谈得完；真失败的判据仍是拿不到 id。
+VIDEO_SUBMIT_TIMEOUT = int(os.environ.get("SHORTDRAMA_VIDEO_SUBMIT_TIMEOUT", "60"))
+
 # pack 档提交是否带 BGM/环境音指令（2026-09-22，对标官方出片拍板）。
 #   证据：官方同款模型示例提示词尾缀「必须保留协调统一的全程BGM和必要环境音，
 #   禁止静音段」→ 12s 产物音轨零静音（BGM+环境音被模型原生执行）。

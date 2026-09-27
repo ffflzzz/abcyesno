@@ -67,8 +67,8 @@ HEADER_KEYS = ("镜头号", "景别", "角度", "运镜", "时长", "画面描�
 #   · 节拍必须从 0 开始、首尾相接、覆盖整镜时长（时长列数字）；
 #   · 不写节拍的镜（旧格式）完全合法——向后兼容，零影响。
 # 消费：
-#   · 静帧路径取**最后一拍**（单动作描述，防多拍序列诱发分屏——clockmaker
-#     事故同类）；
+#   · 静帧路径取**第一拍**（2026-09-26 brawl 实测后由"最后一拍"改定：取最后一拍会让
+#     静帧提示词里一个服装词都不剩，同组静帧穿出两套外套；见 `prompt.content_line`）；
 #   · pack 视频路径把节拍时间戳重映射到整条请求的全局时间轴（prompt.py）。
 # 格式两种都认（实测产物两种都有）：`0-2秒：` 与 `0-4s：`（拉丁 s）。
 # ★ 必须跟冒号：`2-3秒后他转身` 这类**时长描述**不是节拍标记——
@@ -129,6 +129,18 @@ def _col(headers: list[str], *keys: str) -> int | None:
         if any(k in h for k in keys):
             return i
     return None
+
+
+#: 「本镜不绑角色参考图」标记（2026-09-27，xianxia-vfx-action 化身镜实测新增）。
+#: 写在「画面描述」单元格任意位置，解析时**从正文里剥掉**并置 `shot["no_human"]=True`。
+#: 为什么需要它（而不是靠措辞）：仙侠包的「人化作兽形能量体」那一镜，分镜已经不写
+#: `@角色名` 了，`bind()` 仍会经 keywords 兜底 + 角色补漏把**两张人物设定表**捞回来，
+#: 提示词于是同时要求"锁定该角色的长相与服装形制"和"没有站立的人形"——
+#: 前者更具体，模型照后者画成两个静态人像。参考图是绑定层的事实，只能由绑定层关。
+#: 生效点：`assets.bind`（跳过 character 类）、`assets.cast_counts`（记 0 人）、
+#: `prompt.person_directive`（**不注入任何人数声明**——空镜声明会说"环境静物"，
+#: 与"能量构造体在爆炸"直接冲突，所以这一镜的人数措辞交给分镜正文自己写）。
+NO_HUMAN_MARKS = ("【无人像】",)
 
 
 def parse(md: str) -> list[dict]:
@@ -214,6 +226,12 @@ def parse(md: str) -> list[dict]:
         visual = cell(i_visual)
         if len(visual) < 15:          # 占位/空行不入镜
             continue
+        #: 「无人像」标记：从正文剥掉（它不是画面内容，不该进提示词），另置标志位。
+        no_human = any(mk in visual for mk in NO_HUMAN_MARKS)
+        if no_human:
+            for mk in NO_HUMAN_MARKS:
+                visual = visual.replace(mk, "")
+            visual = visual.strip()
         sec = 0
         if i_sec is not None and i_sec < n:
             msec = re.search(r"(\d+(?:\.\d+)?)", cells[i_sec])
@@ -231,6 +249,7 @@ def parse(md: str) -> list[dict]:
             #: 让"哪些行算镜头"这件事只有本函数一处判据，别处不再重实现。
             "line": lineno,
             "visual": visual,
+            "no_human": no_human,
             "dialogue": cell(i_dlg),
             "seconds": sec,
             "shot_type": cell(i_shot),

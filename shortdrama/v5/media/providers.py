@@ -152,7 +152,7 @@ def _builtin_gen_image(prompt: str, refs: list[str] | None = None,
 
 def submit_video(prompt: str, *, first_frame: str | None = None,
                  last_frame: str | None = None, seconds: int = 10,
-                 aspect_ratio: str | None = None, timeout: int = 60,
+                 aspect_ratio: str | None = None, timeout: int | None = None,
                  mode: str = "keyframe",
                  images: list[str] | None = None,
                  audios: list[str] | None = None,
@@ -161,7 +161,12 @@ def submit_video(prompt: str, *, first_frame: str | None = None,
     否则走内置实现 `_builtin_submit_video`（= 改造前的原逻辑，**逐字保留**）。
 
     厂商档需实现**同签名**函数（只接视频的厂商可以只实现本函数与 `query_video`）。
+
+    `timeout=None` ⇒ 取 `config.VIDEO_SUBMIT_TIMEOUT`（默认 60 = 旧写死值，行为不变；
+    多参考图的 pack 档提交为什么要能调大，见 config 那条注释里的实测记录）。
+    **在分发处解析成整数**，厂商实现永远拿到的是 int，不必各自兜底。
     """
+    timeout = int(timeout or config.VIDEO_SUBMIT_TIMEOUT)
     impl = vendors.impl_for("video")
     if impl is not None:
         return impl.submit_video(prompt, first_frame=first_frame,
@@ -176,7 +181,8 @@ def submit_video(prompt: str, *, first_frame: str | None = None,
 
 def _builtin_submit_video(prompt: str, *, first_frame: str | None = None,
                           last_frame: str | None = None, seconds: int = 10,
-                          aspect_ratio: str | None = None, timeout: int = 60,
+                          aspect_ratio: str | None = None,
+                          timeout: int | None = None,
                           mode: str = "keyframe",
                           images: list[str] | None = None,
                           audios: list[str] | None = None,
@@ -184,6 +190,8 @@ def _builtin_submit_video(prompt: str, *, first_frame: str | None = None,
     """内置（agnes 风格）图生视频 —— 改造前 `submit_video` 的原逻辑。
 
     图生视频：first_frame / last_frame 是**静帧 URL**（生产输入）。
+
+    `timeout=None` ⇒ 取 `config.VIDEO_SUBMIT_TIMEOUT`（见 `submit_video` 的说明）。
 
     默认 `mode="keyframe"`（静帧先行架构的做法：身份在静帧阶段用参考图锁好，
     视频阶段只吃关键帧）。**两条硬规则（官方文档，非我们的取舍）**：
@@ -201,6 +209,7 @@ def _builtin_submit_video(prompt: str, *, first_frame: str | None = None,
     必须用同一条 key** —— 除非探测证明 `video_id` 是账号维度（见
     `scripts/probe_multikey.py` 阶段 B），否则跨 key 查询会查不到。
     """
+    timeout = int(timeout or config.VIDEO_SUBMIT_TIMEOUT)
     mode = (mode or "keyframe").strip().lower()
     if mode == "keyframe":
         if not (first_frame or last_frame):

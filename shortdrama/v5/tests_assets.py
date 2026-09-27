@@ -637,5 +637,78 @@ class TestRefCountCapWithCharacters(unittest.TestCase):
         self.assertEqual(len(got), 3, "2 人 + 1 道具 = 3 张（两张脸都在）")
 
 
+class TestNoHumanMark(unittest.TestCase):
+    """★ 「无人像」标记（2026-09-27，xianxia-vfx-action 化身镜实测新增）。
+
+    要治的事故：仙侠包「人化作兽形能量体」那一镜，分镜**已经不写** `@角色名` 了，
+    `bind()` 仍会经 keywords 兜底 + 角色补漏把两张人物设定表捞回来，提示词于是同时
+    要求"锁定该角色的长相与服装形制"与"没有站立的人形"——前者更具体，
+    模型就画成两个静态人像（实测：兽形完全没出现）。
+    ⇒ 关参考图必须在**绑定层**，不能靠措辞。
+    """
+
+    def test_parse_strips_mark_and_sets_flag(self):
+        from v5.media import storyboard
+        md = ("| 镜头号 | 景别 | 角度 | 运镜 | 时长(秒) | 画面描述 | 对白 | 音效 |\n"
+              "|---|---|---|---|---|---|---|---|\n"
+              "| 1 | 全景 | 俯视 | 环绕 | 6 | 【无人像】0-3秒：一具暗赤焰羽凤凰光构自"
+              "左侧腾空，与一头深蓝白雷光白虎在半空撞开；3-6秒：连锁爆炸撕开成片屋脊 | "
+              "（无声，环境音） | 雷爆 | \n")
+        s = storyboard.parse(md)[0]
+        self.assertTrue(s["no_human"], "标记应被解析成标志位")
+        self.assertNotIn("无人像", s["visual"], "标记不能留在正文（会进提示词）")
+        self.assertEqual(len(storyboard.split_beats(s["visual"])), 2,
+                         "剥掉标记后节拍仍要正常切分")
+
+    def test_bind_skips_character_sheets(self):
+        """同一段正文，加标记前绑 2 张脸、加标记后绑 0 张。"""
+        import tempfile
+        from pathlib import Path
+
+        from PIL import Image
+
+        from v5.media import assets as assets_mod
+        from v5.media import storyboard
+
+        d = tempfile.TemporaryDirectory()
+        root = Path(d.name)
+        (root / "images").mkdir(parents=True, exist_ok=True)
+        for i, n in enumerate(("绛雪", "沧月"), start=1):
+            Image.new("RGB", (32, 32), (i * 90, i * 30, i * 10)).save(
+                root / "images" / (n + ".png"), "PNG")
+        import json
+        reg = {"assets": [
+            {"id": n, "name": n, "type": "character", "keywords": [n],
+             "priority": 10, "ref_image": n + ".png", "public_url": ""}
+            for n in ("绛雪", "沧月")]}
+        (root / "assets.json").write_text(json.dumps(reg, ensure_ascii=False),
+                                          encoding="utf-8")
+        md_tmpl = ("| 镜头号 | 景别 | 角度 | 运镜 | 时长(秒) | 画面描述 | 对白 | 音效 |\n"
+                   "|---|---|---|---|---|---|---|---|\n"
+                   "| 1 | 全景 | 俯视 | 环绕 | 6 | %s | （无声，环境音） | 雷爆 |\n")
+        # 真实事故形态：分镜**不写 @名**，但正文里出现了角色名（"绛雪化作…"）——
+        # `_chars_by_name` 的角色补漏照样把两张人物设定表绑上，于是"锁定长相与服装
+        # 形制"压过"没有站立的人形"，化身镜画成两个静态人像。
+        body = "0-3秒：绛雪化作一具暗赤焰羽凤凰光构自左侧腾空，与沧月化作的一头深蓝白" \
+               "雷光白虎在半空撞开；3-6秒：连锁爆炸撕开成片屋脊"
+        with d:
+            plain = storyboard.parse(md_tmpl % body)[0]
+            marked = storyboard.parse(md_tmpl % ("【无人像】" + body))[0]
+            self.assertEqual(len(assets_mod.bind(root, [plain]).get("LN01") or []), 2,
+                             "前提：不写 @名 时角色补漏仍绑 2 张人物图（这正是事故来源）")
+            self.assertEqual(assets_mod.bind(root, [marked]).get("LN01") or [], [],
+                             "带标记的镜必须一张人物图都不绑")
+            self.assertEqual(assets_mod.cast_counts(root, [marked])["LN01"], 0,
+                             "带标记的镜人数记 0")
+
+    def test_person_directive_silent_for_no_human(self):
+        """不注入人数声明：既不能说"共有 2 个人物"，也不能说"空镜·环境静物"。"""
+        from v5.media import prompt as P
+        self.assertEqual(P.person_directive({"no_human": True, "_cast_n": 0}), "",
+                         "空镜声明会说'环境静物'，会把能量化身的动感抹平")
+        self.assertIn("2 个人物", P.person_directive({"_cast_n": 2}),
+                      "未带标记的多人镜照旧")
+
+
 if __name__ == "__main__":
     unittest.main()

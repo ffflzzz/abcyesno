@@ -881,6 +881,9 @@ def cast_counts(root: Path, shots: list[dict], max_n: int = 5) -> dict[str, int]
     reg, prot, fallback = _cast_ctx(root)
     out: dict[str, int] = {}
     for s in shots:
+        if s.get("no_human"):        # 「无人像」镜：不认角色、不注人数声明（见 `bind` 同名分支）
+            out[s["name"]] = 0
+            continue
         n = len(_shot_cast_lines(s, reg, prot, fallback, max_n=max_n))
         # 兜底：正文**显式写了群体人数**却没点姓名时（实测 LN24「三人喘着气站着」
         # 只按姓名认到 1 人）→ 取名册数与量词数的**较大值**，只会抬到事实值。
@@ -954,8 +957,13 @@ def bind(root: Path, shots: list[dict], max_n: int = 5,
         #
         # 旧规则的实测代价：双人镜只绑一张 → 第二个角色对模型"不存在"
         # （rainy-door LN02 因此被 clipqc 判「缺少本镜应有的人物：周奶奶」）。
-        chars = [h for h in hits if h.get("type") == "character"]
-        # **location 不进 `others`**：它由下面的 `scene_pick` 单独按景别决定是否入列
+        # ★ **「无人像」镜（`storyboard.NO_HUMAN_MARKS`）**：本镜**不绑任何角色设定表**，
+        #   只留场景与道具图。判据在**绑定层**而非措辞层 —— 实测：分镜已经不写 `@角色名`
+        #   了，keywords 兜底与角色补漏仍会把两张人脸捞回来，于是化身镜被"锁定长相与
+        #   服装形制"这句压回成两个静态人像（2026-09-27 xianxia-vfx-action 实测）。
+        if s.get("no_human"):
+            hits = [h for h in hits if h.get("type") != "character"]
+        chars = [h for h in hits if h.get("type") == "character"]        # **location 不进 `others`**：它由下面的 `scene_pick` 单独按景别决定是否入列
         #   （2026-09-23 起；2026-09-09～09-23 是一律不绑）。理由：
         #   场景参考图是**空镜内景**，自带机位与景别。把它喂进"近景 @周平 手部特写"
         #   这类镜，等于同时告诉模型"用一个空荡的全景"，容易把构图拉回大 Wide，

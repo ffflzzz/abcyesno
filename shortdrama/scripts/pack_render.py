@@ -36,7 +36,7 @@ sys.path.insert(0, str(ROOT))
 from v5 import config                                   # noqa: E402
 from v5.media import providers                          # noqa: E402
 from v5.media import style as style_mod                 # noqa: E402
-from v5.media.prompt import _remap_beats                # noqa: E402
+from v5.media.prompt import _remap_beats, framing_clause    # noqa: E402
 from v5.media.storyboard import parse                   # noqa: E402
 from v5.media.video import _wait_one                    # noqa: E402
 
@@ -164,7 +164,7 @@ def build_prompt(group: list[dict], declared: list[int], total: int,
         segs.append(
             "画面风格：电影级实拍剧照质感；这是同一条连续素材，"
             "各节拍光线与色调随场景自然过渡，转场干脆利落，人物造型跨节拍完全一致。")
-    segs.append("全片不得出现任何文字、字幕、水印；不得分屏；竖屏构图。")
+    segs.append("全片不得出现任何文字、字幕、水印；不得分屏；%s。" % framing_clause())
     return "\n\n".join(segs)
 
 

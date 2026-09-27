@@ -924,7 +924,10 @@ def _run_impl(project_root: Path, ep: int = 1, log=print, max_regen: int = 2,
         #    成本可控）；两次都判负面才算硬伤。偏置方向刻意选"宽松"——QC 判据是
         #    概率性的（实测翻判：LN12 干净/干净/有硬伤），而**翻判的成本全落在误报
         #    这一侧**（每次负面判定都要重画一张图 + 下一轮复审）。
-        if hard_rep and config.QC_CONFIRM_NEGATIVE:
+        #    ★ 例外（2026-09-27）：**「人数 / 主体复制」类貁免本道确认**，抓到即重画——
+        #      它的成本方向相反（多一个人会顺着静帧→视频→整组打包素材一路带下去，
+        #      放行一次赔的是一整组）。判据与实测见 `qc.COUNT_ISSUE_KEYS`。
+        if hard_rep and config.QC_CONFIRM_NEGATIVE and not qc.is_count_issue(hard_rep):
             try:
                 _rep2 = call_with_backoff(_one_rep,
                                           attempts=config.QC_RETRY_ATTEMPTS,

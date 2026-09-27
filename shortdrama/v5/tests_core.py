@@ -806,5 +806,63 @@ class TestShotTypePromptTemplate(unittest.TestCase):
         self.assertIn("未写", txt)
 
 
+class TestCountIssueExemptFromRecheck(unittest.TestCase):
+    """★ 「人数 / 主体复制」类硬伤貁免复采翻判（2026-09-27，xianxia-vfx-action 实测）。
+
+    `QC_CONFIRM_NEGATIVE` 的偏置是"误报比漏报贵"（负面判定要重画一张图）。
+    人数错的成本方向相反：多一个人会顺着 静帧 → 视频 → 整组打包素材 一路带下去。
+    实测：同一轮 LN02 / LN06 都被首轮 QC 明确报出「人数不符 / 主体复制（三名女性）」，
+    复采一次翻判成"干净"就放行，成片里两人镜稳定出三人。
+    接线点：`pipeline` 的「③ 负面判定复采确认」——`is_count_issue` 为真即不复采。
+    """
+
+    def test_count_wording_hits_classifier(self):
+        """正例全部取自三轮 `media.log` 里 QC **实际写过**的句子（不是构造的）。"""
+        from v5.media import qc
+
+        for desc in (
+                "人数不符/主体复制：分镜明确要求「每帧恰好两名战斗者」，画面中却出现了"
+                "三名穿着相似古装、面部清晰的女性",
+                "画面画成了三人持剑站立的地面古风 CG 静态合影，完全没有凤凰、白虎",
+                "人物站位与动作不符：画面中三人呈一字排开的并列站立姿态",
+                "缺少本镜应有的人物或关键道具：画面为三人静态站立，未包含动作场景",
+                "服装细节不符：中间多出的人物身着淡紫色服装",
+                "仅剩 @沧月 一人，人数清点不符",
+                "缺少本镜应有的人物沧月"):
+            self.assertTrue(qc.is_count_issue([{"level": "P0", "desc": desc}]),
+                            "人数类应被认出：%s" % desc)
+
+    def test_non_count_wordings_not_swept_in(self):
+        """★ 反向对照：这些是同一批日志里**不是**人数问题的句子。
+
+        误收的代价是实打实的：豁免复采 = 首轮判定直接触发重画，把误报变成烧配额。
+        尤其「两人」那句 —— 两人镜的**正确**描述里也常出现"两人"，所以正则刻意只收 ≥3。
+        """
+        from v5.media import qc
+
+        for desc in (
+                "缺少关键特效：分镜要求「紫晶长剑与錾花长剑剑尖相抵」，画面中两人虽各持"
+                "一剑但处于分持状态，剑尖未接触",
+                "人物服装与分镜描述不符：分镜要求左侧身着「薰衣草粉珍珠渐变长裙」，"
+                "画面中最左侧人物身着「白色长裙」，颜色属性不匹配",
+                "渲染形态与期望不符：人物面部与肢体呈现明显的真人实拍特征",
+                "场景位置不符：画面中所有人物均站在同一高度的圆形青石平台上"):
+            self.assertFalse(qc.is_count_issue([{"level": "P0", "desc": desc}]),
+                             "非人数类不该豁免复采：%s" % desc)
+
+    def test_other_categories_still_rechecked(self):
+        """其它硬伤**照旧走复采**（那道确认的历史依据仍在：QC 概率性、误报贵）。"""
+        from v5.media import qc
+
+        for desc in ("画面右上角有可读字幕", "背景出现荒漠沙丘", "分屏上下两格"):
+            self.assertFalse(qc.is_count_issue([{"level": "P0", "desc": desc}]),
+                             "非人数类不该貁免复采：%s" % desc)
+
+    def test_empty_and_none_safe(self):
+        from v5.media import qc
+        self.assertFalse(qc.is_count_issue([]))
+        self.assertFalse(qc.is_count_issue(None))
+
+
 if __name__ == "__main__":
     unittest.main()

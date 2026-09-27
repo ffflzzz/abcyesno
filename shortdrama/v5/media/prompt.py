@@ -691,6 +691,12 @@ def person_directive(shot: dict) -> str:
     `_has_person`），保证既有测试与非媒体链路径行为不变。
     """
     n = shot.get("_cast_n")
+    if shot.get("no_human"):
+        # 「无人像」镜（能量化身/构造体）：**不注入任何人数声明**。
+        # 为什么不走 n=0 的空镜分支：`EMPTY_SCENE` 说的是"场景与道具本身、环境静物"，
+        # 与"两具能量兽形在半空撞开、连锁爆炸"直接冲突（静物会把动感抹平）。
+        # 这一镜的主体措辞由分镜正文自己负责（包契约要求写形态串）。
+        return ""
     if n is None:
         return SINGLE_PERSON if _has_person(shot) else _empty_scene_for(shot)
     try:
@@ -1409,6 +1415,23 @@ def _remap_beats(visual: str, offset: int, span: int) -> str:
     return "；".join(parts)
 
 
+#: 画幅构图词（2026-09-26，xianxia-vfx-action 建包时撞上）：pack 档尾句原先**硬编码**
+#: 「竖屏构图」，而真实画幅由 API 参数下发（`config.ASPECT_RATIO`）。横屏项目因此
+#: 同时收到"横屏静帧 + 竖屏构图指令"，模型只能用把主体压中间、上下补黑来同时满足。
+#: 这句只负责**构图取向**，所以必须跟着参数走；默认 9:16 行为逐字不变。
+_LANDSCAPE_RATIOS = ("16:9", "21:9", "4:3")
+
+
+def framing_clause(aspect_ratio: str | None = None) -> str:
+    """按项目画幅给构图词（旁路脚本 `scripts/pack_render.py` 共用同一份判据）。"""
+    ar = str(aspect_ratio or config.ASPECT_RATIO).strip()
+    if ar in _LANDSCAPE_RATIOS:
+        return "横屏宽画幅构图"
+    if ar == "1:1":
+        return "方形画幅构图"
+    return "竖屏构图"
+
+
 def build_pack_prompt(group: list[dict], declared: list[int], total: int,
                       style_block: str = "",
                       prev_shot_name: str | None = None) -> str:
@@ -1474,7 +1497,7 @@ def build_pack_prompt(group: list[dict], declared: list[int], total: int,
         segs.append(
             "画面风格：电影级实拍剧照质感；这是同一条连续素材，"
             "各节拍光线与色调随场景自然过渡，转场干脆利落，人物造型跨节拍完全一致。")
-    segs.append("全片不得出现任何文字、字幕、水印；不得分屏；竖屏构图。")
+    segs.append("全片不得出现任何文字、字幕、水印；不得分屏；%s。" % framing_clause())
     # 声音指令（2026-09-22，对标官方出片拍板）：同款模型实测能原生执行
     # 「全程 BGM+环境音、禁止静音段」（官方 12s 示例音轨零静音）。
     # 我方成片声音干巴巴是最大廉价感来源之一。brief 明确禁 BGM 的项目

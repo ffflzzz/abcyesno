@@ -3454,6 +3454,32 @@ class TestPackMode(unittest.TestCase):
         p2 = build_pack_prompt([dict(group[0], seconds=4)], [2], 2, style_block="")
         self.assertIn("0-1秒：@陈默抬手按住@画纸；1-2秒：右手把@画笔搁下", p2)
 
+    def test_pack_prompt_framing_clause_follows_aspect(self):
+        """★ 2026-09-26（xianxia-vfx-action 建包撞上）：pack 档尾句的构图词必须跟画幅。
+
+        旧实现硬编码「竖屏构图」——横屏项目（`SHORTDRAMA_ASPECT=16:9`）会同时收到
+        横屏静帧与"竖屏构图"指令，模型只能用主体压中间、上下补黑来同时满足。
+        真实画幅本就由 API 参数下发，这句只给构图取向。
+        """
+        from v5.media.prompt import build_pack_prompt, framing_clause
+
+        shot = {"name": "LN01", "scene": "云海石台", "seconds": 6, "shot_type": "全景",
+                "angle": "极低角度", "camera": "缓推", "visual": "0-6秒：@甲拔剑。",
+                "dialogue": "", "sfx": "", "tail": ""}
+        self.assertEqual(framing_clause("9:16"), "竖屏构图", "默认档行为逐字不变")
+        self.assertEqual(framing_clause("16:9"), "横屏宽画幅构图")
+        self.assertEqual(framing_clause("1:1"), "方形画幅构图")
+        self.assertIn("竖屏构图", build_pack_prompt([shot], [6], 6, style_block=""))
+        from v5 import config
+        old = config.ASPECT_RATIO
+        try:
+            config.ASPECT_RATIO = "16:9"
+            p = build_pack_prompt([shot], [6], 6, style_block="")
+            self.assertIn("横屏宽画幅构图", p)
+            self.assertNotIn("竖屏构图", p)
+        finally:
+            config.ASPECT_RATIO = old
+
     def test_still_prompt_takes_first_beat_only(self):
         """★ 2026-09-25/26：静帧只取**一拍**——多拍序列是「时间性描述」，
         会诱发分屏（clockmaker 事故同类）。取**第一拍**（2026-09-26 改）：
