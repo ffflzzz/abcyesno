@@ -3480,6 +3480,26 @@ class TestPackMode(unittest.TestCase):
         finally:
             config.ASPECT_RATIO = old
 
+    def test_pack_prompt_gives_composition_to_text_not_refs(self):
+        """★ 2026-09-27 A/B 实测：参考图只锁身份，**构图权必须留给文字**。
+
+        旧句「人物、服装、道具与场景一律以对应参考图为准」顺手把场景与构图一起交给了
+        参考图。同一批图、同一模型，只改这一句，产出立刻出现贴脸剑尖冲镜、
+        人物极小而能量体占满画面这类镜头（= 用户参考片的水准）。
+        探针：`scripts/ab_source_prompt.py`。
+        """
+        from v5.media.prompt import build_pack_prompt
+
+        shot = {"name": "LN01", "scene": "石台", "seconds": 6, "shot_type": "全景",
+                "angle": "极低角度", "camera": "剑尖微距拉起",
+                "visual": "0-6秒：@甲 挥出板状剑罡。",
+                "dialogue": "", "sfx": "", "tail": ""}
+        p = build_pack_prompt([shot], [6], 6, style_block="")
+        self.assertIn("参考图只用于锁定身份", p)
+        self.assertIn("构图、景别、机位与镜头运动一律按下面的文字描述执行", p)
+        self.assertNotIn("一律以对应参考图为准", p,
+                         "旧句回来了 = 构图权又被交出去，成片会退回平铺构图")
+
     def test_still_prompt_takes_first_beat_only(self):
         """★ 2026-09-25/26：静帧只取**一拍**——多拍序列是「时间性描述」，
         会诱发分屏（clockmaker 事故同类）。取**第一拍**（2026-09-26 改）：

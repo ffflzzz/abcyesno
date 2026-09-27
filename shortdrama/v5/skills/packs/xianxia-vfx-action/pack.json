@@ -21,7 +21,7 @@
     "dialogue-led"
   ],
   "default-audio-mode": "silent",
-  "audio-mode-note": "★ 本包主张 `silent`：参考片两条提示词都写死「Nobody speaks anywhere in this clip / non_diegetic_music: None」，叙事全靠动作与能量形态，声音只有 foley（破空、雷暴、瓦雨、崩塌、音爆环、飓风吼、喘息闷哼）。⚠️ **`default-audio-mode` 代码不消费**（`validate.audio_mode_of` 只读 brief）——要 silent 必须在 **brief.json 显式写** `\"audio_mode\": \"silent\"`，否则回落 `dialogue-led`。silent 下分镜「对白」列**每一格**必须是 `（无声，环境音）`（`roles._audio_mode_defect` 逐格判，出现任何台词即回退 scenedesigner）。`narration-led`（特效解说体）与 `dialogue-led`（斗法前喊招）可选，未实测。",
+  "audio-mode-note": "★ 本包主张 `silent`：参考片两条提示词都写死「Nobody speaks anywhere in this clip / non_diegetic_music: None」，叙事全靠动作与能量形态，声音只有 foley（破空、雷暴、瓦雨、崩塌、音爆环、飓风吼、喘息闷哼）。⚠️ **`default-audio-mode` 代码不消费**（`validate.audio_mode_of` 只读 brief）——要 silent 必须在 **brief.json 显式写** `\"audio_mode\": \"silent\"`，否则回落 `dialogue-led`。silent 下分镜「对白」列**每一格**必须是 `（无声，环境音）`（`roles._audio_mode_defect` 逐格判，出现任何台词即回退 scenedesigner）。`narration-led`（特效解说体）与 `dialogue-led`（斗法前喊招）可选，未实测。 ★ 多人论武/需要交代身份的题材推荐 narration-led（旁白报身份与招式名），本包三种模式都支持——换模式只改 brief，不必换包。",
   "shot-duration": "3-12s",
   "aspect-ratio": "16:9（本包主张横屏宽画幅；参考片两条均写死 16:9 60fps）",
   "aspect-ratio-note": "⚠️ 真实画幅**不由本字段决定**：视频由 `SHORTDRAMA_ASPECT`、静帧由 `SHORTDRAMA_STILL_RATIO` 控制，**两个都要设**（只改一个会让静帧与成片画幅不一致）。且分镜正文自带的 `Ratio: 16:9` 字样会被 `prompt._clean_prompt` **正则清掉**（防模型用「画两格」同时满足两个比例）⇒ 横屏只能在 env 里定，写进分镜无效。本字段只供前端展示（代码不消费）。",
@@ -45,5 +45,5 @@
     "reviewer"
   ],
   "roles-note": "本包自带 5 个角色契约。**未自带的** `plotdesigner` / `scriptwriter` / `dialogue` 回落到 `shortdrama` 同名 SKILL（这是设计内的：本包是风格包不是剧作包，回落层里没有商业短剧判据——那些已剥离到 `craft/`，本包 `script-craft` 为空）。",
-  "notes": "★ 本包的**主资产是镜头语法**，不是氛围词。风格块只管「长什么样」；真正让成片像参考片的是 scenedesigner 的六条律（起始态声明 / 能量色编码 / 板状剑罡 / 一镜一招升级 / 运镜库 / 尾镜接续），它们**必须同时写进 brief 的 `分镜格式硬要求`** —— 2026-09-25 brawl 实测：只写在包 SKILL 里执行率 1/18，写进 brief 是 20/20。"
+  "notes": "★ 本包的**主资产是镜头语法**，不是氛围词。风格块只管「长什么样」；真正让成片像参考片的是 scenedesigner 的六条律（起始态声明 / 能量色编码 / 板状剑罡 / 一镜一招升级 / 运镜库 / 尾镜接续），它们**必须同时写进 brief 的 `分镜格式硬要求`** —— 2026-09-25 brawl 实测：只写在包 SKILL 里执行率 1/18，写进 brief 是 20/20。 ★ 硬约束：媒体层参考图封顶 3 张、人脸优先（assets.bind，2026-09-15 定稿）⇒ 任何一镜最多 3 个角色有脸锚，第 4 人必漂。多人论武必须排成\"车轮战 1v1 + 群像用远景只 @ 三人\"。远程攻击形态（板状剑罡）可用项目级 style.md 覆盖换成掌风/指力/气劲，不必改包。"
 }

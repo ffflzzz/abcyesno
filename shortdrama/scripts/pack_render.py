@@ -132,8 +132,11 @@ def build_prompt(group: list[dict], declared: list[int], total: int,
         left = right
     segs = [
         "、".join(maps)
+        # ★ 与 `v5.media.prompt.build_pack_prompt` 同步（2026-09-27 A/B 实测）：
+        #   参考图只锁身份，构图/景别/机位/运镜听文字。
         + "；共 %d 张参考图对应同一条 %d 秒片段的 %d 个节拍，"
-          "人物、服装、道具与场景一律以对应参考图为准。" % (n, total, n),
+          "参考图只用于锁定身份（长相、发型、服装形制与兵刃），"
+          "构图、景别、机位与镜头运动一律按下面的文字描述执行。" % (n, total, n),
         "本片段总长 %d 秒，由连续发生的 %d 个节拍组成，各节拍按下列时间分配自然衔接，"
         "节拍边界允许 ±1 秒弹性：" % (total, n),
     ]
