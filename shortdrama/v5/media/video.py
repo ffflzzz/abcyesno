@@ -728,6 +728,19 @@ def submit_packs(project_root: Path, shots: list[dict], stills: dict, planned: l
         jobs_mod.save(out_dir, jobs)
         log("[video] %s submitted（%d 镜打包，%ds，%s）"
             % (pname, len(names), total, pool.label(key_idx)))
+        # ★ **串行等本组落盘再提交下一组**（2026-09-28 修）：下一组的接续锚帧要从
+        #   **本组成片**抽真实末帧（`seam_anchor`），而旧时序是"先把所有组提交完、
+        #   最后统一轮询下载"⇒ 提交 pack N 时 pack N-1 还没落盘，锚帧**永远**走
+        #   "静帧兜底"，末帧修复形同没做（v4 实测 12 组全是 `接续锚=静帧兜底`）。
+        #   代价：失去跨 key 并发，整轮多 20-40 分钟；换来的是真的动作接续。
+        landed = _wait_one(vid, dest, log=log, key=key)
+        if landed:
+            jobs_mod.mark(jobs, pname, "completed", local=str(dest))
+            jobs_mod.save(out_dir, jobs)
+            log("[video] %s done（串行落盘，供下一组抽末帧锚）" % pname)
+        # 没落盘就**保持 submitted**：`poll_all` 与补渲轮靠这个状态认领原任务继续轮询，
+        # 在这里改判 expired 会把一个可能还在出的任务丢掉（并导致下一组退化成静帧兜底，
+        # 那是降级不是失败）。
         prev_last_name = names[-1]     # 下一组的状态衔接锚（无条件更新：静帧链按分镜序）
     if len(pool) > 1:
         log("[video] key 用量：%s" % pool.stats())

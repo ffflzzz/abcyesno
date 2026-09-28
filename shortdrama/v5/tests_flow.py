@@ -3599,6 +3599,7 @@ class TestPackMode(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
             with mock.patch.object(video.config, "VIDEO_MODE", "pack"), \
+                    mock.patch.object(video, "_wait_one", return_value=""), \
                     mock.patch.object(providers, "submit_video",
                                       return_value={"video_id": "v1"}) as sub:
                 jobs = video.submit_packs(root, shots, st, planned, ep=1,
@@ -3609,6 +3610,50 @@ class TestPackMode(unittest.TestCase):
             self.assertEqual(jobs["pack02"]["shots"], ["LN03"])
             self.assertEqual(jobs["pack01"]["state"], "submitted")
             self.assertEqual(sub.call_args_list[0].kwargs.get("seconds"), 10)
+
+    def test_submit_packs_lands_group_before_submitting_next(self):
+        """★ 2026-09-28 回归：pack 档必须**串行落盘**，否则末帧锚修复形同没做。
+
+        `seam_anchor` 从**上一组成片**抽真实末帧；而旧时序是"先把所有组提交完、
+        最后统一轮询下载"⇒ 提交 pack02 时 pack01 的 mp4 还没落盘，锚帧**永远**走
+        "静帧兜底"。v4 实跑日志 12 组全部 `接续锚=静帧兜底` 就是这个。
+        现在提交每组后会 `_wait_one` 到落盘再进下一组。
+        """
+        from unittest import mock
+
+        from v5.media import providers, video
+
+        shots = [{"name": "LN01", "scene": "画室", "seconds": 5},
+                 {"name": "LN02", "scene": "画室", "seconds": 5},
+                 {"name": "LN03", "scene": "夜街", "seconds": 5}]
+        planned = [{"name": s["name"], "frame_plan": {}} for s in shots]
+        st = {s["name"]: {"url": "u"} for s in shots}
+        seen = []
+
+        def fake_wait(vid, dest, **kw):
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(b"mp4")          # 假装落盘成功
+            return str(dest)
+
+        real_anchor = video.seam_anchor
+
+        def fake_anchor(clip_dir, prev_pname, stills, prev_shot):
+            seen.append(prev_pname)
+            return real_anchor(clip_dir, prev_pname, stills, prev_shot)
+
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            with mock.patch.object(video.config, "VIDEO_MODE", "pack"), \
+                    mock.patch.object(video, "_wait_one", side_effect=fake_wait), \
+                    mock.patch.object(video, "seam_anchor", side_effect=fake_anchor), \
+                    mock.patch.object(providers, "submit_video",
+                                      return_value={"video_id": "v1"}):
+                jobs = video.submit_packs(root, shots, st, planned, ep=1,
+                                          log=lambda *_: None)
+            self.assertEqual(jobs["pack01"]["state"], "completed",
+                             "串行等待成功后必须标 completed（否则 poll 会重复认领）")
+            self.assertEqual(seen, [None, "pack01"], "第二组提交时必须已知道上一组是谁")
+            self.assertEqual(jobs["pack02"]["state"], "completed")
 
     def test_submit_packs_only_rerenders_containing_group(self):
         from unittest import mock
@@ -3628,6 +3673,7 @@ class TestPackMode(unittest.TestCase):
             jobs_mod.save(ep_dir, {"pack01": {"state": "completed",
                                               "shots": ["LN01", "LN02"]}})
             with mock.patch.object(video.config, "VIDEO_MODE", "pack"), \
+                    mock.patch.object(video, "_wait_one", return_value=""), \
                     mock.patch.object(providers, "submit_video",
                                       return_value={"video_id": "v2"}) as sub:
                 video.submit_packs(root, shots, st, planned, ep=1,

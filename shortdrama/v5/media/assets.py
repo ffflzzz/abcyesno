@@ -441,6 +441,19 @@ def hits_for_shot(reg: dict, shot: dict, max_n: int = 5) -> tuple:
     named = _chars_by_name(reg, _char_text(shot), max_n=MAX_CAST_PER_SHOT)
     if named:
         hits = named + [h for h in hits if h.get("type") != "character"]
+    # ★ **宽景镜无条件绑「场景」列**（2026-09-28 实测改，替代"逼分镜写 @场景名"的契约）：
+    #   原先只有「@ 一个都没命中」才回退 keywords 匹配 ⇒ 只要本镜 @ 了角色，「场景」列
+    #   里的名字**永不参与匹配**，一张场景图都绑不上（v2 实测：资产已登记 location、
+    #   场景图已生成，6 镜仍各只绑 2 张人脸，"云海双塔"画成地面庭院而**日志全绿**）。
+    #   上一版对策是要求分镜写 `@场景名`，但那是**确定性事实**，交给模型自觉的代价是：
+    #   v4 连跑四轮为这一条被阻断/返工，其中一轮 reviewer 还编造了阻断理由
+    #   （实测 9 个宽景镜全部已写 `@场景名`，它说"以情绪小标题开头"）。
+    #   ⇒ 「场景」列本来就是分镜契约的必填列，直接按它绑，位置约束从此与模型无关。
+    if any(w in (shot.get("shot_type") or "") for w in WIDE_SHOT_WORDS):
+        scene_a = by_name.get((shot.get("scene") or "").strip())
+        if (scene_a is not None and scene_a.get("type") == "location"
+                and scene_a not in hits):
+            hits = hits + [scene_a]
     return hits[:max_n], leftover
 
 
@@ -505,6 +518,11 @@ SCENE_ANCHOR_MAX = 260
 #: 场景描述里属于"参考图空镜"的措辞 —— 注入到**有人物**的镜里会诱导模型画成空店
 #: （assetdesigner 是按"空镜头参考图"写的，那是给生图用的，不是给本镜用的）。
 _EMPTY_SHOT_WORDS = ("空镜头", "空镜", "空店氛围", "空店", "无人物")
+
+#: 宽景词表（唯一一份）：`hits_for_shot` 用它决定"无条件绑场景列"，`bind` 用它决定
+#: 场景图入不入列。场景图自带固定机位，绑进中近景会把构图拉回大 Wide，所以只有
+#: 全景/远景/大全景/空镜绑（2026-09-23 收窄；2026-09-28 提到模块级避免两处漂移）。
+WIDE_SHOT_WORDS = ("大全景", "全景", "远景", "空镜")
 #: **跨镜一致性的载体**：这三段是"同一场戏不漂"的关键，**必须优先保留**。
 #: 它们在源描述里以 `**光源**：` / `**色温**：` / `**陈设**：` 形式出现。
 _SCENE_KEY_SEGS = ("光源", "色温", "陈设")
@@ -1008,8 +1026,7 @@ def bind(root: Path, shots: list[dict], max_n: int = 5,
         #   折中：**全景/远景/大全景/空镜**绑场景图（构图本来就是 Wide，不打架，
         #   且空镜/交代镜正是场景漂移的重灾区）；中近景/特写不绑（文字锚点兜底）。
         #   场景图占道具位（others 首位），cap 照旧约束总数。
-        wide_shot = any(w in (s.get("shot_type") or "")
-                        for w in ("大全景", "全景", "远景", "空镜"))
+        wide_shot = any(w in (s.get("shot_type") or "") for w in WIDE_SHOT_WORDS)
         scene_pick = None
         if wide_shot:
             locs = [h for h in hits if h.get("type") == "location" and h.get("name")]

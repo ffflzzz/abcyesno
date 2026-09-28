@@ -195,6 +195,29 @@ class TestSceneAnchor(unittest.TestCase):
         self.assertIn("周平", names, "角色照常绑")
         self.assertNotIn("洗衣店内部", names)
 
+    def test_wide_shot_binds_scene_column_without_at_mention(self):
+        """★ 宽景镜**无条件**绑「场景」列（2026-09-28：把确定性事实从契约挪进代码）。
+
+        旧行为：`hits_for_shot` 只在「@ 一个都没命中」时才回退 keywords 匹配 ⇒
+        只要本镜 @ 了角色，「场景」列里的名字**永不参与匹配**，宽景镜一张场景图都
+        绑不上、场景自由发挥而**日志全绿**（v2 实测："云海双塔"画成地面庭院）。
+        上一版对策是要求分镜写 `@场景名`，代价是 v4 连跑四轮为这一条被阻断/返工，
+        其中一轮 reviewer 还**编造**了阻断理由（实测 9 个宽景镜全部已写 @场景名）。
+        ⇒ 「场景」列是分镜契约必填列，直接按它绑，不再依赖模型自觉。
+        中近景仍不绑（场景空镜自带机位，会把构图拉回大 Wide）——那条政策没变。
+        """
+        reg = json.loads(self.REG)
+        wide = {"name": "LN01", "scene": "洗衣店内部", "shot_type": "全景",
+                "visual": "@周平 抬头看向吊扇"}
+        names = [h.get("name") for h in assets.hits_for_shot(reg, wide)[0]]
+        self.assertIn("洗衣店内部", names,
+                      "宽景镜即使只 @ 了角色，也必须绑上「场景」列的 location")
+        self.assertIn("周平", names, "角色不能被场景挤掉")
+        near = dict(wide, name="LN02", shot_type="近景")
+        names2 = [h.get("name") for h in assets.hits_for_shot(reg, near)[0]]
+        self.assertNotIn("洗衣店内部", names2,
+                         "近景仍不绑场景图（2026-09-23 收窄的政策不许被这次改动带回去）")
+
 
 class TestCharFallback(unittest.TestCase):
     """`@` 只命中场景/道具时，未 `@` 的角色仍要绑对脸（2026-09-13）。
