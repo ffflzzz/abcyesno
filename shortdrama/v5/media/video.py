@@ -19,6 +19,7 @@ import time
 from pathlib import Path
 
 from .. import config
+from . import assets
 from . import jobs as jobs_mod
 from . import keypool
 from . import prompt as prompt_mod
@@ -521,6 +522,92 @@ def _seam_preview(out_dir: Path, groups: list, stills: dict, log=print) -> Path 
     return p
 
 
+def pack_ref_images(project_root: Path, group: list[dict], own: dict[str, str],
+                    prev_url: str | None = None) -> tuple[list[str], list[tuple[str, str]]]:
+    """A 臂图序（2026-09-28 实测）：**身份由人物设定表锁，静帧只当场景实现与接续锚**。
+
+    返回 `(urls, roles)`，`roles` 与 `urls` 同序，供
+    `prompt.pack_ref_declaration` 生成"第 N 张参考图是什么"的分工声明。
+
+    ★ **为什么不再"每镜一张静帧"**：静帧本身可能画错身份，而视频模型会**忠实继承**
+    那个错。v2 华山论剑逐帧实测：喂静帧的基准臂里谢潮生一路是黑发+粉紫裙（静帧就这么
+    画的，QC 重画 2-3 次没收敛）；把身份来源换成设定表后 6/6 帧回到霜白长发+月白袍。
+    ★ **为什么仍留两张静帧**：设定表锁不住"这一处场景长什么样"——去掉静帧后同一个
+    「云海之上的孤峰松坪」在相邻两组里长成石台孤松 vs 高大松林两种样子（接缝跳）。
+    留「本组首镜静帧」当场景实现、「前组末镜静帧」当接续，并在声明里写明
+    "这两张里的人物若与设定表不一致就忽略其人物"，实测身份与场景同时保住。
+
+    槽位优先级（`images` 上限 5）：人物设定表（≤2）→ 场景空镜 → 本组首镜静帧
+    → 前组末镜静帧 → 道具图补空位。
+    """
+    names_out: dict = {}
+    types_out: dict = {}
+    bound = assets.bind(project_root, group, names_out=names_out, types_out=types_out)
+    chars: list[tuple[str, str]] = []      # (url, 资产名)
+    locs: list[tuple[str, str]] = []
+    props: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for s in group:
+        urls_s = bound.get(s["name"]) or []
+        nms = names_out.get(s["name"]) or []
+        tys = types_out.get(s["name"]) or []
+        for u, nm, kind in zip(urls_s, nms, tys):
+            if not u or u in seen:
+                continue
+            seen.add(u)
+            if kind == "character":
+                chars.append((u, nm))
+            elif kind == "location":
+                locs.append((u, nm))
+            else:
+                props.append((u, nm))
+    urls: list[str] = []
+    roles: list[tuple[str, str]] = []
+
+    def add(u: str | None, kind: str, label: str) -> None:
+        if u and len(urls) < 5 and u not in urls:
+            urls.append(u)
+            roles.append((kind, label))
+
+    for u, nm in chars[:2]:
+        add(u, "character", "角色「%s」的人物设定表" % nm)
+    for u, nm in locs[:1]:
+        add(u, "location", "场景「%s」的空镜" % nm)
+    add(own.get(group[0]["name"]), "shot",
+        "本片段**第一拍的画面实现**（只取它的场景地貌、光线与人物站位）")
+    if prev_url:
+        add(prev_url, "prev",
+            "**上一片段的结束画面**（只取它的场景连续性与人物站位）")
+    for u, nm in props:
+        add(u, "prop", "道具「%s」" % nm)
+    return urls, roles
+
+
+def seam_anchor(clip_dir: Path, prev_pname: str | None, stills: dict,
+                prev_shot_name: str | None) -> tuple[str | None, str]:
+    """跨组接续锚帧 = **上一组成片的真实末帧**；抽不到才退回前组末镜静帧。
+
+    ★ 2026-09-28 实测修（用户反馈"镜头之间割裂感严重"）：原先这里直接用
+    `stills[前组末镜]`，但静帧是该镜的**第一拍=起幅画面**，而提示词把它声明成
+    "上一片段的结束画面——用于衔接人物姿态、道具位置与场景连续性"。并排对照
+    （`tmp/ANCHOR_wrong.png`）：pack08 的锚帧是"两人远景站立"、真实末帧是"两人近景
+    剑已相交"；pack07 的锚帧里还画着**第三人**。⇒ 每次交接都在对模型说一句假话，
+    它只能忽略锚帧，组与组各拍各的。keyframe 档早就有 `extract_last_frame` 这条
+    正确通道，pack 档当时"跳过落幅帧预生成"，于是拿静帧凑了个数。
+
+    返回 `(url_or_data_uri, 来源标记)`，来源只用于日志。
+    """
+    if prev_pname:
+        u = extract_last_frame(clip_dir / (prev_pname + ".mp4"))
+        if u:
+            return u, "末帧"
+    if prev_shot_name:
+        u = (stills.get(prev_shot_name) or {}).get("url")
+        if u:
+            return u, "静帧兜底"
+    return None, "无"
+
+
 def submit_packs(project_root: Path, shots: list[dict], stills: dict, planned: list[dict],
                  ep: int = 1, log=print, only: list[str] | None = None,
                  max_group: int | None = None) -> dict:
@@ -553,7 +640,7 @@ def submit_packs(project_root: Path, shots: list[dict], stills: dict, planned: l
 
     pool = keypool.KeyPool.of()
     log("[video] 提交配速：%d 条 key × 间隔 %ss" % (len(pool), pool.interval_s))
-    prev_last_name = None          # 跨组静帧链：上一组末镜名（提交时追加其静帧）
+    prev_last_name = None          # 跨组接续链：上一组末镜名（锚帧优先用其**成片末帧**）
     for k, (g, declared) in enumerate(groups, 1):
         pname = "pack%02d" % k
         names = [s["name"] for s in g]
@@ -572,32 +659,29 @@ def submit_packs(project_root: Path, shots: list[dict], stills: dict, planned: l
         if rec.get("state") == "submitted" and rec.get("video_id"):
             log("[video] %s 续跑认领已提交任务（poll_all 接管）" % pname)
             continue
-        urls = [(stills.get(n) or {}).get("url") for n in names]
-        missing = [n for n, u in zip(names, urls) if not u]
+        own = {n: (stills.get(n) or {}).get("url") for n in names}
+        missing = [n for n in names if not own[n]]
         if missing:
             log("[video] %s 缺静帧：%s → 标 failed（先补静帧）" % (pname, missing))
             jobs_mod.mark(jobs, pname, "failed", error="缺静帧:" + ",".join(missing))
             jobs_mod.save(out_dir, jobs)
             continue
-        # ★ 跨组静帧链（2026-09-23）：把**上一组末镜的静帧**追加到参考图末尾
-        #   （Picture n+1，prompt 里声明为"上一片段结束画面"）。组与组独立生成
-        #   互不知情（灯下棋实测：柳娘坐/站组间跳变、玉佩位置漂移）——这张图给
-        #   模型一个状态衔接锚点。ref_max=5：组内已有 5 张时放弃追加（保组内完整）。
-        prev_url = None
-        if prev_last_name:
-            pu = (stills.get(prev_last_name) or {}).get("url")
-            if pu and pu not in urls and len(urls) < 5:
-                prev_url = pu
-                urls = urls + [prev_url]
+        # ★ 跨组静帧链（2026-09-23）：上一组末镜的静帧当**接续锚点**。组与组独立生成
+        #   互不知情（灯下棋实测：柳娘坐/站组间跳变、玉佩位置漂移）。
+        prev_url, prev_src = seam_anchor(
+            clip_dir, ("pack%02d" % (k - 1)) if k > 1 else None,
+            stills, prev_last_name)
+        # A 臂图序（2026-09-28 实测）：设定表锁身份、静帧只当场景实现与接续锚。
+        urls, roles = pack_ref_images(project_root, g, own, prev_url=prev_url)
         # 项目风格块（style-block / 项目 style.md）一次加载，逐组复用——
         # 2026-09-22：替换 build_pack_prompt 里硬编码的「国风古装」句（题材污染）。
         prompt = prompt_mod.build_pack_prompt(
             g, declared, total,
             style_block=style_mod.wrap(style_mod.load(project_root)),
-            prev_shot_name=prev_last_name if prev_url else None)
-        log("[video] %s：%s 合计 %ds，prompt=%d 字，images=%d%s"
+            ref_roles=roles)
+        log("[video] %s：%s 合计 %ds，prompt=%d 字，images=%d（%s）接续锚=%s"
             % (pname, "+".join(names), total, len(prompt), len(urls),
-               "（含前组末镜锚帧）" if prev_url else ""))
+               "、".join(k for k, _l in roles), prev_src))
         # 提交：队列满时**换 key 重试**（2026-09-22 改造，同 submit_all 的理由：
         # 队列满是每条通道各自的状态，跨入口换通道能绕开单池拥堵）。
         r = None

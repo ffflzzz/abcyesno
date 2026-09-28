@@ -291,11 +291,14 @@ brief.json 的 `script-craft` 列表（项目级）> pack.json 的 `script-craft
 |---|---|---|---|
 | **`reference`（当前默认）** | 静帧进 `images`，提示词里作 `<Picture 1>` | `images`(≤5) / `audios`(≤3) | `first_frame`、`last_frame` |
 | `keyframe`（回退档） | 静帧当首帧，构图被锁死 | `first_frame` / `last_frame` | `images`、`audios` |
-| `pack`（2026-09-22 落管线） | **相邻同场景镜打包**成一条 ≤12s 的 reference 请求（每镜一张静帧、逐拍 `<Picture i>` 点名+时间边界）；job 与产物都是**组级**（`clips/packNN.mp4`），提交前自动生成跨组接缝静帧预检图 `seam_preview.jpg`（人眼扫，不阻断） | 同 `reference`（≤5 张/请求 ⇒ 组上限默认 5） | 同 `reference` |
+| `pack`（2026-09-22 落管线） | **相邻同场景镜打包**成一条 ≤12s 的 reference 请求；job 与产物都是**组级**（`clips/packNN.mp4`），提交前自动生成跨组接缝静帧预检图 `seam_preview.jpg`（人眼扫，不阻断）。★ **图序（2026-09-28 A 臂实测改，`video.pack_ref_images`）**：人物设定表（≤2）→ 场景空镜 → **本组首镜静帧** → 前组末镜静帧 → 道具补空位，**不再每镜一张静帧**；提示词首段由 `prompt.pack_ref_declaration` 生成，声明"人物一律以设定表为准、静帧只沿用场景与站位、其中人物与设定表冲突就忽略其人物"。理由：静帧画错的身份会被视频**忠实继承**（v2 华山实测），而完全去掉静帧又会让同一处场景在相邻两组里长成两种样子 | 同 `reference`（≤5 张/请求 ⇒ 组上限默认 5） | 同 `reference` |
 
 分组算法在 `media/video_plan.group_shots`（同场景相邻贪心、≤12s、压缩保台词下限）；
 打包 prompt 在 `media/prompt.build_pack_prompt`；旁路脚本 `scripts/pack_render.py`
-保留为独立验证入口，两处判据改动必须同步。pack 档**跳过**逐镜 clipqc（组产物多镜
+保留为独立验证入口。⚠️ **2026-09-28 起两者图序故意不同步**：`pack_render.py` 停在
+旧的"每镜一张静帧"，留作 A/B 对照臂（新图序的复现入口是
+`scripts/probe_costume_direct.py --mode hybrid`）；**分组判据**仍要求两处同步。
+pack 档**跳过**逐镜 clipqc（组产物多镜
 合并、逐镜判据不适用）与落幅帧预生成。
 
 回退：`SHORTDRAMA_VIDEO_MODE=keyframe`。

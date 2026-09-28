@@ -3500,6 +3500,73 @@ class TestPackMode(unittest.TestCase):
         self.assertNotIn("一律以对应参考图为准", p,
                          "旧句回来了 = 构图权又被交出去，成片会退回平铺构图")
 
+    def test_pack_ref_declaration_locks_identity_on_costume_sheet(self):
+        """A 臂图序（2026-09-28 实测）：pack 档视频请求的**身份来源必须是人物设定表**，
+        静帧降级为"场景实现 + 跨组接续"两张，且声明里要写明冲突时忽略静帧的人物。
+
+        实测依据（`scripts/probe_costume_direct.py`）：v2 华山论剑逐帧看完发现，喂静帧的
+        基准臂里谢潮生一路是黑发+粉紫裙（静帧本身就这么画的，QC 重画 2-3 次没收敛），
+        把身份来源换成设定表后 6/6 帧回到霜白长发+月白袍；但**完全**去掉静帧会让同一处
+        「云海之上的孤峰松坪」在相邻两组里长成石台孤松 vs 高大松林（接缝跳）——
+        故留两张静帧供场景与站位，并声明"其中人物与设定表不一致就忽略人物"，
+        实测身份与场景同时保住。
+        """
+        from v5.media.prompt import build_pack_prompt, pack_ref_declaration
+
+        roles = [("character", "角色「裴烛」的人物设定表"),
+                 ("character", "角色「谢潮生」的人物设定表"),
+                 ("location", "场景「松坪」的空镜"),
+                 ("shot", "本片段**第一拍的画面实现**"),
+                 ("prev", "**上一片段的结束画面**")]
+        d = pack_ref_declaration(roles)
+        self.assertIn("一律以第 1、2 张人物设定表为准", d)
+        self.assertIn("第 4、5 张只沿用其场景", d)
+        self.assertIn("忽略它们的人物", d,
+                      "不写这句 = 静帧里画错的身份又被喂回视频模型（v2 的缺陷来源）")
+        # 纯道具/空镜组：没有角色时不得生成"以第 张设定表为准"的空引用
+        d2 = pack_ref_declaration([("location", "场景「空巷」的空镜"),
+                                   ("shot", "本片段**第一拍的画面实现**")])
+        self.assertNotIn("人物设定表", d2)
+        self.assertIn("第 2 张只沿用其场景", d2)
+        # 给了 ref_roles 就不再逐拍点名 —— 此时 Picture 序号对应设定表，
+        # 说"第 N 张是第 X-Y 秒的画面参考"是**谎话**
+        shot = {"name": "LN01", "scene": "松坪", "seconds": 6, "shot_type": "全景",
+                "angle": "俯瞰", "camera": "缓推", "visual": "0-6秒：@裴烛 举剑。",
+                "dialogue": "", "sfx": "", "tail": ""}
+        p = build_pack_prompt([shot], [6], 6, style_block="", ref_roles=roles)
+        self.assertNotIn("秒节拍的画面参考", p)
+        self.assertIn("一律以第 1、2 张人物设定表为准", p)
+        self.assertIn("【第 0-6 秒", p, "节拍时间边界仍要保留（时间轴不靠图来标）")
+
+    def test_seam_anchor_prefers_real_last_frame_over_still(self):
+        """★ 2026-09-28 实测（用户反馈"镜头之间割裂感严重"）：跨组接续锚必须是
+        **上一组成片的真实末帧**，不能是"前组末镜的静帧"。
+
+        旧实现拿静帧当锚，而静帧是该镜的**第一拍=起幅**，提示词却把它声明成
+        "上一片段的结束画面——用于衔接人物姿态、道具位置与场景连续性"。并排对照
+        （`tmp/ANCHOR_wrong.png`）：pack08 锚帧是两人远景站立、真实末帧是两人近景
+        剑已相交；pack07 的锚帧里还画着**第三人**。⇒ 每次交接都在对模型说假话，
+        它只能忽略锚帧，组与组各拍各的。
+        """
+        from v5.media import video as video_mod
+
+        with tempfile.TemporaryDirectory() as td:
+            d = Path(td)
+            stills = {"LN03": {"url": "http://x/LN03.jpg"}}
+            # ① 上一组 clip 在盘上 → 必须用抽出来的末帧 data URI
+            (d / "pack01.mp4").write_bytes(b"x")
+            with mock.patch.object(video_mod, "extract_last_frame",
+                                   return_value="data:image/jpeg;base64,AAA"):
+                u, src = video_mod.seam_anchor(d, "pack01", stills, "LN03")
+            self.assertEqual(src, "末帧")
+            self.assertTrue(u.startswith("data:"))
+            # ② clip 缺失（上一组失败）→ 退回静帧，但来源要在日志里看得见
+            with mock.patch.object(video_mod, "extract_last_frame", return_value=None):
+                u2, src2 = video_mod.seam_anchor(d, "pack01", stills, "LN03")
+            self.assertEqual((u2, src2), ("http://x/LN03.jpg", "静帧兜底"))
+            # ③ 第一组没有前组 → 不得拿自己的静帧冒充"上一段结束画面"
+            self.assertEqual(video_mod.seam_anchor(d, None, stills, None), (None, "无"))
+
     def test_still_prompt_takes_first_beat_only(self):
         """★ 2026-09-25/26：静帧只取**一拍**——多拍序列是「时间性描述」，
         会诱发分屏（clockmaker 事故同类）。取**第一拍**（2026-09-26 改）：

@@ -1432,9 +1432,45 @@ def framing_clause(aspect_ratio: str | None = None) -> str:
     return "竖屏构图"
 
 
+def pack_ref_declaration(ref_roles: list[tuple[str, str]]) -> str:
+    """A 臂图序的参考图分工声明（`build_pack_prompt(ref_roles=...)` 用）。
+
+    `ref_roles` = `[(kind, 标签), …]`，顺序**必须与 images 一致**。
+    kind：`character`=人物设定表 / `location`=场景空镜 /
+          `shot`=本组首镜静帧（场景实现）/ `prev`=前组末镜静帧（接续）。
+
+    ★ 为什么要写"忽略静帧里的人物"：静帧是**按上一版的角色画出来的实现图**，
+    角色一旦画错（xianxia-vfx-action 实测：谢潮生被画成黑发+粉紫裙），把它当参考图
+    就等于把错的身份重新喂回视频模型。声明"人物以设定表为准、静帧只供场景与站位"
+    之后，实测身份漂移消失而场景仍然接得住（2026-09-28 探针
+    `scripts/probe_costume_direct.py --mode hybrid`）。
+    """
+    def _nums(kind: str) -> list[int]:
+        return [i + 1 for i, (k, _l) in enumerate(ref_roles) if k == kind]
+
+    head = "、".join("第 %d 张参考图=%s" % (i + 1, lab)
+                     for i, (_k, lab) in enumerate(ref_roles))
+    chars, scenes = _nums("character"), _nums("location")
+    impl = _nums("shot") + _nums("prev")
+    parts = [head + "。"]
+    if chars:
+        parts.append("★ 优先级：出场人物的长相、发型、服装形制与兵刃**一律以第 %s 张"
+                     "人物设定表为准**。" % "、".join(str(c) for c in chars))
+    if impl:
+        parts.append("第 %s 张只沿用其场景地貌、光线与人物站位——其中人物长相若与设定表"
+                     "不一致，**忽略它们的人物**。" % "、".join(str(c) for c in impl))
+    if scenes:
+        parts.append("第 %s 张只用于锁定场景内的建筑与地貌。"
+                     % "、".join(str(c) for c in scenes))
+    parts.append("构图、景别、机位与镜头运动一律按下面的文字描述执行。"
+                 "各节拍画面与本片段时间边界严格对应。")
+    return "".join(parts)
+
+
 def build_pack_prompt(group: list[dict], declared: list[int], total: int,
                       style_block: str = "",
-                      prev_shot_name: str | None = None) -> str:
+                      prev_shot_name: str | None = None,
+                      ref_roles: list[tuple[str, str]] | None = None) -> str:
     """打包 prompt：参考图逐拍点名 + 时间段边界 + 逐拍完整内容。
 
     `group` = 同场景相邻镜列表；`declared` = 每镜分配秒（≤12s 合计）；
@@ -1444,6 +1480,9 @@ def build_pack_prompt(group: list[dict], declared: list[int], total: int,
     ——任何项目走 pack 档都被注入国风风格句（非国风项目直接被污染）。
     传入后与静帧路径同源（style-block / 项目 style.md）；缺省回退**通用**
     实拍句，不再点名任何题材。
+    `ref_roles` = 参考图**不是**"每镜一张静帧"时的分工声明（2026-09-28 A 臂）。
+    给了它就用 `pack_ref_declaration` 生成首段，**不再**逐拍打 `<Picture i>` 时间戳——
+    因为此时 Picture 的序号对应的是设定表/场景图，逐拍点名会说谎。
     """
     n = len(group)
     bounds, maps = [], []
@@ -1462,17 +1501,18 @@ def build_pack_prompt(group: list[dict], declared: list[int], total: int,
         tail_map = ("<Picture %d> 为**上一片段的结束画面**——仅用于衔接人物姿态、"
                     "道具位置与场景连续性，**不对应本片段任何节拍**" % (n + 1))
     segs = [
-        "、".join(maps)
-        + ("；" + tail_map if tail_map else "")
-        # ★ 2026-09-27 A/B 实测改的这句（`scripts/ab_source_prompt.py`）：
-        #   原文「人物、服装、道具与**场景一律**以对应参考图为准」是把**构图权**也交给了
-        #   参考图——同一批图、同一模型，只把这句换成"参考图只锁身份、构图听文字"，
-        #   产出立刻出现贴脸剑尖冲镜、人物极小而能量体占满画面这类镜头（参考片的水准）。
-        #   旧句不是错在"让模型尊重参考图"（那正是跨镜一致性的前提），
-        #   而是**顺手把场景与构图一起交了出去**。
-        + "。参考图只用于锁定身份——长相、发型、服装形制与兵刃；"
-          "构图、景别、机位与镜头运动一律按下面的文字描述执行。"
-          "各节拍画面与本片段时间边界严格对应。",
+        pack_ref_declaration(ref_roles) if ref_roles else
+        ("、".join(maps)
+         + ("；" + tail_map if tail_map else "")
+         # ★ 2026-09-27 A/B 实测改的这句（`scripts/ab_source_prompt.py`）：
+         #   原文「人物、服装、道具与**场景一律**以对应参考图为准」是把**构图权**也交给了
+         #   参考图——同一批图、同一模型，只把这句换成"参考图只锁身份、构图听文字"，
+         #   产出立刻出现贴脸剑尖冲镜、人物极小而能量体占满画面这类镜头（参考片的水准）。
+         #   旧句不是错在"让模型尊重参考图"（那正是跨镜一致性的前提），
+         #   而是**顺手把场景与构图一起交了出去**。
+         + "。参考图只用于锁定身份——长相、发型、服装形制与兵刃；"
+           "构图、景别、机位与镜头运动一律按下面的文字描述执行。"
+           "各节拍画面与本片段时间边界严格对应。"),
         "本片段总长 %d 秒，由连续发生的 %d 个节拍组成，各节拍按下列时间分配自然衔接，"
         "节拍边界允许 ±1 秒弹性：" % (total, n),
     ]
