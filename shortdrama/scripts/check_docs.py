@@ -21,6 +21,15 @@ import re
 import sys
 import pathlib
 
+# ★ 本机控制台默认 GBK，而输出里有 ✓/✗ —— 质量门钩子（git commit）不带 PYTHONUTF8 时，
+#   打印第一条就 UnicodeEncodeError 崩掉，看起来像"文档对账失败"，其实一个字都没比错。
+#   在脚本里自己定死 UTF-8，而不是要求每个调用方记得设环境变量。
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:  # noqa: BLE001 -- 老 Python / 被重定向成非 tty 的怪对象
+        pass
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 # 已知死配置/文档特意保留的名字（代码里无引用是**设计内**的）
 ENV_DOC_ONLY_OK = {"SHORTDRAMA_VIDEO_PROVIDER"}
