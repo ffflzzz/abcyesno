@@ -27,6 +27,7 @@ import appManjuIcon from "./assets/app-manju.png";
 import appPaperIcon from "./assets/app-paper.png";
 import aihotIcon from "./assets/aihot.png";
 import openrouterIcon from "./assets/openrouter.png";
+import polymarketIcon from "./assets/polymarket.png";
 
 // Map of manifest id / special key → vite-imported PNG so the same launcher
 // art shows in BOTH the homepage grid AND the browser-style tab strip.
@@ -1611,6 +1612,25 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
           title: "OpenRouter",
           iconSrc: openrouterIcon,
           browserUrl: "https://openrouter.ai/",
+        });
+      },
+    },
+    // Polymarket — prediction-market site, opened in the built-in browser tab
+    // like OpenRouter / Excalidraw. Icon is their OWN app tile, downloaded
+    // unmodified from https://polymarket.com/manifest.json
+    // (→ /icons/android-chrome-384x384.png, 384×384, brand blue #1652f0);
+    // no resample, so the artwork is exactly what the site ships.
+    {
+      key: "polymarket",
+      title: "Polymarket",
+      icon: "default",
+      iconSrc: polymarketIcon,
+      onClick: () => {
+        createTab({
+          type: "browser",
+          title: "Polymarket",
+          iconSrc: polymarketIcon,
+          browserUrl: "https://polymarket.com/zh",
         });
       },
     },
