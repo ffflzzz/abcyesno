@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import Icon from "./Icon.jsx";
 import { useTts } from "../hooks/useTts.jsx";
 
@@ -8,23 +8,31 @@ function maskKey(key) {
   return `${key.slice(0, 4)}...${key.slice(-4)}`;
 }
 
+const CATEGORIES = [
+  { id: "connection", label: "API 与模型", icon: "key", hint: "各类密钥额度与默认模型" },
+  { id: "appearance", label: "外观", icon: "palette", hint: "界面配色" },
+  { id: "voice", label: "语音朗读", icon: "audio", hint: "自动朗读、音色与语速" },
+  { id: "data", label: "数据", icon: "folder-open", hint: "本地文件位置" },
+  { id: "integrations", label: "集成", icon: "wechat", hint: "外部消息通道" },
+  { id: "advanced", label: "高级", icon: "wrench", hint: "控制台、更新与退出" },
+];
+
 export default function SettingsPanel({ apiKey = "", hasApiKey = false, apiKeys = null, keyStatus = "", model = "", theme = "dark", onThemeChange, onEditApiKey, onClearApiKey, onClose, version = "", onOpenWechatBind }) {
   const [openDirStatus, setOpenDirStatus] = useState("");
   const [updater, setUpdater] = useState(null);
+  const [activeCat, setActiveCat] = useState(CATEGORIES[0].id);
+  const [query, setQuery] = useState("");
+  const paneRef = useRef(null);
   const { ttsSettings, updateTtsSettings, voiceOptions } = useTts();
   const { autoRead, voice, rate } = ttsSettings;
 
+  const has = (scope) => !!(apiKeys && apiKeys[scope] && apiKeys[scope].set);
+  const masked = (scope) => (apiKeys && apiKeys[scope] ? apiKeys[scope].masked : "");
+
   // 主 Key 显示值：优先用主进程返回的掩码快照，回退到旧 props。
   const mainDisplay = apiKeys && apiKeys.main
-    ? (apiKeys.main.set ? apiKeys.main.masked : "未设置")
-    : (apiKey ? maskKey(apiKey) : hasApiKey ? "已设置" : "未设置");
-
-  // 图片/视频 Key 行：有覆盖显示掩码，否则显示「跟随对话 Key」。
-  function scopedDisplay(scope) {
-    const s = apiKeys && apiKeys[scope];
-    if (!s) return "跟随对话 Key";
-    return s.set ? s.masked : "跟随对话 Key";
-  }
+    ? (apiKeys.main.set ? apiKeys.main.masked : "")
+    : (apiKey ? maskKey(apiKey) : hasApiKey ? "" : "");
 
   useEffect(() => {
     setOpenDirStatus("");
@@ -45,6 +53,16 @@ export default function SettingsPanel({ apiKey = "", hasApiKey = false, apiKeys 
       h.offUpdaterState(onState);
     };
   }, []);
+
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  useEffect(() => {
+    if (paneRef.current) paneRef.current.scrollTop = 0;
+  }, [activeCat, query]);
 
   async function handleOpenDevTools() {
     // Close the settings modal first so keyboard focus returns to the main
@@ -119,273 +137,333 @@ export default function SettingsPanel({ apiKey = "", hasApiKey = false, apiKeys 
     }
   }
 
+  // ── 设置项登记表：导航、搜索与内容区都由这一份数据驱动 ──────────────────
+  // 每项 { id, cat, name, desc, kw, badge, value, control }
+  const items = [
+    {
+      id: "key-main",
+      cat: "connection",
+      name: "对话（LLM）",
+      desc: "主 Key，所有应用共用；保存在本机，保存后重启后台。",
+      kw: "api key 密钥 对话 llm 主key",
+      badge: mainDisplay ? { tone: "ok", text: "已设置" } : { tone: "warn", text: "未设置" },
+      value: mainDisplay,
+      control: (
+        <button className="ghost settings-inline-btn" onClick={() => onEditApiKey("main")}>
+          {mainDisplay ? "修改" : "设置"}
+        </button>
+      ),
+    },
+    {
+      id: "key-image",
+      cat: "connection",
+      name: "图片生成",
+      desc: "不填则跟随对话 Key。适合给创作类应用单独隔离额度。",
+      kw: "api key 密钥 图片 生图 image",
+      badge: has("image") ? { tone: "ok", text: "独立 Key" } : { tone: "muted", text: "跟随主 Key" },
+      value: has("image") ? masked("image") : "",
+      control: (
+        <>
+          <button className="ghost settings-inline-btn" onClick={() => onEditApiKey("image")}>
+            {has("image") ? "修改" : "覆盖"}
+          </button>
+          {has("image") && (
+            <button className="ghost settings-inline-btn" onClick={() => onClearApiKey("image")}>清除</button>
+          )}
+        </>
+      ),
+    },
+    {
+      id: "key-video",
+      cat: "connection",
+      name: "视频生成",
+      desc: "不填则跟随对话 Key；覆盖后下次生成任务生效。",
+      kw: "api key 密钥 视频 生视频 video",
+      badge: has("video") ? { tone: "ok", text: "独立 Key" } : { tone: "muted", text: "跟随主 Key" },
+      value: has("video") ? masked("video") : "",
+      control: (
+        <>
+          <button className="ghost settings-inline-btn" onClick={() => onEditApiKey("video")}>
+            {has("video") ? "修改" : "覆盖"}
+          </button>
+          {has("video") && (
+            <button className="ghost settings-inline-btn" onClick={() => onClearApiKey("video")}>清除</button>
+          )}
+        </>
+      ),
+    },
+    {
+      id: "key-fallback",
+      cat: "connection",
+      name: "备用 Key",
+      desc: "对话 Key 额度耗尽（429）时降级使用，可选。",
+      kw: "api key 密钥 备用 fallback 429 额度",
+      badge: has("fallback") ? { tone: "ok", text: "已设置" } : { tone: "muted", text: "未设置" },
+      value: has("fallback") ? masked("fallback") : "",
+      control: (
+        <>
+          <button className="ghost settings-inline-btn" onClick={() => onEditApiKey("fallback")}>
+            {has("fallback") ? "修改" : "设置"}
+          </button>
+          {has("fallback") && (
+            <button className="ghost settings-inline-btn" onClick={() => onClearApiKey("fallback")}>清除</button>
+          )}
+        </>
+      ),
+    },
+    {
+      id: "model-default",
+      cat: "connection",
+      name: "默认模型",
+      desc: "新会话默认使用的模型，可在输入框下方临时切换。",
+      kw: "模型 model agnes 默认",
+      value: model || "未选择",
+    },
+    {
+      id: "theme",
+      cat: "appearance",
+      name: "主题",
+      desc: "选择界面配色，跟随系统则随操作系统明暗切换。",
+      kw: "主题 theme 深色 浅色 外观 配色 暗色",
+      control: (
+        <div className="settings-seg">
+          {[
+            { value: "dark", label: "深色" },
+            { value: "light", label: "浅色" },
+            { value: "system", label: "跟随系统" },
+          ].map((opt) => (
+            <button
+              key={opt.value}
+              className={`settings-seg-btn ${theme === opt.value ? "active" : ""}`}
+              onClick={() => onThemeChange && onThemeChange(opt.value)}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      ),
+    },
+    {
+      id: "tts-auto",
+      cat: "voice",
+      name: "自动朗读",
+      desc: "收到助手回复后自动朗读（需联网；云端 edge-tts 中文语音）。",
+      kw: "语音 tts 朗读 自动 播报",
+      control: (
+        <div className="settings-seg">
+          <button
+            className={`settings-seg-btn ${!autoRead ? "active" : ""}`}
+            onClick={() => updateTtsSettings({ autoRead: false })}
+          >关闭</button>
+          <button
+            className={`settings-seg-btn ${autoRead ? "active" : ""}`}
+            onClick={() => updateTtsSettings({ autoRead: true })}
+          >开启</button>
+        </div>
+      ),
+    },
+    {
+      id: "tts-voice",
+      cat: "voice",
+      name: "音色",
+      desc: "微软云端中文神经语音（晓晓 / 云希 等）。",
+      kw: "语音 音色 声音 voice 晓晓 云希",
+      control: (
+        <select
+          className="settings-select"
+          value={voice}
+          onChange={(e) => updateTtsSettings({ voice: e.target.value })}
+        >
+          {voiceOptions.map((v) => (
+            <option key={v.value} value={v.value}>{v.label}</option>
+          ))}
+        </select>
+      ),
+    },
+    {
+      id: "tts-rate",
+      cat: "voice",
+      name: "语速",
+      desc: "朗读速度，1.0 为正常语速。",
+      kw: "语音 语速 rate 速度 快慢",
+      value: `${rate.toFixed(1)}×`,
+      control: (
+        <input
+          className="settings-range"
+          type="range"
+          min="0.5"
+          max="2"
+          step="0.1"
+          value={rate}
+          onChange={(e) => updateTtsSettings({ rate: Number(e.target.value) })}
+        />
+      ),
+    },
+    {
+      id: "data-dir",
+      cat: "data",
+      name: "数据目录",
+      desc: "会话、助手与配置存放的本地文件夹。",
+      kw: "数据 目录 文件夹 路径 存储 data dir",
+      control: <button className="ghost settings-inline-btn" onClick={handleOpenDataDir}>打开数据目录</button>,
+      after: openDirStatus ? <div className="settings-status-error">{openDirStatus}</div> : null,
+    },
+    {
+      id: "wechat",
+      cat: "integrations",
+      name: "微信桥接",
+      desc: "把个人微信接入 Abcyesno，在微信里直接发消息调用默认对话。",
+      kw: "微信 wechat 桥接 集成 绑定 机器人",
+      control: <button className="ghost settings-inline-btn" onClick={onOpenWechatBind}>绑定 / 管理</button>,
+    },
+    {
+      id: "devtools",
+      cat: "advanced",
+      name: "开发控制台",
+      desc: "打开/关闭开发者工具（F12；若 F12 被系统占用，请用 Ctrl+Shift+I）。",
+      kw: "开发 devtools 控制台 调试 日志",
+      control: <button className="ghost settings-inline-btn" onClick={handleOpenDevTools}>切换</button>,
+    },
+    {
+      id: "about",
+      cat: "advanced",
+      name: "关于 Abcyesno",
+      desc: aboutDesc(),
+      kw: "关于 版本 更新 version update",
+      control: (
+        updater && updater.supported && updater.status === "downloaded"
+          ? <button className="primary settings-inline-btn" onClick={handleInstallUpdate}>重启更新</button>
+          : (
+            <button
+              className="ghost settings-inline-btn"
+              onClick={handleCheckUpdate}
+              disabled={updater && updater.supported && (updater.status === "checking" || updater.status === "downloading")}
+            >
+              {updater && updater.supported && updater.status === "error" ? "重试" : "检查更新"}
+            </button>
+          )
+      ),
+      after: updater && updater.supported && updater.status === "downloading" && updater.progress ? (
+        <div className="settings-progress">
+          <div className="settings-progress-fill" style={{ width: `${Math.min(100, updater.progress.percent || 0)}%` }} />
+        </div>
+      ) : null,
+    },
+    {
+      id: "quit",
+      cat: "advanced",
+      name: "退出应用",
+      desc: "关闭并退出 Abcyesno。",
+      kw: "退出 quit 关闭 离开",
+      danger: true,
+      control: <button className="ghost danger-text settings-inline-btn" onClick={handleQuit}>退出</button>,
+    },
+  ];
+
+  const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const matches = (it) => {
+    if (!tokens.length) return true;
+    const cat = CATEGORIES.find((c) => c.id === it.cat);
+    const hay = `${it.name} ${it.desc} ${it.kw || ""} ${cat ? cat.label : ""}`.toLowerCase();
+    return tokens.every((t) => hay.includes(t));
+  };
+  // 每次渲染重算：items 里带着当前 state 的闭包，缓存会让搜索结果中的控件失效。
+  const matched = items.filter(matches);
+
+  // 搜索时：命中项按分类分组呈现，导航只点亮有命中的分类。
+  const searching = tokens.length > 0;
+  const hitCats = new Set(matched.map((it) => it.cat));
+  const shownItems = searching ? matched : items.filter((it) => it.cat === activeCat);
+  const shownCat = CATEGORIES.find((c) => c.id === activeCat) || CATEGORIES[0];
+
+  function renderCard(it) {
+    return (
+      <div key={it.id} className={`settings-card ${it.danger ? "danger" : ""}`}>
+        <div className="settings-card-text">
+          <div className="settings-card-name">
+            {it.name}
+            {it.badge && <span className={`settings-badge ${it.badge.tone}`}>{it.badge.text}</span>}
+          </div>
+          <div className="settings-card-desc">{it.desc}</div>
+          {it.after}
+        </div>
+        <div className="settings-card-control">
+          {it.value && <span className="settings-value">{it.value}</span>}
+          {it.control}
+        </div>
+      </div>
+    );
+  }
+
+  // 搜索结果按分类插小标题，保持与导航一致的层级。
+  const blocks = [];
+  let lastCat = null;
+  shownItems.forEach((it) => {
+    if (searching && it.cat !== lastCat) {
+      lastCat = it.cat;
+      const c = CATEGORIES.find((x) => x.id === it.cat);
+      blocks.push(<div key={`h-${it.cat}`} className="settings-pane-subhead">{c ? c.label : it.cat}</div>);
+    }
+    blocks.push(renderCard(it));
+  });
+
   return (
     <div className="modal-mask" onClick={onClose}>
-      <div className="modal settings-panel" onClick={(e) => e.stopPropagation()}>
+      <div className="modal settings-modal" onClick={(e) => e.stopPropagation()}>
         <div className="settings-head">
           <h3>设置</h3>
-          <button className="settings-close" onClick={onClose} title="关闭"><Icon name="close" size={14} /></button>
+          <button className="settings-close" onClick={onClose} title="关闭（Esc）"><Icon name="close" size={14} /></button>
         </div>
 
-        {/* API 密钥：一个主 Key 全端通用，图片/视频/备用可按需单独覆盖 */}
-        <div className="settings-group">
-          <div className="settings-group-title">API 密钥</div>
-          <div className="settings-item">
-            <div className="settings-item-text">
-              <div className="settings-item-name">对话（LLM）</div>
-              <div className="settings-item-desc">主 Key，所有应用共用；保存在本机，保存后重启后台。</div>
-            </div>
-            <div className="settings-item-control">
-              <span className="settings-value">{mainDisplay}</span>
-              <button className="ghost settings-inline-btn" onClick={() => onEditApiKey("main")}>
-                {mainDisplay !== "未设置" ? "修改" : "设置"}
-              </button>
-            </div>
-          </div>
-          <div className="settings-item">
-            <div className="settings-item-text">
-              <div className="settings-item-name">图片生成</div>
-              <div className="settings-item-desc">不填则跟随对话 Key。适合给创作类应用单独隔离额度。</div>
-            </div>
-            <div className="settings-item-control">
-              <span className="settings-value">{scopedDisplay("image")}</span>
-              <button className="ghost settings-inline-btn" onClick={() => onEditApiKey("image")}>
-                {apiKeys && apiKeys.image && apiKeys.image.set ? "修改" : "覆盖"}
-              </button>
-              {apiKeys && apiKeys.image && apiKeys.image.set && (
-                <button className="ghost settings-inline-btn" onClick={() => onClearApiKey("image")}>清除</button>
-              )}
-            </div>
-          </div>
-          <div className="settings-item">
-            <div className="settings-item-text">
-              <div className="settings-item-name">视频生成</div>
-              <div className="settings-item-desc">不填则跟随对话 Key；覆盖后下次生成任务生效。</div>
-            </div>
-            <div className="settings-item-control">
-              <span className="settings-value">{scopedDisplay("video")}</span>
-              <button className="ghost settings-inline-btn" onClick={() => onEditApiKey("video")}>
-                {apiKeys && apiKeys.video && apiKeys.video.set ? "修改" : "覆盖"}
-              </button>
-              {apiKeys && apiKeys.video && apiKeys.video.set && (
-                <button className="ghost settings-inline-btn" onClick={() => onClearApiKey("video")}>清除</button>
-              )}
-            </div>
-          </div>
-          <div className="settings-item">
-            <div className="settings-item-text">
-              <div className="settings-item-name">备用 Key</div>
-              <div className="settings-item-desc">对话 Key 额度耗尽（429）时降级使用，可选。</div>
-            </div>
-            <div className="settings-item-control">
-              <span className="settings-value">{scopedDisplay("fallback")}</span>
-              <button className="ghost settings-inline-btn" onClick={() => onEditApiKey("fallback")}>
-                {apiKeys && apiKeys.fallback && apiKeys.fallback.set ? "修改" : "设置"}
-              </button>
-              {apiKeys && apiKeys.fallback && apiKeys.fallback.set && (
-                <button className="ghost settings-inline-btn" onClick={() => onClearApiKey("fallback")}>清除</button>
-              )}
-            </div>
-          </div>
-          {keyStatus && <div className="settings-status-error">{keyStatus}</div>}
-        </div>
-
-        {/* 模型 */}
-        <div className="settings-group">
-          <div className="settings-group-title">模型</div>
-          <div className="settings-item">
-            <div className="settings-item-text">
-              <div className="settings-item-name">默认模型</div>
-              <div className="settings-item-desc">新会话默认使用的模型，可在输入框下方临时切换。</div>
-            </div>
-            <div className="settings-item-control">
-              <span className="settings-value">{model || "未选择"}</span>
-            </div>
-          </div>
-        </div>
-
-        {/* 外观 */}
-        <div className="settings-group">
-          <div className="settings-group-title">外观</div>
-          <div className="settings-item">
-            <div className="settings-item-text">
-              <div className="settings-item-name">主题</div>
-              <div className="settings-item-desc">选择界面配色，跟随系统则随操作系统明暗切换。</div>
-            </div>
-            <div className="settings-item-control">
-              <div className="settings-seg">
-                {[
-                  { value: "dark", label: "深色" },
-                  { value: "light", label: "浅色" },
-                  { value: "system", label: "跟随系统" },
-                ].map((opt) => (
-                  <button
-                    key={opt.value}
-                    className={`settings-seg-btn ${theme === opt.value ? "active" : ""}`}
-                    onClick={() => onThemeChange && onThemeChange(opt.value)}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* 语音朗读 */}
-        <div className="settings-group">
-          <div className="settings-group-title">语音朗读</div>
-          <div className="settings-item">
-            <div className="settings-item-text">
-              <div className="settings-item-name">自动朗读</div>
-              <div className="settings-item-desc">收到助手回复后自动朗读（需联网；云端 edge-tts 中文语音）。</div>
-            </div>
-            <div className="settings-item-control">
-              <div className="settings-seg">
-                <button
-                  className={`settings-seg-btn ${!autoRead ? "active" : ""}`}
-                  onClick={() => updateTtsSettings({ autoRead: false })}
-                >关闭</button>
-                <button
-                  className={`settings-seg-btn ${autoRead ? "active" : ""}`}
-                  onClick={() => updateTtsSettings({ autoRead: true })}
-                >开启</button>
-              </div>
-            </div>
-          </div>
-          <div className="settings-item">
-            <div className="settings-item-text">
-              <div className="settings-item-name">音色</div>
-              <div className="settings-item-desc">微软云端中文神经语音（晓晓 / 云希 等）。</div>
-            </div>
-            <div className="settings-item-control">
-              <select
-                className="modal-select"
-                value={voice}
-                onChange={(e) => updateTtsSettings({ voice: e.target.value })}
-              >
-                {voiceOptions.map((v) => (
-                  <option key={v.value} value={v.value}>{v.label}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-          <div className="settings-item">
-            <div className="settings-item-text">
-              <div className="settings-item-name">语速</div>
-              <div className="settings-item-desc">朗读速度，1.0 为正常语速。</div>
-            </div>
-            <div className="settings-item-control" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div className="settings-body">
+          <nav className="settings-nav">
+            <label className="settings-search">
+              <Icon name="search" size={13} />
               <input
-                type="range"
-                min="0.5"
-                max="2"
-                step="0.1"
-                value={rate}
-                onChange={(e) => updateTtsSettings({ rate: Number(e.target.value) })}
-                style={{ flex: 1, accentColor: "var(--accent, #4f7cff)" }}
+                type="text"
+                placeholder="搜索设置项…"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
               />
-              <span className="settings-value" style={{ minWidth: 36, textAlign: "right" }}>{rate.toFixed(1)}×</span>
-            </div>
-          </div>
-        </div>
-
-        {/* 数据 */}
-        <div className="settings-group">
-          <div className="settings-group-title">数据</div>
-          <div className="settings-item">
-            <div className="settings-item-text">
-              <div className="settings-item-name">数据目录</div>
-              <div className="settings-item-desc">会话、助手与配置存放的本地文件夹。</div>
-            </div>
-            <div className="settings-item-control">
-              <button className="ghost" onClick={handleOpenDataDir}>打开数据目录</button>
-            </div>
-          </div>
-          {openDirStatus && <div className="settings-status-error">{openDirStatus}</div>}
-        </div>
-
-        {/* 微信绑定 */}
-        <div className="settings-group">
-          <div className="settings-group-title">微信</div>
-          <div className="settings-item">
-            <div className="settings-item-text">
-              <div className="settings-item-name">微信桥接</div>
-              <div className="settings-item-desc">把个人微信接入 Abcyesno，在微信里直接发消息调用默认对话。</div>
-            </div>
-            <div className="settings-item-control">
-              <button className="ghost" onClick={onOpenWechatBind}>绑定 / 管理</button>
-            </div>
-          </div>
-        </div>
-
-        {/* 高级（原原生菜单栏的功能迁移至此） */}
-        <div className="settings-group">
-          <div className="settings-group-title">高级</div>
-          <div className="settings-item">
-            <div className="settings-item-text">
-              <div className="settings-item-name">开发控制台</div>
-              <div className="settings-item-desc">打开/关闭开发者工具（F12；若 F12 被系统占用，请用 Ctrl+Shift+I）。</div>
-            </div>
-            <div className="settings-item-control">
-              <button className="ghost" onClick={handleOpenDevTools}>切换</button>
-            </div>
-          </div>
-          <div className="settings-item">
-            <div className="settings-item-text">
-              <div className="settings-item-name">关于 Abcyesno</div>
-              <div className="settings-item-desc">{aboutDesc()}</div>
-              {updater && updater.supported && updater.status === "downloading" && updater.progress && (
-                <div
-                  style={{
-                    marginTop: 8,
-                    width: "100%",
-                    maxWidth: 320,
-                    height: 6,
-                    borderRadius: 3,
-                    background: "rgba(127,127,127,0.25)",
-                    overflow: "hidden",
-                  }}
-                >
-                  <div
-                    style={{
-                      width: `${Math.min(100, updater.progress.percent || 0)}%`,
-                      height: "100%",
-                      borderRadius: 3,
-                      background: "#4f8cff",
-                      transition: "width 0.3s ease",
-                    }}
-                  />
-                </div>
-              )}
-            </div>
-            <div className="settings-item-control">
-              {updater && updater.supported && updater.status === "downloaded" ? (
-                <button className="primary" onClick={handleInstallUpdate}>重启更新</button>
-              ) : (
-                <button
-                  className="ghost"
-                  onClick={handleCheckUpdate}
-                  disabled={updater && updater.supported && (updater.status === "checking" || updater.status === "downloading")}
-                >
-                  {updater && updater.supported && updater.status === "error" ? "重试" : "检查更新"}
+              {searching && (
+                <button className="settings-search-clear" onClick={() => setQuery("")} title="清除搜索">
+                  <Icon name="close" size={12} />
                 </button>
               )}
+            </label>
+            <div className="settings-nav-list">
+              {CATEGORIES.map((c) => {
+                const n = matched.filter((it) => it.cat === c.id).length;
+                const dim = searching && n === 0;
+                return (
+                  <button
+                    key={c.id}
+                    className={`settings-nav-item ${!searching && activeCat === c.id ? "active" : ""} ${dim ? "dim" : ""}`}
+                    onClick={() => { setQuery(""); setActiveCat(c.id); }}
+                    title={c.hint}
+                  >
+                    <Icon name={c.icon} size={15} />
+                    <span className="settings-nav-label">{c.label}</span>
+                    {searching && n > 0 && <span className="settings-nav-count">{n}</span>}
+                  </button>
+                );
+              })}
             </div>
-          </div>
-          <div className="settings-item">
-            <div className="settings-item-text">
-              <div className="settings-item-name">退出应用</div>
-              <div className="settings-item-desc">关闭并退出 Abcyesno。</div>
-            </div>
-            <div className="settings-item-control">
-              <button className="ghost danger-text" onClick={handleQuit}>退出</button>
-            </div>
-          </div>
-        </div>
+            <div className="settings-nav-foot">Abcyesno {version ? `v${version}` : "v-dev"}</div>
+          </nav>
 
-        <div className="modal-actions">
-          <button className="primary" onClick={onClose}>关闭</button>
+          <section className="settings-pane" ref={paneRef}>
+            <div className="settings-pane-head">
+              <h4>{searching ? "搜索结果" : shownCat.label}</h4>
+              <p>
+                {searching
+                  ? (matched.length ? `匹配到 ${matched.length} 项设置` : "没有匹配的设置，换个关键词试试。")
+                  : shownCat.hint}
+              </p>
+            </div>
+            {blocks}
+            {keyStatus && <div className="settings-status-error">{keyStatus}</div>}
+          </section>
         </div>
       </div>
     </div>
