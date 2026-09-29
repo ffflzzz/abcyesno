@@ -664,6 +664,67 @@ def role_input(role: str, root: Path, m: dict, reasons: list[str] | None = None)
     if _cb:
         lines.append(_cb)
     lines.append("产物用 write_file 写到：/%s" % out_path(role, ep))
+    # ★★ 分镜**重跑**时给"退回清单"，不给"自己检查一遍"（2026-09-29）。
+    #   事故：第 2 集分镜角色被要求满足十几条可数律，它就在**逐镜自查自改**上
+    #   连跑 2 小时，撞满链预算（9000s）后 rc=0 静默收工，审稿根本没轮到。
+    #   ⇒ 检查交回程序（`v5/shotcheck.py`）：
+    #     · 有不合格 → 只列那几镜 + 逐字原文，并明令"没列出的不要动、改完就停"；
+    #     · 全部合格 → 明令**不要重写**，直接结束本轮（这才是省下 2 小时的那一支）。
+    if (role == "scenedesigner" and config.SHOTCHECK != "off"
+            and not config.FAST):
+        _sb = root / out_path("scenedesigner", ep)
+        try:
+            from . import shotcheck
+            from .media import storyboard as _sbd
+            try:
+                _brief = guards.load_brief(root)
+                _tgt = int(validate.parse_target_seconds(
+                    _brief.get("target_duration")) or 0)
+            except Exception:  # noqa: BLE001 -- 片长这条可缺，不该挡住其余判据
+                _tgt = 0
+                _brief = {}
+            # ★ brief 明写"共 15-18 镜"时按**区间**判，不只用"目标秒÷8"的派生下限
+            #   （2026-09-29 实测：一条链交 12 镜 / 54 秒仍"镜数合格"= 漏检）
+            _rng = validate.parse_shot_range(_brief.get("target_duration"))
+            _pl: list[str] = []
+            if _sb.exists():
+                _shots = _sbd.parse(_sb.read_text(encoding="utf-8"))
+                _pl = shotcheck.punch_list(_shots, target_seconds=_tgt,
+                                           use_judge=(config.SHOTCHECK == "full"),
+                                           chars=shotcheck.character_names(root),
+                                           target_shots=_rng,
+                                           log=lambda *a: None)
+                if _pl:
+                    # 钉在盘上：正规"打回重做"会把旧表移进 `.rerun_backup/`，
+                    # 下一轮就没有表可读，只有这个文件还在。
+                    shotcheck.save_punch(root, ep, _pl)
+                else:
+                    shotcheck.clear_punch(root, ep)
+                    lines.append(
+                        "\n【✅ 盘上第 %d 集分镜表**已通过程序体检**（可数判据 + 语义判据）】\n"
+                        "**不要重写、不要逐镜自查、不要「优化」措辞** —— "
+                        "它已经是合格成品。本轮只需回一句「已合格，未改动」即可结束。"
+                        % ep)
+            else:
+                _pl = shotcheck.load_punch(root, ep)
+                if _pl:
+                    lines.append(
+                        "\n【⚠️ 上一版分镜表被打回，以下是**程序体检**对它查出的 %d 处不合格"
+                        " —— 新表必须避开这些，其余按 brief 正常创作】\n"
+                        "检查由程序做，你**不必逐镜自查**。这些是上一版真实踩中的坑，"
+                        "同型问题不要再写出来。" % len(_pl))
+                    lines.extend("- " + x for x in _pl[:24])
+            if _pl and _sb.exists():
+                lines.append(
+                    "\n【⚠️ 盘上已有第 %d 集分镜表，程序体检发现 %d 处不合格 —— "
+                    "**只改列出的那几镜**】\n"
+                    "检查由程序做，改完它会再跑一遍确认。**不要逐镜自查整张表**"
+                    "（那件事已经由程序承担）；**没列出的镜头一律不要动**。"
+                    % (ep, len(_pl)))
+                lines.extend("- " + x for x in _pl[:24])
+        except Exception as e:  # noqa: BLE001 -- 体检失败不能伪装成"合格"
+            lines.append("\n【⚠️ 分镜体检未能执行（%s）—— 本轮请自行逐镜核对】"
+                         % str(e)[:90])
     if reasons:
         lines.append("")
         lines.append("【本次是评审打回后的重跑，必须修正以下问题】")

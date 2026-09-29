@@ -352,10 +352,17 @@ class TestPhaseAccounting(unittest.TestCase):
             self.assertEqual(len(backup), 2)
 
     def test_revision_exhausted(self):
-        """计数 = 已回退次数；达到上限仍给最后一次机会，**超过**才跳过。"""
-        m = {"revision_counts": {"scriptwriter": 3}}
+        """计数 = 已回退次数；达到上限仍给最后一次机会，**超过**才跳过。
+
+        ⚠️ 取 `config.MAX_REVISIONS_PER_PHASE` 的**相对值**，不写死数字：上限在
+        2026-09-29 按用户口径改成默认 2（「超 2 次就放行」），写死 3/4 的测试当时就红了
+        —— 那类红是测试耦合配置，不是逻辑坏了。
+        """
+        from v5 import config
+        cap = int(config.MAX_REVISIONS_PER_PHASE)
+        m = {"revision_counts": {"scriptwriter": cap}}
         self.assertFalse(guards.revision_exhausted("scriptwriter", m))
-        m = {"revision_counts": {"scriptwriter": 4}}
+        m = {"revision_counts": {"scriptwriter": cap + 1}}
         self.assertTrue(guards.revision_exhausted("scriptwriter", m))
         self.assertFalse(guards.revision_exhausted("dialogue", m))
 

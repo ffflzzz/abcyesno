@@ -486,12 +486,15 @@ def gate_report(root: Path, ep: int | None = None) -> dict:
 
 # ─── 1. media_gate：媒体阶段状态机 ───────────────────────────────────────────
 
-def media_gate(action: str, m: dict, ep: int | None = None) -> tuple[bool, str]:
+def media_gate(action: str, m: dict, ep: int | None = None,
+               root: Path | None = None) -> tuple[bool, str]:
     """动作是否合法。返回 (ok, why)。
 
     ★ M2（2026-09-17）：**按集读状态**。改造前读的是一维 `phases` / `media_loop`，
     于是第 2 集会拿**第 1 集**的 `complete` 放行 —— 正是 M2 的验收负样本。
     `ep` 不传则取 manifest 的 `episode_index`（既有调用方零改动）。
+    `root` 只在**评审上限**那一条上用到（要落盘累计拦截次数）；不传则只在内存计数，
+    旧调用方与测试行为零变化。
     """
     if ep is None:
         ep = int(m.get("episode_index", 1) or 1)
@@ -513,9 +516,38 @@ def media_gate(action: str, m: dict, ep: int | None = None) -> tuple[bool, str]:
         #   理由与边界见 `config.HUMAN_IN_CHARGE` 的注释：`media_gate` 是唯一入口，
         #   全局放开会把**全自动**（外部 agent，没有人看）唯一的质量保护一起拆掉，
         #   所以它是一个由前端显式打开的模式开关，默认关。
+        #   ⛔ 这个开关**只给前端**：外部 agent 拿它去放行进渲染，等于把上面那句话作废。
         if not config.HUMAN_IN_CHARGE and not (rev.get("passed")
                                               or rev.get("force_passed")):
-            return False, "评审未通过（无 pass: true），不能渲染"
+            # ★ 2026-09-29 人定口径（用户原话「超 2 次就写 force_passed 让门放行」）：
+            #   渲染被评审门拦下**超过** `MAX_REVISIONS_PER_PHASE`（默认 2）次
+            #   → 写 `review.force_passed` **放行**，并把"这一版是带着未通过评审渲的"
+            #   连同评审仍未消化的条目一起打**响**。
+            #   为什么必须补：这道保险原先**空转** —— `revision_exhausted()` 全仓只有
+            #   测试调用、`force_passed` 有 5 处读却**零写入点**，于是评审反复不过没有出口，
+            #   真实结局是一直重派到撞墙钟预算、`rc=0` 静默收工不出片（0929 ep2 就是这么丢的）。
+            # ★ 计数源是**门自己**（`review_blocks`，按集、落盘累计）。不用 `revision_counts`：
+            #   2026-09-29 实测三个真实项目（xianxia-60s-0929 / 60s2 / 60s3）它**全是 null** ——
+            #   那要靠角色调 `record_phase(count=True)` 才累加，而实际重派是**调度器 LLM 自己**
+            #   发起的，不经过 `guards.reset_from()`（那函数只有 HITL 手动调用）。照它判，新保险照样空转。
+            cap = int(config.MAX_REVISIONS_PER_PHASE)
+            rb = m.setdefault("review_blocks", {})
+            n = int(rb.get(str(int(ep))) or 0) + 1
+            rb[str(int(ep))] = n
+            if root is not None:
+                save_manifest(Path(root), m)   # 不落盘 = 跨进程不累计 ⇒ 又是空转
+            if n > cap:
+                m.setdefault("review", {})["force_passed"] = True
+                if root is not None:
+                    save_manifest(Path(root), m)
+                print("[media-gate] !! 渲染已被评审拦下 %d 次 > 上限 %d → 记 force_passed "
+                      "**放行**：这一版是带着未通过的评审渲染的。评审仍未消化的条目："
+                      % (n, cap))
+                for _r in (rev.get("reasons") or [])[:5]:
+                    print("   · " + str(_r)[:200])
+            else:
+                return False, ("评审未通过（无 pass: true），不能渲染 —— 本集第 %d/%d 次拦截，"
+                               "超过 %d 次本门将记 force_passed 放行" % (n, cap, cap))
         if ml.get("rendered") and not ml.get("pending_revision"):
             return False, "已渲染且无待修订，无需重渲"
         return True, ""

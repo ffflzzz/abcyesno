@@ -256,24 +256,36 @@ def base_for(kind: str, key: str | None = None) -> str:
     （`AGNES_API_KEYS` 的 `key@base` 语法，2026-09-22 国内/国际混用）→ 用它；
     否则走全局（`base_from_config` → `config.AGNES_BASE`）——**默认行为零变化**。
     """
-    own = _own_base_for(key)
+    own = _own_base_for(key, kind)
     if own:
         return own
     spec = spec_for(kind)
     return _pick(spec, "base") + str(spec.get("base_suffix") or "")
 
 
-def _own_base_for(key: str | None) -> str:
-    """该 key 的专属地址（没配/厂商非 agnes/非媒体通道 → 空串）。"""
-    k = (key or "").strip()
-    if not k:
-        return ""
+def _own_base_for(key: str | None, kind: str = "video") -> str:
+    """该 key 的专属地址（没配/厂商非 agnes/非媒体通道 → 空串）。
+
+    ★ 必须按**请求的那个 kind** 查 spec（2026-09-28 教训）：原先写死 `spec_for("video")`，
+    配上"默认 key 兜底"之后，会把非 agnes 厂商（测试里注册的 b1/oai 档）的
+    `base_env`/`base_default` **整个劫持掉** —— 5 个 `TestBaseResolution` 当场变红。
+    """
     try:
-        spec = spec_for("video")
+        spec = spec_for(kind)
     except Exception:  # noqa: BLE001 —— 厂商未注册等场景不在这里响亮，交给正常路径
         return ""
-    if not spec.get("base_from_config") == "AGNES_BASE":
+    if spec.get("base_from_config") != "AGNES_BASE":
         return ""                     # 只有内置 agnes 档支持 key@base（别的厂商未接线）
+    k = (key or "").strip()
+    if not k:
+        # ★ **不传 key = 用默认 key**（`config.AGNES_API_KEY`），那它的专属地址也必须一起跟上。
+        #   2026-09-28 必需：key 池改成"只剩国内 cpk"后，`AGNES_API_KEY` 是 cpk，
+        #   而若干调用点（`video.submit_all` 的逐镜路径等）漏传 key → 原来会拿
+        #   cpk 去打卡 `AGNES_BASE`（国际 apihub）⇒ 400/401。地址与 key 是一对的，
+        #   不能只换一个。
+        k = (getattr(config, "AGNES_API_KEY", "") or "").strip()
+    if not k:
+        return ""
     return _config_get_base(k)
 
 

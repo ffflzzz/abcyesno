@@ -29,6 +29,31 @@ def _read(p: Path) -> str:
         return ""
 
 
+def brief_broken(root: Path) -> str:
+    """`brief.json` **存在但解析不出来**时返回错误说明，否则空串。
+
+    为什么单独开这个函数（2026-09-28 实测事故）：本文件所有读 brief 的地方
+    都是 `except Exception: return ""` —— 语义是「没有 brief 就按包默认走」。
+    但「JSON 语法错」和「文件不存在」被**同一句 except 吞掉了**，于是手改 brief
+    打错一个引号 = 整条媒体链**静默降级成朴素提示词**（pack 读不出来 ⇒ 风格块 /
+    `still-refs` / `still-tail` / QC 词表**全部**回落到默认包），日志只有一行
+    「无风格块（brief.json 未配置 pack）→ 提示词朴素」，而那一轮已经烧掉了
+    4 条 clip。文档里早有同型陷阱的警告（AGENTS「该路径读不到时不会报错，
+    而是**静默用默认类型包**」），这次是它的另一半：**解析失败**。
+    ⇒ 调用方**必须在烧配额之前拦下来**，不许继续降级。
+    """
+    p = root / "brief.json"
+    if not p.exists():
+        return ""
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except Exception as e:  # noqa: BLE001
+        return "brief.json 解析失败：%s" % str(e)[:200]
+    if not isinstance(data, dict):
+        return "brief.json 顶层不是对象（实际是 %s）" % type(data).__name__
+    return ""
+
+
 def pack_of(root: Path) -> str:
     """项目用哪个类型包（brief.json 的 pack 字段；缺省空）。"""
     p = root / "brief.json"
@@ -276,6 +301,9 @@ def diagnose(root: Path) -> str:
     """
     if _read(root / "style.md"):
         return ""
+    broken = brief_broken(root)
+    if broken:
+        return broken
     pack = pack_of(root)
     if not pack:
         return "brief.json 未配置 pack"

@@ -1737,6 +1737,161 @@ class TestQcStyleSpecAndDuplication(unittest.TestCase):
             self.assertEqual(style.style_criterion_spec(root), "")
 
 
+class TestBrokenBriefAborts(unittest.TestCase):
+    """**brief.json 解析失败必须终止媒体链**，不许静默降级成"无类型包"（2026-09-28）。
+
+    事故：手改 brief 时把中文引号写成了裸 ASCII 双引号 ⇒ JSON 语法错。
+    `style.pack_of` 的 `except Exception: return ""` 把「语法错」和「文件不存在」
+    当成同一件事 ⇒ pack 读不出来 ⇒ 风格块 / `still-refs` / `still-tail` /
+    QC 词表**全部**回落到默认包。日志只有一行
+    「无风格块（brief.json 未配置 pack）→ 提示词朴素」，
+    而那一轮已经烧掉 32 张静帧 + 4 条 clip，且成品**风格全无**。
+    """
+
+    def test_brief_broken_only_fires_on_bad_json(self):
+        """缺文件 = 不报（老项目合法）；坏 JSON / 顶层非对象 = 报。"""
+        import json
+        import tempfile
+        from pathlib import Path
+
+        from v5.media import style
+
+        d = tempfile.TemporaryDirectory()
+        root = Path(d.name)
+        with d:
+            self.assertEqual(style.brief_broken(root), "")   # 没有文件
+            (root / "brief.json").write_text(
+                json.dumps({"pack": "shortdrama"}, ensure_ascii=False), encoding="utf-8")
+            self.assertEqual(style.brief_broken(root), "")   # 正常
+            (root / "brief.json").write_text('{"pack": "x"  ', encoding="utf-8")
+            self.assertIn("解析失败", style.brief_broken(root))
+            (root / "brief.json").write_text('["pack"]', encoding="utf-8")
+            self.assertIn("顶层不是对象", style.brief_broken(root))
+
+    def test_diagnose_names_the_parse_error(self):
+        """降级日志必须说出真原因，不能继续谎报「未配置 pack」。"""
+        import tempfile
+        from pathlib import Path
+
+        from v5.media import style
+
+        d = tempfile.TemporaryDirectory()
+        root = Path(d.name)
+        with d:
+            (root / "brief.json").write_text('{"topic": "甲", "pack": "x"', encoding="utf-8")
+            self.assertIn("解析失败", style.diagnose(root))
+
+    def test_run_impl_stops_before_any_quota(self):
+        """媒体链第一步就拦下：不生成、不提交、不落产物。"""
+        import tempfile
+        from pathlib import Path
+
+        from v5.media import pipeline
+
+        d = tempfile.TemporaryDirectory()
+        root = Path(d.name)
+        with d:
+            (root / "brief.json").write_text('{"pack": "x"', encoding="utf-8")
+            msgs = []
+            r = pipeline._run_impl(root, ep=1, log=lambda *a: msgs.append(" ".join(map(str, a))))
+            self.assertEqual(r["status"], "failed")
+            self.assertIn("解析失败", r["reason"])
+            self.assertTrue(any("⛔" in m and "不烧任何配额" in m for m in msgs))
+            self.assertFalse((root / "media" / "ep1" / "stills").exists())
+
+
+class TestCastSheetStaleness(unittest.TestCase):
+    """**资产卡改了，定妆照必须判陈旧重画**（2026-09-29 实测事故）。
+
+    事故：`huashan-duel-v4-0928` 的定妆照 18:28 生成，`worldbuilder.md` 的角色卡
+    20:01 被重写（补上「男性／女性」）。而 `_ref_is_current` 只看 `ref_ver` +
+    "文件在不在盘上" ⇒ 旧图一直被判有效、一次都没重画 ⇒
+    **全片两位主角性别与剧本相反**（32 静帧 + 12 组视频忠实继承），日志全绿。
+    这是「上游产物变了、下游不失效」= 本项目最忌的失败不可见。
+    """
+
+    def _mk(self, root, appearance, *, legacy=False):
+        from v5.media import cast
+
+        item = {"name": "裴烛", "type": "character", "appearance": appearance,
+                "keywords": ["裴烛"]}
+        if legacy:
+            item["identity"] = ("裴烛的固定形象（全片每镜必须完全一致）：%s"
+                                % appearance[:220])
+        cast._register(root, item, "裴烛")
+        if legacy:   # 抹掉指纹，模拟老注册表
+            from v5.media import assets as am
+            reg = am.load_registry(root)
+            for a in reg.get("assets", []):
+                a.pop("src_fp", None)
+            (root / am.REGISTRY_NAME).write_text(
+                __import__("json").dumps(reg, ensure_ascii=False), encoding="utf-8")
+        return root / "images" / "裴烛.png"
+
+    def test_changed_card_invalidates_sheet(self):
+        """新注册表走**内容指纹**：卡一改 → 判陈旧 + 说清原因。"""
+        import json
+        import tempfile
+        from pathlib import Path
+
+        from v5.media import cast
+
+        d = tempfile.TemporaryDirectory()
+        root = Path(d.name)
+        (root / "images").mkdir()
+        with d:
+            ap1 = "男性，三十岁上下，玄黑高马尾、暗赤劲装配黑色长裤"
+            p = self._mk(root, ap1)
+            p.write_bytes(b"x")
+            reg = {a["id"]: a for a in json.loads(
+                (root / "assets.json").read_text(encoding="utf-8"))["assets"]}
+            msgs = []
+            self.assertTrue(cast._ref_is_current(reg, "裴烛", p, ap1, log=msgs.append))
+            self.assertEqual(msgs, [])
+            # 卡被重写（补上性别词正是本次事故的内容）
+            ap2 = "男性，三十岁上下，玄黑高马尾、暗赤劲装配黑色长裤（不是裙装）"
+            self.assertFalse(cast._ref_is_current(reg, "裴烛", p, ap2, log=msgs.append))
+            self.assertTrue(any("资产卡已改" in m or "出图输入已改" in m for m in msgs))
+
+    def test_legacy_record_without_fingerprint_still_caught(self):
+        """老注册表没有 `src_fp` ⇒ 退回比对已存的 `identity` 文本，**不能**放过。"""
+        import json
+        import tempfile
+        from pathlib import Path
+
+        from v5.media import cast
+
+        d = tempfile.TemporaryDirectory()
+        root = Path(d.name)
+        (root / "images").mkdir()
+        with d:
+            old = "玄黑高马尾、暗赤劲装"          # 生成图时用的旧卡（没有"男性"）
+            p = self._mk(root, old, legacy=True)
+            p.write_bytes(b"x")
+            reg = {a["id"]: a for a in json.loads(
+                (root / "assets.json").read_text(encoding="utf-8"))["assets"]}
+            self.assertNotIn("src_fp", reg["裴烛"])
+            msgs = []
+            new = "男性，三十岁上下，玄黑高马尾、暗赤劲装"   # 重写后的卡
+            self.assertFalse(cast._ref_is_current(reg, "裴烛", p, new, log=msgs.append))
+            self.assertTrue(any("判陈旧" in m for m in msgs))
+            # 但"没带来源文本"的调用（老代码路径）不得被误判成需要重烧
+            self.assertTrue(cast._ref_is_current(reg, "裴烛", p, "", log=msgs.append))
+
+    def test_missing_image_is_stale_regardless(self):
+        import tempfile
+        from pathlib import Path
+
+        from v5.media import cast
+
+        d = tempfile.TemporaryDirectory()
+        root = Path(d.name)
+        (root / "images").mkdir()
+        with d:
+            p = self._mk(root, "男性，玄黑高马尾")
+            self.assertFalse(cast._ref_is_current({}, "裴烛", p, "男性，玄黑高马尾"))
+
+
 class TestStillRefRule(unittest.TestCase):
     """静帧路径也必须声明「以参考图为准」（2026-09-15 实测缺口）。
 
@@ -3036,6 +3191,73 @@ class TestVideo503Classification(unittest.TestCase):
 
         with self.assertRaises(providers.QueueFullError):
             self._submit(503, "<html><body>502 Bad Gateway</body></html>")
+
+
+class TestGenAllStillsParity(unittest.TestCase):
+    """`scripts/gen_all_stills.py` 的注入必须与 `pipeline._run_impl` **同源**。
+
+    事故（2026-09-29）：这个脚本是「改完风格块后全量重画静帧」的唯一入口，
+    但它只注了 `_style_block` + `_identity_line`，漏了 pipeline 的
+    `_cast_n` 与 `_scene_line` ⇒ 用它重画出来的静帧提示词**比 pipeline 弱**
+    （同一镜实测 1389 字 vs 1476 字）：
+      · 多人镜被注「画面中只有一个人物，且仅出现一次」
+        —— 这正是 2026-09-15 pipeline 修过的"主体复制"事故，被脚本重新引入；
+      · 场景只剩一个名字，注册表里的陈设/光线描述全丢 → 场景漂移。
+    且日志全绿、32 张图一张不少 —— 典型的「失败不可见」。
+    """
+
+    SB = ("# 分镜\n\n| 镜头号 | 景别 | 角度 | 运镜 | 时长(秒) | 场景 | 画面描述 | 对白 | 音效 |\n"
+          "|---|---|---|---|---|---|---|---|---|\n"
+          "| LN01 | 全景 | 平视 | 缓推 | 4 | 石台 | @甲（黑衣）与 @乙（白衣）分立平台两端，"
+          "两人同时压上重心 | 甲：接招。 | 风 |\n")
+
+    def _load_script(self):
+        import importlib.util
+        p = Path(__file__).resolve().parents[1] / "scripts" / "gen_all_stills.py"
+        spec = importlib.util.spec_from_file_location("gen_all_stills", p)
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        return m
+
+    def _proj(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        d = Path(tmp.name)
+        (d / "brief.json").write_text(json.dumps(
+            {"topic": "奇偶校验", "pack": "shortdrama"}, ensure_ascii=False), encoding="utf-8")
+        sd = d / "scenedesigner"
+        sd.mkdir(parents=True, exist_ok=True)
+        (sd / "scenedesigner_ep1.md").write_text(self.SB, encoding="utf-8")
+        (d / "assets.json").write_text(json.dumps({"assets": [
+            {"id": "甲", "name": "甲", "type": "character", "keywords": ["甲"],
+             "identity": "甲的固定形象：黑衣、短发", "ref_image": "", "ref_ver": 99},
+            {"id": "乙", "name": "乙", "type": "character", "keywords": ["乙"],
+             "identity": "乙的固定形象：白衣、长发", "ref_image": "", "ref_ver": 99},
+            {"id": "石台", "name": "石台", "type": "location", "keywords": ["石台"],
+             "prompt": "圆形青石平台，中央立一座铜铸剑架，四周绝壁", "ref_image": "",
+             "ref_ver": 99},
+        ]}, ensure_ascii=False), encoding="utf-8")
+        return d
+
+    def test_script_injects_what_pipeline_injects(self):
+        from v5.media import prompt, relations, storyboard
+
+        m = self._load_script()
+        root = self._proj()
+        shots = storyboard.parse((root / "scenedesigner" / "scenedesigner_ep1.md")
+                                 .read_text(encoding="utf-8"))
+        out, _refs, _rn, _rt = m.prepare_shots(root, shots, log=lambda *a: None)
+        s = out[0]
+        self.assertEqual(s.get("_cast_n"), 2,
+                         "两人镜的 `_cast_n` 没注入 → 静帧会被告知「只有一个人物」")
+        self.assertIn("圆形青石平台", s.get("_scene_line") or "",
+                      "场景锚点没注入 → 只剩裸场景名，场景必漂移")
+        self.assertTrue(s.get("_style_block"), "风格块没注入 → 类型包审美不生效")
+        self.assertTrue(s.get("_identity_line"))
+        plan = {p.get("name"): p for p in relations.plan_frames(out)}
+        built = prompt.build_still_prompt(s, plan.get(s["name"]))
+        self.assertIn("共有 2 个人物", built)
+        self.assertNotIn("画面中只有一个人物", built)
 
 
 class TestBindEpisode(unittest.TestCase):

@@ -544,7 +544,7 @@ def _run_guarded(project_root: Path, ep: int = 1, log=print, max_regen: int = 2,
             save_manifest(project_root, m)
         elif ml.get("rendered") and ml.get("input_fingerprint") != fp_now:
             ml["pending_revision"] = True
-        ok, why = media_gate("render", m, ep=ep)
+        ok, why = media_gate("render", m, ep=ep, root=project_root)
         if not ok:
             log("[media-block] " + why)
             return _finish({"status": "blocked", "reason": why, "gate": "render"})
@@ -595,6 +595,17 @@ def _run_impl(project_root: Path, ep: int = 1, log=print, max_regen: int = 2,
               stills_only: bool = False, only: list[str] | None = None,
               from_still: bool = False) -> dict:
     from ..guards import resolve_path          # 局部 import：避免 guards ↔ media 的循环依赖
+    # ★★ **brief.json 坏了必须在烧配额之前拦住**（2026-09-28 实测：手改 brief 打错
+    #    一个引号 → `style.pack_of` 的 `except` 吞掉语法错 → 整轮静默按「无类型包」跑，
+    #    32 张静帧 + 4 条 clip 全是没有风格块的朴素提示词，日志只有一行降级提示）。
+    #    「文件不存在」可以降级（老项目 / 项目自带 style.md），「存在但解析不出来」不行。
+    broken = style.brief_broken(project_root)
+    if broken:
+        log("[media] ⛔ %s —— **已终止，不烧任何配额**" % broken)
+        log("[media]    为什么终止：brief 读不出来时 pack 会**静默回落到默认包**，"
+            "风格块 / still-refs / still-tail / QC 词表**一起**变掉，"
+            "而日志只会说「无风格块 → 提示词朴素」。先修 JSON 语法再跑。")
+        return {"status": "failed", "reason": broken, "clips_done": []}
     # M1：分镜是**集级**产物（`scenedesigner_ep{N}.md`）；读取走 resolve_path（旧名回退）
     # ★★ `ep` 必须显式传（2026-09-19 实测）：不传会回落 `manifest.episode_index`
     #    （= 最近跑过的集）⇒ **渲染拿错集的分镜**。实测 ep=1 的请求读到了 ep2 的分镜。

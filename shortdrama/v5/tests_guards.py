@@ -511,5 +511,131 @@ class TestWholeDramaRoleMisnamedFile(unittest.TestCase):
             self.assertEqual(path, "scenedesigner/scenedesigner_ep1.md")
 
 
+class TestMediaGateReviewForcePass(unittest.TestCase):
+    """评审上限的**出口**（2026-09-29 人定口径：渲染被拦超过 2 次 → 写 force_passed 放行）。
+
+    为什么必须单独测：这道保险原先是**空转的** —— `revision_exhausted()` 只有测试调用、
+    `force_passed` 全仓 5 处读却零写入点，测试套件照样全绿，而线上评审反复不过没有出口，
+    真实结局是重派到撞墙钟预算、`rc=0` 静默收工不出片。所以下面每条都**连落盘一起断言**。
+    """
+
+    def _m(self):
+        # ★ phases 必须是**二维**（`{"1": {role: "complete"}}`）：M2 之后按集读，
+        #   写成扁平一份会让门以为"本集一个角色都没跑完"，测出来的是另一条判据。
+        m = {"episode_index": 1, "phases": {}, "revision_counts": {},
+             "media_loop": {},
+             "review": {"passed": False, "rerun": ["scenedesigner"],
+                        "reasons": ["LN02：非宽景双 @ 会多画一个人"]}}
+        for ep in (1, 2):
+            for r in guards.GATE_ROLES:
+                guards.set_phase(m, r, "complete", ep=ep)
+        return m
+
+    def test_blocks_until_cap_then_force_passes(self):
+        """前 `cap` 次拦、第 `cap+1` 次放行并写 force_passed。"""
+        cap = int(config.MAX_REVISIONS_PER_PHASE)
+        from tempfile import TemporaryDirectory
+        with TemporaryDirectory() as d:
+            root = Path(d)
+            m = self._m()
+            for i in range(1, cap + 1):
+                ok, why = guards.media_gate("render", m, ep=1, root=root)
+                self.assertFalse(ok, "第 %d 次应当拦下" % i)
+                self.assertIn("第 %d/%d 次拦截" % (i, cap), why)
+            ok, _why = guards.media_gate("render", m, ep=1, root=root)
+            self.assertTrue(ok, "超过上限应当放行")
+            self.assertTrue(m["review"].get("force_passed"), "放行必须留下 force_passed")
+
+    def test_counter_survives_process_restart(self):
+        """★ 计数必须落盘：不落盘 = 每次重启都从 0 数 = 保险再次空转。"""
+        from tempfile import TemporaryDirectory
+        with TemporaryDirectory() as d:
+            root = Path(d)
+            m = self._m()
+            guards.media_gate("render", m, ep=1, root=root)
+            reloaded = guards.load_manifest(root)
+            self.assertEqual(int((reloaded.get("review_blocks") or {}).get("1") or 0), 1,
+                             "第一次拦截没有落盘")
+
+    def test_passed_review_is_never_counted(self):
+        """评审通过时不进这条分支 —— 别把正常渲染也累计成"被拦过"。"""
+        from tempfile import TemporaryDirectory
+        with TemporaryDirectory() as d:
+            root = Path(d)
+            m = self._m()
+            m["review"]["passed"] = True
+            ok, _why = guards.media_gate("render", m, ep=1, root=root)
+            self.assertTrue(ok)
+            self.assertEqual(m.get("review_blocks") or {}, {}, "不该被计数")
+
+    def test_human_mode_does_not_count_or_force_pass(self):
+        """人工模式（前端路径）语义不变：不拦、也**不计数**、不写 force_passed。
+
+        计数被人工模式污染的话，下一次全自动跑会从"已经拦过 N 次"起步，
+        第一脚就放行 —— 那是把全自动唯一的保护拆掉。
+        """
+        from unittest import mock
+        from tempfile import TemporaryDirectory
+        with TemporaryDirectory() as d:
+            root = Path(d)
+            m = self._m()
+            with mock.patch.object(config, "HUMAN_IN_CHARGE", True):
+                ok, _why = guards.media_gate("render", m, ep=1, root=root)
+            self.assertTrue(ok)
+            self.assertEqual(m.get("review_blocks") or {}, {}, "不该被计数")
+            self.assertFalse(m["review"].get("force_passed"))
+
+    def test_per_episode_counters_are_isolated(self):
+        """按集隔离：第 2 集不该继承第 1 集用掉的额度（M2 同一条纪律）。"""
+        from tempfile import TemporaryDirectory
+        with TemporaryDirectory() as d:
+            root = Path(d)
+            m = self._m()
+            guards.media_gate("render", m, ep=1, root=root)
+            guards.media_gate("render", m, ep=1, root=root)
+            ok, why = guards.media_gate("render", m, ep=2, root=root)
+            self.assertFalse(ok, "第 2 集第一次渲染不该被第 1 集的额度放行")
+            self.assertIn("第 1/%d 次拦截" % int(config.MAX_REVISIONS_PER_PHASE), why)
+
+
+class TestGateAfterDiskReconcile(unittest.TestCase):
+    """产物在盘、账本 `phases` 为空时，门必须走进"评审未通过"那条分支并**累计次数**。
+
+    这条测试是为我自己引入的一个 bug 写的（2026-09-29）：`scripts/run_new_project.py`
+    新加的"问门"调用直接喂 `load_manifest()`，而那条路径上 `phases` 是空的
+    （实测 `.agent_state.json` 只有 `{"episode_index": 1}`）⇒ 门先撞上
+    「创作链未完成（缺 7 个角色）」，**根本进不到评审那条分支**，
+    `review_blocks` 不累计、`force_passed` 永远不写 ⇒ 出口照旧堵死。
+    pipeline 早就用 `reconcile_manifest` 治过这个（其 docstring 记着 2026-09-12 同型事故）。
+    """
+
+    def _proj(self, root):
+        for role in guards.GATE_ROLES:
+            p = root / guards.out_path(role, 1)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            body = ('```json\n{"pass": false, "rerun": ["scenedesigner"], '
+                    '"reasons": ["LN02 双 @ 会多画一个人"]}\n```'
+                    if role == "reviewer" else "# %s\n\n正文若干，非空即可。\n" % role)
+            p.write_text(body, encoding="utf-8")
+
+    def test_empty_phases_still_counts_review_blocks(self):
+        from tempfile import TemporaryDirectory
+        with TemporaryDirectory() as d:
+            root = Path(d)
+            self._proj(root)
+            guards.save_manifest(root, {"episode_index": 1})          # 账本空
+            m = guards.reconcile_manifest(root, guards.load_manifest(root), ep=1)
+            self.assertEqual(
+                [r for r in guards.GATE_ROLES if guards.phase_of(m, r, 1) != "complete"], [],
+                "reconcile 没按磁盘事实补齐 phases —— 门会误报「缺角色」")
+            ok, why = guards.media_gate("render", m, ep=1, root=root)
+            self.assertFalse(ok)
+            self.assertNotIn("创作链未完成", why, "走错了分支：该报评审拦截，不该报缺角色")
+            self.assertIn("次拦截", why, "没进评审计数分支 ⇒ force_passed 永远不会被写")
+            reloaded = guards.load_manifest(root)
+            self.assertEqual(int((reloaded.get("review_blocks") or {}).get("1") or 0), 1,
+                             "拦截次数没落盘 ⇒ 跨进程不累计，保险空转")
+
+
 if __name__ == "__main__":
     unittest.main()

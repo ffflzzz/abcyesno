@@ -334,8 +334,8 @@ def submit_all(project_root: Path, shots: list[dict], stills: dict, planned: lis
     # 是闸门），因此 `video_jobs.json` 的单写入者假设**不必动**。
     # `VIDEO_KEY_ROTATE=0`（默认）时池里只有第一条 key ⇒ 闸门与旧行为等价。
     pool = keypool.KeyPool.of()
-    log("[video] 提交配速：%d 条 key × 间隔 %ss%s"
-        % (len(pool), pool.interval_s,
+    log("[video] 提交配速：%d 条 key × %s%s"
+        % (len(pool), pool.pacing(),
            "（轮转：提交段约摊薄 %d 倍）" % len(pool) if len(pool) > 1 else ""))
     for s, p in zip(shots, planned):
         name = s["name"]
@@ -639,7 +639,7 @@ def submit_packs(project_root: Path, shots: list[dict], stills: dict, planned: l
     _seam_preview(out_dir, groups, stills, log=log)
 
     pool = keypool.KeyPool.of()
-    log("[video] 提交配速：%d 条 key × 间隔 %ss" % (len(pool), pool.interval_s))
+    log("[video] 提交配速：%d 条 key × %s" % (len(pool), pool.pacing()))
     prev_last_name = None          # 跨组接续链：上一组末镜名（锚帧优先用其**成片末帧**）
     for k, (g, declared) in enumerate(groups, 1):
         pname = "pack%02d" % k

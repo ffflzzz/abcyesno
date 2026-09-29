@@ -250,7 +250,7 @@ brief 是外部 Agent 唯一的强杠杆——它决定"拍什么"，而画质�
 | `laofuzi-hk-retro` | 老夫子 IP 老港片复古风 | 按包定义 | 4 个角色（`director`/`worldbuilder`/`assetdesigner`/`reviewer`），其余回落 `shortdrama`。⚠️ 含第三方 IP，**商用需授权** |
 | `half-narrated-live-action` | 半解说真人短剧（旁白推进剧情 + 对白补情绪）| **narration-led** / dialogue-led / silent | `still-refs: true`、`still-tail: material`、`style-watch: true`；启用商业三件套 `script-craft`（**不含**微表情）|
 | `madfate-grim` | 命案·都市残酷惊悚（gritty 现代老城）| **narration-led** / silent / dialogue-led | `still-refs: true`、`still-tail: material`、`style-watch: true`、**不开** `style-is-criterion`；**刻意不启用**商业短剧 `script-craft` |
-| `xianxia-vfx-action` | UE5-Niagara 仙侠特效动作·高精度游戏 CG（**横屏**、**无对白**）| **silent** / narration-led / dialogue-led | `still-refs: true`、`still-tail: material`、`style-watch: true`、`script-craft: []`；自带 5 个角色契约。**主资产是镜头语法**（能量色编码／板状剑罡／第一拍锚点／尾镜接续）——六条律**必须压进 brief 的 `分镜格式硬要求`**（brawl 实测：只写包 SKILL 执行率 1/18）。跑横屏必须**同时**设 `SHORTDRAMA_ASPECT=16:9` + `SHORTDRAMA_STILL_RATIO=16:9`。**未实测**，首跑按换包验收走一遍 |
+| `xianxia-vfx-action` | UE5-Niagara 仙侠特效动作·高精度游戏 CG（**横屏**、**无对白**）| **silent** / narration-led / dialogue-led | `still-refs: true`、`still-tail: material`、`style-watch: true`、`script-craft: []`；自带 5 个角色契约。**主资产是镜头语法**：要压进 brief 的只剩**三条语义律**（能量色编码一致／远程攻击只有板状剑罡／尾镜接续 TAIL LOCK）——可数的条款改由 `v5/shotcheck.py` 出带镜号的退回清单，不再要求角色逐镜自查（2026-09-29 实测：双重执法让分镜角色逐镜自改、一条链白跑 2 小时）。★ 已删的三条：`兵刃接触 ≥8`（官方范例 30 秒接触 **0** 次，比参考片还严，逼下来真打镜数 12→4→1）、`每镜必须写尺度对比`（16:9 六臂探针：加尺度命令的差异 +1.05 < 同提示词噪声地板 5.30，且没加它的基线本来就有大柱小人）、`宽景必须 @场景名`（代码已无条件绑 location）。跑横屏必须**同时**设 `SHORTDRAMA_ASPECT=16:9` + `SHORTDRAMA_STILL_RATIO=16:9`。**未实测**，首跑按换包验收走一遍 |
 
 **`pack.json` 里真正生效的只有七项**：`still-refs` / `still-tail` /
 `style-is-criterion` / `style-watch` / `visual-style` / `hard-keys*` / `script-craft`。
@@ -434,8 +434,12 @@ pack 档**跳过**逐镜 clipqc（组产物多镜
 而无 `reasons`（阻断理由）**视为通过**；有阻断理由才回退，目标由
 `decision.resolve_target()` 算出（取 `rerun` 与 `reason_owners` 中**更上游**的那个）。
 回退时该角色**及其下游**的 `phases` 被清空、旧产物移到 `.rerun_backup/<时间戳>/` 后重跑。
-同一角色回退**超过** `SHORTDRAMA_MAX_REVISIONS` 次后记 `force_passed` **强制放行**
+同一角色回退**超过** `SHORTDRAMA_MAX_REVISIONS`（默认 **2**）次后记 `force_passed` **强制放行**
 （媒体门认 `passed or force_passed`，不会卡死）。
+★ 2026-09-29 才真正接线：此前 `force_passed` **零写入点**、`revision_exhausted()` 零生产调用点，
+"不会卡死"是文档超前于代码——评审反复判 fail 的真实结局是重派到撞墙钟预算、`rc=0` 静默收工不出片。
+现在的计数源是**门自己**按集累计、落盘的 `review_blocks`（`scripts/run_new_project.py` 也改为
+问同一道门，判据只留一份）；放行时日志会列出评审仍未消化的条目，**不许静默**。
 
 **旧项目（旧产物名 / 一维 manifest）**：老项目的集级产物是 `dialogue.md` /
 `scenedesigner.md` / `review.md`。读取走 `guards.resolve_path()`（新名优先、旧名回退）。

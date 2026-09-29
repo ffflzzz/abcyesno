@@ -177,7 +177,11 @@ def _gen(prompt: str, ref_path: Path, ratio: str, size: str, out: Path, tag: str
     uri = _uri(ref_path)
     for attempt in range(1, 5):
         try:
-            _, url = providers.gen_image(prompt, refs=[uri], ratio=ratio)
+            # ★ 必须显式传 `config.image_key()`：2026-09-28 起 key 池只剩国内 cpk，
+            #   而漏传 key 时 `_auth(None)` 取池第一条、`base_for(..., None)` 却回落
+            #   `AGNES_BASE`（国际 apihub）⇒ 拿 cpk 打国际入口必然 400/401。
+            _, url = providers.gen_image(prompt, refs=[uri], ratio=ratio,
+                                         key=config.image_key())
             if url:
                 _save(_fetch(url), out)
                 log("[sheet] %s ok（%s）" % (tag, out.name))

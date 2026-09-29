@@ -150,6 +150,47 @@ def image_key() -> str | None:
             return k
     return None
 
+
+def image_pool_keys() -> list[str]:
+    """可以**并发**发图的 key：池里标了图片 rpm（`#v:I` 的 I 段）的那些。
+
+    一条都没标 → 回落到 `image_key()` 的语义（池第一条 / 空），此时池大小 = 1，
+    并发自动退化成改造前的"串行 + 单条 key"，行为逐字节不变。
+    """
+    ks = [k for k in AGNES_API_KEYS if AGNES_KEY_IMAGE_RPM.get(k)]
+    if ks:
+        return ks
+    return [AGNES_API_KEY] if AGNES_API_KEY else []
+
+
+IMAGE_WORKERS_CAP = 4      # 自动档的封顶（再多也是自我限速，不是提速）
+
+
+def image_workers() -> int:
+    """并发生图的线程数（静帧 / 定妆照的四视图 / 落幅帧共用这一个口径）。
+
+    `SHORTDRAMA_IMAGE_WORKERS`：
+      · **0（缺省）= 自动** = 带图片 rpm 的 key 数，封顶 `IMAGE_WORKERS_CAP`、保底 1；
+      · **1 = 串行**，等价于改造前逐张发的行为（回退开关）；
+      · >1 = 显式指定（超过可用 key 数会被压回 key 数，避免同一条 key 自我限速）。
+
+    为什么该并发：每张静帧是 66–107 秒的**纯等待**（IO 密集，GIL 不影响），
+    17–18 镜串行下来就是 20 分钟。而**生图之间没有相互依赖**——跨镜传的是文字
+    （「承接上一镜的落点」进提示词），不是上一张图。真串行依赖只有两处，本函数
+    都不管：`keyframe`/`mixed` 档的"上一镜尾帧=下一镜首帧"链，以及 pack 档
+    **视频**组之间抽真实末帧的接续锚（那是 2026-09-28 特意改成串行的）。
+    """
+    try:
+        want = int(os.environ.get("SHORTDRAMA_IMAGE_WORKERS", "0"))
+    except ValueError:
+        want = 0
+    if want == 1:
+        return 1
+    avail = max(1, len(image_pool_keys()))
+    if want > 1:
+        return min(want, avail)
+    return max(1, min(avail, IMAGE_WORKERS_CAP))
+
 # 单条 key 的提交最小间隔（秒）——**多 key 并行时的闸门单位**。
 #
 # 为什么必须是**函数而不是常量**：它是 `VIDEO_SUBMIT_MIN_INTERVAL_S` 的派生值，
@@ -462,6 +503,18 @@ DIALOGUE_VERBATIM_STRICT = os.environ.get("SHORTDRAMA_DIALOGUE_VERBATIM_STRICT",
 # 纯烧生图配额）。与 clip 侧的 CLIP_QC_MAX_REQUEUE 对称。
 # 上限到了就保留现有静帧并如实记入 still_residual。
 STILL_QC_MAX_REGEN = int(os.environ.get("SHORTDRAMA_STILL_QC_MAX_REGEN", "3"))
+#: **定妆照 ↔ 角色卡 对账**（2026-09-29 补，默认开）。`cast` 出图后逐项问视觉模型
+#: "图上这一项长什么样"，**判定归代码**（颜色族不相交 / 明确没画 / 断剑画成完整）。
+#:
+#: 为什么必须有（实测事故 xianxia-60s4-0929）：角色卡写「玄黑高马尾、双手共持一柄断剑、
+#: 左腕一串旧铜钱」，`images/沈砚.png` 画成**酒红发 + 完整长剑 + 铜护腕**，成片 18 镜
+#: 忠实继承了这张错图。而链上没有任何一环能发现：内容指纹只解决"卡片改了→旧图作废"，
+#: reviewer 判的是文本对文本（它看不到图）。定妆照是全片身份的权威来源，权威本身没对账。
+#: ⇒ 关掉它（`0`）= 回到"图错了也没人核"的历史行为。
+SHEET_CHECK = os.environ.get("SHORTDRAMA_SHEET_CHECK", "1").strip().lower() != "0"
+#: 对账不过时**重画几次**（硬上限，默认 1）。判据是视觉模型给的、概率性，
+#: 与静帧 QC 同理 ⇒ 必须有出口：到达上限即保留现有图并响亮记残留，绝不循环。
+SHEET_CHECK_MAX_REGEN = int(os.environ.get("SHORTDRAMA_SHEET_CHECK_MAX_REGEN", "1"))
 # 静帧 QC 的限速退避重试（2026-09-12）。
 #
 # 为什么需要：供应商是**免费额度**，每分钟窗口很窄——重生成一批静帧（图片调用）
@@ -514,6 +567,15 @@ CLIP_QC = os.environ.get("SHORTDRAMA_CLIP_QC", "1") != "0"
 # 配套用 `--rerender <镜号>` 人工定向修（同一天加的）。
 FAST = os.environ.get("SHORTDRAMA_FAST", "0") != "0"
 
+# 分镜**程序体检**（`v5/shotcheck.py`，2026-09-29）。分镜角色**重跑**时，
+# 由代码把"哪几镜、什么毛病、逐字原文"塞进它的输入，替代"你自己逐镜检查一遍"。
+# 起因：第 2 集分镜角色为满足十几条可数律逐镜自查，连跑 2 小时撞满链预算
+# （9000 秒）后 rc=0 静默收工，审稿根本没轮到。
+#   full  可数判据 + 语义判据（语义 = 每镜一次文本调用，32 镜约 1 分钟）← 默认
+#   count 只跑可数判据（完全零成本、确定性）
+#   off   关闭（回到"角色自己检查"的旧行为）
+SHOTCHECK = os.environ.get("SHORTDRAMA_SHOTCHECK", "full").strip().lower()
+
 # 成片复核的重拍轮数。**FAST 时归零**（不再自动复核）。
 CLIP_QC_ROUNDS = 0 if FAST else int(os.environ.get("SHORTDRAMA_CLIP_QC_ROUNDS", "2"))
 # 队列满（503 video_queue_full）时的退避重试次数。队列满是瞬时的：
@@ -547,7 +609,7 @@ MEDIA_LOCK_STALE_S = float(os.environ.get("SHORTDRAMA_MEDIA_LOCK_TTL", "300"))
 # ─── 熔断（旧架构缺失的教训）────────────────────────────────────────────────
 TOKEN_BUDGET_RUN = int(os.environ.get("SHORTDRAMA_TOKEN_BUDGET_RUN", str(3_000_000)))
 TOKEN_BUDGET_ROLE = int(os.environ.get("SHORTDRAMA_TOKEN_BUDGET_ROLE", str(800_000)))
-MAX_REVISIONS_PER_PHASE = int(os.environ.get("SHORTDRAMA_MAX_REVISIONS", "3"))
+MAX_REVISIONS_PER_PHASE = int(os.environ.get("SHORTDRAMA_MAX_REVISIONS", "2"))
 
 ASPECT_RATIO = os.environ.get("SHORTDRAMA_ASPECT", "9:16")
 

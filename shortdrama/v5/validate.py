@@ -842,7 +842,7 @@ def check_storyboard(md: str, brief: dict | None = None,
     if headers and not shots:
         unparsed = ("分镜表头已识别（%d 列）但**解析不出任何镜头行** → 镜序/片长/空对白/"
                     "画内文字全部无从校验。检查「镜头号」列的写法"
-                    "（支持 `1` / `1-1` / `LN01` / `S01`）" % len(headers))
+                    "（支持 `1` / `1-1` / `LN01` / `L01` / `S01`）" % len(headers))
 
     return {"schema_ok": not missing_cols, "missing_cols": missing_cols,
             "order_ok": order_ok, "scene_count": len(set(scenes)),
@@ -860,3 +860,24 @@ def check_storyboard(md: str, brief: dict | None = None,
             "ok": (not missing_cols and order_ok and not missing
                    and empty_dialog == 0 and not text_dep and not unparsed
                    and not row_violations and not beat_violations)}
+
+
+_SHOT_RANGE_RE = re.compile(r"(\d+)\s*[-–~至]\s*(\d+)\s*个?镜|共\s*(\d+)\s*个?镜")
+
+
+def parse_shot_range(text: str | None) -> tuple[int, int] | None:
+    """从 brief 的 `target_duration` 里读「共 15-18 镜」这种区间。
+
+    为什么需要（2026-09-29 实测）：量表与链内体检的镜数下限写的是"目标秒 ÷ 8"，
+    而 brief 自己明写 15-18 镜 —— 结果一条链交出 **12 镜 / 54 秒** 却"镜数合格"。
+    判据不能只按派生公式，brief 写了区间就按区间判（读不出才回落公式）。
+    """
+    if not text:
+        return None
+    m = _SHOT_RANGE_RE.search(str(text))
+    if not m:
+        return None
+    if m.group(3):
+        n = int(m.group(3))
+        return (n, n)
+    return (int(m.group(1)), int(m.group(2)))

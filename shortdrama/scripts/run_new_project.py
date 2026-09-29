@@ -353,15 +353,39 @@ def run_one_episode(project: str, proj: Path, run_log: Path, ep: int,
         except Exception:  # noqa: BLE001
             _passed = bool(rev_dec.get("pass"))
         if not _passed:
-            log(run_log, "!! 创作链产物**齐全但 reviewer 判定 fail**（rerun=%s）"
-                         "→ 不启动媒体链。首条原因：%s"
-                % (rev_dec.get("rerun"),
-                   ((rev_dec.get("reasons") or [""])[0])[:300]))
-            log(run_log, "   处理：盘上是**半程恢复**的中间态（chain.log 末尾若停在 timeout "
-                         "即为腰斩）。**重跑必须加 --fresh**，否则物化守卫看到 .md 就判"
-                         " complete、整链空转。")
-            return 1
-        log(run_log, "reviewer 判定：pass ✓")
+            # ★ 2026-09-29：这里**不再自己决定出不出片**，改问媒体门（判据只留一份）。
+            #   门按集累计"渲染被评审拦下几次"，超过 `SHORTDRAMA_MAX_REVISIONS`（默认 2）
+            #   就记 `review.force_passed` 并返回可渲染 ⇒ 全自动链路终于有出口，
+            #   不再是"反复重派到撞墙钟预算、rc=0 静默收工、缺的角色没人补"
+            #   （0929 ep2 就是这么丢的）。旧实现在这里 return 1，等于把出口堵死。
+            _g_ok, _g_why = False, "门未被调用"
+            try:
+                from v5 import guards as _guards2
+                # ★ 必须先 `reconcile_manifest` 再问门（2026-09-29 我自己踩的坑）：
+                #   这条路径上 `.agent_state.json` 的 `phases` 是空的（实测：产物齐全
+                #   但清单只有 episode_index），直接喂给门会得到「创作链未完成（缺 7 个角色）」
+                #   —— 于是**根本走不进"评审未通过"那条分支**，`review_blocks` 不累计、
+                #   `force_passed` 永远不会写 ⇒ 出口照旧堵死。pipeline 早就用
+                #   `reconcile_manifest` 治过这个（其 docstring 记着 2026-09-12 同型事故），
+                #   我新加的这次调用漏了它，等于把老 bug 重新引入。
+                _m = _guards2.reconcile_manifest(
+                    proj, _guards2.load_manifest(proj), ep=ep)
+                _g_ok, _g_why = _guards2.media_gate("render", _m, ep=ep, root=proj)
+            except Exception as e:  # noqa: BLE001 -- 调用异常按"不渲染"处理，但要报出来
+                _g_why = "media_gate 调用异常：%s" % str(e)[:140]
+            if not _g_ok:
+                log(run_log, "!! 创作链产物**齐全但 reviewer 判定 fail**（rerun=%s）→ 不启动媒体链。"
+                             "门说：%s" % (rev_dec.get("rerun"), _g_why[:220]))
+                log(run_log, "   首条原因：%s"
+                             % ((rev_dec.get("reasons") or [""])[0])[:300])
+                log(run_log, "   处理：盘上是**半程恢复**的中间态（chain.log 末尾若停在 timeout "
+                             "即为腰斩）。**重跑必须加 --fresh**，否则物化守卫看到 .md 就判"
+                             " complete、整链空转。")
+                return 1
+            log(run_log, "!! reviewer 仍判 fail，但门已按上限（SHORTDRAMA_MAX_REVISIONS）"
+                         "记 force_passed → **放行渲染**。上面列出的缺陷未消化，成片须人工复核。")
+        else:
+            log(run_log, "reviewer 判定：pass ✓")
 
     if chain_only:
         log(run_log, "=== --chain-only：到此结束 ===")
@@ -510,14 +534,42 @@ def main() -> int:
             moved.append(p.name)
         log(run_log, "已归档旧创作链产物（保留 brief/assets/images）：%s" % (moved or "无"))
 
-    # 1) 归档 .langgraph_api：防陈旧 run 复活
-    api = ROOT / ".langgraph_api"
+    # 1) 归档**本项目自己**的 .langgraph_api：防陈旧 run 复活
+    # ★ 2026-09-29：状态目录改成按项目隔离。langgraph 的内存运行时把 `.langgraph_api/`
+    #   写在**进程 cwd** 下，目录名写死（`langgraph_runtime_inmem/checkpoint.py:59`、
+    #   `store.py:83`、`database.py:99` 三处），CLI 没有参数能改、也没有环境变量能改
+    #   （`langgraph dev --help` 全量选项已查）。所以以前"所有项目都从仓库根起服"=
+    #   共用同一份进度，第二条链启动会把第一条正在用的整个搬走 —— 症状是
+    #   「轮数一路涨、产物不新增、日志零错误」，极难归因。
+    #   解法：每个项目在自己的 `.dev/<项目名>/` 里起服（探针实测：换 cwd 后 9 张图照常
+    #   加载、状态目录落在各自目录、不再碰仓库根那份）。前端路径早就用这个约定
+    #   （`webchain.py` 的 `cwd=RUNTIME_ROOT` + 绝对 config），这里是把 CLI 并过来。
+    runtime = ROOT / ".dev" / project
+    runtime.mkdir(parents=True, exist_ok=True)
+    # ★ 配置里的 `dependencies` 与 `env` 也是**跟着进程 cwd 解析**的（仓库里那份写的是
+    #   `".."` / `"..\\.env"`，从仓库根启动时刚好指对）。cwd 一改，就必须换成本项目专属的
+    #   一份**绝对路径**配置 —— 探针实测：绝对 dependencies 能让 9 张图照常加载。
+    cfg = runtime / "langgraph.json"
+    try:
+        import json as _json
+        _base = _json.loads((ROOT / "v5" / "langgraph.json").read_text(encoding="utf-8"))
+        _envf = ROOT / ".env"
+        if not _envf.exists():
+            _envf = ROOT.parent / ".env"
+        _base["dependencies"] = [str(ROOT)]
+        _base["env"] = str(_envf)
+        cfg.write_text(_json.dumps(_base, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:  # noqa: BLE001 -- 生不成配置就别静默退回旧路径（那正是并行相撞的根因）
+        log(run_log, "!! 无法为项目生成绝对路径的 langgraph 配置：%s → 终止"
+                     "（不退回仓库根启动：那会与其他项目共用进度目录）" % str(e)[:140])
+        return 1
+    api = runtime / ".langgraph_api"
     if api.exists():
-        shutil.move(str(api), str(ROOT / (".langgraph_api.bak-" + time.strftime("%m%d%H%M"))))
-        log(run_log, "已归档 .langgraph_api")
+        shutil.move(str(api), str(runtime / (".langgraph_api.bak-" + time.strftime("%m%d%H%M"))))
+        log(run_log, "已归档本项目旧的 .langgraph_api（其他项目不受影响）")
 
     # 2) 起 dev server（项目编译期绑定）
-    # ★ 起服前必须确认 2024 空闲：否则 wait_ok() 会被**上一个项目的** dev server 骗过
+    # ★ 起服前必须确认端口空闲：否则 wait_ok() 会被**上一个项目的** dev server 骗过
     #   —— 那是"run 发错地方、本项目零产物、白等到超时"的入口（见 stop_dev 文档）。
     port_ok, port_notes = ensure_port_free()
     if not port_ok:
@@ -529,12 +581,19 @@ def main() -> int:
         log(run_log, "起服前清理了占用 %d 的陈旧进程：%s"
             % (DEV_PORT, "；".join(port_notes)))
     dev = subprocess.Popen(
-        [LANGGRAPH, "dev", "--config", "v5/langgraph.json",
-         "--host", "127.0.0.1", "--port", str(DEV_PORT), "--no-browser"],
-        cwd=str(ROOT), env=_env(project, qc_mode=qc_mode),
+        # `--config` 必须是**绝对路径**：进程 cwd 已改成本项目专属目录，
+        #   相对的 `v5/langgraph.json` 解析不到。
+        # `--no-reload`：uvicorn 的 WatchFiles 监视整个仓库根，链在跑时改任何 `.py`
+        #   都会重载 worker、打断运行中的 run（2026-09-29 两次实测）。关掉后
+        #   "边跑边改"才成立；代价是改动要重启才生效 —— 换项目本来就要重启（编译期绑定），
+        #   所以这个代价等于零。
+        [LANGGRAPH, "dev", "--config", str(cfg),
+         "--host", "127.0.0.1", "--port", str(DEV_PORT), "--no-browser", "--no-reload"],
+        cwd=str(runtime), env=_env(project, qc_mode=qc_mode),
         stdout=(proj / "dev.log").open("w", encoding="utf-8"),
         stderr=subprocess.STDOUT)
-    log(run_log, "dev server 启动（pid=%d，SHORTDRAMA_V5_PROJECT=%s）" % (dev.pid, project))
+    log(run_log, "dev server 启动（pid=%d，SHORTDRAMA_V5_PROJECT=%s，运行目录=%s）"
+                 % (dev.pid, project, runtime.relative_to(ROOT)))
     if not wait_ok():
         log(run_log, "!! dev server 未就绪 → 终止（见 dev.log）")
         stop_dev(dev)

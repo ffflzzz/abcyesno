@@ -15,6 +15,7 @@ from pathlib import Path
 import httpx
 
 from .. import config
+from . import keypool
 from . import prompt as prompt_mod
 from . import providers
 from . import style
@@ -211,6 +212,7 @@ def ensure(project_root: Path, shots: list[dict], refs_by_shot: dict[str, list[s
     changed = False
     plan_by_name = {p.get("name"): p for p in (planned or [])}
     shots = _with_still_tail(project_root, prompt_mod.resolve_styles(shots))
+    todo: list[dict] = []
     for s in shots:
         name = s["name"]
         cur = data.get(name) or {}
@@ -240,6 +242,36 @@ def ensure(project_root: Path, shots: list[dict], refs_by_shot: dict[str, list[s
                 changed = True
                 log("[still] %s 复用盘上静帧与 url 边车（json 未落盘，免重烧）" % name)
                 continue
+        todo.append(s)
+
+    if todo:
+        _generate(project_root, todo, sd, data, plan_by_name, refs_by_shot,
+                  ref_names_by_shot, ref_types_by_shot, extra, retries, log)
+
+    if changed or todo:
+        _save(sd, data)
+    return data
+
+
+def _generate(project_root, todo, sd, data, plan_by_name, refs_by_shot,
+              ref_names_by_shot, ref_types_by_shot, extra, retries, log) -> None:
+    """并发生成 `todo` 里的静帧，结果写进 `data`（原地）。
+
+    ★ 为什么这里**可以**并发（2026-09-29）：每张静帧只吃「本镜文字 + 已在盘上的参考图」，
+      镜与镜之间传的是**话**不是**图**——「承接上一镜的落点」是 `prompt.build_still_prompt`
+      里的一句描述，不是把上一张图喂进来。真串行依赖只有两处，都不在这条路上：
+        · `keyframe`/`mixed` 档的"上一镜尾帧 = 下一镜 first_frame"链；
+        · pack 档**视频**组之间抽上一组成片真实末帧当接续锚（2026-09-28 特意改成串行）。
+      落幅帧（`ensure_tails`）走的是另一条通道，本函数不碰。
+    ★ 写盘安全：每镜只写自己的 `LNxx.jpg` 与 `LNxx.jpg.url` 边车（文件名天然隔离），
+      `stills.json` 由调用方在**全部完成后**单点写 —— 所以不需要给清单加锁。
+    """
+    pool = keypool.KeyPool.image_pool()
+    workers = min(config.image_workers(), len(todo))
+
+    def _one(s: dict) -> tuple[str, dict | None]:
+        name = s["name"]
+        local = sd / (name + ".jpg")
         refs = (refs_by_shot or {}).get(name) or []
         base = _with_ref_rule(
             prompt_mod.build_still_prompt(s, plan_by_name.get(name)), refs,
@@ -248,28 +280,55 @@ def ensure(project_root: Path, shots: list[dict], refs_by_shot: dict[str, list[s
         prompt = base + (extra or "")
         url = ""
         for attempt in range(retries + 1):
+            idx, key = pool.claim()
             try:
-                _, url = providers.gen_image(prompt, refs=refs, ratio=config.STILL_RATIO,
-                                    key=config.image_key())
+                _, url = providers.gen_image(prompt, refs=refs,
+                                             ratio=config.STILL_RATIO, key=key)
                 if url:
                     break
+            except providers.RateLimitError as e:  # noqa: BLE001
+                # 429 是**这条 key** 的窗口没满足 —— 原地重试只会再撞一次，
+                # 把它多停一轮，让池里其他 key 顶上（`KeyPool.note_rate_limited`）。
+                pool.note_rate_limited(idx)
+                url = ""
+                log("[still] %s 限流（%s）→ 这条 key 停一轮：%s"
+                    % (name, pool.label(idx), str(e)[:60]))
             except Exception as e:  # noqa: BLE001
                 url = ""
                 log("[still] %s FAILED(%d/%d): %s"
                     % (name, attempt + 1, retries + 1, str(e)[:100]))
         if not url:
-            continue
+            return name, None
         try:
             _download(url, local)
         except Exception as e:  # noqa: BLE001 -- 落盘失败不覆盖已有静帧
             log("[still] %s download FAILED: %s" % (name, str(e)[:100]))
-            continue
+            return name, None
         (sd / (name + ".jpg.url")).write_text(url, encoding="utf-8")
-        data[name] = {"path": str(local), "url": url, "seconds": s.get("seconds", 0),
+        return name, {"path": str(local), "url": url, "seconds": s.get("seconds", 0),
                       "prompt": prompt,
                       "image_vendor": vendors.current("image")}
-        changed = True
+
+    # ★ 自报生效：并发度、实际 key 闸门、每条 key 发了几张 —— 上一轮"末帧锚修复空转"
+    #   就是因为改动的正确性依赖时序、却没有一个字段报告它走了哪条分支。
+    log("[still] 并发=%d（可用 key %d 条，闸门 %s）待画 %d 镜"
+        % (workers, len(pool), pool.pacing(), len(todo)))
+    if workers > 1:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            results = list(ex.map(_one, todo))
+    else:
+        results = [_one(s) for s in todo]
+
+    ok = 0
+    for name, entry in results:
+        if not entry:
+            log("[still] %s 无产出（重试 %d 次仍失败）—— 该镜留空，不进视频" % (name, retries))
+            continue
+        data[name] = entry
+        ok += 1
         log("[still] %s ok" % name)
-    if changed:
-        _save(sd, data)
-    return data
+    log("[still] 本轮请求 %d / 成功 %d ｜ key 用量 %s" % (len(todo), ok, pool.stats()))
+    if ok < len(todo):
+        log("[still] !! 有 %d 镜没画出来，成片会缺这些镜（不拼接、不覆盖旧片）"
+            % (len(todo) - ok))

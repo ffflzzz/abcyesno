@@ -91,6 +91,24 @@ class KeyPool:
                      else [config.video_interval_for_key(k) for k in keys])
         return cls(list(keys), interval_s, intervals=intervals, **kw)
 
+    @classmethod
+    def image_pool(cls) -> "KeyPool":
+        """**生图**专用池：只含标了图片 rpm 的 key，闸门 = 60/图片rpm。
+
+        与视频池共用同一个 `claim()` / `note_rate_limited()`（per-key 独立计时），
+        不另写一份限速实现。生图额度与视频额度是**分开**的（国内 cpk 图片 80rpm、
+        4000 张/天，与视频 500 秒/天互不相干），所以闸门必须各算各的 ——
+        拿视频的 12 秒闸门管生图，等于把 80rpm 的通道当成 5rpm 用。
+
+        没标图片 rpm 时池里只有 `AGNES_API_KEY` 一条 ⇒ `claim()` 每 0.75/… 秒
+        就返回同一条，并发自动退化成"串行 + 原闸门"，与改造前逐字节等价。
+        """
+        keys = config.image_pool_keys()
+        intervals = [60.0 / max(1, int(config.AGNES_KEY_IMAGE_RPM.get(k) or 1))
+                     for k in keys]
+        return cls(list(keys), intervals[0] if intervals else 0.0,
+                   intervals=intervals or None)
+
     # ── 只读 ──
     @property
     def keys(self) -> list[str]:
@@ -107,6 +125,16 @@ class KeyPool:
         """`k2(sk-AbCdEfG…)` —— 日志用。**绝不打印完整 key**（连片段也只取前 11 字符）。"""
         k = self._keys[idx]
         return "k%d(%s…)" % (idx + 1, k[:11]) if k else "k1(<空>)"
+
+    def pacing(self) -> str:
+        """日志用：**逐 key 的真实闸门**。
+
+        ★ 别只打 `interval_s`（那是全局值）—— 2026-09-28 实测：池换成国内 key
+        （`#5` ⇒ 每条 12 秒）后日志仍写"间隔 65.0s"，我据此误判了一轮"配速太慢"。
+        闸门按 key 独立计时，看得见的那个数必须就是实际生效的那个数。
+        """
+        return "、".join("%s=%gs" % (self.label(i), self._intervals[i])
+                         for i in range(len(self._keys)))
 
     def stats(self) -> str:
         return " ".join("k%d=%d%s" % (i + 1, self._used[i],

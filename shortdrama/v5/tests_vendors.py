@@ -76,7 +76,7 @@ class _CapturingClient:
 class VendorBase(unittest.TestCase):
     #: 测试要隔离的环境变量：三条链的选择变量 + 文本通道的旧名 + deepseek 的模型名
     ENVS = (vendors.ENV_KEY["chat"], vendors.ENV_KEY["image"], vendors.ENV_KEY["video"],
-            vendors.ENV_LEGACY["chat"], "DEEPSEEK_MODEL")
+            vendors.ENV_LEGACY["chat"], "DEEPSEEK_MODEL", "DEEPSEEK_API_KEY")
 
     def setUp(self):
         self._saved = {k: os.environ.get(k) for k in self.ENVS}
@@ -123,9 +123,14 @@ class TestDefaults(VendorBase):
             vendors.current("audio")
 
     def test_default_request_targets_agnes_base(self):
-        from . import config
+        """默认请求必须打在**当前 key 该去的那个地址**上。
+
+        ★ 2026-09-28：断言对象从 `config.AGNES_BASE` 改成 `vendors.base_for("image")`
+        本身 —— 前者在"默认 key 带专属地址"（国内 cpk 池）时不再等于实际出口，
+        写死它就成了**第二份真相**；这里要锁的是"URL 与 base_for 同源"。
+        """
         got = self._capture("gen_image", prompt="P")
-        self.assertTrue(got["url"].startswith(config.AGNES_BASE), got["url"])
+        self.assertTrue(got["url"].startswith(vendors.base_for("image")), got["url"])
         self.assertTrue(got["url"].endswith("/v1/images/generations"), got["url"])
         self.assertEqual(got["body"]["size"], "1K")
         self.assertIn("ratio", got["body"])
@@ -192,10 +197,32 @@ class TestBaseResolution(VendorBase):
         self.assertEqual(vendors.base_for("image"), "https://fallback")
 
     def test_agnes_reads_config_live(self):
-        """agnes 走 `base_from_config` ⇒ 必须**调用时**读，不能 import 期固化。"""
+        """agnes 走 `base_from_config` ⇒ 必须**调用时**读，不能 import 期固化。
+
+        ★ 2026-09-28：把 `AGNES_API_KEY` 清空再断言 —— 因为"不传 key 时用默认 key 的
+        专属地址"是新增语义（国内 cpk 池场景），不清空就会读到 .env 里那条 key 的
+        地址，测试变成**受环境摆布**（这正是本文件另外几个用例的毛病）。
+        """
         from . import config
-        with mock.patch.object(config, "AGNES_BASE", "https://patched.example"):
+        with mock.patch.object(config, "AGNES_BASE", "https://patched.example"), \
+                mock.patch.object(config, "AGNES_API_KEY", ""), \
+                mock.patch.object(config, "AGNES_KEY_BASE", {}):
             self.assertEqual(vendors.base_for("image"), "https://patched.example")
+
+    def test_default_key_carries_its_own_base(self):
+        """★ 2026-09-28 新增：默认 key 带专属地址时，**漏传 key 也必须跟着它走**。
+
+        场景：key 池只剩国内 cpk（`AGNES_API_KEY`=cpk、`AGNES_BASE`=国际 apihub）。
+        若干调用点（`video.submit_all` 的逐镜路径）不传 key —— 若地址仍取 `AGNES_BASE`，
+        就是拿 cpk 打国际入口 ⇒ 400/401。key 与地址是一对，不能只换一个。
+        """
+        from . import config
+        with mock.patch.object(config, "AGNES_API_KEY", "cpk-test"), \
+                mock.patch.object(config, "AGNES_KEY_BASE",
+                                  {"cpk-test": "https://cn.example"}), \
+                mock.patch.object(config, "AGNES_BASE", "https://hub.example"):
+            self.assertEqual(vendors.base_for("image"), "https://cn.example")
+            self.assertEqual(vendors.base_for("video", "cpk-test"), "https://cn.example")
 
 
 class TestConfigDrivenVendor(VendorBase):
@@ -329,20 +356,30 @@ class TestChatLane(VendorBase):
     """
 
     def test_default_is_agnes_with_v1_suffix(self):
-        """缺省 = agnes；`base_suffix=/v1` 是文本通道特有的（媒体侧路径里自带）。"""
+        """缺省 = agnes；`base_suffix=/v1` 是文本通道特有的（媒体侧路径里自带）。
+
+        ⚠️ 断言的是**关系**，不是 `.env` 里的字面地址（2026-09-28 修正）：
+        文本通道取 `CHAT_BASE_EFFECTIVE`（= 带自己地址的那条 key 的入口，国内优先），
+        早先这里写死 `config.AGNES_BASE`，于是 `.env` 一换成国内 cpk 池
+        （key 自带 `@https://api.agnes-ai.cn/v1`）这两条用例就红 ——
+        **测试耦合了本机配置**，与本文件头「不依赖 `.env`」的承诺相反。
+        """
         from . import config
         p = vendors.chat_spec()
-        self.assertEqual(p["base_url"], config.AGNES_BASE + "/v1")
+        self.assertTrue(config.CHAT_BASE_EFFECTIVE)
+        self.assertEqual(p["base_url"], config.CHAT_BASE_EFFECTIVE + "/v1")
         self.assertEqual(p["model"], config.MODELS["chat"])
-        self.assertEqual(p["api_key"], config.AGNES_API_KEY)
+        self.assertEqual(p["api_key"], config.CHAT_KEY_EFFECTIVE)
 
     def test_values_are_read_live(self):
         """一律**调用时**读 config —— 否则又成了第二份真相源。"""
         from . import config
-        with mock.patch.object(config, "AGNES_BASE", "https://x.example"), \
+        with mock.patch.object(config, "CHAT_BASE_EFFECTIVE", "https://x.example"), \
+                mock.patch.object(config, "CHAT_KEY_EFFECTIVE", "k-live-test"), \
                 mock.patch.object(config, "MODELS", {"chat": "m-test", "image": "i", "video": "v"}):
             p = vendors.chat_spec()
         self.assertEqual(p["base_url"], "https://x.example/v1")
+        self.assertEqual(p["api_key"], "k-live-test")
         self.assertEqual(p["model"], "m-test")
 
     def test_unknown_vendor_raises_not_fallback(self):
@@ -383,12 +420,13 @@ class TestChatLane(VendorBase):
         from . import config, llm
         m = llm.chat_for()
         self.assertEqual(m.model_name, config.MODELS["chat"])
-        self.assertEqual(m.openai_api_base, config.AGNES_BASE + "/v1")
+        self.assertEqual(m.openai_api_base, vendors.chat_spec()["base_url"])
 
     def test_role_override_still_works(self):
         """`ROLE_PROVIDER` per-role 覆盖是统一前就有的能力，不能破。"""
         from . import config, llm
         os.environ["DEEPSEEK_MODEL"] = "deepseek-chat"
+        os.environ["DEEPSEEK_API_KEY"] = "sk-test-offline"   # 离线构造客户端也要求非空
         config.ROLE_PROVIDER["reviewer"] = "deepseek"
         try:
             self.assertEqual(llm.role_chat("reviewer").model_name, "deepseek-chat")

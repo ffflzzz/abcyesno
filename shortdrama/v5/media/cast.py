@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import json
 import re
@@ -33,6 +34,7 @@ from pathlib import Path
 import httpx
 
 from .. import config
+from . import keypool
 from . import providers
 
 IMAGES_DIR = "images"
@@ -577,20 +579,24 @@ def parse_assets(assets_md: str) -> list[dict]:
 
 # ─── 生成 ────────────────────────────────────────────────────────────────────
 
-def _char_prompt(c: dict) -> str:
+def _char_prompt(c: dict, emphasis: str = "") -> str:
     """角色参考图提示词。
 
     **必须显式写「画面中只有一个人物」**（实测）：参考图会被当 refs 喂给
     每一镜的静帧生成，若参考图本身含多个同款人（拼图、镜像构图），模型会
     照抄"多个人"的版式。单格 + 单人数约束是锁脸的前提。
+
+    emphasis：对账不合格重画时，把**卡片里那几项原文**前置成硬要求（只补被画错的
+    那几项，不重写整张卡 —— 重写会把对的项也摇一次骰子）。
     """
-    return ("人物设定参考图，%s。竖版构图，浅灰纯色背景，写实短剧质感，"
+    tail = ("★ 这几项必须严格照卡片画：%s。" % emphasis) if emphasis else ""
+    return ("人物设定参考图，%s。%s竖版构图，浅灰纯色背景，写实短剧质感，"
             "全身到膝盖的清晰造型，五官与服装细节可辨，"
-            "画面中只有这一个人物，不要出现第二个人。" % c["appearance"])
+            "画面中只有这一个人物，不要出现第二个人。" % (c["appearance"], tail))
 
 
 def _turnaround(root: Path, c: dict, ratio: str, log=print,
-                source: str = "") -> str:
+                source: str = "", emphasis: str = "") -> str:
     """2x2 四视图卷轴（正面/3-4/侧面/背面）→ 取**正面单格**作参考图。
 
     为什么是四视图而不是单张：单张只锁一个视角，模型对侧面/背面会自行脑补
@@ -607,20 +613,44 @@ def _turnaround(root: Path, c: dict, ratio: str, log=print,
     """
     from PIL import Image
 
-    base = _char_prompt(c)
+    base = _char_prompt(c, emphasis=emphasis)
     refs = [source] if source else None
-    imgs = []
-    first_url = ""
-    for key, zh in VIEWS:
+    pool = keypool.KeyPool.image_pool()
+
+    def _view(_vk, zh):
+        """一个视角 = 一次独立生图：四视角之间没有依赖（同一张卡、同一份源照片）。
+
+        失败语义**照旧**：一个视角失败就少一格，不额外加重试（原来就是一次）。
+        """
         p = base + "，%s视角，同一张脸、同一着装，保留人物特征" % zh
+        idx, k = pool.claim()
         try:
-            _, url = providers.gen_image(p, refs=refs, ratio=ratio, key=config.image_key())
-            data = _fetch(url)
-            if not first_url:
-                first_url = url
-            imgs.append(Image.open(io.BytesIO(data)).convert("RGB"))
+            _, url = providers.gen_image(p, refs=refs, ratio=ratio, key=k)
+            return url, _fetch(url)
+        except providers.RateLimitError as e:  # 撞限只停这一条 key
+            pool.note_rate_limited(idx)
+            log("[cast] %s %s 视图限流（%s）：%s" % (c["name"], zh, pool.label(idx), str(e)[:60]))
+            return "", None
         except Exception as e:  # noqa: BLE001
             log("[cast] %s %s 视图失败：%s" % (c["name"], zh, str(e)[:80]))
+            return "", None
+
+    workers = min(config.image_workers(), len(VIEWS))
+    if workers > 1:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            got = list(ex.map(lambda kv: _view(*kv), VIEWS))
+    else:
+        got = [_view(k, zh) for k, zh in VIEWS]
+    # ★ 顺序按 VIEWS 定，不按完成先后：`imgs[0]` 是**正面单格**（进注册表当参考图），
+    #   `first_url` 取第一个成功的视角 url —— 并发若乱序就会把侧脸当成正面锁进参考图。
+    imgs, first_url = [], ""
+    for url, data in got:
+        if not data:
+            continue
+        if not first_url:
+            first_url = url
+        imgs.append(Image.open(io.BytesIO(data)).convert("RGB"))
     if not imgs:
         return ""
     if len(imgs) == 1:
@@ -638,6 +668,98 @@ def _turnaround(root: Path, c: dict, ratio: str, log=print,
         log("[cast] %s 拼图归档失败：%s" % (c["name"], str(e)[:80]))
     # 参考图 = 正面单格（单个人物），不是整张拼图
     return str(_save_ref(root, c["name"], _png_bytes(imgs[0]), first_url))
+
+
+def _sheet_data_uri(path: Path) -> str:
+    mime = "image/jpeg" if path.suffix.lower() in (".jpg", ".jpeg") else "image/png"
+    return "data:%s;base64," % mime + base64.b64encode(path.read_bytes()).decode()
+
+
+def verify_character_sheets(root: Path, chars: list[dict], *, log=print,
+                            llm=None, ask=None) -> dict:
+    """★ 定妆照 ↔ 角色卡 对账（判据与为什么需要，见 `media/sheetcheck.py` 文件头）。
+
+    **有界**：核对不过 ⇒ 把矛盾项原文前置强调、重画一次、再核对一次；仍不符就
+    响亮记残留并继续。视觉判据是概率性的（静帧 QC 同一张图连审三次能给出 1/1/2 个硬伤），
+    没有出口就会变成无限重画烧配额 —— 所以这里写死一次。
+
+    ask=None 时走真实视觉模型；测试注入 `ask(path, appearance) -> 模型回复文本`。
+    """
+    from . import sheetcheck
+
+    out = {"checked": 0, "redrawn": 0, "residual": []}
+    if not config.SHEET_CHECK:
+        log("[sheetcheck] 已关（SHORTDRAMA_SHEET_CHECK=0）→ 定妆照不与角色卡对账")
+        return out
+
+    def _ask(path, app):
+        if ask is not None:
+            return ask(path, app)
+        from langchain_core.messages import HumanMessage
+        from ..llm import chat_for
+        msg = HumanMessage(content=[
+            {"type": "text", "text": sheetcheck.ask_text(app)},
+            {"type": "image_url", "image_url": {"url": _sheet_data_uri(path)}}])
+        r = (llm or chat_for("", 900, temperature=0)).invoke([msg])
+        return getattr(r, "content", "") or ""
+
+    for c in chars:
+        name, app = c.get("name") or "", c.get("appearance") or ""
+        path = images_dir(root) / (name + ".png")
+        if not app or not path.exists():
+            continue
+        if not sheetcheck.items_of(app):
+            log("[sheetcheck] %s 卡片里没有可对账的外形项 ⇒ 不判（**不等于通过**）" % name)
+            continue
+        if path.stat().st_size < 2048:
+            # 真图最小也是几十 KB；这里挡的是**写坏/截断**的参考图（以及测试桩）。
+            # 拿一张读不出内容的图去问模型，模型会一律答"图上没有" ⇒ 假矛盾 + 白烧一次重画。
+            log("[sheetcheck] ⚠️ %s 参考图只有 %d 字节（截断或占位）⇒ 无法对账，"
+                "**不判**（不等于通过）" % (name, path.stat().st_size))
+            continue
+        out["checked"] += 1
+        try:
+            v = sheetcheck.judge(app, _ask(path, app))
+        except Exception as e:                                    # noqa: BLE001
+            log("[sheetcheck] ⚠️ %s 对账**没跑成**（%s）⇒ 不判（不等于通过）"
+                % (name, str(e)[:70]))
+            continue
+        if not v["mismatch"]:
+            log("[sheetcheck] %s 定妆照与角色卡相符（%d 项已核%s）"
+                % (name, len(sheetcheck.items_of(app)),
+                   "，%d 项模型没答 ⇒ 未判" % len(v["unchecked"]) if v["unchecked"] else ""))
+            continue
+        for item, seen, kind in v["mismatch"]:
+            log("[sheetcheck] !! %s 定妆照与角色卡**矛盾**（%s）：卡片「%s」≠ 图上「%s」"
+                % (name, kind, item, seen))
+        emphasis = "；".join(m[0] for m in v["mismatch"])
+        for attempt in range(1, max(0, int(config.SHEET_CHECK_MAX_REGEN)) + 1):
+            log("[sheetcheck] %s 重画定妆照（第 %d 次，把矛盾项前置为硬要求）"
+                % (name, attempt))
+            if not _turnaround(root, c, config.STILL_RATIO, log=log, emphasis=emphasis):
+                log("[sheetcheck] !! %s 重画失败 → 保留原图" % name)
+                break
+            out["redrawn"] += 1
+            try:
+                v = sheetcheck.judge(app, _ask(path, app))
+            except Exception as e:                                # noqa: BLE001
+                log("[sheetcheck] ⚠️ %s 重画后无法复核（%s）⇒ 保留新图、不判"
+                    % (name, str(e)[:70]))
+                _register(root, c, name)
+                break
+            if not v["mismatch"]:
+                log("[sheetcheck] %s 重画后与角色卡相符 ✓" % name)
+                _register(root, c, name)
+                break
+            for item, seen, kind in v["mismatch"]:
+                log("[sheetcheck] !! %s 重画后仍不符（%s）：卡片「%s」≠ 图上「%s」"
+                    % (name, kind, item, seen))
+        if v["mismatch"]:
+            out["residual"].append(name)
+            log("[sheetcheck] ⛔ %s 带**未消化的身份矛盾**进全片（重画已到上限 %d 次）。"
+                "参考图是全片身份的权威来源 —— 这条会一路带到成片，"
+                "要么改角色卡措辞、要么人工换图。" % (name, int(config.SHEET_CHECK_MAX_REGEN)))
+    return out
 
 
 # 资产图（道具/场景）的**无人物**约束。
@@ -767,6 +889,11 @@ def _register(root: Path, item: dict, ref_name: str, *,
     }
     if ident:
         rec["identity"] = ident
+    # ★ 出图输入的**内容指纹**（2026-09-29）：`_ref_is_current` 靠它判定"卡改了、
+    #   图该重画"。存的是**喂给生图的那段文字**，不是图片本身。
+    _st = _src_text(item)
+    if _st:
+        rec["src_fp"] = _fp_of(_st)
     # ★ **场景把描述一起带进注册表**（2026-09-14）：`assets.scene_lines()` 需要它
     #   做提示词的场景锚点，而注册表原本只有 `ref_image`、**没有描述字段**
     #   → 锚点命中实测 **0/49**（描述只躺在 assetdesigner 的契约里）。
@@ -787,15 +914,54 @@ def _register(root: Path, item: dict, ref_name: str, *,
         json.dumps(reg, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def _ref_is_current(reg: dict, name: str, dest: Path) -> bool:
-    """参考图是否已是当前规则版本（旧的拼图版会被判 False → 重生成）。"""
+def _src_text(item: dict) -> str:
+    """这张参考图是**由哪段文字画出来的**（与 `_scene_prompt`/`_asset_prompt` 的
+    取值优先级一致：先 `prompt` 再 `appearance`；角色卡只有 `appearance`）。"""
+    return str(item.get("prompt") or item.get("appearance") or "").strip()
+
+
+def _fp_of(text: str) -> str:
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
+
+
+def _ref_is_current(reg: dict, name: str, dest: Path, src_text: str = "",
+                    log=print) -> bool:
+    """参考图能否复用 = **规则版本对** 且 **出图输入没变过**。
+
+    ★ 第二条是 2026-09-29 补的（实测事故）：`huashan-duel-v4-0928` 的定妆照生成于
+      18:28，`worldbuilder.md` 的角色卡在 **20:01 被重写**（补上了「男性／女性」），
+      但 `_ref_is_current` 只看 `ref_ver` 和"文件在不在盘上" ⇒ 旧图被判有效、
+      一次都没重画。于是**全片两位主角的性别与剧本相反**（32 张静帧 + 12 组视频
+      全部忠实继承了那张女性版裴烛设定表），而日志全绿。
+      这正是本项目最忌的「失败不可见」：**上游产物变了，下游不失效**。
+      （同一类问题在评审判决指纹里也出现过。）
+    判据用**内容指纹**；老注册表没有 `src_fp` 时，退回比对已存的
+    `identity` / `prompt` 文本 —— 这样**不需要**为了补指纹而无谓重烧一轮图。
+    """
     if not dest.exists():
         return False
     rec = reg.get(name) or {}
     try:
-        return int(rec.get("ref_ver") or 0) >= REF_VERSION
+        if int(rec.get("ref_ver") or 0) < REF_VERSION:
+            return False
     except Exception:  # noqa: BLE001
         return False
+    if not src_text:
+        return True
+    stored = str(rec.get("src_fp") or "")
+    if stored:
+        if stored != _fp_of(src_text):
+            log("[cast] ⚠️ %s 的**出图输入已改**（指纹 %s→%s）→ 参考图判陈旧，重画"
+                % (name, stored[:6], _fp_of(src_text)[:6]))
+            return False
+        return True
+    # 老记录：没有指纹，就用它当初存下来的文本比
+    old = str(rec.get("identity") or "").split("：", 1)[-1].strip() or str(rec.get("prompt") or "").strip()
+    if old and old[:220] != src_text[:220]:
+        log("[cast] ⚠️ %s 的**资产卡已改**（注册表里存的描述与当前卡不一致）"
+            "→ 参考图判陈旧，重画" % name)
+        return False
+    return True
 
 
 CONTRACT_NAME = "assets.contract.json"
@@ -947,7 +1113,7 @@ def ensure(root: Path, *, log=print, force: bool = False,
             made["noimg"] += 1
             log("[cast] 登记角色（不生图）：%s —— 身份走注册表 identity 锚点" % c["name"])
             continue
-        if (not force) and _ref_is_current(reg, c["name"], dest):
+        if (not force) and _ref_is_current(reg, c["name"], dest, _src_text(c), log=log):
             made["skipped"] += 1
             continue
         log("[cast] 生成角色参考图：%s" % c["name"])
@@ -1113,7 +1279,7 @@ def ensure(root: Path, *, log=print, force: bool = False,
             #   质量）保持旧路径（仅登记）；生图失败 → 回落文字锚点，不挡链。
             rec = reg.get(a["name"]) or {}
             dest_s = images_dir(root) / (a["name"] + ".png")
-            if (not force) and _ref_is_current(reg, a["name"], dest_s):
+            if (not force) and _ref_is_current(reg, a["name"], dest_s, _src_text(a), log=log):
                 made["skipped"] += 1
                 continue
             # ★ 2026-09-25：补回 `scenes` 计数 —— 09-23 新写的这个分支漏了它，
@@ -1141,7 +1307,7 @@ def ensure(root: Path, *, log=print, force: bool = False,
             made["noimg"] += 1
             log("[cast] 登记资产（不生图）：%s（%s）—— pack 关闭参考图" % (a["name"], a["type"]))
             continue
-        if (not force) and _ref_is_current(reg, a["name"], dest):
+        if (not force) and _ref_is_current(reg, a["name"], dest, _src_text(a), log=log):
             made["skipped"] += 1
             continue
         log("[cast] 生成资产参考图：%s（%s）" % (a["name"], a["type"]))
@@ -1150,6 +1316,14 @@ def ensure(root: Path, *, log=print, force: bool = False,
             made["assets"] += 1
         else:
             made["failed"] += 1
+
+    # ★ **定妆照 ↔ 角色卡 对账**（2026-09-29 补的缺口：卡片写玄黑高马尾、图画成酒红发，
+    #   全片 18 镜忠实继承，而链上没有任何一环核得出来）。放在**所有图都落盘之后**跑，
+    #   这样"本轮新生成"与"复用盘上旧图"两条路径一起覆盖 —— 内容指纹只保证
+    #   "卡片没改就不重画"，它不保证"画的就是卡片写的"。
+    chk = verify_character_sheets(root, chars, log=log)
+    made["sheet_checked"] = chk["checked"]
+    made["sheet_residual"] = chk["residual"]
 
     log("[cast] 完成：角色 %d / 资产 %d / 场景（仅登记）%d / 不生图登记 %d / 跳过 %d / 失败 %d"
         % (made["characters"], made["assets"], made.get("scenes", 0),

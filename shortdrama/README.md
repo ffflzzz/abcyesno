@@ -157,7 +157,7 @@ python -m v5.series <项目名> --monitor --events 12     # 最多 12 次快照
 | `half-narrated-live-action` | 半解说真人短剧（旁白推进剧情，对白补情绪） | `still-refs: true`、`still-tail: material`、`style-watch: true`；`audio_mode` 主张 `narration-led`（**需在 brief 显式声明**）；`script-craft` = 开场法则 / 钩子 / 爽点（**不启用**微表情）|
 | `madfate-grim` | 命案·都市残酷惊悚（港产残酷犯罪剧质感） | `still-refs: true`、`still-tail: material`、`style-watch: true`、**不开** `style-is-criterion`；**刻意不启用**商业短剧 `script-craft`（「憋闷」与「每集必有钩子」对打）；风格卡 `styles/madfate-grim.md` |
 | `laofuzi-hk-retro` | 老夫子 IP 老港片复古风 | 4 个角色（director / worldbuilder / assetdesigner / reviewer），其余回落 `shortdrama`；风格卡 `styles/laofuzi-ai-remake.md`。⚠️ 含第三方 IP，商用需授权 |
-| `xianxia-vfx-action` | UE5-Niagara 仙侠特效动作·高精度游戏 CG（**横屏**、**无对白**） | 2026-09-26 从用户提供的两条 Ref2VA 提示词蒸馏；自带 5 个角色（director / worldbuilder / assetdesigner / scenedesigner / reviewer），其余回落 `shortdrama`；`still-refs: true`、`still-tail: material`、`style-watch: true`、`script-craft: []`；**主资产是镜头语法不是氛围词**（六条律 + `At 00:02.200` 式时间码必须翻译成 `0-3秒：`），依据档案 `.../references/vfx-shot-grammar.md`。**未实测** |
+| `xianxia-vfx-action` | UE5-Niagara 仙侠特效动作·高精度游戏 CG（**横屏**、**无对白**） | 2026-09-26 从用户提供的两条 Ref2VA 提示词蒸馏；自带 5 个角色（director / worldbuilder / assetdesigner / scenedesigner / reviewer），其余回落 `shortdrama`；`still-refs: true`、`still-tail: material`、`style-watch: true`、`script-craft: []`；**主资产是镜头语法不是氛围词**（要压进 brief 的是**三条语义律**：能量色一致／远程攻击只有板状剑罡／尾镜接续；可数的条款 2026-09-29 起由 `v5/shotcheck.py` 出带镜号退回清单，不再要求角色逐镜自查。`At 00:02.200` 式时间码必须翻译成 `0-3秒：`），依据档案 `.../references/vfx-shot-grammar.md`。**未实测** |
 
 **静帧尾缀 `still-tail`**（pack.json 字段，2026-09-12 新增）：每张静帧提示词的收尾约束，
 `material`=「表面为真实连续的材质」/ `flat`=「表面只是平涂纯色块」/ `none`=不注入；
@@ -241,7 +241,7 @@ projects/<项目名>/
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `AGNES_API_KEY` | — | **必需**（生图 / 生视频 / LLM）。语义 = key 池中**第一条**。key 文件 `.env` 允许两处：`shortdrama/.env` 优先，找不到再读仓库根 `.env`（读到即停，勿两处并存——防轮换漂移） |
-| `AGNES_API_KEYS` | — | 可选：多条 key（逗号/分号/换行分隔，去重有序）。**每条可带自己的地址与限速**：`key@base#video_rpm[:image_rpm]`（如 `cpk-xxx@https://api.agnes-ai.cn/v1#5:80` = 国内入口：视频 5rpm、图片 80rpm；尾部 /v1 自动剥）。标了 image_rpm 的 key 会被静帧/资产图自动优先使用（`config.image_key()`，不占视频配额）。未标的走全局 `AGNES_BASE` 与全局闸门。配合 `SHORTDRAMA_VIDEO_KEY_ROTATE` 使用；未设则退回单条 `AGNES_API_KEY` |
+| `AGNES_API_KEYS` | — | 可选：多条 key（逗号/分号/换行分隔，去重有序）。**每条可带自己的地址与限速**：`key@base#video_rpm[:image_rpm]`（如 `cpk-xxx@https://api.agnes-ai.cn/v1#5:80` = 国内入口：视频 5rpm、图片 80rpm；尾部 /v1 自动剥）。标了 image_rpm 的 key 会被静帧/资产图自动优先使用（`config.image_pool_keys()` 组成生图专用池，闸门 `60/rpm` 按 key 独立计时；不占视频配额）。未标的走全局 `AGNES_BASE` 与全局闸门。配合 `SHORTDRAMA_VIDEO_KEY_ROTATE` 使用；未设则退回单条 `AGNES_API_KEY` |
 | `AGNES_VIDEO_MAX_SHOTS` | 20 | **超过 20 镜的项目必须调大**，否则静默截断 |
 | `AGNES_VIDEO_MAX_SECONDS` | 12 | 单镜秒数**上限**（供应商硬约束 `seconds ∈ [4,12]`；下限 4 固定）。★ **别调小**——设小于 12 会让超长的镜被**静默压短**（与分镜契约「单镜 4-12 秒」也不一致）|
 | `SHORTDRAMA_OPEN_CHAIN` | 0 | **人用开关**：设 `1` 开放全链路（`--resume-media` 放行，输入过三道门） |
@@ -254,6 +254,8 @@ projects/<项目名>/
 | `SHORTDRAMA_DIALOGUE_LANG` | Mandarin Chinese | 台词烘焙语言声明（纯**英文**语言名，如 `Cantonese`——含中文字形会被烧上屏幕，见 prompt.py LANG_SUFFIX 注释）。粤语项目设 `Cantonese` |
 | `SHORTDRAMA_STILL_QC` | 1 | `0` = 跳过静帧 QC |
 | `SHORTDRAMA_STILL_QC_MAX_REGEN` | 3 | 单镜累计重画上限（跨进程） |
+| `SHORTDRAMA_SHEET_CHECK` | 1 | **定妆照 ↔ 角色卡 对账**。`0` = 不核（回到"图错了也没人发现"的历史行为）。判据：视觉模型逐项报"图上这一项长什么样"，**判定归代码**（颜色族不相交／明确没画／断剑画成完整）；抄不出卡片原文的条目一律不算。理由：0929 成片 18 镜继承了错图（卡片`玄黑高马尾`、图上酒红发），而内容指纹只保证"卡片改了会重画"、reviewer 只作文本对文本 |
+| `SHORTDRAMA_SHEET_CHECK_MAX_REGEN` | 1 | 对账不过时重画几次（**硬上限**）。到点即保留现有图并响亮记 `sheet_residual`，不循环——视觉判据是概率性的 |
 | `SHORTDRAMA_QC_STOP_REPEAT` | 1 | `1` = 同一镜**连续两轮报同一类**问题时不再重画（直接记 `still_residual`）。理由：重画的强化约束只由"类别"决定 ⇒ 同类 ⇒ 提示词完全一致 ⇒ 再画一次只是**换种子抽奖**。设 `0` 回到"一路重画到上限" |
 | `SHORTDRAMA_QC_CONFIRM_NEG` | 1 | `1` = 只对**判负面**的镜复采一次判定，两次都判负面才算硬伤（正面判定不复采）。理由：QC 概率性翻判（实测同图连审会给不同结论），而翻判成本全落在"误报→多一次重画"这一侧。复采失败时保留原判 |
 | `SHORTDRAMA_CLIP_QC_ROUNDS` | 2 | 成片复核重拍轮数 |
@@ -261,7 +263,8 @@ projects/<项目名>/
 | `SHORTDRAMA_VIDEO_SUBMIT_MIN_INTERVAL_S` | 65 | 供应商 1rpm 平铺闸门（**单条 key** 的最小提交间隔） |
 | `SHORTDRAMA_VIDEO_KEY_ROTATE` | 0 | `1` = 各镜**轮流用不同 key** 提交 → 提交段按 key 数摊薄（需 `AGNES_API_KEYS` 多于 1 条）。只摊薄提交节流，不加快渲染 |
 | `SHORTDRAMA_VIDEO_SUBMIT_MIN_INTERVAL_PER_KEY_S` | 同上一行 | 覆盖 per-key 间隔；未设时**实时**跟随 `SHORTDRAMA_VIDEO_SUBMIT_MIN_INTERVAL_S` |
-| `SHORTDRAMA_MAX_REVISIONS` | 3 | 单角色回退上限，**超过**才强制放行 |
+| `SHORTDRAMA_IMAGE_WORKERS` | 0（自动） | **并发生图**线程数：`0` = 自动 = 标了图片 rpm 的 key 数（封顶 4、保底 1）；`1` = 逐张串行（= 改造前行为，回退开关）；`>1` 显式指定但会被压到可用 key 数（同一条 key 自我限速不是提速）。作用于**静帧**与**定妆照四视图**——它们之间没有依赖（跨镜传的是文字「承接上一镜落点」，不是上一张图）。⛔ **不影响两处真串行依赖**：`keyframe`/`mixed` 档的首尾帧链、pack 档**视频组之间**抽真实末帧当接续锚（2026-09-28 特意串行）。闸门按 key 独立计时 = `60/图片rpm`（80rpm → 0.75s/条），与视频的 12s 闸门分开算 |
+| `SHORTDRAMA_MAX_REVISIONS` | 2 | 渲染被**媒体门**因"评审未通过"拦下的次数上限，**超过**即记 `review.force_passed` 放行并响亮列缺陷（2026-09-29 由 3 改为 2，用户口径「超 2 次就放行」）。★ 计数是门自己按集累计的 `review_blocks`（落盘、跨进程）；⚠️ **不是** `revision_counts` —— 真实链路上它常年为 `null`（要角色自调 `record_phase(count=True)` 才累加，而实际重派由调度器 LLM 发起，不经过 `guards.reset_from()`） |
 | `SHORTDRAMA_TOKEN_BUDGET_RUN` | 3000000 | 整轮 token 熔断预算 |
 | `SHORTDRAMA_CHAT_VENDOR` | agnes | 文本通道厂商（`v5/vendors.py`）。旧名 `NEWDEEP_LLM_PROVIDER` 仍兼容回落 |
 | `SHORTDRAMA_V5_PROJECT` | studio | supervisor 架构绑定的项目目录 |
@@ -275,6 +278,7 @@ projects/<项目名>/
 | `SHORTDRAMA_NARRATION_VOICE` | zh-CN-YunxiNeural | 旁白音色（edge-tts 音色名，低沉男声）|
 | `SHORTDRAMA_NARRATION_RATE` | +0% | 旁白语速（edge-tts 语法，如 `+10%`）|
 | `SHORTDRAMA_VIDEO_PACK_MAX_GROUP` | 5 | `pack` 模式下单组最多吞几个镜（分组算法见 `media/video_plan.group_shots`；与旁路脚本 `scripts/pack_render.py --max-group` 同义） |
+| `SHORTDRAMA_SHOTCHECK` | full | 渲前**分镜契约体检**档位（`v5/shotcheck.py`，跑在创作链派发分镜角色时）：`full` = 可数判据 + 裁判模型语义判据；`count` = 只跑可数判据（零文本调用）；`off` = 整条关掉。不合格的镜按**镜号 + 逐字原文**写成退回清单（`scenedesigner/shotcheck_ep{N}.json`）注入分镜角色，让它只改点名的那几镜 |
 | `SHORTDRAMA_VIDEO_SUBMIT_TIMEOUT` | 60 | 生视频**提交**的读超时（秒）。2026-09-26 实测：pack 档多参考图组（3–4 张 16:9 静帧）提交时服务端要先拉齐素材，60 秒谈不完 —— 同轮里单图组正常完成、多图组两次都恰好卡满 60s 报 `read operation timed out` 且 `attempts=0`（没拿到 `video_id`）。**多图组建议 180**；默认 60 = 历史行为不变 |
 | `SHORTDRAMA_PACK_BGM` | 1 | `pack` 档提交是否带「全程 BGM+环境音、禁止静音段」指令（官方同款模型实测可原生执行）；brief 明确禁 BGM 的项目设 0 关掉 |
 | `SHORTDRAMA_IMAGE_VENDOR` | agnes | 生图厂商（`v5/vendors.py` 注册表）。未注册的名字**响亮报错**，不静默回退 |
@@ -374,7 +378,7 @@ v5/
 ├── guards.py               # 记账 / 物化对账 / TokenBreaker / media_gate
 ├── validate.py             # brief 智能截断 / brief 完备性 / 产物忠实度 / 分镜契约
 ├── config.py  llm.py       # 配置与 LLM 供应商
-├── media/                  # 静态画面先行管线（23 个模块，不含 __init__）
+├── media/                  # 静态画面先行管线（24 个模块，不含 __init__）
 │   ├── pipeline.py         #   **媒体链唯一入口**（media_gate + 审批门 + 记账都收在这里）
 │   ├── jobs.py             #   video_jobs 显式状态机
 │   ├── storyboard.py       #   分镜解析
