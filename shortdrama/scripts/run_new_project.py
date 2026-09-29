@@ -15,17 +15,20 @@
   · 成功判据是**成片在盘**（存在且 mtime ≥ 本轮启动时刻），**不是**日志里有没有 `RESULT:`；
   · 项目是**编译期绑定**的（`SHORTDRAMA_V5_PROJECT`），换项目必须重启 dev。
 
-★★ **运行纪律：一个项目一个后台任务 —— 绝不在同一个任务里连跑多个项目**（2026-09-16 实测）。
-   原因：`dev.terminate()` 杀的是 `langgraph.exe` 外壳，真正监听 2024 的 uvicorn 子进程活着，
+★★ **多项目并行是支持的**（2026-09-29 起）：每个项目在自己的 `.dev/<项目名>/` 里起服
+   （进度目录按项目隔离），端口从 2080-2099 **自动挑空闲的**，所以两条链互不打扰。
+   实测：`par-a-0929` / `par-b-0929` 同秒起跑（22:21:07），A 22:48 收工不影响 B 跑到 23:07。
+
+   以前写的是"一个项目一个后台任务、绝不连跑多个项目"，根因是**所有项目共用 2024**：
+   `dev.terminate()` 杀的是 `langgraph.exe` 外壳，真正监听端口的 uvicorn 子进程活着，
    且仍编译期绑着**上一个项目** → 下个项目的 `wait_ok()` 被"端口已开"骗过、
    `drive_chain` 把 run 发给旧 server → **产物写进上一个项目的目录**，自己的
    `done_roles()` 永远为空 → 白等 `--timeout 5400`（90 分钟），日志上却一切"正常"。
-   而**沙箱内打不到持口进程**：`netstat -ano` 报 `127.0.0.1:2024 LISTENING <pid>`，
-   `taskkill /F /T /PID <pid>` 却回 `错误: 没有找到进程`（沙箱进程视图与 host 的 PID 不是同一套编号）。
-   端口是**随任务树被回收**才释放（约 84 秒），从来不是被我们杀掉的。
-   ⇒ 每个项目单独起一个后台任务，跑完等通知再起下一个（起服时端口必然干净）。
-   `ensure_port_free()` 保留只是为了**响亮失败**（把"白等 90 分钟"变成"半分钟报错"），
-   **不要指望它能清场**。
+   ⇒ **改成每次起服换一个没人听的端口，这个失效面就整体消失了**（陈旧监听赖在 2024 上
+   也骗不到我们）。⛔ 不要再往"清场/杀进程"的方向修：在真终端里 `taskkill` 打得到别的
+   会话的 dev server，那等于**并行时互相拆台**（沙箱里反而打不到，见下）。
+   ⚠️ 沙箱内 `netstat -ano` 报的持口 pid 用 `taskkill` 会回 `错误: 没有找到进程`
+   （沙箱进程视图与 host 的 PID 不是同一套编号）——端口是**随任务树被回收**才释放的。
 """
 from __future__ import annotations
 
@@ -108,10 +111,10 @@ def _env(project: str, *, qc_mode: str, ep: int = 1) -> dict:
         "SHORTDRAMA_V5_EPISODE": str(int(ep)),
         "SHORTDRAMA_OPEN_CHAIN": "1",
         "SHORTDRAMA_ALLOW_RESUME": "1",
-        # ★ 派发目标必须跟 dev 实际端口走（2026-09-21）：DEV_PORT 可被
-        #   SHORTDRAMA_DEV_PORT 覆盖（幽灵监听占 2024 时换端口），config 默认
-        #   2024 会在换端口后静默派发失败，故在这里显式对齐。
-        "SHORTDRAMA_V5_AGENT_URL": "http://127.0.0.1:%d" % DEV_PORT,
+        # ★ 派发目标必须跟 dev **实际**端口走（2026-09-21）：端口现在每次起服自动挑
+        #   （`pick_dev_port`），config 默认的 2024 会在换端口后**静默派发失败**，
+        #   所以这里读的是 `RUN_PORT`（本次真正用的那个），不是常量。
+        "SHORTDRAMA_V5_AGENT_URL": "http://127.0.0.1:%d" % RUN_PORT,
         "NO_PROXY": NOPROXY, "no_proxy": NOPROXY,
         "PYTHONIOENCODING": "utf-8",
     })
@@ -133,7 +136,7 @@ def wait_ok(timeout: float = 180.0) -> bool:
         s = socket.socket()
         s.settimeout(2)
         try:
-            s.connect(("127.0.0.1", DEV_PORT))
+            s.connect(("127.0.0.1", RUN_PORT))
             s.close()
             return True
         except Exception:  # noqa: BLE001
@@ -142,14 +145,28 @@ def wait_ok(timeout: float = 180.0) -> bool:
     return False
 
 
-DEV_PORT = int(os.environ.get("SHORTDRAMA_DEV_PORT", "2024"))
+#: 显式给了 `SHORTDRAMA_DEV_PORT` 就**只用那一个**（被占了也绝不换、更不去杀占口的）；
+#: 没给则从 `AUTO_PORTS` 里自动挑一个空闲口 —— 这是多项目并行的前提。
+DEV_PORT_PINNED = bool(os.environ.get("SHORTDRAMA_DEV_PORT"))
+DEV_PORT = int(os.environ.get("SHORTDRAMA_DEV_PORT") or 2024)
+#: 自动挑口范围。刻意**不含 2024**：前端 `webchain.py` 和手工 `langgraph dev` 都默认
+#: 粘在它上面，避开它就等于避开了一切陈旧监听（见模块 docstring）。
+AUTO_PORTS = tuple(range(2080, 2100))
+#: 本次运行**真正**使用的端口，由 `pick_dev_port()` 定；下面所有探活/清理都读它。
+RUN_PORT = DEV_PORT
 TASKKILL = r"C:/Windows/System32/taskkill.exe"
 NETSTAT = r"C:/Windows/System32/netstat.exe"
 
 
-def port_free(port: int = DEV_PORT) -> bool:
+def _p(port: "int | None") -> int:
+    """默认参数在 def 时就求值了，所以"跟随本次端口"必须走这里。"""
+    return RUN_PORT if port is None else port
+
+
+def port_free(port: "int | None" = None) -> bool:
     """端口是否空闲（不依赖 curl / netstat）。"""
     import socket
+    port = _p(port)
     s = socket.socket()
     s.settimeout(2)
     try:
@@ -161,8 +178,9 @@ def port_free(port: int = DEV_PORT) -> bool:
         return True
 
 
-def pids_on_port(port: int = DEV_PORT) -> list[int]:
+def pids_on_port(port: "int | None" = None) -> list[int]:
     """占着该端口且处于 LISTENING 的 pid（`netstat` 输出是 GBK，必须显式解码）。"""
+    port = _p(port)
     r = subprocess.run([NETSTAT, "-ano"], capture_output=True)
     txt = r.stdout.decode("gbk", "replace")
     pids = []
@@ -187,8 +205,12 @@ def _kill_tree(pid: int) -> str:
     return (err or out or ("rc=%d" % r.returncode)).replace("\n", " ")[:160]
 
 
-def release_port(port: int = DEV_PORT, budget: float = 60.0) -> list[str]:
+def release_port(port: "int | None" = None, budget: float = 60.0) -> list[str]:
     """反复尝试杀掉占口的进程，直到端口释放（或超预算）。返回**去重后**的诊断信息。
+
+    ⛔ **只在收自己起的 dev server 时调用**（`stop_dev`）。起服前不要再清场 ——
+       多项目并行时那个"占口的"就是**另一条正在跑的链**，杀它 = 互相拆台。
+       换口才是正解，见 `pick_dev_port`。
 
     ★ 为什么"反复"：持口 pid 会变（实测 20644 → 24076 → 5048），单杀一次必然漏。
     ★ 为什么预算**不能给太长**：**沙箱内打不到持口进程** —— `netstat` 报
@@ -200,6 +222,7 @@ def release_port(port: int = DEV_PORT, budget: float = 60.0) -> list[str]:
     """
     notes: list[str] = []
     seen: set[int] = set()
+    port = _p(port)
     t0 = time.time()
     while time.time() - t0 < budget:
         if port_free(port):
@@ -247,21 +270,32 @@ def stop_dev(dev: "subprocess.Popen | None") -> tuple[bool, list[str]]:
     return port_free(), notes
 
 
-def ensure_port_free(budget: float = 25.0) -> tuple[bool, list[str]]:
-    """起 dev 之前先确认 2024 没被别人占着。返回 (ok, 诊断)。
+def pick_dev_port(project: str) -> "int | None":
+    """定下本次起服用的端口，写进 `RUN_PORT`。返回 None = 挑不到，调用方**响亮终止**。
 
-    与 `stop_dev` 是同一事故的两面：端口被陈旧 dev 占着时，`wait_ok()` 会**立刻返回
-    True**，而那个 server 绑的是**别的项目** —— 于是 run 被发错地方、本项目零产物、
-    白等到超时，日志上却看不出异常。**宁可在这里响亮地失败。**
+    ★ 为什么是"换口"而不是"清场"（2026-09-29，多项目并行的前提）：
+      原来的 `ensure_port_free()` 起服前会 `taskkill` 掉占口进程。串行时那是对的
+      （清的是**上一个项目**留下的陈旧 server）；并行时"占口的"就是**另一条正在跑的链**，
+      它的 dev server 编译期绑着自己的项目，杀掉它 = 那条链的 run 全部派发失败
+      —— 等于一边并行一边互相拆台。⇒ 起服前一律**不杀**，改挑一个没人听的口。
 
-    预算刻意只有 **25s**（不是 150s）：既然沙箱内**打不到**持口进程
-    （见 `release_port` 的说明），多等纯属浪费——本机实测 3 个项目因此白等 7.5 分钟。
-    这里的价值是**快速报错**，不是清场；真要清场只能靠"一个项目一个后台任务"。
+    ★ 顺带把"陈旧监听骗 `wait_ok()`"这个老失效面整体消掉了：那个病的前提是我们去挤
+      同一个端口（2024）。`AUTO_PORTS` 刻意避开 2024（前端 `webchain.py` 与手工
+      `langgraph dev` 都默认粘在上面），所以别人留下的 server 再也骗不到我们。
+
+    扫描起点按项目名错开，避免两条链同一秒起跑时都从 2080 开始试。
+    ⚠️ 挑口与 `langgraph dev` 真去绑定之间仍有竞态窗口，故调用方在 `wait_ok()` 之后
+       还要回看 `dev.poll()`：起服进程自己退了 = 口被抢，不静默。
     """
-    if port_free():
-        return True, []
-    notes = release_port(budget=budget)
-    return port_free(), notes
+    global RUN_PORT
+    if DEV_PORT_PINNED:                      # 人显式指定的口：照用，被占就终止，不抢不换
+        return DEV_PORT if port_free(DEV_PORT) else None
+    off = sum(project.encode("utf-8")) % len(AUTO_PORTS)
+    for p in AUTO_PORTS[off:] + AUTO_PORTS[:off]:
+        if port_free(p):
+            RUN_PORT = p
+            return p
+    return None
 
 
 
@@ -569,17 +603,19 @@ def main() -> int:
         log(run_log, "已归档本项目旧的 .langgraph_api（其他项目不受影响）")
 
     # 2) 起 dev server（项目编译期绑定）
-    # ★ 起服前必须确认端口空闲：否则 wait_ok() 会被**上一个项目的** dev server 骗过
-    #   —— 那是"run 发错地方、本项目零产物、白等到超时"的入口（见 stop_dev 文档）。
-    port_ok, port_notes = ensure_port_free()
-    if not port_ok:
-        log(run_log, "!! 端口 %d 仍被占用（持口 pid=%s）→ 终止：粘在上面的陈旧 dev server "
-                     "会让本项目把 run 发到别的项目去。诊断：%s"
-            % (DEV_PORT, pids_on_port(), "；".join(port_notes)))
+    # ★ 端口**只挑空闲的、起服前一律不清场**：并行时"占着口的那个"就是另一条正在跑的链，
+    #   杀它 = 把对方的 run 全打断（旧 `ensure_port_free` 的行为，见 `pick_dev_port`）。
+    port = pick_dev_port(project)
+    if port is None:
+        if DEV_PORT_PINNED:
+            log(run_log, "!! 显式指定的端口 %d 已被占用（持口 pid=%s）→ 终止。"
+                         "**不去杀它**（可能是别的会话或另一条链的 dev server）；"
+                         "要并行就别钉 SHORTDRAMA_DEV_PORT。"
+                % (DEV_PORT, pids_on_port(DEV_PORT) or "?"))
+        else:
+            log(run_log, "!! 自动端口段 %d-%d 全被占用 → 终止（并行的条数超过了端口段）"
+                % (AUTO_PORTS[0], AUTO_PORTS[-1]))
         return 1
-    if port_notes:
-        log(run_log, "起服前清理了占用 %d 的陈旧进程：%s"
-            % (DEV_PORT, "；".join(port_notes)))
     dev = subprocess.Popen(
         # `--config` 必须是**绝对路径**：进程 cwd 已改成本项目专属目录，
         #   相对的 `v5/langgraph.json` 解析不到。
@@ -588,17 +624,25 @@ def main() -> int:
         #   "边跑边改"才成立；代价是改动要重启才生效 —— 换项目本来就要重启（编译期绑定），
         #   所以这个代价等于零。
         [LANGGRAPH, "dev", "--config", str(cfg),
-         "--host", "127.0.0.1", "--port", str(DEV_PORT), "--no-browser", "--no-reload"],
+         "--host", "127.0.0.1", "--port", str(port), "--no-browser", "--no-reload"],
         cwd=str(runtime), env=_env(project, qc_mode=qc_mode),
         stdout=(proj / "dev.log").open("w", encoding="utf-8"),
         stderr=subprocess.STDOUT)
-    log(run_log, "dev server 启动（pid=%d，SHORTDRAMA_V5_PROJECT=%s，运行目录=%s）"
-                 % (dev.pid, project, runtime.relative_to(ROOT)))
+    log(run_log, "dev server 启动（pid=%d，SHORTDRAMA_V5_PROJECT=%s，端口=%d，运行目录=%s）"
+                 % (dev.pid, project, port, runtime.relative_to(ROOT)))
     if not wait_ok():
         log(run_log, "!! dev server 未就绪 → 终止（见 dev.log）")
         stop_dev(dev)
         return 1
-    log(run_log, "dev server 就绪")
+    if dev.poll() is not None:
+        # 挑口与真去绑定之间有竞态：口被别人抢先占了，`langgraph dev` 自己退出去，
+        # 而 `wait_ok()` 探到的可能是**那个抢口的人**。端口不再是我们的判据，进程才是。
+        log(run_log, "!! 端口 %d 有应答但起服进程（pid=%d）已退出 → 终止：应答的不是本项目 "
+                     "的 server，继续跑就会把 run 发到别的项目去。见 dev.log"
+            % (port, dev.pid))
+        stop_dev(dev)
+        return 1
+    log(run_log, "dev server 就绪（端口 %d）" % port)
 
     try:
         rc = 0
@@ -617,9 +661,9 @@ def main() -> int:
             # 不静默：端口没释放 = 下一个项目必然把 run 发错地方
             log(run_log, "!! dev server 的端口 %d 未释放（pid=%d）—— 下一个项目会因此把 run "
                          "发到本项目。诊断：%s。请人工清理后再跑。"
-                % (DEV_PORT, dev.pid, "；".join(stop_notes)))
+                % (RUN_PORT, dev.pid, "；".join(stop_notes)))
         else:
-            log(run_log, "dev server 已停，端口 %d 已释放" % DEV_PORT)
+            log(run_log, "dev server 已停，端口 %d 已释放" % RUN_PORT)
 
 
 if __name__ == "__main__":

@@ -145,6 +145,25 @@ SHORTDRAMA_V5_PROJECT=<项目名> .venv/Scripts/langgraph.exe dev \
 `SHORTDRAMA_SLICE_SOFT=1` 降级为注入全文）。⇒ `plotdesigner` 的产物必须按
 「`## 第 N 卷` + `### 第 M 集`」结构写，且**集条目自包含**（禁"同上/见前文"，切片后会悬空）。
 
+### ★ 多项目并行（2026-09-29 起支持，两条事实）
+
+```bash
+# 两条链各自起服、各自进度目录，同秒起跑互不打扰（实测 par-a / par-b）
+PYTHONUTF8=1 .venv/Scripts/python.exe scripts/run_new_project.py <项目A> --stills-qc &
+PYTHONUTF8=1 .venv/Scripts/python.exe scripts/run_new_project.py <项目B> --stills-qc &
+```
+
+1. **不需要你分配端口，也不需要你避让 2024。** `run_new_project.py` 每次起服从
+   **2080-2099 自动挑一个没人听的口**（扫描起点按项目名错开），并把
+   `SHORTDRAMA_V5_AGENT_URL` 对齐到那个口；项目的 `.langgraph_api` 落在
+   `.dev/<项目名>/` 下（仓库根那份不再共用）。⚠️ **起服前一律不杀进程**——
+   旧实现在那里 `taskkill` 占口进程，串行时清的是上个项目的残留，**并行时那就是
+   另一条正在跑的链**。显式钉 `SHORTDRAMA_DEV_PORT` 则只用它、被占就响亮终止（不换口、不抢人）。
+   ⇒ 前端 `webchain.py` 仍走 2024 + 共用 `RUNTIME_ROOT`（**未改**），所以"前端 + CLI 并行"目前会撞。
+2. **限速与视频配额是全机共用的**：三条 key 一个池，两条链互相**排队**（变慢，不是失败）。
+   pack 档本身每组串行落盘（要抽真实末帧当下一组的接续锚），所以并行条数上去后
+   单轮时间按当轮实测组时报（0929 晚 7-8 分钟/组），**别拿上一次的读数当基线**。
+
 ## brief.json 规范（你的核心产出）
 
 **写到 `projects/<项目名>/brief.json`** —— 脚本按这个路径读。

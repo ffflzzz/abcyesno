@@ -300,7 +300,7 @@ projects/<项目名>/
 | `SHORTDRAMA_ASSET_GATE` | 0 | 资产完整性缺失时**硬拦**（`return blocked`）。默认只强告警不拦——存量项目多有部分缺图，直接拦会把它们全卡住 |
 | `SHORTDRAMA_DIALOGUE_VERBATIM_STRICT` | 0 | 对白**逐字门**在 `_input_gates` 里阻断。默认只警告——存量项目的旧 `dialogue` 产物多为改写版 |
 | `SHORTDRAMA_CHAIN_TIMEOUT` | 9000 | `run_new_project.py` 传给创作链的整体超时秒数（它据此给 `scripts/drive_chain.py` 传 `--timeout`）。⚠️ `run_new_project.py` **自身不解析** `--timeout`，直接传它会被静默忽略 |
-| `SHORTDRAMA_DEV_PORT` | 2024 | dev server 端口（`webchain.py` 与 `run_new_project.py` 通用；换端口时派发目标 `SHORTDRAMA_V5_AGENT_URL` 由脚本自动对齐） |
+| `SHORTDRAMA_DEV_PORT` | 2024 | dev server 端口。**语义按入口分**：`run_new_project.py` 在**不设它时**从 2080-2099 自动挑空闲口（多项目并行的前提，扫描起点按项目名错开，`SHORTDRAMA_V5_AGENT_URL` 自动对齐；**设了就只用那一个，被占即响亮终止，绝不换口也不杀占口进程**）；`webchain.py` 仍固定用它 |
 | `SHORTDRAMA_IMAGE_SIZE` | （空） | 生图尺寸覆盖；空 = 不传该参数，用供应商默认 |
 | `SHORTDRAMA_QC_WORKERS` | 3 | 静帧 QC / clipqc 并发 worker 数。**调高会撞供应商限速** |
 | `SHORTDRAMA_RECURSION_LIMIT` | 600 | `drive_chain.py` 全链递归上限 |
