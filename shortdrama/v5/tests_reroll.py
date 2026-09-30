@@ -48,6 +48,21 @@ reasons: []
 """
 
 
+class RerollBudgetTests(unittest.TestCase):
+    """预算必须读**门那份按集落盘的累计值**（我第一版按进程起算，实测会把同一集
+    再打回两轮才轮到门放行 —— 一轮 25 分钟，纯重复付费）。"""
+
+    def test_durable_blocks_shrink_budget(self):
+        self.assertEqual(dc.reroll_budget(2, 0), 2)     # 没拦过：给足
+        self.assertEqual(dc.reroll_budget(2, 1), 1)     # 拦过一次：只剩一次
+        self.assertEqual(dc.reroll_budget(2, 2), 0)     # 到上限：直接交给门
+        self.assertEqual(dc.reroll_budget(2, 5), 0)     # 越界不返回负数
+
+    def test_missing_counter_is_tolerated(self):
+        for missing in (None, ""):
+            self.assertEqual(dc.reroll_budget(2, missing), 2)
+
+
 class RerollPlanTests(unittest.TestCase):
     def test_real_verdict_rerolls_scenedesigner(self):
         """真实那次判决喂进去：必须得出"打回 scenedesigner"，并把原因带上。"""

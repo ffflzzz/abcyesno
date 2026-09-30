@@ -164,6 +164,19 @@ async def _wait_decision(root: Path, project: str, tid: str, rid: str,
     return None
 
 
+def reroll_budget(cap: int, blocked: int) -> int:
+    """还能自动打回几次 = 门那一份上限 − 本集**已落盘累计**的拦截次数。
+
+    ★ 为什么必须读累计值而不是从 `cap` 起算（2026-09-30 实测，我自己引入的）：
+      门（`guards.media_gate`）的 `review_blocks` 是**按集、跨进程累计**的，
+      而驱动器每次是新进程。第一版我从 `cap` 起算 ⇒ 同一集第二次起服会**再打回
+      两轮**才轮到门放行，等于把"反复重派"的成本重复付一遍（实测一轮 25 分钟）。
+      读累计值之后：门已经拦过 2 次 ⇒ 预算 0 ⇒ 直接收工交给门（门第 3 次记
+      `force_passed` 并列出未消化条目）。**判据只留门那一份。**
+    """
+    return max(0, int(cap) - int(blocked or 0))
+
+
 def reroll_plan(dec: dict, until: str = "", redo_left: int = 0) -> tuple:
     """评审判决 → 该不该自动打回、打回谁。返回 `(action, target, note)`。
 
@@ -394,7 +407,8 @@ async def main() -> int:
     #   下一轮用 `redo_message()` 只重派目标角色及其下游。
     #   重试上限**沿用门那一份**（`SHORTDRAMA_MAX_REVISIONS`，默认 2），不新造数字；
     #   用完仍不过 ⇒ 照旧交给门（门数够次数会 `force_passed` 并响亮列出未消化条目）。
-    redo_left = int(config.MAX_REVISIONS_PER_PHASE)
+    redo_left = reroll_budget(config.MAX_REVISIONS_PER_PHASE,
+                              (load_manifest(root).get("review_blocks") or {}).get(str(ep)))
 
     def review_state():
         """读本集评审判决 → `(passed, decision)`。读不到 ⇒ `(None, None)`，不据此打回。"""
