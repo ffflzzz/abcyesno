@@ -284,5 +284,28 @@ class TestWiring(unittest.TestCase):
                              roles.role_input("scenedesigner", root, {"episode_index": 1}))
 
 
+    def test_dialogue_density_rule_only_judges_dialogue_led(self):
+        """★「台词镜 ≥50%」只该管 `dialogue-led`。
+
+        实错（2026-09-30 起新链前查到）：这条原先**无条件**生效 ⇒ `silent` 与
+        `narration-led` 的项目每镜都不合格——它们的对白列按本包契约统一写
+        「（无声，环境音）」（旁白写在**音效**列）。后果不是报错而是白烧一轮重派：
+        退回清单会要求分镜"把台词补到一半以上"，而那正好违反它自己的音频模式契约。
+        """
+        shots = [_shot("LN%02d" % i,
+                       "@裴烛 蹬地前冲三步劈下，@谢潮生 侧身避开后横移两步",
+                       dialogue="（无声，环境音）", seconds=4) for i in range(1, 16)]
+        self.assertEqual(len(shots), 15, "夹具没凑够镜数 ⇒ 这条测试会假绿")
+        self.assertTrue(all("（无声" in s["dialogue"] for s in shots))
+        for mode in ("silent", "narration-led"):
+            checks = [h["check"] for h in shotcheck.countable(shots, 60, audio_mode=mode)]
+            self.assertEqual([c for c in checks if "台词镜" in c], [],
+                             "%s 模式不该判台词密度：%s" % (mode, checks))
+        # 反向对照：同一张表在 dialogue-led 下**必须**判出来（否则这条判据被悄悄废掉）
+        checks = [h["check"] for h in shotcheck.countable(shots, 60,
+                                                          audio_mode="dialogue-led")]
+        self.assertTrue(any("台词镜" in c for c in checks), checks)
+
+
 if __name__ == "__main__":
     unittest.main()

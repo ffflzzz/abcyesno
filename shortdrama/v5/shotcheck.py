@@ -96,7 +96,8 @@ WIDE_WORDS = ("大全景", "全景", "远景", "空镜")
 
 def countable(shots: list[dict], target_seconds: int = 0,
               chars: list[str] | None = None,
-              target_shots: tuple[int, int] | None = None) -> list[dict]:
+              target_shots: tuple[int, int] | None = None,
+              audio_mode: str = "dialogue-led") -> list[dict]:
     """能数的判据。返回 `[{name, check, detail}]`，空列表 = 全过。
 
     ★ 这一层的存在意义（2026-09-29）：**凡程序能确定的，就别写进提示词让模型自觉**。
@@ -141,11 +142,18 @@ def countable(shots: list[dict], target_seconds: int = 0,
     contact = [s["name"] for s in shots if any(w in (s.get("visual") or "") for w in CONTACT)]
     dodge = [s["name"] for s in shots if any(w in (s.get("visual") or "") for w in DODGE)]
     need(len(dodge) >= max(2, n // 10), "有应招（闪/退/被荡开）", "%d 镜" % len(dodge))
-    spoken = [s for s in shots
-              if (s.get("dialogue") or "").strip()
-              and not any(w in (s.get("dialogue") or "") for w in SILENT_MARK)]
-    need(len(spoken) >= n * 0.5, "台词镜 ≥50%", "%d/%d = %.0f%%" % (len(spoken), n,
-                                                                    100.0 * len(spoken) / n))
+    # ★ 「台词镜 ≥50%」**只在 dialogue-led 判**（2026-09-30 修）。
+    #   原先它无条件生效 ⇒ `silent` 与 `narration-led` 的项目**每一镜**都不合格：
+    #   silent 的对白列按契约写「（无声，环境音）」，narration-led 的旁白写在**音效**列、
+    #   对白列同样统一「（无声，环境音）」（两者都是 AGENTS 明写的契约写法）。
+    #   后果不是报错而是**白烧一轮重派**：退回清单会要求分镜"把台词补到一半以上"，
+    #   而那正好违反本包自己的音频模式契约。
+    if audio_mode == "dialogue-led":
+        spoken = [s for s in shots
+                  if (s.get("dialogue") or "").strip()
+                  and not any(w in (s.get("dialogue") or "") for w in SILENT_MARK)]
+        need(len(spoken) >= n * 0.5, "台词镜 ≥50%", "%d/%d = %.0f%%" % (len(spoken), n,
+                                                                        100.0 * len(spoken) / n))
     over5 = [x for x in secs if x > 5]
     need(sum(1 for x in secs if x > 8) == 0 and len(over5) <= 2,
          "单镜时长（≤5s 常态，6-8s 至多 2 镜）",
@@ -238,19 +246,21 @@ def clear_punch(root, ep: int) -> None:
 
 def punch_list(shots: list[dict], *, target_seconds: int = 0, use_judge: bool = True,
                workers: int = 8, log=print, chars: list[str] | None = None,
-               target_shots: tuple[int, int] | None = None) -> list[str]:
+               target_shots: tuple[int, int] | None = None,
+               audio_mode: str = "dialogue-led") -> list[str]:
     """给角色看的**退回清单**（一镜一行，带镜号与逐字原文）。
 
     为什么要有这个形状：分镜角色拿到的如果是"你自己检查一遍"，它会逐镜重读整张表
     （实测 2 小时）；拿到"这 5 镜、这几条、原文在此"，它只需要改那 5 镜。
     """
-    hard = countable(shots, target_seconds, chars, target_shots)
+    hard = countable(shots, target_seconds, chars, target_shots, audio_mode)
     out = []
     for h in hard:
         out.append("【%s】%s（%s）" % (h["check"], h["name"] or "全表", h["detail"]))
     if use_judge:
         r = check(shots, target_seconds=target_seconds, use_judge=True,
-                  workers=workers, log=log, chars=chars, target_shots=target_shots)
+                  workers=workers, log=log, chars=chars, target_shots=target_shots,
+                  audio_mode=audio_mode)
         for s in r["semantic"]:
             out.append("【%s】镜 %s：「%s」—— %s"
                        % (CODE_LABELS.get(s["code"], s["code"]), s["name"],
@@ -335,12 +345,13 @@ def character_names(root) -> list[str]:
 def check(shots: list[dict], *, target_seconds: int = 0, use_judge: bool = True,
           workers: int = 8, log=print, llm=None,
           chars: list[str] | None = None,
-          target_shots: tuple[int, int] | None = None) -> dict:
+          target_shots: tuple[int, int] | None = None,
+          audio_mode: str = "dialogue-led") -> dict:
     """两层体检的总入口。返回 `{countable, semantic, unverifiable, errors, blocking}`。
 
     `llm` 可注入（离线单测用）—— 缺省才去建真实客户端。
     """
-    hard = countable(shots, target_seconds, chars, target_shots)
+    hard = countable(shots, target_seconds, chars, target_shots, audio_mode)
     for h in hard:
         log("[shotcheck] ❌ %s —— %s%s"
             % (h["check"], h["detail"], ("（%s）" % h["name"]) if h["name"] else ""))

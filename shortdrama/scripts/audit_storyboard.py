@@ -77,9 +77,28 @@ def _both_active(shot, names):
     return all(moves(p) for p in parties[:2])
 
 
+def _ep_from_argv(argv: list[str]) -> str:
+    """`--ep=2` 与 `--ep 2` 都收；**写错一律响亮退出**。
+
+    实错（2026-09-29 23:30）：只认 `--ep=`，我传了 `--ep 2` ⇒ 静默按第 1 集体检，
+    而我把那份数字当成第 2 集的读数报了出去。量表读错文件比读不出数更糟。
+    """
+    for i, a in enumerate(argv):
+        if a.startswith("--ep"):
+            if "=" in a:
+                val = a.split("=", 1)[1]
+            else:
+                val = argv[i + 1] if i + 1 < len(argv) else ""
+            if not val.isdigit():
+                raise SystemExit("⛔ `--ep` 要紧跟一个集号（`--ep 2` 或 `--ep=2`），收到的是 %r"
+                                 " —— 本脚本不许在集号不明的情况下默认按第 1 集跑" % val)
+            return val
+    return "1"
+
+
 def main() -> None:
     project = next((a for a in sys.argv[1:] if not a.startswith("--")), "<请显式传项目名>")
-    ep = next((a.split("=", 1)[1] for a in sys.argv[1:] if a.startswith("--ep=")), "1")
+    ep = _ep_from_argv(sys.argv[1:])
     root = config.PROJECTS_DIR / project
     p = resolve_path(root, "scenedesigner", int(ep))
     if not p.exists():
@@ -153,6 +172,7 @@ def main() -> None:
     per10 = len(contact_shots) / max(1, total / 10.0)
 
     print("=== %s 第 %s 集分镜体检（%d 镜 / %d 秒）" % (project, ep, n, total))
+    print("    读的是：%s" % p)
     rows = [
         ("兵刃接触镜数 ≥8", len(contact_shots) >= 8,
          "%d 镜（每 10 秒 %.1f 次）" % (len(contact_shots), per10)),

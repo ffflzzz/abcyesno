@@ -693,6 +693,7 @@ def role_input(role: str, root: Path, m: dict, reasons: list[str] | None = None)
                                            use_judge=(config.SHOTCHECK == "full"),
                                            chars=shotcheck.character_names(root),
                                            target_shots=_rng,
+                                           audio_mode=validate.audio_mode_of(_brief),
                                            log=lambda *a: None)
                 if _pl:
                     # 钉在盘上：正规"打回重做"会把旧表移进 `.rerun_backup/`，
