@@ -792,6 +792,50 @@ async def monitor(project: str, pack: str = "shortdrama",
             "problems": list(dict.fromkeys(problems)), "events": n}
 
 
+def _storyboard_episodes(root) -> list[int]:
+    """本项目**已有分镜表**的集号（升序）。
+
+    为什么按文件找而不是读 manifest：manifest 的 `episode_index` 只记**最近跑过**
+    的那一集，而 `--rerender` 要在"哪几集都能接受这批镜号"这件事上做判断 ——
+    得看盘上有几份表。旧项目的单份 `scenedesigner.md` 按 manifest 的集号算。
+    """
+    import re
+    from pathlib import Path
+
+    from v5.guards import load_manifest, resolve_path
+
+    d = Path(root) / "scenedesigner"
+    eps = set()
+    if d.is_dir():
+        for p in d.glob("scenedesigner_ep*.md"):
+            m = re.search(r"_ep(\d+)\.md$", p.name)
+            if m:
+                eps.add(int(m.group(1)))
+    cur = resolve_path(Path(root), "scenedesigner", None)
+    if cur and cur.exists():
+        eps.add(int(load_manifest(Path(root)).get("episode_index", 1) or 1))
+    return sorted(eps)
+
+
+def _rerender_ep_conflict(root, names: list[str], ep_given: bool) -> list[int]:
+    """这批镜号在**多集都存在**且调用方没显式给 `--ep` ⇒ 返回那些集（非空即须拒绝）。
+
+    抽成纯函数的理由同 `orchestrator.supervisor_system_prompt`（2026-09-17）：
+    内联在 `main()` 里的判断测不到，而这条判断错了的代价是**覆盖另一集的产物**。
+    `ep_given=False`（没写 `--ep`）才判 —— 显式给了集号就按它执行，不猜也不拦。
+    """
+    if ep_given or not names:
+        return []
+    from v5.media import pipeline
+
+    out = []
+    for e in _storyboard_episodes(root):
+        known = set(pipeline._known_shots(root, e))
+        if known and set(names) <= known:
+            out.append(e)
+    return out if len(out) > 1 else []
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="v5 series (single-graph pipeline)")
     ap.add_argument("project")
@@ -958,7 +1002,29 @@ def main() -> None:
 
         root = config.PROJECTS_DIR / a.project
         names = [x for x in a.rerender.replace(",", " ").split() if x]
-        out = pipeline.rerender(root, names, note=a.note,
+        # ★ **集号必须显式传下去**（2026-09-30 实测事故）。
+        #   这里原先根本不传 `ep`，而 `pipeline.rerender` 的签名是 `ep: int = 1`
+        #   ⇒ 多集项目里 `--rerender` **只能打到第 1 集**。更糟的是它不会报错：
+        #   连载的镜号每集都是 `LN01..LN30`，`_known_shots(root, ep=1)` 逐个查下来
+        #   **全部合法**，那道"防臆造镜号"的校验分辨不出集，于是静默重画了错的那一集
+        #   —— 实测把 ep1 的 30 张静帧整批覆盖掉，而 ep1 的成片与 clips 没跟着重渲，
+        #   盘上留下"成片对不上自己静帧"的状态，白烧 30 张图。
+        #   ⇒ ① 把 `a.ep` 传下去；② 没显式给 `--ep` 且这批镜号**跨多集都存在**时，
+        #      宁可拒绝也不猜 —— 猜错的代价是覆盖另一集的产物，不是重跑一次。
+        if not any(t == "--ep" or t.startswith("--ep=") for t in sys.argv[1:]):
+            hits = _rerender_ep_conflict(root, names, ep_given=False)
+            if hits:
+                print("[rerender] ⛔ 拒绝执行：镜号 %s…在第 %s 集的分镜里**都存在**"
+                      "（连载每集都用 LN01..LN30 编号）。\n"
+                      "  不指定 `--ep` 时本命令只会打第 1 集，会**覆盖那一集的静帧与 clip**。\n"
+                      "  请显式加集号，例如：--rerender %s… --ep %d"
+                      % (",".join(names[:3]), "、".join(str(h) for h in hits),
+                         names[0], hits[-1]), flush=True)
+                print("RESULT:", json.dumps({"status": "failed",
+                                             "reason": "ambiguous episode"},
+                                            ensure_ascii=False))
+                return
+        out = pipeline.rerender(root, names, note=a.note, ep=a.ep,
                                 from_still=(a.from_stage == "still"))
         print("RESULT:", json.dumps(out, ensure_ascii=False))
         return

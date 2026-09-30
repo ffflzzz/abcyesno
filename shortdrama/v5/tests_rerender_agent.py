@@ -193,5 +193,101 @@ class TestRerenderGraph(unittest.TestCase):
             self.assertIn(rerender_agent.NODE_NAME, g.get_graph().nodes)
 
 
+class TestRerenderEpisodeGuard(unittest.TestCase):
+    """★ `--rerender` 不许在**镜号跨集撞名**时猜一个集下手（2026-09-30 实测事故）。
+
+    事故：`series.main()` 调 `pipeline.rerender(root, names, ...)` 时**从不传 `ep`**，
+    而它的签名是 `ep: int = 1` ⇒ 多集项目里 `--rerender` 只能打到第 1 集。
+    而那道"防臆造镜号"的校验按 `ep=1` 查，连载每集都编号 LN01..LN30 ⇒ **全部合法**，
+    于是静默把 ep1 的 30 张静帧整批覆盖，而 ep1 的成片与 clips 没跟着重渲 ——
+    盘上留下"成片对不上自己静帧"，白烧 30 张图。
+    """
+
+    MD = ("| 镜头号 | 景别 | 角度 | 运镜 | 时长(秒) | 画面描述 | 对白 | 音效 |\n"
+          "|---|---|---|---|---|---|---|---|\n"
+          "| %s | 全景 | 平视 | 固定 | 4 | 0-4秒：@甲 站在门口望向远处的长街 | （无声） | 风 |\n")
+
+    def _root(self, d, episodes: dict):
+        """episodes = {集号: [镜号…]}，写成真的分镜表（不 mock 解析器）。
+
+        ⚠️ 必须**当场断言解析出 N 条**：`storyboard.parse` 有一条
+        `len(visual) < 15 → 当占位行丢掉`（storyboard.py:227）。我第一版夹具的画面
+        描述只有 14 字，整张表解析出 **0 镜** —— 于是上面那些"应拒绝/应放行"的断言
+        全部因为 `_known_shots` 返回空而**空过**，测试绿着但什么都没测。
+        """
+        from v5.media import pipeline
+
+        (Path(d) / "scenedesigner").mkdir(parents=True, exist_ok=True)
+        for ep, rows in episodes.items():
+            body = "".join(self.MD % r for r in rows)
+            (Path(d) / "scenedesigner" / ("scenedesigner_ep%d.md" % ep)).write_text(
+                "# 第 %d 集\n%s" % (ep, body), encoding="utf-8")
+            self.assertEqual(pipeline._known_shots(Path(d), ep),
+                             ["LN%02d" % (i + 1) for i in range(len(rows))],
+                             "夹具必须真被解析出 %d 镜，否则下面的断言是空的" % len(rows))
+        return Path(d)
+
+    def test_same_shot_numbers_in_two_episodes_is_refused(self):
+        from v5 import series
+
+        names = ["LN01", "LN02"]
+        with tempfile.TemporaryDirectory() as d:
+            root = self._root(d, {1: ["1", "2"], 2: ["1", "2"]})
+            self.assertEqual(series._rerender_ep_conflict(root, names, ep_given=False),
+                             [1, 2], "两集都有这批镜号且没给 --ep ⇒ 必须拒绝")
+
+    def test_explicit_ep_skips_the_check(self):
+        from v5 import series
+
+        names = ["LN01", "LN02"]
+        with tempfile.TemporaryDirectory() as d:
+            root = self._root(d, {1: ["1", "2"], 2: ["1", "2"]})
+            self.assertEqual(series._rerender_ep_conflict(root, names, ep_given=True), [],
+                             "显式给了 --ep 就按它执行，不猜也不拦")
+
+    def test_single_episode_project_is_never_blocked(self):
+        """单集项目（绝大多数历史项目）行为零变化 —— 别给老路加一道新拦截。"""
+        from v5 import series
+
+        with tempfile.TemporaryDirectory() as d:
+            root = self._root(d, {1: ["1", "2"]})
+            self.assertEqual(series._rerender_ep_conflict(root, ["LN01", "LN02"],
+                                                          ep_given=False), [])
+
+    def test_unambiguous_multi_episode_still_runs(self):
+        """镜号只在一集里存在 ⇒ 能唯一定位 ⇒ 放行。
+
+        ⚠️ `parse` 给的 `name` 是**按表内序号**生成的 `LN%02d`（`len(shots)+1`），
+        不是表里写的镜头号 —— 所以这里用「ep3 比 ep1 多一行」来造出只属于 ep3 的 LN03，
+        而不是天真地以为写 `| 7 |` 就会得到 LN07。
+        """
+        from v5 import series
+
+        with tempfile.TemporaryDirectory() as d:
+            root = self._root(d, {1: ["1", "2"], 3: ["1", "2", "3"]})
+            self.assertEqual(series._rerender_ep_conflict(root, ["LN03"],
+                                                          ep_given=False), [],
+                             "LN03 只在第 3 集存在 ⇒ 不歧义，放行")
+            self.assertEqual(series._rerender_ep_conflict(root, ["LN01", "LN02"],
+                                                          ep_given=False), [1, 3],
+                             "同一批镜号在两集都存在 ⇒ 仍须拒绝")
+
+    def test_disease_sample_would_still_be_caught(self):
+        """把旧病装回去：旧代码等价于"永远按 ep=1 干"，这里证明它**会红**。"""
+        from v5 import series
+
+        with tempfile.TemporaryDirectory() as d:
+            root = self._root(d, {1: ["1", "2"], 2: ["1", "2"]})
+            # 旧行为：不判集，直接按 ep=1 取镜号 —— 两集镜号都"合法"，看不出打错了
+            from v5.media import pipeline
+            k1 = set(pipeline._known_shots(root, 1))
+            k2 = set(pipeline._known_shots(root, 2))
+            self.assertTrue({"LN01", "LN02"} <= k1 and {"LN01", "LN02"} <= k2,
+                            "前提：旧校验在两集都通过 ⇒ 单靠镜号校验拦不住，必须有本守卫")
+            self.assertNotEqual(
+                series._rerender_ep_conflict(root, ["LN01", "LN02"], ep_given=False), [],
+                "新守卫必须报出冲突，否则它形同不存在")
+
+
 if __name__ == "__main__":
     unittest.main()
