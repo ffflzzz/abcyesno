@@ -216,15 +216,15 @@ def create_app(base: str | None = None, web_root: str | None = None):
     **例外**：给了 `web_root`（同源托管前端）时空串才正确 —— 那时页面就长在这个
     服务上，根相对路径会被解析到同一个 origin。
 
-    `web_root`：**要一起托管的前端静态目录**。**默认（CLI）就是本仓库的 `web/`**
-    —— 前端应用代码（`index.html` + `assets/`，19 个文件）2026-09-18 已搬进本仓库，
-    这样就是**同一个 origin**：
+    `web_root`：**要一起托管的前端静态目录**。**默认（CLI）是 `frontend/dist`**
+    —— React 前端的构建产物（旧的原生 JS `web/` 已于 2026-09-30 退役删除）。
+    这样是**同一个 origin**：
       · 不需要 CORS（同源请求浏览器不做 CORS 检查）
       · **可以不再放行 `Origin: null`**（补上那条到期的安全复查项）
-      · 前端不用再手动配 `baseUrl`（`api.js` 自检同源）
+      · 前端不用再手动配 `baseUrl`（`api.ts` 自检同源）
       · 少养一个静态服务进程（本机沙箱里那个进程会被回收）
     """
-    from fastapi import FastAPI
+    from fastapi import FastAPI, Request
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import FileResponse, JSONResponse
     from . import webmap as wm
@@ -234,8 +234,8 @@ def create_app(base: str | None = None, web_root: str | None = None):
     if root_dir is not None:
         if not (root_dir / "index.html").is_file():
             raise RuntimeError(
-                "`web_root` 里没有 index.html：%s（应指向前端根目录，默认是本仓库的 web/）"
-                % root_dir)
+                "`web_root` 里没有 index.html：%s（应指向前端构建产物目录，"
+                "默认是 frontend/dist，需先 npm run build）" % root_dir)
         base = ""                       # 同源 → 根相对路径才对
     else:
         base = base or os.environ.get("SHORTDRAMA_WEB_BASE", "")
@@ -404,6 +404,70 @@ def create_app(base: str | None = None, web_root: str | None = None):
         pid, ep = _resolve_eid(eid)
         root = webmap.project_root(pid)
         return wm.envelope(wm.storyboard_detail(root, ep))
+
+    @r.get("/v1/pixa/short-drama/projects/{pid}/canvas")
+    def project_canvas(pid: str, request: Request, ep: int = 1):
+        """把这一集**已跑完的产物**摆成画布（确定性，不调模型、不烧配额）。
+
+        返回的就是 Infinite Atelier 的 `importProject()` 能直接吃的形状
+        （`title` / `nodes` / `connections` / `viewport`，多余字段它自动忽略），
+        外加 `fingerprint`（输入指纹）与 `warnings`（哪一列没数据，不静默）。
+
+        ★ 地址前缀取**本次请求的来源**：开发期画布在 `:3000`、后端在 `:8787`，
+          填根相对路径会被浏览器解析到画布自己那个源 ⇒ 每个节点都是破图（实测）。
+        """
+        from . import canvasout
+        return wm.envelope(canvasout.build(_resolve_pid(pid), ep,
+                                           base=str(request.base_url)))
+
+    # ══════════════════ 画布应用的模型代理（同源 · OpenAI 兼容形状）══════════════════
+    #
+    # ★ 为什么要这层：画布直连模型的话，密钥要在浏览器里**再填一份**，而且
+    #   绕过后端的密钥池轮换 / 429 冷却 / 配额记账 —— 生成的东西日志和账本里都看不见。
+    #   走这里，密钥只有 `.env` 那一份；真正出图仍调 `providers.gen_image`，
+    #   与媒体链**同一条路**（这里不另写一份调用逻辑）。
+    from . import aigc
+
+    @r.get("/v1/models")
+    def aigc_models():
+        """只列后端真能服务的模型（见 `aigc.models_payload` 的说明）。"""
+        return aigc.models_payload()
+
+    @r.post("/v1/images/generations")
+    def aigc_image_generations(payload: dict):
+        try:
+            urls = aigc.generate_images(payload or {})
+        except Exception as exc:                       # noqa: BLE001
+            # 不静默返回空列表 —— 那会让画布显示"成功但没有图"
+            return JSONResponse(status_code=502, content={"error": {
+                "message": "生图失败：%s" % str(exc)[:300], "type": "shortdrama_proxy"}})
+        return aigc.image_response(urls)
+
+    # ── 尚未接线的通道：**明确报"为什么不行"**，而不是让它变成"能点但永远转圈" ──
+    _AIGC_UNWIRED = {
+        "/v1/images/edits": "带参考图的图生图未接线：画布按 multipart 上传**文件**，"
+                            "而后端的参考图约定是 **URL**（`extra_body.image`）。"
+                            "文件→URL 这一步没做，硬接等于赌供应商收不收 base64",
+        "/v1/chat/completions": "文本通道未做流式（SSE）转发，画布是按流读的",
+        "/v1/videos": "生视频未接：查进度要走 `GET {base}/agnesapi?video_id=&model_name=`，"
+                      "与 OpenAI 的 `/videos/{id}` 形状不同，照原样转发只会让画布永远转圈",
+    }
+
+    def _aigc_unwired(path: str, why: str):
+        def _handler():                              # noqa: ANN202
+            return JSONResponse(status_code=501, content={"error": {
+                "message": "shortdrama 代理未接线：%s" % why, "type": "not_implemented"}})
+        _handler.__name__ = "aigc_" + path.strip("/").replace("/", "_").replace("-", "_"
+                                                                                  ) + "_blocked"
+        return _handler
+
+    for _p, _why in _AIGC_UNWIRED.items():
+        r.add_api_route(_p, _aigc_unwired(_p, _why), methods=["POST"], include_in_schema=False)
+
+    @r.get("/v1/videos/{video_id}", include_in_schema=False)
+    def aigc_video_query_blocked(video_id: str):      # noqa: ARG001
+        return JSONResponse(status_code=501, content={"error": {
+            "message": _AIGC_UNWIRED["/v1/videos"], "type": "not_implemented"}})
 
     # ⚠️ 必须**显式**列 HEAD：FastAPI 的 `APIRoute` 不像 Starlette 的 `Route` 那样
     #    在注册 GET 时自动补 HEAD（实测 HEAD → 405）。而 `HEAD` 是
@@ -874,19 +938,40 @@ def create_app(base: str | None = None, web_root: str | None = None):
                 % (request.method, rel, _write_hint(rel)),
                 code="E501"))
 
-    # ── 同源托管前端（`--web-root`）──
+    # ── 同源托管静态前端 ──
     #
     # ★ **必须挂在最后**：Starlette 按注册顺序匹配 → 挂在前面的 API 路由先命中，
     #   `mount("/")` 只兜住剩下的一切（前端静态文件）。
+    #   ⚠️ 也正因为按顺序匹配，**子路径 `/atelier` 必须挂在 `/` 之前**，
+    #   否则会被根挂载整个吞掉（实测：挂反时 /atelier/ 返回的是工作台首页）。
     #   `html=True` 让目录请求回落 `index.html`。
     #
-    # ⚠️ 这是**有意把两棵目录合到一个 origin 上**，但**不合并仓库**：
-    #   ★ 2026-09-18 起**前端应用代码就在本仓库的 `web/`**（index.html + assets/，19 个文件），
-    #     所以这是"托管自己的前端"，不再是跨目录借用。
-    #   （`web/` 里**只有应用代码**；抓取产物 `_recon/`、截图、素材仍在外面的
-    #     `pavo-offline/` 工作目录里 —— 那些是实验资料，不该进本仓库。）
+    # ⚠️ 这是**有意把几棵目录合到一个 origin 上**，但**不合并仓库**：
+    #   · `/`        → `frontend/dist`（React 工作台；旧的原生 JS `web/` 已于 2026-09-30 退役）
+    #   · `/atelier` → `atelier/dist`（vendored 的画布应用 Infinite Atelier）
     #   真正的收益是**同源**（见 create_app 的 docstring），不是目录结构。
+    _mounts: list[tuple[str, Path, str]] = []
+    _atelier = config.PROJECT_ROOT / "atelier" / "dist"
+    if (_atelier / "index.html").is_file():
+        _mounts.append(("/atelier", _atelier, "atelier"))
+    else:
+        # 没构建就**说清楚**，别让人对着 404 猜是接口坏了还是地址写错了。
+        # ⚠️ 挂在 `app` 上而不是 `r` 上：`r` 已经 `include_router` 过了，
+        #    事后再往 `r` 上加路由**不会生效**（实测踩过一次静默 404）。
+        @app.api_route("/atelier", methods=["GET"], include_in_schema=False)
+        @app.api_route("/atelier/{rest:path}", methods=["GET"], include_in_schema=False)
+        def _atelier_missing(rest: str = ""):        # noqa: ANN202, ARG001
+            return JSONResponse(
+                status_code=503,
+                content=wm.error_body(
+                    "画布应用没构建：找不到 %s/index.html。先跑 "
+                    "cd atelier && npm install && VITE_BASE=/atelier/ npm run build"
+                    % _atelier, code="E503"))
+
     if root_dir is not None:
+        _mounts.append(("/", root_dir, "web"))
+
+    if _mounts:
         from fastapi.staticfiles import StaticFiles
         from starlette.responses import Response as _Resp
 
@@ -899,24 +984,36 @@ def create_app(base: str | None = None, web_root: str | None = None):
             return _Resp(status_code=204)
 
         class _NoCacheStatic(StaticFiles):
-            """静态文件统一加 `Cache-Control: no-cache`。
+            """静态文件：统一加 `Cache-Control: no-cache` + 无扩展名路径回落 index.html。
 
-            **为什么必须加**：`StaticFiles` 只发 `etag` / `last-modified`，
+            **为什么必须加 no-cache**：`StaticFiles` 只发 `etag` / `last-modified`，
             **不发 `Cache-Control`** ⇒ 浏览器启用**启发式缓存**（约文件年龄的 10%），
             在你再次访问时**直接用旧文件、连问都不问**。
             实测反复踩到：「改了 JS/CSS，刷新还是旧界面，以为改动没生效」。
-
             `no-cache` **不是"不缓存"**，而是"每次先回来问一句"：
             命中 `etag` 就是 304 空响应，成本可忽略；收益是**改完刷新必定生效**。
-            这是开发用 shim（同源托管本仓库 `web/`），正确性优先于那点带宽。
+
+            **为什么要 SPA 回落**：画布应用是 **history 路由**（`createBrowserRouter`），
+            深链 `/atelier/canvas` 在磁盘上没有对应文件 ⇒ 原本 404（实测）。
+            只回落到 `index.html` 给**没有扩展名**的路径，让前端路由自己接管；
+            带扩展名的（`.js` `.png`…）照旧 404 —— 否则丢一个图片文件会被伪装成
+            "首页 HTML"，那种错最难查。
+            （React 工作台不受影响：它走 hash 路由。）
             """
 
             async def get_response(self, path, scope):     # noqa: ANN001, ANN201
-                r = await super().get_response(path, scope)
+                from starlette.exceptions import HTTPException as _HTTPExc
+                try:
+                    r = await super().get_response(path, scope)
+                except _HTTPExc as exc:
+                    if exc.status_code != 404 or "." in path.rsplit("/", 1)[-1]:
+                        raise
+                    r = await super().get_response("index.html", scope)
                 r.headers["Cache-Control"] = "no-cache"
                 return r
 
-        app.mount("/", _NoCacheStatic(directory=str(root_dir), html=True), name="web")
+        for _path, _dir, _name in _mounts:
+            app.mount(_path, _NoCacheStatic(directory=str(_dir), html=True), name=_name)
 
     return app
 
@@ -932,21 +1029,27 @@ def main() -> int:
     ap.add_argument("--port", type=int, default=8787)
     ap.add_argument("--reload", action="store_true")
     ap.add_argument("--web-root", default=os.environ.get("SHORTDRAMA_WEB_ROOT", ""),
-                    help="要一起托管的前端静态目录。**默认就是本仓库的 `web/`**"
-                         "（前端应用已搬进来）→ 通常不用传。传空串 `--web-root=` 可关掉")
+                    help="要一起托管的前端静态目录。**默认是本仓库的 `frontend/dist`**"
+                         "（React 前端的构建产物）→ 通常不用传。传空串 `--web-root=` 可关掉")
     a = ap.parse_args()
 
     import uvicorn
-    # ★ 2026-09-18：前端**应用代码**已搬进本仓库 `web/`（index.html + assets/，19 个文件）。
-    #   所以这里**默认托管它** → 启动命令简化成 `python -m v5.server --port 8787`，
-    #   不用再记 `--web-root ../pavo-offline`。
+    # ★ 2026-09-30：默认托管切到 **`frontend/dist`**（React 那套成了唯一前端）。
+    #   原先默认是本仓库 `web/`（原生 JS 旧版），`web/` 已退役删除。
+    #   启动命令不变：`python -m v5.server --port 8787`。
     #   ⚠️ 默认值只加在 **CLI** 这一层，`create_app()` 的语义**不动** ——
     #      测试要靠「不传 web_root = 旧两服务模式」来验证 `Origin: null` 的放行差异。
     web_root = a.web_root
     if web_root == "":
-        cand = config.PROJECT_ROOT / "web"
+        cand = config.PROJECT_ROOT / "frontend" / "dist"
         if (cand / "index.html").is_file():
             web_root = str(cand)
+        elif cand.is_dir():
+            # 目录在、产物没构建 —— 别让人以为"前端起了但打不开"是后端的问题
+            print("[shim] ⚠️ %s 里没有 index.html ⇒ **前端没构建**，"
+                  "本次只起 API。先跑：cd frontend && npm run build" % cand)
+        else:
+            print("[shim] ⚠️ 找不到 %s ⇒ 本次只起 API（前端需自己起或传 --web-root）" % cand)
     root_dir = Path(web_root).resolve() if web_root else None
     # ★ 静态资源必须是**绝对 URL**：旧的两服务模式（前端 5500 / shim 8787）下
     #   根相对路径会被浏览器解析到页面 origin → 全部 404。
@@ -958,6 +1061,10 @@ def main() -> int:
     if base:
         webmap.set_media_base(base)
     print("[shim] 项目目录：%s" % config.PROJECTS_DIR)
+    _ad = config.PROJECT_ROOT / "atelier" / "dist" / "index.html"
+    print("[shim] 画布应用：%s" % ("同源挂在 /atelier" if _ad.is_file()
+                                  else "⚠️ 没构建（点画布入口会 503）→ cd atelier && "
+                                       "MSYS_NO_PATHCONV=1 VITE_BASE=/atelier/ npm run build"))
     if root_dir:
         print("[shim] ★ 同源托管前端：%s" % root_dir)
         print("[shim] ★ 打开这个就用：http://%s:%d/" % (hostname, a.port))
@@ -965,8 +1072,8 @@ def main() -> int:
         print("[shim]   要用 file:// 双击打开的话，设 "
               "SHORTDRAMA_WEB_ALLOW_NULL_ORIGIN=1（知道代价再开）")
     else:
-        print("[shim] 未托管前端（旧的两服务模式）：%s/web 不存在或 --web-root= 显式关掉了" %
-              config.PROJECT_ROOT)
+        print("[shim] 未托管前端（旧的两服务模式）：默认目录 frontend/dist 没有构建产物，"
+              "或 --web-root= 显式关掉了")
         print("[shim] 前端 baseUrl 请填：%s（不带 /api 也行）" % base)
     print("[shim] 探活：/health")
     uvicorn.run("v5.server:app" if a.reload else create_app(base, root_dir),

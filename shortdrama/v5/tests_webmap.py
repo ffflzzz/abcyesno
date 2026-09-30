@@ -992,69 +992,19 @@ class TestStylePreview(_Base):
             webmap.set_media_base(old)
 
 
-class TestFrontendPackSnapshot(_Base):
-    """★ **漂移检测**：前端的离线包快照必须与 `styles()` 一致。
+class TestStylePackFields(_Base):
+    """`styles()` 的字段完整性 —— 前端风格库按 `group` 分类、显示 `name`。
 
-    前端的 `web/assets/js/data/packs.js` 是 `_tools/gen_packs.py` 从
-    `webmap.styles()` 生成的**快照**（离线模式下风格库显示它）。
-    v5 加了包而忘了重跑生成脚本 → 用户界面上的风格库就少一个包
-    （实测事故：新增第 4 个包 `wool-felt-story-short` 时后端硬编列表静默拒了它）。
-
-    ★ 2026-09-18：前端**应用代码已搬进本仓库** `web/`，所以这里不再需要跨项目猜路径。
+    ★ 2026-09-30 重写。原本这里是「前端离线包快照 `web/assets/js/data/packs.js`
+      必须与 `styles()` 一致」的**漂移检测**（事故：新增第 4 个包 `wool-felt-story-short`
+      时后端硬编列表静默拒了它）。旧 `web/` 退役后快照不复存在，React 前端每次
+      直接取 `/styles` ⇒ 没有第二份真相可漂，漂移检测随它一起删。
+      但**字段本身仍会被界面消费**（缺 name/group = 风格库里出现无名条目），
+      这条判据保留，只是改判 `styles()` 自己。
     """
 
-    def _snapshot(self):
-        """同仓库的 `web/assets/js/data/packs.js`。
-
-        ⚠️ 搬进本仓库后**不再"找不到就跳过"** —— 跳过会把"文件丢了"藏起来，
-        而这正是这套漂移检测要防的事。缺了就直接失败。
-        """
-        p = config.PROJECT_ROOT / "web" / "assets" / "js" / "data" / "packs.js"
-        self.assertTrue(p.is_file(),
-                        "找不到 %s —— 前端应用应在本仓库 `web/` 下（或重跑 gen_packs.py）" % p)
-        return p
-
-    def test_snapshot_exists_in_repo(self):
-        """前端应用代码**应该**在 `web/` 里（搬过之后就位；缺了要能立刻看出来）。"""
-        p = config.PROJECT_ROOT / "web" / "index.html"
-        self.assertTrue(p.is_file(),
-                        "`web/index.html` 不存在 —— 前端应用应在本仓库 `web/` 下")
-
-    def test_web_tree_has_no_pavo_offline_dependency(self):
-        """★ 应用代码搬进 `web/` 后**不该再引用 `pavo-offline` 路径**（否则等于没搬干净）。
-
-        `_tools/` 里的验证脚本仍可能提到它（那是另一个目录的事），但
-        **`web/` 下的应用代码**——尤其是 `index.html` 与 `assets/js/**`——
-        不该出现对 `pavo-offline` 的路径依赖。
-        """
-        bad = []
-        for f in (config.PROJECT_ROOT / "web").rglob("*"):
-            if not f.is_file() or f.suffix.lower() not in (".html", ".js", ".css"):
-                continue
-            txt = f.read_text(encoding="utf-8", errors="replace")
-            for ln, line in enumerate(txt.splitlines(), 1):
-                # `pavo-offline:v1` 是 **localStorage 的键名**，不是路径 —— 放行
-                if "pavo-offline" in line and "pavo-offline:v1" not in line:
-                    bad.append("%s:%d %s" % (f.relative_to(config.PROJECT_ROOT), ln, line.strip()[:70]))
-        self.assertEqual(bad, [], "web/ 里仍有对 pavo-offline 的引用：\n  " + "\n  ".join(bad))
-
-    def test_snapshot_matches_backend(self):
-        f = self._snapshot()
-        txt = f.read_text(encoding="utf-8")
-        m = re.search(r'"packs"\s*:\s*(\[.*\])\s*\n\}', txt, re.S)
-        self.assertIsNotNone(m, "packs.js 里没找到 `packs` 数组（生成脚本改了？）")
-        snap = json.loads(m.group(1))
-        codes = [s["code"] for s in snap]
-        live = [s["code"] for s in webmap.styles()]
-        self.assertEqual(codes, live,
-                         "前端包快照与后端不一致 → 请重跑 `python _tools/gen_packs.py`\n"
-                         "  快照：%s\n  后端：%s" % (codes, live))
-
-    def test_snapshot_carries_name_and_group(self):
-        f = self._snapshot()
-        m = re.search(r'"packs"\s*:\s*(\[.*\])\s*\n\}', f.read_text(encoding="utf-8"), re.S)
-        snap = json.loads(m.group(1))
-        for s in snap:
+    def test_every_pack_carries_name_and_group(self):
+        for s in webmap.styles():
             self.assertTrue(s.get("name"), "包 %s 缺 name（前端要显示它）" % s.get("code"))
             self.assertTrue(s.get("group"), "包 %s 缺 group（前端按 group 分类）" % s.get("code"))
 

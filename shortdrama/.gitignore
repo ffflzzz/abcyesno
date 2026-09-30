@@ -1,3 +1,10 @@
 
 # 每个项目自己的 dev server 运行目录（含 .langgraph_api 进度）
 .dev/
+
+# 画布应用（vendored 的 Infinite Atelier）
+# ⚠️ 与 `frontend/dist` **不一样，dist 不入库**：它的构建会把 `public/` 里 8MB 的
+#    提示词封面与导演台产物一起拷进 dist，每次改动都产生十兆级 diff。
+#    没构建时 `v5/server.py` 会响亮提示去 `npm run build`，不会静默空挂。
+atelier/node_modules/
+atelier/dist/

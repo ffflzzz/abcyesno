@@ -164,7 +164,14 @@ export const Store = {
     set({ projects: state.projects.filter((p) => p.id !== pid) });
   },
 
-  /** 离线模式（local 驱动）的初始数据：直接引用旧 `web/assets/js/data/seed.js`。 */
+  /**
+   * 离线模式（local 驱动）的初始数据，来自 `window.PAVO_SEED`。
+   *
+   * ⚠️ 2026-09-30 现状：那份种子原本由旧 `web/assets/js/data/seed.js` 挂到 window 上，
+   * 而 React 入口**从未引用它** ⇒ 本方法在 React 版里一直是空转（走 console.warn 那条）。
+   * 旧 web 已退役，`seed.js` 随之删除 ⇒ local 驱动在 React 版**没有数据来源**。
+   * 要恢复离线演示，得给 React 构建产一份种子并真正挂上；否则就把这个驱动档删掉。
+   */
   loadSeed(): void {
     const seed = (window as unknown as { PAVO_SEED?: { styles?: StylePack[]; projects?: Project[] } }).PAVO_SEED;
     if (!seed) {

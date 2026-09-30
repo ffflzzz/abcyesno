@@ -2,8 +2,8 @@
    src/lib/scriptdoc.test.ts —— 移植的**等价性**测试（旧实现当标准答案）
    --------------------------------------------------------------------------
    为什么不手写期望值：手写期望只能证明"我写的时候想的是什么"，证明不了
-   **移植没走样**。这里把旧 `web/assets/js/core/scriptdoc.js` 直接加载起来当
-   对照实现，同一份输入喂两边，逐字节比对 html / stats ——
+   **移植没走样**。这里把旧实现（`mock/legacy/scriptdoc.js`，从旧 web 冻结而来）
+   直接加载起来当对照实现，同一份输入喂两边，逐字节比对 html / stats ——
    这是把 200 行解析逻辑搬语言时唯一靠得住的判据。
 
    语料用**真实产物**（`projects/<项目>/scriptwriter/scriptwriter_ep1.md`），不用手写样本：
@@ -18,7 +18,11 @@ import { render as mine, parse, stats } from './scriptdoc';
 
 /* ---------- 把旧实现加载进来当"标准答案" ---------- */
 
-const origFile = path.resolve(__dirname, '../../../web/assets/js/core/scriptdoc.js');
+/**
+ * 这份是**冻结快照**：旧 `web/` 已于 2026-09-30 退役，对照实现留在 `mock/legacy/`。
+ * ⇒ 它的职责只是守住"移植当时没走样"，不代表旧版最新行为（旧版已不再演进）。
+ */
+const origFile = path.resolve(__dirname, '../../mock/legacy/scriptdoc.js');
 const origSrc = fs.readFileSync(origFile, 'utf8');
 const win: Record<string, unknown> = {};
 new Function('window', origSrc)(win);

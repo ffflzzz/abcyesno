@@ -7,6 +7,7 @@
 import { Router } from '../router';
 import { Store, useStore } from '../store';
 import { Icon } from '../components/Icons';
+import { canvasOpenUrl } from '../lib/canvasApp';
 
 function Page({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -32,15 +33,65 @@ export function Inspiration() {
   );
 }
 
-/** 画布 —— 线上为无限画布编辑器，未纳入复刻范围 */
+/**
+ * 画布 —— 把某一集**已跑完的产物**摆成无限画布。
+ *
+ * 画布是独立应用（Infinite Atelier），不在本 SPA 的路由里 ⇒ 跳转是整页导航，
+ * 不能用 Router.go。地址收在 `lib/canvasApp.ts` 一处。
+ * 内容全由后端按盘上事实生成（资产定妆照 → 逐镜静帧 → 片段组 → 成片），
+ * 不调模型、不烧配额。
+ *
+ * 卡片上的"N镜"是**分镜表的镜数**（后端 `shots`），不是已生成的静帧数 ——
+ * 两者可以差很多（只跑了创作链的项目有镜数、没静帧）。
+ */
 export function Canvas() {
+  const { projects } = useStore();
+  const withBoard = projects.filter((p) => (p.episodes || []).some((e) => (e.shots || 0) > 0));
   return (
     <Page title="画布">
-      <div className="empty mt32">
-        {Icon.empty(48)}
-        <div>线上「画布」是独立的无限画布编辑器（/canvas）</div>
-        <div className="small">本次复刻范围聚焦短剧工作台，该模块未纳入。</div>
+      <div className="small mt16">
+        每集的画布由后端按盘上已有产物生成：资产定妆照 → 逐镜静帧 → 片段组 → 成片。
+        不调用模型、不消耗配额；点开的是独立应用，节点里可直接播放片段。
       </div>
+      {withBoard.length ? (
+        <div className="project-grid mt24">
+          {withBoard.map((p) => (
+            <div className="project-card" key={p.id}>
+              <div className="project-cover">
+                {p.cover ? <img src={p.cover} alt="" loading="lazy" /> : null}
+              </div>
+              <div className="project-meta">
+                <div className="flex1">
+                  <h3>{p.name}</h3>
+                  <p className="project-sub">
+                    {p.episodes.length}集<span className="divider" />{p.created_at}
+                  </p>
+                </div>
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 10 }}>
+                {(p.episodes || []).map((e) => {
+                  const n = e.shots || 0;
+                  return (
+                    <button key={e.id} type="button" className="btn btn--sm" disabled={!n}
+                      title={n ? `${n} 镜${e.has_final ? ' · 已出片' : ' · 未出片'}` : '这一集还没有分镜表'}
+                      onClick={() => window.open(canvasOpenUrl(p.id, e.no), '_blank', 'noopener')}>
+                      第{e.no} 集{n ? ` · ${n}镜` : ''}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="empty mt32">
+          {Icon.empty(48)}
+          <div>还没有可画的项目 —— 至少需要一集有分镜表</div>
+          <div className="small">分镜出来后，这里会按集列出入口。</div>
+          <button type="button" className="btn btn--primary btn--sm mt16"
+            onClick={() => Router.go('/playlet/list')}>去短剧工作台</button>
+        </div>
+      )}
     </Page>
   );
 }

@@ -36,6 +36,11 @@ export interface Episode {
   script?: string;
   script_status?: string;
   storyboard?: { ratio?: string; segments?: Segment[] };
+  /** 后端便利字段：分镜表的镜数（`len(shots(root,ep))`），**不是**已生成的静帧数。 */
+  shots?: number;
+  /** 后端便利字段：`media/ep{N}/episode_final.mp4` 在不在盘上。 */
+  has_final?: boolean;
+  duration_s?: number;
 }
 
 export interface Segment {

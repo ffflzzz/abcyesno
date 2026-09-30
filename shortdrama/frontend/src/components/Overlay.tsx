@@ -8,7 +8,7 @@
        （这是刻意的：弹层不能被视图重渲染带走），但**不需要谁来管它的生死**；
      · 不再有 `mask.remove()`、`onReady(api)`、`root.querySelector(...)`
        这一整套"渲染完再去 DOM 里找元素"的回调。
-   类名（`.ov-*`）与旧版一致 ⇒ 直接复用 `web/assets/css/app.css`，样式不分叉。
+   类名（`.ov-*`）与旧版一致 ⇒ 用 `src/styles/app.css` 里那一份（旧 web 退役后随入口一起搬进来的）。
    ========================================================================== */
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';

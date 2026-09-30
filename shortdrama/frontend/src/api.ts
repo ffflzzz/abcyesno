@@ -526,7 +526,8 @@ export async function hydrate(
     return { hydrated: true, from: 'progress', vendors: await vds };
   }
 
-  if (path === '/playlet/list' || path === '/') {
+  if (path === '/playlet/list' || path === '/' || path === '/canvas') {
+    // `/canvas` 走同一条：画布入口页就是"按项目/按集挑一集"，要的是同一份项目列表。
     // 风格库一起水合：http 驱动下必须以**后端真实类型包**为准，
     // 否则下拉里是线上站点的风格名、实际却跑 v5 的某一个包（静默偏差）。
     const styles = Api.getStyles().then(

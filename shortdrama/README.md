@@ -345,7 +345,11 @@ projects/<项目名>/
 python -m unittest discover -s v5 -p 'tests_*.py' -t .
 ```
 
-**973 个用例 / 16 个测试文件**，纯离线（不打网络）：`tests_flow`(168)、`tests_server`(112)、`tests_webmap`(84)、`tests_core`(73)、`tests_cast`(69)、`tests_webchain`(64)、`tests_validate`(62)、`tests_webwrite`(61)、`tests_graph`(53)、`tests_guards`(49)、`tests_hitl`(42)、`tests_assets`(40)、`tests_roles`(35)、`tests_vendors`(33)、`tests_rerender_agent`(20)、`tests_sheet`(8)。
+**1177 个用例 / 27 个测试文件**（2026-09-30 深夜实测计数），纯离线（不打网络）：`tests_flow`(188)、`tests_server`(112)、`tests_core`(80)、`tests_webmap`(81)、`tests_cast`(72)、`tests_validate`(68)、`tests_webchain`(64)、`tests_webwrite`(61)、`tests_graph`(53)、`tests_assets`(50)、`tests_guards`(57)、`tests_hitl`(42)、`tests_roles`(35)、`tests_vendors`(34)、`tests_variants`(26)、`tests_rerender_agent`(25)、`tests_sheetcheck`(22)、`tests_aigc`(13)、`tests_chatrotate`(11)、`tests_canvasout`(11)、`tests_sheet`(12)、`tests_stills`(12)、`tests_shotcheck`(16)、`tests_storyboard_fmt`(6)、`tests_reroll`(9)、`tests_devport`(8)、`tests_render_recipe`(8)。
+
+> ⚠️ 这一行的数字**会随每次加测试而过期**（2026-09-30 就发现它从 973/16 落后到 1163/26）。
+> 要准数就现跑：`python -m unittest discover -s v5 -p 'tests_*.py' -t .`。
+> `scripts/check_docs.py` 只拦"机器可数"的结构漂移，**拦不到这里**。
 
 值得留意的回归保护：
 
@@ -356,6 +360,7 @@ python -m unittest discover -s v5 -p 'tests_*.py' -t .
 - `tests_flow.py::TestExternalAgentLockout`（6 例）锁死**准入契约**：`--media-only` 不存在、`--resume-media` / `--stills-only` 无放行环境变量时拒绝、`--monitor` 严格只读（不改 manifest、不代建项目、发现问题只报告）。
 - `tests_flow.py::TestMediaGateAtSingleEntry`（6 例）+ `TestMediaIsOutsideGraph`（3 例）锁死**媒体链唯一入口**：8 角色未齐 / 评审未过被拦、`force_passed` 放行、`stills_only` 不受 render 门约束、`rendered` 记账落盘、**输入指纹变则自动解除闩锁**；并防 `MEDIA_NODE` 旁路复活。
 - `tests_flow.py::TestApprovalGates`（8 例）锁死三道审批门：**上游产物一变，批文自动作废**。
+- `tests_canvasout.py`（11 例）锁死**画布导出的三条判据**：节点地址必须是**绝对**的（写成根相对时，画布与后端不同源会每格破图，实测）、资产连线**按场次带连一次**而不是逐镜连（一条"每镜都在"的场景资产曾拉出 30 根线）、缺 `stills.json` / `video_jobs.json` / 成片时**必须进 `warnings`** 且不留假节点。两条"旧病"装回去都验过会红。
 
 ## 9. 已知局限
 
@@ -399,11 +404,46 @@ v5/
 │   ├── model_profile.py    #   模型怪癖档案（按模型归档，组装器零改动）
 │   ├── prompt.py           #   六段式提示词组装 + 反烧字清洗
 │   └── providers.py  scaffold.py
+├── canvasout.py            # **画布导出**：按盘上事实摆成 Infinite Atelier 的画布（确定性、零配额）
+├── aigc.py                 # **画布模型代理**：OpenAI 形状 → 后端密钥池转发（比例折算在这）
 └── skills/packs/<包名>/    # 类型包：角色 SKILL.md + pack.json + style-block.md
 scripts/                    # 运维脚本（人用）
 projects/                   # 运行时产出（已 gitignore）
+frontend/                   # React 工作台源码（`npm run build` → `frontend/dist`，由 `/` 同源托管）
+atelier/                    # **vendored 的画布应用**（Infinite Atelier，React+antd+tailwind）
+│                             #   `MSYS_NO_PATHCONV=1 VITE_BASE=/atelier/ npm run build`
+│                             #   → `atelier/dist`，由 `/atelier` 同源挂载（dist 与 node_modules 不入库）
+docs/pavo/                  # 外部平台对接的取证材料（端点全集 / 模型档位 / 直调客户端）
 AGENTS.md                   # 外部 Agent 调用规范（权威）
 ```
+
+**前端两棵树**：`frontend/`（工作台）与 `atelier/`（画布）各自构建、由 `v5/server.py` 挂到
+同一个 origin 下（`/` 与 `/atelier`）。旧的原生 JS `web/` 已于 2026-09-30 退役删除。
+⚠️ 在 Git Bash 里构建 `atelier/` **必须带 `MSYS_NO_PATHCONV=1`** —— 否则 `/atelier/`
+会被 MSYS 当成 Unix 路径改写成 `/Program Files/Git/atelier/`，产物里的资源地址全部 404（实测黑屏）。
+
+### 画布的模型请求走同源代理（`v5/aigc.py`）
+
+画布**不直连**模型。它按 OpenAI 形状请求同源后端，后端用 `.env` 的密钥池转发：
+
+| 路由 | 状态 |
+|---|---|
+| `POST /v1/images/generations` | ✅ 已通（真出图） |
+| `GET /v1/models` | ✅ 列后端真能服务的模型 |
+| `POST /v1/images/edits`（带参考图） | ⛔ 501 + 原因：画布上传**文件**，后端的参考图约定是 **URL** |
+| `POST /v1/chat/completions` | ⛔ 501 + 原因：未做流式（SSE）转发 |
+| `POST /v1/videos`、`GET /v1/videos/{id}` | ⛔ 501 + 原因：查进度要走 `GET {base}/agnesapi?video_id=&model_name=`，与 OpenAI 形状不同 |
+
+★ **为什么要这层**：直连要在浏览器里再填一份密钥，且绕过密钥池轮换 / 429 冷却 / 配额记账
+—— 生成的东西在日志和账本里看不见。走代理后密钥只有 `.env` 那一份，出图仍调
+`providers.gen_image`（与媒体链同一条路，不另写一份调用逻辑）。
+`atelier/` 的默认渠道已改成同源地址 + 占位密钥（它的"就绪"判据要求密钥非空，代理不看这个值），
+⇒ 开箱不用配置。
+
+★ **代理顺手修掉了"假开关"**：实测 Agnes **忽略**像素串 `size`（画布发 `1024x1792`、
+后端发 `1K`+`ratio:"9:16"`，两边出图完全一样 736×1312）。`aigc.ratio_from_size` 把任意
+`size` 折到官方比例档位（`config.py` 记着的 8 档）再发出去 —— 实测画布选竖屏得
+736×1312、选横屏得 1312×736，比例选择器**真的**生效了。
 
 **依赖**：ffmpeg / ffprobe 需在 PATH 中（拼接与帧抽取用）。
 

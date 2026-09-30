@@ -1,25 +1,11 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
-import { fileURLToPath } from 'node:url';
-
-/**
- * 为什么 `server.fs.allow` 要放开到仓库根：
- * 样式（`web/assets/css/*.css`）**不复制**，直接引用旧的那一份 ——
- * 复制会立刻产生「同一判据写两份」，而本项目最贵的一类 bug 就是这个
- * （改了一边忘了另一边 = 两边界面悄悄不一致）。
- * 过渡期两边共用一份 CSS：改一次，React 版和旧 web 版同时生效。
- *
- * 等 `web/` 真要退役时，把那两个 css 移进 `frontend/src/styles/` 即可 ——
- * 那时 import 路径会立刻报错，**不会静默失效**。
- */
-const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 
 export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
     strictPort: true,
-    fs: { allow: [repoRoot] },
     /**
      * ★★ **必须把这几条代理回后端**（2026-09-19 真浏览器实测抓到的真问题）：
      *
