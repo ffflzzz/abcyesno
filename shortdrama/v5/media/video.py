@@ -536,7 +536,7 @@ def rate_limit_should_retry(q_try: int, n_keys: int) -> bool:
 
 
 def pack_ref_images(project_root: Path, group: list[dict], own: dict[str, str],
-                    prev_url: str | None = None) -> tuple[list[str], list[tuple[str, str]]]:
+                    prev_url: str | None = None, ep=None) -> tuple[list[str], list[tuple[str, str]]]:
     """A 臂图序（2026-09-28 实测）：**身份由人物设定表锁，静帧只当场景实现与接续锚**。
 
     返回 `(urls, roles)`，`roles` 与 `urls` 同序，供
@@ -555,7 +555,8 @@ def pack_ref_images(project_root: Path, group: list[dict], own: dict[str, str],
     """
     names_out: dict = {}
     types_out: dict = {}
-    bound = assets.bind(project_root, group, names_out=names_out, types_out=types_out)
+    bound = assets.bind(project_root, group, names_out=names_out, types_out=types_out,
+                        ep=ep)
     chars: list[tuple[str, str]] = []      # (url, 资产名)
     locs: list[tuple[str, str]] = []
     props: list[tuple[str, str]] = []
@@ -685,7 +686,7 @@ def submit_packs(project_root: Path, shots: list[dict], stills: dict, planned: l
             clip_dir, ("pack%02d" % (k - 1)) if k > 1 else None,
             stills, prev_last_name)
         # A 臂图序（2026-09-28 实测）：设定表锁身份、静帧只当场景实现与接续锚。
-        urls, roles = pack_ref_images(project_root, g, own, prev_url=prev_url)
+        urls, roles = pack_ref_images(project_root, g, own, prev_url=prev_url, ep=ep)
         # 项目风格块（style-block / 项目 style.md）一次加载，逐组复用——
         # 2026-09-22：替换 build_pack_prompt 里硬编码的「国风古装」句（题材污染）。
         prompt = prompt_mod.build_pack_prompt(

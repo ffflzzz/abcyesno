@@ -766,7 +766,7 @@ def _run_impl(project_root: Path, ep: int = 1, log=print, max_regen: int = 2,
     if style.still_refs_enabled(project_root):
         try:
             refs_by_shot = assets.bind(project_root, shots, names_out=ref_names,
-                                       types_out=ref_types)
+                                       types_out=ref_types, ep=ep)
             log("[media] 参考图绑定 %d/%d 镜" % (len(refs_by_shot), len(shots)))
             # ★ **cast 之后的资产完整性校验**（2026-09-12 新增）。
             # 为什么必须在这里：资产契约门跑在 cast **之前**（那时注册表必然为空），
