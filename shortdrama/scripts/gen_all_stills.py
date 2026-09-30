@@ -57,7 +57,7 @@ def main() -> None:
             raise SystemExit("[gen] ⛔ --only 里这些镜号不在分镜中：%s"
                              % "、".join(sorted(missing)))
         print("[gen] 只重画 %d 镜：%s" % (len(shots), "、".join(s["name"] for s in shots)))
-def prepare_shots(root, shots, log=print):
+def prepare_shots(root, shots, ep=None, log=print):
     """把 `pipeline._run_impl` 的**逐镜注入**原样做一遍，返回
     `(shots, refs_by_shot, ref_names, ref_types)`。
 
@@ -72,7 +72,7 @@ def prepare_shots(root, shots, log=print):
     else:
         log("[gen] ⚠️ **无风格块**（brief.json 缺 pack 或解析失败）→ 提示词朴素，"
             "重画出来的静帧没有本包审美。先修 brief 再跑")
-    idl = assets.identity_lines(root, shots)
+    idl = assets.identity_lines(root, shots, ep=ep)
     shots = [{**s, "_identity_line": idl.get(s["name"], "")} for s in shots]
     log("[gen] 身份锚点 %d/%d 镜" % (len(idl), len(shots)))
     # ★ **场景锚点 + 出场角色数**（2026-09-29 补的第二处漏注入）：
@@ -100,7 +100,8 @@ def prepare_shots(root, shots, log=print):
     ref_names: dict = {}
     ref_types: dict = {}
     if style.still_refs_enabled(root):
-        refs_by_shot = assets.bind(root, shots, names_out=ref_names, types_out=ref_types)
+        refs_by_shot = assets.bind(root, shots, names_out=ref_names,
+                             types_out=ref_types, ep=ep)
         log("[gen] 参考图绑定 %d/%d 镜" % (len(refs_by_shot), len(shots)))
     else:
         refs_by_shot = {}
@@ -139,7 +140,7 @@ def main() -> None:
         if missing:
             raise SystemExit("[gen] ⛔ --only 里这些镜号不在分镜中：%s"
                              % "、".join(sorted(missing)))
-    shots, refs_by_shot, ref_names, ref_types = prepare_shots(root, shots)
+    shots, refs_by_shot, ref_names, ref_types = prepare_shots(root, shots, ep=int(ep))
     planned = relations.plan_frames(shots)
     # ★ `--only` 必须在 `prepare_shots` **之后**筛（2026-09-30 实测）。
     #   先筛后算会让这几镜看不到整集里**唯一带年龄的第一拍** ⇒ 「本集默认年龄段」

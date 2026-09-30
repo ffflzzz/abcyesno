@@ -362,6 +362,33 @@ class EpisodeDefaultTests(unittest.TestCase):
                          {"阿旺": "14岁"})
         d.cleanup()
 
+    def test_missing_ep_does_not_borrow_another_episode(self):
+        """不传 `ep` ⇒ **不猜集号**（宁可只按传入的镜算），否则跨集重画会串味。
+
+        实测：`gen_all_stills --ep=1` 漏传 ep 时读到 manifest 的 `episode_index=2`，
+        第 1 集 18 镜全部套上第 2 集的「13岁版」——上一集的孩子被画成少年。
+        """
+        d = tempfile.TemporaryDirectory()
+        root = Path(d.name) / "p3"
+        (root / "scenedesigner").mkdir(parents=True)
+        # 盘上只有第 2 集的分镜；manifest 也写着 2 —— 第 1 集的镜若漏传 ep 就会被带偏
+        (root / "scenedesigner" / "scenedesigner_ep2.md").write_text(
+            _TABLE + "\n" + "\n".join(row(i + 1, v) for i, v in enumerate(self.EP)),
+            encoding="utf-8")
+        (root / ".agent_state.json").write_text(
+            json.dumps({"episode_index": 2}), encoding="utf-8")
+        one = storyboard.parse(
+            (root / "scenedesigner" / "scenedesigner_ep2.md").read_text(encoding="utf-8")
+        )[2]
+        self.assertEqual(assets.episode_defaults(VARIANT_REG, [one], root=root), {},
+                         "没传 ep 就不许借用别的集的年龄段（宁可不换表）")
+        self.assertEqual(
+            [h.get("name") for h in
+             assets.hits_for_shot(VARIANT_REG, one,
+                                  defaults={"阿旺": "14岁"})[0]], ["阿旺（14岁版）"],
+            "对照组：显式给出**本集**默认年龄段时确实换表")
+        d.cleanup()
+
     def test_registry_without_variant_entries_is_byte_untouched(self):
         """没有变体条目的历史项目 ⇒ 传了默认年龄段也不许改绑定的任何东西。"""
         s = shots_of("@阿旺（蓝色外套）蹲在台阶上，视线落在自己的鞋尖")[0]

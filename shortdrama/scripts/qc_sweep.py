@@ -4,7 +4,7 @@
 用途：静帧批次跑完后，先摸清哪几镜有硬伤（文字/缺人物/杂脸），
 再决定定向重生成名单——避免全量重画白烧配额。
 
-用法：python scripts/qc_sweep.py [project] [--json]
+用法：python scripts/qc_sweep.py <project> [--ep=N] [--json]
 """
 import json
 import sys
@@ -13,6 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from v5 import config  # noqa: E402
+from v5.guards import resolve_path  # noqa: E402
 from v5.media import qc, storyboard  # noqa: E402
 from v5.media.pipeline import HARD_KEYS  # noqa: E402
 
@@ -23,10 +24,21 @@ def main() -> None:
     # ⚠️ 原默认值 `bootleg99-full` 已随 2026-09-14 的老架构清理删除；请显式传项目名。
     project = args[0] if args else "<请显式传项目名>"
     root = config.PROJECTS_DIR / project
-    sd = root / "media" / "ep1" / "stills"
-    shots = storyboard.parse(
-        (root / "scenedesigner" / "scenedesigner.md").read_text(encoding="utf-8"))
+    ep = next((a.split("=", 1)[1] for a in sys.argv[1:] if a.startswith("--ep=")), "1")
+    sd = root / "media" / ("ep" + str(ep)) / "stills"
+    # 分镜是**集级**产物（`scenedesigner_ep{N}.md`），必须走 `resolve_path`。
+    # 本脚本原先硬写旧名 `scenedesigner.md` ⇒ 新项目一律 FileNotFoundError，
+    # 与 `gen_all_stills.py` 2026-09-19 修过的是同一个坑（两个入口同型病，只修了一个）。
+    sb = resolve_path(root, "scenedesigner", int(ep))
+    if not sb.exists():
+        raise SystemExit("[qc] ⛔ 找不到分镜：%s（项目名/集号对不对？）" % sb)
+    shots = storyboard.parse(sb.read_text(encoding="utf-8"))
+    n_parsed = len(shots)
     shots = shots[: config.VIDEO_MAX_SHOTS]
+    if len(shots) < n_parsed:
+        print("[qc] ⚠️ 分镜 %d 镜 > 上限 %d → **只审前 %d 镜**，其余未审。"
+              "要全片审请设 AGNES_VIDEO_MAX_SHOTS=%d。"
+              % (n_parsed, config.VIDEO_MAX_SHOTS, len(shots), n_parsed))
 
     rows, hard_names = [], []
     for s in shots:

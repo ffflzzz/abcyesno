@@ -413,25 +413,33 @@ def episode_defaults(reg: dict, shots: list, root=None, ep=None, log=None) -> di
       `--rerender LN05 --from still` 与 `gen_all_stills --only=` 都只把**被抽中的那几镜**
       传进 `bind`/`identity_lines`，而那几镜恰好都是不带年龄的后续拍 ⇒ 默认年龄段算不出来
       ⇒ 重画的这一镜绑回孩童表、邻居镜仍是少年表，**同一个人两种年纪**。
-      读不到盘（老项目/解析失败）才退回 `shots`。
+      读不到盘（老项目/解析失败）才退回 `shots`。**必须显式传 `ep`**：
+      集号一旦靠猜（manifest），跨集重画就会串味，见下方那条告警。
     """
     from . import variants as variants_mod
 
     corpus = list(shots)
-    if root is not None:
+    if root is not None and ep is not None:
         try:
             from .. import guards
             from . import storyboard as sb_mod
-            e = int(ep or guards.load_manifest(Path(root)).get("episode_index", 1) or 1)
-            p = guards.resolve_path(Path(root), "scenedesigner", e)
+            p = guards.resolve_path(Path(root), "scenedesigner", int(ep))
             if p.exists():
                 parsed = sb_mod.parse(p.read_text(encoding="utf-8"))
                 if parsed:
                     corpus = parsed
         except Exception as ex:  # noqa: BLE001 -- 退回"只看传进来的镜"，但要报出来
             if log:
-                log("[variants] 读不到本集分镜 → 默认年龄段只按传入的 %d 镜算：%s"
-                    % (len(shots), str(ex)[:80]))
+                log("[variants] 读不到第 %s 集分镜 → 默认年龄段只按传入的 %d 镜算：%s"
+                    % (ep, len(shots), str(ex)[:80]))
+    elif root is not None and _variant_index(reg):
+        # ⛔ **不拿 manifest 猜集号**（2026-10-01 实测：猜错会**跨集串味**）。
+        #   `gen_all_stills --ep=1` 没传 ep 时读到 manifest 的 `episode_index=2`，
+        #   于是第 1 集 18 镜全部套上第 2 集的「13岁版」——上一集的孩子被画成少年。
+        #   只有**真有多张年龄表**的项目会受影响，所以这条告警对历史项目是安静的。
+        print("[assets] !! 未传 ep 就调 bind/identity_lines（注册表里有分龄表）"
+              "→ 默认年龄段只按传入的 %d 镜算，**跨集重画会绑错年纪**；调用方请传 ep"
+              % len(shots))
     entries = (reg or {}).get("assets", []) or []
     known = [str(a.get("name") or "") for a in entries if a.get("name")]
     chars = {str(a.get("name") or "") for a in entries if a.get("type") == "character"}
