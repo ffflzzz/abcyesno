@@ -88,3 +88,15 @@ shortdrama/.env.*
 # 会连它一起吞掉，导致打包后短剧页 404。
 !shortdrama/frontend/dist/
 !shortdrama/frontend/dist/**
+
+# ── 在跑的会话状态与实验产物：只忽略，内容一律不删 ──────────────────
+# 2026-09-30 清 git status 时确认这几处是别的会话正在写的，删了就是毁工作现场：
+#   .workbuddy/ .qoder/      —— 各工作区的本地会话记忆
+#   shortdrama/tmp/          —— 短剧 A/B 臂成片与中间产物（实测 1.4G / 4 万文件，当天仍在写）
+# 上方 .workbuddy/memory/ 只盖住了 memory/，tmp/ 会漏出来，这里补整目录。
+.workbuddy/
+.qoder/
+shortdrama/tmp/
+# 仓库根 tmp/ 是 scripts/test-browser-panel/build.mjs 的默认输出目录，
+# 每次跑都会长出来，别再让它进 status。
+/tmp/
