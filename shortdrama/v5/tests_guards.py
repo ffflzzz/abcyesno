@@ -546,6 +546,31 @@ class TestMediaGateReviewForcePass(unittest.TestCase):
             self.assertTrue(ok, "超过上限应当放行")
             self.assertTrue(m["review"].get("force_passed"), "放行必须留下 force_passed")
 
+    def test_force_pass_without_machine_block_is_not_silent(self):
+        """★ 判定块解析不出来时 `reasons=[]` ⇒ 放行日志不许只剩一个空标题。
+
+        实错（2026-09-29 huashan-duel-v4-0928 ep2）：reviewer 产物只写了散文
+        `**pass = false**`、没有围栏机器块，程序读不到条目与 rerun 目标；
+        放行那行明明写着「评审仍未消化的条目：」后面却一个字都不打 —— 人看到的
+        就是"门自己放行了"，正是这条机制当初承诺要避免的样子。
+        """
+        import io
+        from contextlib import redirect_stdout
+        from tempfile import TemporaryDirectory
+
+        cap = int(config.MAX_REVISIONS_PER_PHASE)
+        with TemporaryDirectory() as d:
+            root = Path(d)
+            m = self._m()
+            m["review"]["reasons"] = []
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                for _i in range(cap + 1):
+                    guards.media_gate("render", m, ep=1, root=root)
+            out = buf.getvalue()
+        self.assertIn("force_passed", out, out)
+        self.assertIn("没有机器判定块", out, "列不出条目就必须说明为什么列不出：" + out)
+
     def test_counter_survives_process_restart(self):
         """★ 计数必须落盘：不落盘 = 每次重启都从 0 数 = 保险再次空转。"""
         from tempfile import TemporaryDirectory
@@ -635,6 +660,35 @@ class TestGateAfterDiskReconcile(unittest.TestCase):
             reloaded = guards.load_manifest(root)
             self.assertEqual(int((reloaded.get("review_blocks") or {}).get("1") or 0), 1,
                              "拦截次数没落盘 ⇒ 跨进程不累计，保险空转")
+
+
+class TestReviewParseWarningNamesTheEpisode(unittest.TestCase):
+    """解析不出判定块时，告警必须点名**本集**那份文件。
+
+    实错（2026-09-29 渲 huashan-duel-v4-0928 第 2 集）：告警写的是
+    `out_path("reviewer")`（默认 ep=1）⇒ 日志报「review_ep1.md 解析不出判定块」，
+    而 ep1 那份的 `pass: false` 块是完好的。我据此去查了一个**不存在**的解析器 bug，
+    真凶是 ep2 的 reviewer 只写了散文 `**pass = false**`、没有机器判定块。
+    """
+
+    def test_warning_names_ep2_file_not_ep1(self):
+        import io
+        from contextlib import redirect_stdout
+        from tempfile import TemporaryDirectory
+
+        with TemporaryDirectory() as d:
+            root = Path(d)
+            p = root / "reviewer" / "review_ep2.md"
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text("## 终审判定\n\n**pass = false**\n\n阻断理由：LN02 双 @。\n",
+                         encoding="utf-8")
+            guards.save_manifest(root, {"episode_index": 2})
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                guards.reconcile_manifest(root, guards.load_manifest(root), ep=2)
+            out = buf.getvalue()
+        self.assertIn("review_ep2.md", out, "没告警 = 判定被静默当成未通过：" + out)
+        self.assertNotIn("review_ep1.md", out, "告警点名了别的集的文件 ⇒ 会把人引去查错的地方")
 
 
 if __name__ == "__main__":

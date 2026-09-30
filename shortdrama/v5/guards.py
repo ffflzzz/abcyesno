@@ -107,17 +107,20 @@ def reconcile_manifest(root: Path, m: dict | None = None,
                     # 但必须说出来，否则换个写法就会再次静默退化成「评审未通过」。
                     print("[guards] ⚠️ %s 的判定块没有代码围栏（```yaml）—— 契约要求围栏，"
                           "本次已按裸块兜底解析（pass=%s）"
-                          % (out_path("reviewer"), rev["passed"]))
+                          % (out_path("reviewer", ep), rev["passed"]))
             else:
                 # ★ 产物存在却解析不出判定 → 媒体门必然报「评审未通过（无 pass: true）」，
                 #   而报告里可能明明写着 `pass: true`（自相矛盾、极难排查）。
                 #   原先这里是**完全静默**的（连异常都被 `except: pass` 吞掉）—— 必须显式告警。
+                #   ⚠️ 文件名必须带**本集集号**：这里原先写死 `out_path("reviewer")`（默认 ep=1），
+                #   于是渲第 2 集时告警指着 `review_ep1.md` 报"解析不出判定块"，而那份文件
+                #   的判定块是好的（2026-09-29 实测把我引去查了一个不存在的解析器 bug）。
                 print("[guards] ⚠️ %s 存在但解析不出判定块（pass/rerun/reasons）"
                       "→ 评审门会判「未通过」，媒体链会被拦下。请检查该文件末尾的判定块格式。"
-                      % out_path("reviewer"))
+                      % out_path("reviewer", ep))
         except Exception as e:  # noqa: BLE001
             print("[guards] ⚠️ %s 判定解析异常：%s"
-                  % (out_path("reviewer"), str(e)[:120]))
+                  % (out_path("reviewer", ep), str(e)[:120]))
     save_manifest(root, m)
     return m
 
@@ -545,6 +548,13 @@ def media_gate(action: str, m: dict, ep: int | None = None,
                       % (n, cap))
                 for _r in (rev.get("reasons") or [])[:5]:
                     print("   · " + str(_r)[:200])
+                if not (rev.get("reasons") or []):
+                    # 「不许静默」的边界情形：判定块**根本没解析出来**时 reasons 是空的，
+                    # 上面那行"仍未消化的条目："后面会一个字都不打 ⇒ 放行看起来像走了过场。
+                    # 实测：huashan-duel-v4-0928 ep2 的 reviewer 只写了散文 `**pass = false**`。
+                    print("   · （**评审报告里没有机器判定块**，程序读不出条目与 rerun 目标 —— "
+                          "上面那句「未消化」只能按「整份判决都未消化」处理。"
+                          "去补 reviewer 产物末尾的 ```yaml 判定块，或人工核一遍再放行。）")
             else:
                 return False, ("评审未通过（无 pass: true），不能渲染 —— 本集第 %d/%d 次拦截，"
                                "超过 %d 次本门将记 force_passed 放行" % (n, cap, cap))

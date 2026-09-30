@@ -99,6 +99,18 @@ def normalize_rerun(rerun, allowed: tuple[str, ...] = RERUN_ROLES) -> list[str]:
     return [r for r in ROLES if r in got]
 
 
+def _as_bool_verdict(v) -> bool | None:
+    """`verdict:` 那一行的取值词表（模型爱写 pass/fail 而不是 true/false）。"""
+    if isinstance(v, bool):
+        return v
+    s = str(v or "").strip().lower()
+    if s in ("pass", "passed", "ok", "true", "yes", "通过", "判通过", "合格"):
+        return True
+    if s in ("fail", "failed", "false", "no", "reject", "不通过", "未通过", "不合格"):
+        return False
+    return None
+
+
 def _from_mapping(data) -> dict | None:
     """把已解析成映射的判定块转成标准结果；**两种格式都不成立时返回 None**。
 
@@ -109,6 +121,23 @@ def _from_mapping(data) -> dict | None:
     if not isinstance(data, dict):
         return None
     keys = {str(k).strip().lower(): v for k, v in data.items()}
+    # ── 同义键归一（2026-09-30 实测）：xianxia-vfx-action 的 reviewer 连着两份产物写成
+    #   `verdict: pass` / `blocking: []` / `rerun_role: null`，而程序只认
+    #   `pass` / `reasons` / `rerun` ⇒ **一份判了"通过"的评审被读成"读不出判定块"**，
+    #   媒体链被假拦（比误放更难查，因为日志只说"未通过"）。
+    #   两侧都补：解析器认同义词（打 `synonym` 标记以便如实告警），包契约里把块形写死。
+    syn = False
+    if "pass" not in keys and "verdict" in keys:
+        v = _as_bool_verdict(keys.get("verdict"))
+        if v is not None:
+            keys["pass"] = v
+            syn = True
+    if "reasons" not in keys and "blocking" in keys:
+        keys["reasons"] = keys.get("blocking")
+        syn = True
+    if "rerun" not in keys and "rerun_role" in keys:
+        keys["rerun"] = keys.get("rerun_role")
+        syn = True
     if not ({"pass", "rerun", "reasons"} & set(keys)):
         # 兼容旧格式（历史产物 / 其他类型包）：needs_revision + revision_target
         if "needs_revision" in keys:
@@ -126,7 +155,11 @@ def _from_mapping(data) -> dict | None:
     if passed is None:
         # pass 缺失：有 rerun 视为不通过，否则无法判定 → 交给调用方
         passed = not _as_list(keys.get("rerun"))
-    return {
+    if syn and _as_list(keys.get("reasons")):
+        # 同义键这一路 `verdict` 与 `blocking` 是配对着写的：有阻断项就不算通过。
+        # （标准词表那一支不动 —— 它按契约把 `pass` 当最终裁决，改它会波及老项目。）
+        passed = False
+    res = {
         "pass": bool(passed),
         "rerun": normalize_rerun(keys.get("rerun")),
         # 每条 reason 的责任角色（与 reasons 同序）。可选字段：老产物没有它，
@@ -142,6 +175,9 @@ def _from_mapping(data) -> dict | None:
                              or keys.get("notes")),
         "raw": data,
     }
+    if syn:
+        res["synonym"] = True
+    return res
 
 
 # 裸块（无代码围栏）行式解析：只认 ASCII 冒号，中文全角「：」不匹配
