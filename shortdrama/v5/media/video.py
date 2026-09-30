@@ -522,6 +522,19 @@ def _seam_preview(out_dir: Path, groups: list, stills: dict, log=print) -> Path 
     return p
 
 
+def rate_limit_should_retry(q_try: int, n_keys: int) -> bool:
+    """撞 429 后，**同一组内**要不要换 key 再试一次。
+
+    抽成纯函数的理由同 `series._rerender_ep_conflict`：整条 pack 提交循环要 mock
+    掉 provider / pool / 静帧 / 绑定 / 提示词才测得到，而真正会错的只有这一个判断。
+
+    规则：一条通道撞 429 就把它拉黑，**还有没试过的通道就换一条重试本组**；
+    试完一圈（`q_try + 1 >= n_keys`）才放弃本组。
+    单 key 池 ⇒ 立刻放弃（等价于改造前的行为，不多等）。
+    """
+    return q_try + 1 < max(1, n_keys)
+
+
 def pack_ref_images(project_root: Path, group: list[dict], own: dict[str, str],
                     prev_url: str | None = None) -> tuple[list[str], list[tuple[str, str]]]:
     """A 臂图序（2026-09-28 实测）：**身份由人物设定表锁，静帧只当场景实现与接续锚**。
@@ -708,8 +721,23 @@ def submit_packs(project_root: Path, shots: list[dict], stills: dict, planned: l
                 time.sleep(wait)
             except providers.RateLimitError:
                 pool.note_rate_limited(key_idx)
-                log("[video] %s 429（%s 拉黑一轮）：跳过本组，其余组继续"
-                    % (pname, pool.label(key_idx)))
+                # ★ 429 不再一撞就放弃本组（2026-09-30 实测）。
+                #   旧行为：拉黑当前 key + `break` —— 拉黑的意义是让**下一组**换 key，
+                #   可如果这是最后一组，就没有下一组了。实测 duanji-gui-0930 ep2 的
+                #   pack10 连续三次都是 `k1=1/429x1  k2=0  k3=0`：三条通道里
+                #   **两条从没被试过**，而新进程的轮转又固定从 k1 开始 ⇒ 盲目重试
+                #   必然再撞同一个 429（三次实测同一结果，已证伪"重跑就好"）。
+                #   ⇒ 对齐上面 503 的处理：同一组内把 key **试完一圈**才放弃；
+                #     一圈之后仍照旧"跳过本组、其余组继续"，不阻塞整批。
+                n_keys = max(1, len(pool))
+                if rate_limit_should_retry(q_try, n_keys):
+                    log("[video] %s 429（%s 拉黑）→ 换下一条 key 重试本组"
+                        "（已试 %d/%d 条通道）"
+                        % (pname, pool.label(key_idx), q_try + 1, n_keys))
+                    time.sleep(6)
+                    continue
+                log("[video] %s 429：%d 条通道都试过 → 跳过本组，其余组继续"
+                    % (pname, n_keys))
                 r = None
                 break
             except Exception as e:  # noqa: BLE001
