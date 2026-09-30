@@ -368,6 +368,41 @@ def media_lock(project_root: Path, ep: int = 1, log=print):
         _release_lock(p, log=log)
 
 
+def _render_recipe() -> str:
+    """**出片配方**：画幅 / 视频模式 / 单集镜数上限 / 静帧比例。
+
+    为什么这些必须进闸门判据（2026-09-30 实测，代价是一整集白烧）：第 2 集第一次渲时
+    我漏带 `SHORTDRAMA_ASPECT=16:9` 与 `AGNES_VIDEO_MAX_SHOTS`，出成**竖屏 + 只渲前 20 镜**
+    （32 镜被默认上限截断）；补上参数再跑却被「已渲染且无待修订」挡回 —— 因为
+    `input_fingerprint` 只覆盖**创作产物**（分镜/静帧/资产），**不含出片参数**，
+    于是"换了配方"在闸门眼里等于"什么都没变"。
+    """
+    return "%s|%s|%s|%s" % (config.ASPECT_RATIO, config.VIDEO_MODE,
+                            config.VIDEO_MAX_SHOTS, config.STILL_RATIO)
+
+
+def needs_rerender(ml: dict, fp_now: str, recipe: str,
+                   only: list[str] | None = None) -> str:
+    """这一版要不要标成"有修订待渲"。返回原因（`"显式"`/`"产物"`/`"配方"`/`""`）。
+
+    单独抽出来是为了**可测**：这条判据决定"会不会再烧一遍配额"，
+    原先它埋在 `run()` 的两个 if 里，配方那一半是事后补的、没有回归测试兜着。
+    """
+    if only:
+        return "显式"                       # 单镜重渲 = 一次显式修订请求
+    if not ml.get("rendered"):
+        return ""                          # 没渲过，门本来就会放行
+    if ml.get("input_fingerprint") != fp_now:
+        return "产物"
+    # ★ 记录里**没有** `recipe` 键（本次改动之前渲过的老项目）⇒ 按"没变"处理。
+    #   取舍：宁可少渲一次，也不要因为升级了代码就替每个老项目重烧一整集配额。
+    #   这一类的显式重渲走 `--rerender <镜号>`（它本来就等价于一次修订请求）。
+    #   反向对照由 `tests_flow.TestSingleShotRerender` 那条守着：什么都不变时不许放行整集重渲。
+    if ml.get("recipe") and ml.get("recipe") != recipe:
+        return "配方"
+    return ""
+
+
 def run(project_root: Path, ep: int = 1, log=print, max_regen: int = 2,
         stills_only: bool = False, only: list[str] | None = None,
         from_still: bool = False) -> dict:
@@ -534,7 +569,8 @@ def _run_guarded(project_root: Path, ep: int = 1, log=print, max_regen: int = 2,
         #   但那依赖巧合（`rendered` 的语义已经变成"某一集渲过"），必须改正。
         ml = media_loop_set(m, ep)
         fp_now = approvals.fingerprint(project_root, "media", ep)
-        if only:
+        why_rev = needs_rerender(ml, fp_now=fp_now, recipe=_render_recipe(), only=only)
+        if why_rev == "显式":
             # **单镜重渲 = 一次显式修订请求**：`media_gate` 那条
             # 「已渲染且无待修订，无需重渲」正是靠这个标记放行（成片出过一次后
             # `rendered=True`，不置标记的话重渲会被自己的门挡住）。
@@ -542,8 +578,12 @@ def _run_guarded(project_root: Path, ep: int = 1, log=print, max_regen: int = 2,
             # 再次被拦 —— 而这一版的修订请求本来就还没消化。
             ml["pending_revision"] = True
             save_manifest(project_root, m)
-        elif ml.get("rendered") and ml.get("input_fingerprint") != fp_now:
+        elif why_rev == "产物":
             ml["pending_revision"] = True
+        elif why_rev == "配方":
+            ml["pending_revision"] = True
+            log("[media] 创作产物没变，但**出片配方**变了（%s → %s）→ 按新配方重渲这一版"
+                % (ml.get("recipe") or "（旧记录无配方）", _render_recipe()))
         ok, why = media_gate("render", m, ep=ep, root=project_root)
         if not ok:
             log("[media-block] " + why)
@@ -578,6 +618,7 @@ def _run_guarded(project_root: Path, ep: int = 1, log=print, max_regen: int = 2,
         ml["rendered"] = r.get("status") == "ok"
         if ml["rendered"]:
             ml["input_fingerprint"] = approvals.fingerprint(project_root, "media", ep)
+            ml["recipe"] = _render_recipe()   # 配方与产物一起记，否则下次换配方挡不住
             ml.pop("pending_revision", None)   # 渲成了 → 修订已消化
         save_manifest(project_root, m)
     return _finish(r)
@@ -708,7 +749,7 @@ def _run_impl(project_root: Path, ep: int = 1, log=print, max_regen: int = 2,
     #    生图是配额敏感操作，故可续跑（已在盘上的图跳过）。
     if config.CAST_ENSURE:
         try:
-            cast.ensure(project_root, log=log)
+            cast.ensure(project_root, log=log, ep=ep)
         except Exception as e:  # noqa: BLE001 -- 资产生成失败不得阻断生产
             log("[media] 资产生成异常：%s（退化为无参考图）" % str(e)[:100])
     else:
