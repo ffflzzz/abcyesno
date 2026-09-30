@@ -341,6 +341,27 @@ class EpisodeDefaultTests(unittest.TestCase):
         self.assertEqual(assets.episode_defaults(VARIANT_REG, shots_of(*self.EP)),
                          {"阿旺": "14岁"})
 
+    def test_subset_render_still_sees_the_whole_episode(self):
+        """单镜返工 / `--only=` 只传被抽中的那几镜 ⇒ 默认年龄段**必须从盘上的本集分镜读**。
+
+        否则重画的这一镜绑回孩童表、邻居镜仍是少年表 —— 同一个人两种年纪
+        （2026-09-30 实测：`--only=LN05,LN12,LN20` 画出来全是 8 岁体型）。
+        """
+        d = tempfile.TemporaryDirectory()
+        root = Path(d.name) / "p2"
+        (root / "scenedesigner").mkdir(parents=True)
+        (root / "scenedesigner" / "scenedesigner_ep2.md").write_text(
+            _TABLE + "\n" + "\n".join(row(i + 1, v) for i, v in enumerate(self.EP)),
+            encoding="utf-8")
+        one = [s for s in storyboard.parse(
+            (root / "scenedesigner" / "scenedesigner_ep2.md").read_text(encoding="utf-8"))
+            if s["name"] == "LN03"][0]
+        self.assertEqual(assets.episode_defaults(VARIANT_REG, [one]), {},
+                         "不传 root 时确实只看传入的那一镜（对照组）")
+        self.assertEqual(assets.episode_defaults(VARIANT_REG, [one], root=root, ep=2),
+                         {"阿旺": "14岁"})
+        d.cleanup()
+
     def test_registry_without_variant_entries_is_byte_untouched(self):
         """没有变体条目的历史项目 ⇒ 传了默认年龄段也不许改绑定的任何东西。"""
         s = shots_of("@阿旺（蓝色外套）蹲在台阶上，视线落在自己的鞋尖")[0]

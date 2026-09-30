@@ -406,16 +406,38 @@ def apply_age_variants(reg: dict, hits: list, text: str, defaults=None) -> list:
     return out
 
 
-def episode_defaults(reg: dict, shots: list, log=None) -> dict:
-    """本集每个角色的**默认年龄段**（判据与"不猜"纪律见 `variants.default_ages`）。"""
+def episode_defaults(reg: dict, shots: list, root=None, ep=None, log=None) -> dict:
+    """本集每个角色的**默认年龄段**（判据与"不猜"纪律见 `variants.default_ages`）。
+
+    ★ 整集视野**从盘上的本集分镜读**，不能只看传进来的 `shots`（2026-09-30 实测）：
+      `--rerender LN05 --from still` 与 `gen_all_stills --only=` 都只把**被抽中的那几镜**
+      传进 `bind`/`identity_lines`，而那几镜恰好都是不带年龄的后续拍 ⇒ 默认年龄段算不出来
+      ⇒ 重画的这一镜绑回孩童表、邻居镜仍是少年表，**同一个人两种年纪**。
+      读不到盘（老项目/解析失败）才退回 `shots`。
+    """
     from . import variants as variants_mod
 
+    corpus = list(shots)
+    if root is not None:
+        try:
+            from .. import guards
+            from . import storyboard as sb_mod
+            e = int(ep or guards.load_manifest(Path(root)).get("episode_index", 1) or 1)
+            p = guards.resolve_path(Path(root), "scenedesigner", e)
+            if p.exists():
+                parsed = sb_mod.parse(p.read_text(encoding="utf-8"))
+                if parsed:
+                    corpus = parsed
+        except Exception as ex:  # noqa: BLE001 -- 退回"只看传进来的镜"，但要报出来
+            if log:
+                log("[variants] 读不到本集分镜 → 默认年龄段只按传入的 %d 镜算：%s"
+                    % (len(shots), str(ex)[:80]))
     entries = (reg or {}).get("assets", []) or []
     known = [str(a.get("name") or "") for a in entries if a.get("name")]
     chars = {str(a.get("name") or "") for a in entries if a.get("type") == "character"}
-    spk = {s for st in shots
+    spk = {s for st in corpus
            for s in _dialogue_speakers(st.get("dialogue") or "").split()}
-    return variants_mod.default_ages(shots, known, spk, chars,
+    return variants_mod.default_ages(corpus, known, spk, chars,
                                      log=log or (lambda *_: None))
 
 
@@ -928,7 +950,8 @@ def _photo_bound_names(root: Path, reg: dict) -> set:
     return out
 
 
-def identity_lines(root: Path, shots: list[dict], max_n: int = 5) -> dict[str, str]:
+def identity_lines(root: Path, shots: list[dict], max_n: int = 5,
+                   ep=None) -> dict[str, str]:
     """无参考图时的**文本身份锚点**：{shot_name: "主角固定形象：…"}。
 
     为什么需要：pack 关闭参考图（如牛来风格，参考图会污染审美）后，身份靠
@@ -948,7 +971,7 @@ def identity_lines(root: Path, shots: list[dict], max_n: int = 5) -> dict[str, s
     """
     reg, prot, fallback = _cast_ctx(root)
     skip = _photo_bound_names(root, reg)
-    defaults = episode_defaults(reg, shots)
+    defaults = episode_defaults(reg, shots, root=root, ep=ep)
     out: dict[str, str] = {}
     for s in shots:
         lines = _shot_cast_lines(s, reg, prot, fallback, max_n=max_n,
@@ -1049,7 +1072,7 @@ def _chars_from_worldbuilder(root: Path) -> list[dict]:
 
 def bind(root: Path, shots: list[dict], max_n: int = 5,
          names_out: dict | None = None,
-         types_out: dict | None = None) -> dict[str, list[str]]:
+         types_out: dict | None = None, ep=None) -> dict[str, list[str]]:
     """返回 {shot_name: [public_url, ...]}，供 stills.ensure 的 refs_by_shot 使用。
 
     **有人物图时参考图总数 ≤ 2**（2026-09-09 A/B 实测，同一分镜同一提示词）：
@@ -1082,7 +1105,7 @@ def bind(root: Path, shots: list[dict], max_n: int = 5,
         names = [c.get("name") or "" for c in _chars_from_worldbuilder(root)]
     # ★ 本集**默认年龄段**：分镜契约只在第一拍写全角色锚点，后续拍的 `@名（衣装）`
     #   不带年龄 ⇒ 只按括注换表会让整集 17/18 次点名绑回孩童表（实测见 apply_age_variants）
-    defaults = episode_defaults(reg, shots)
+    defaults = episode_defaults(reg, shots, root=root, ep=ep)
     out: dict[str, list[str]] = {}
     for s in shots:
         text = (s.get("visual") or "") + " " + (s.get("dialogue") or "")

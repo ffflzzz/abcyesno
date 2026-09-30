@@ -1723,7 +1723,7 @@ class TestModelUpgradeAndQcTemperature(unittest.TestCase):
         with mock.patch.object(qc, "chat_for", side_effect=fake_chat_for), \
                 mock.patch.object(qc, "_data_uri", return_value="data:image/jpeg;base64,AA"):
             qc.review("/x/a.jpg")
-            qc.review_shot_type("/x/a.jpg", {"shot_type": "全景"})
+            qc.review_shot_type("/x/a.jpg", {"shot_type": "全景", "_cast_n": 1})
 
         self.assertEqual(seen, [0, 0], "QC 的两次调用都必须是 temperature=0")
 
@@ -2707,7 +2707,7 @@ class TestQcRateLimitBackoff(unittest.TestCase):
                 mock.patch.object(qc, "_data_uri",
                                   return_value="data:image/jpeg;base64,AA"):
             with self.assertRaises(RuntimeError):
-                qc.review_shot_type("/x/a.jpg", {"shot_type": "全景"})
+                qc.review_shot_type("/x/a.jpg", {"shot_type": "全景", "_cast_n": 1})
 
     def test_review_shot_type_still_swallows_other_errors(self):
         """非限速异常仍兜底 ok=True——构图校验是增强，不能阻断生产。"""
@@ -2717,7 +2717,7 @@ class TestQcRateLimitBackoff(unittest.TestCase):
                                side_effect=ValueError("bad json")), \
                 mock.patch.object(qc, "_data_uri",
                                   return_value="data:image/jpeg;base64,AA"):
-            r = qc.review_shot_type("/x/a.jpg", {"shot_type": "全景"})
+            r = qc.review_shot_type("/x/a.jpg", {"shot_type": "全景", "_cast_n": 1})
         self.assertTrue(r["ok"])
 
 

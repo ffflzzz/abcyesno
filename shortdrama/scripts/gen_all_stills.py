@@ -132,16 +132,29 @@ def main() -> None:
               "要全片重画请设 AGNES_VIDEO_MAX_SHOTS=%d。"
               % (n_parsed, config.VIDEO_MAX_SHOTS, len(shots), n_parsed))
     only = next((a.split("=", 1)[1] for a in sys.argv[1:] if a.startswith("--only=")), "")
-    if only:
-        want = {x.strip() for x in only.replace(",", " ").split() if x.strip()}
-        shots = [s for s in shots if s["name"] in want]
+    want = ({x.strip() for x in only.replace(",", " ").split() if x.strip()}
+            if only else set())
+    if want:
         missing = want - {s["name"] for s in shots}
         if missing:
             raise SystemExit("[gen] ⛔ --only 里这些镜号不在分镜中：%s"
                              % "、".join(sorted(missing)))
-        print("[gen] 只重画 %d 镜：%s" % (len(shots), "、".join(s["name"] for s in shots)))
     shots, refs_by_shot, ref_names, ref_types = prepare_shots(root, shots)
     planned = relations.plan_frames(shots)
+    # ★ `--only` 必须在 `prepare_shots` **之后**筛（2026-09-30 实测）。
+    #   先筛后算会让这几镜看不到整集里**唯一带年龄的第一拍** ⇒ 「本集默认年龄段」
+    #   （`variants.default_ages`）算不出来 ⇒ 身份锚点与参考图**双双绑回孩童表**，
+    #   而 `--rerender LN05` 这类单镜返工是同一形态：抽出来的镜永远用不上新表。
+    #   实测：`--only=LN05,LN12,LN20` 画出来仍是 8 岁体型，全集视野下绑定却是对的。
+    #   承接/落幅（`planned`）同理按整集算，否则单镜批次丢掉接续锚。
+    if want:
+        shots = [s for s in shots if s["name"] in want]
+        planned = [p for p in planned if p.get("name") in want]
+        refs_by_shot = {k: v for k, v in refs_by_shot.items() if k in want}
+        ref_names = {k: v for k, v in ref_names.items() if k in want}
+        ref_types = {k: v for k, v in ref_types.items() if k in want}
+        print("[gen] 只重画 %d 镜：%s（身份/绑定/承接按**整集**算，不按抽出来的这几镜）"
+              % (len(shots), "、".join(s["name"] for s in shots)))
     started = time.time()
     stills.ensure(root, shots, refs_by_shot=refs_by_shot, ep=int(ep), force=True,
                   planned=planned, log=print,
