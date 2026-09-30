@@ -791,7 +791,7 @@ def _run_impl(project_root: Path, ep: int = 1, log=print, max_regen: int = 2,
         log("[media] pack 关闭参考图（still-refs=false）→ 风格完全由风格块锁定")
         # 身份改由文字锚点锁定（否则模型自行编服装/乱加招牌）
         try:
-            idl = assets.identity_lines(project_root, shots)
+            idl = assets.identity_lines(project_root, shots, ep=ep)
             if idl:
                 shots = [{**s, "_identity_line": idl.get(s["name"], "")} for s in shots]
                 log("[media] 文本身份锚点 %d/%d 镜" % (len(idl), len(shots)))
@@ -1128,7 +1128,12 @@ def _run_impl(project_root: Path, ep: int = 1, log=print, max_regen: int = 2,
             if "framing" in kinds:
                 # 景别跑偏：把要求的景别**再说一遍**并给占比量化，比泛泛重试有效
                 st_name = str(s.get("shot_type") or "").strip()
-                if st_name:
+                if st_name and prompt_mod.shot_has_no_person(s):
+                    # 兜底（复核器已对空镜豁免，正常走不到这里）：`_FRAMING_HINT`
+                    # 通篇是"人物腰部/胸部以上入画"，给无人镜追加它 = 命令模型塞人。
+                    log("[media] %s 是空镜/无人像镜 → 跳过景别补充语（它会逼模型塞人）"
+                        % s["name"])
+                elif st_name:
                     extra += ("，本镜必须是%s：%s"
                               % (st_name, _FRAMING_HINT.get(st_name, "严格按要求的取景范围")))
             if not extra:
