@@ -93,7 +93,11 @@ def review_clip(clip: Path, shot: dict, work_dir: Path, log=print,
             rep = qc.review(str(fp), shot=shot)
         except Exception as e:  # noqa: BLE001
             failed += 1
-            log("[clipqc] %s 复核失败（%s）：%s" % (clip.stem, fp.name, str(e)[:80]))
+            # ⚠️ 截断留到 240 字，不要压回 80：429 的文案是
+            #   `已达到 API 用量上限，请在 **2026-09-30T..:..** 后重试`，
+            #   **恢复时间在句子末尾**，截在 80 字正好把它切掉
+            #   （2026-09-30 实测：70 次 429 全看不出什么时候该回来）。
+            log("[clipqc] %s 复核失败（%s）：%s" % (clip.stem, fp.name, str(e)[:240]))
             continue
         if not isinstance(rep, dict):
             continue
