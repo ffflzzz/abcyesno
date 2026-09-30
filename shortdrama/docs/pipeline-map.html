@@ -1,0 +1,915 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>流水线架构图 · AI 短剧生成工厂 v5</title>
+<meta name="description" content="创作链与媒体链的节点执行顺序、依赖图、门禁与代码定位。所有事实取自 v5/ 当前代码。">
+<style>
+/* ═══════════════════════════════════════════════════════════════
+   设计系统 —— 全部语义令牌先在此定义，组件只引用变量
+   ═══════════════════════════════════════════════════════════════ */
+:root{
+  /* 底色：工程控制台深灰蓝 */
+  --bg:            222 26% 6%;
+  --bg-raised:     222 22% 9%;
+  --surface:       222 20% 12%;
+  --surface-hi:    222 19% 16%;
+  --line:          220 14% 21%;
+  --line-soft:     220 13% 16%;
+
+  --text:          210 22% 93%;
+  --text-2:        213 14% 72%;
+  --text-3:        215 11% 53%;
+
+  /* 三个强调色 = 三个语义域，不混用 */
+  --creation:      190 84% 55%;   /* 创作链（LLM 调度） */
+  --creation-dim:  190 40% 30%;
+  --media:         264 68% 66%;   /* 媒体链（确定性流水线） */
+  --media-dim:     264 34% 34%;
+  --gate:          36 92% 58%;    /* 门禁 / 契约 */
+  --gate-dim:      36 40% 30%;
+
+  --danger:        356 74% 62%;
+  --ok:            152 58% 47%;
+
+  --grad-creation: linear-gradient(120deg, hsl(190 84% 55%), hsl(214 80% 62%));
+  --grad-media:    linear-gradient(120deg, hsl(264 68% 66%), hsl(300 60% 62%));
+  --grad-gate:     linear-gradient(120deg, hsl(36 92% 58%),  hsl(20 88% 60%));
+
+  /* 字阶 */
+  --fs-mono: 13px;
+  --fs-sm: 12.5px;
+  --fs-base: 14.5px;
+  --fs-md: 16px;
+  --fs-lg: 19px;
+  --fs-xl: 26px;
+  --fs-2xl: 34px;
+
+  /* 间距阶 */
+  --s1: 6px; --s2: 12px; --s3: 18px; --s4: 28px; --s5: 44px; --s6: 72px;
+
+  --r-sm: 5px; --r-md: 9px; --r-lg: 14px;
+  --shadow: 0 12px 34px -18px hsl(222 40% 2% / .9);
+  --ease: 220ms cubic-bezier(.4,0,.2,1);
+
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "Cascadia Mono", Consolas,
+          "JetBrains Mono", "Microsoft YaHei Mono", monospace;
+}
+
+*,*::before,*::after{ box-sizing:border-box; }
+html{ scroll-behavior:smooth; scroll-padding-top:76px; }
+body{
+  margin:0; background:hsl(var(--bg)); color:hsl(var(--text));
+  font-family:var(--font); font-size:var(--fs-base); line-height:1.7;
+  -webkit-font-smoothing:antialiased;
+  background-image:
+    radial-gradient(900px 420px at 12% -8%, hsl(190 84% 55% / .07), transparent 60%),
+    radial-gradient(760px 400px at 92% 2%,  hsl(264 68% 66% / .07),  transparent 60%);
+  background-attachment:fixed;
+}
+code,.mono{ font-family:var(--mono); font-size:var(--fs-mono); }
+h1,h2,h3,h4{ margin:0; font-weight:600; line-height:1.28; letter-spacing:-.01em; }
+p{ margin:0; }
+a{ color:hsl(var(--creation)); }
+
+/* ─── 顶栏 ─────────────────────────────────────────────────── */
+.masthead{
+  border-bottom:1px solid hsl(var(--line));
+  background:hsl(var(--bg-raised) / .82); backdrop-filter:blur(14px);
+  position:sticky; top:0; z-index:40;
+}
+.masthead-in{
+  max-width:1280px; margin:0 auto; padding:14px var(--s4);
+  display:flex; align-items:center; gap:var(--s4); flex-wrap:wrap;
+}
+.brand{ display:flex; align-items:baseline; gap:10px; font-size:var(--fs-md); font-weight:600; }
+.brand .dot{ width:9px; height:9px; border-radius:50%; background:var(--grad-creation); align-self:center;
+             box-shadow:0 0 0 4px hsl(190 84% 55% / .13); }
+.jump{ display:flex; gap:2px; margin-left:auto; flex-wrap:wrap; }
+.jump a{
+  color:hsl(var(--text-3)); text-decoration:none; font-size:var(--fs-sm);
+  padding:6px 12px; border-radius:var(--r-sm); transition:var(--ease);
+}
+.jump a:hover{ color:hsl(var(--text)); background:hsl(var(--surface-hi)); }
+.jump a.on{ color:hsl(var(--text)); background:hsl(var(--surface-hi)); }
+
+.wrap{ max-width:1280px; margin:0 auto; padding:0 var(--s4) var(--s6); }
+
+/* ─── Hero ─────────────────────────────────────────────────── */
+.hero{ padding:var(--s6) 0 var(--s5); border-bottom:1px solid hsl(var(--line-soft)); }
+.hero h1{ font-size:var(--fs-2xl); max-width:24ch; letter-spacing:-.025em; }
+.hero h1 em{ font-style:normal; background:var(--grad-media); -webkit-background-clip:text;
+            background-clip:text; color:transparent; }
+.hero .lede{ margin-top:var(--s3); color:hsl(var(--text-2)); max-width:74ch; font-size:var(--fs-md); }
+.hero .thesis{
+  margin-top:var(--s4); padding:var(--s3) var(--s4); border-radius:var(--r-md);
+  border:1px solid hsl(var(--line)); background:hsl(var(--surface) / .6);
+  border-left:3px solid hsl(var(--creation)); font-size:var(--fs-base); color:hsl(var(--text-2));
+}
+.hero .thesis b{ color:hsl(var(--text)); font-weight:600; }
+.stats{ display:flex; gap:var(--s5); flex-wrap:wrap; margin-top:var(--s5); }
+.stat .n{ font-size:var(--fs-xl); font-weight:600; font-variant-numeric:tabular-nums; letter-spacing:-.02em; }
+.stat .l{ font-size:var(--fs-sm); color:hsl(var(--text-3)); }
+.stat:nth-child(1) .n{ color:hsl(var(--creation)); }
+.stat:nth-child(2) .n{ color:hsl(var(--gate)); }
+.stat:nth-child(3) .n{ color:hsl(var(--media)); }
+.stat:nth-child(4) .n{ color:hsl(var(--text)); }
+
+/* ─── Section 外壳 ─────────────────────────────────────────── */
+section{ padding:var(--s6) 0 0; }
+.sec-head{ display:flex; align-items:flex-start; gap:var(--s3); margin-bottom:var(--s2); }
+.sec-idx{
+  font-family:var(--mono); font-size:var(--fs-sm); color:hsl(var(--text-3));
+  border:1px solid hsl(var(--line)); border-radius:var(--r-sm); padding:2px 8px; margin-top:6px;
+}
+.sec-head h2{ font-size:var(--fs-xl); }
+.sec-head .tag{ font-family:var(--mono); font-size:var(--fs-sm); padding:2px 8px; border-radius:var(--r-sm);
+                margin-top:8px; margin-left:auto; white-space:nowrap; }
+.tag.creation{ color:hsl(var(--creation)); border:1px solid hsl(var(--creation-dim)); background:hsl(190 84% 55% / .07); }
+.tag.gate{ color:hsl(var(--gate)); border:1px solid hsl(var(--gate-dim)); background:hsl(36 92% 58% / .07); }
+.tag.media{ color:hsl(var(--media)); border:1px solid hsl(var(--media-dim)); background:hsl(264 68% 66% / .07); }
+.sec-sub{ color:hsl(var(--text-2)); max-width:88ch; margin-bottom:var(--s4); }
+
+/* ─── 控制条 ───────────────────────────────────────────────── */
+.controls{ display:flex; gap:var(--s4); flex-wrap:wrap; align-items:center; margin-bottom:var(--s3); }
+.ctl{ display:flex; align-items:center; gap:8px; }
+.ctl > span{ font-size:var(--fs-sm); color:hsl(var(--text-3)); }
+.seg{ display:flex; border:1px solid hsl(var(--line)); border-radius:var(--r-sm); overflow:hidden; }
+.seg button{
+  font-family:var(--mono); font-size:var(--fs-sm); color:hsl(var(--text-2));
+  background:hsl(var(--bg-raised)); border:0; padding:6px 12px; cursor:pointer;
+  transition:var(--ease); border-right:1px solid hsl(var(--line));
+}
+.seg button:last-child{ border-right:0; }
+.seg button:hover{ background:hsl(var(--surface-hi)); color:hsl(var(--text)); }
+.seg button.on{ background:hsl(var(--creation) / .16); color:hsl(var(--creation)); box-shadow:inset 0 -2px 0 hsl(var(--creation)); }
+.ctl.reset{ margin-left:auto; }
+.ghost{
+  font-size:var(--fs-sm); color:hsl(var(--text-3)); background:transparent;
+  border:1px solid hsl(var(--line)); border-radius:var(--r-sm); padding:6px 12px; cursor:pointer; transition:var(--ease);
+}
+.ghost:hover{ color:hsl(var(--text)); border-color:hsl(var(--text-3)); }
+
+/* ─── 步骤轨 ───────────────────────────────────────────────── */
+.rail{ display:flex; align-items:stretch; gap:0; overflow-x:auto; padding-bottom:var(--s2); margin-bottom:var(--s2); }
+.rail-step{ flex:1 0 132px; position:relative; padding:10px 12px 10px 0; }
+.rail-step::after{
+  content:""; position:absolute; right:6px; top:19px; width:14px; height:1px; background:hsl(var(--line));
+}
+.rail-step:last-child::after{ display:none; }
+.rail-step .k{ font-family:var(--mono); font-size:11px; color:hsl(var(--text-3)); }
+.rail-step .v{ font-family:var(--mono); font-size:var(--fs-sm); color:hsl(var(--text-2)); margin-top:2px; }
+.rail-step.par .v{ color:hsl(var(--creation)); }
+.rail-step .pill{ display:inline-block; margin-top:4px; font-size:10.5px; font-family:var(--mono);
+  color:hsl(var(--creation)); border:1px solid hsl(var(--creation-dim)); border-radius:99px; padding:0 6px; }
+
+/* ─── 图 + 详情抽屉 ────────────────────────────────────────── */
+.dag-grid{ display:grid; grid-template-columns:minmax(0,1fr) 330px; gap:var(--s4); align-items:start; }
+@media (max-width:1080px){ .dag-grid{ grid-template-columns:minmax(0,1fr); } }
+.canvas{
+  border:1px solid hsl(var(--line)); border-radius:var(--r-lg); background:hsl(var(--bg-raised));
+  padding:var(--s3); box-shadow:var(--shadow); overflow:hidden;
+}
+.canvas svg{ width:100%; height:auto; display:block; }
+.hint{ font-size:var(--fs-sm); color:hsl(var(--text-3)); margin-top:var(--s2); }
+.pan-hint{ display:none; }
+
+.edge{ fill:none; stroke:hsl(var(--line)); stroke-width:1.6; transition:opacity var(--ease), stroke var(--ease); }
+.edge.guards-only{ stroke:hsl(var(--gate) / .55); stroke-dasharray:5 4; }
+.edge.hot{ stroke:hsl(var(--creation)); stroke-width:2.2; }
+.edge.dim{ opacity:.16; }
+.node{ cursor:pointer; }
+.node .box{ fill:hsl(var(--surface)); stroke:hsl(var(--line)); stroke-width:1.2; transition:var(--ease); }
+.node:hover .box{ stroke:hsl(var(--creation) / .7); fill:hsl(var(--surface-hi)); }
+.node.sel .box{ stroke:hsl(var(--creation)); stroke-width:2; fill:hsl(190 84% 55% / .1); }
+.node:focus{ outline:none; }
+.node:focus-visible .box{ stroke:hsl(var(--creation)); stroke-width:2; stroke-dasharray:3 3; }
+.node.dim{ opacity:.26; }
+.node .id{ font-family:var(--mono); font-size:14px; fill:hsl(var(--text)); }
+.node .zh{ font-size:11.5px; fill:hsl(var(--text-3)); }
+.node.sup .box{ stroke:hsl(var(--creation-dim)); fill:hsl(190 84% 55% / .07); }
+.node.skip .box{ stroke-dasharray:4 4; }
+.node .lvl{ font-family:var(--mono); font-size:9.5px; }
+.arc-lab{ font-size:11px; fill:hsl(var(--text-3)); font-family:var(--mono); }
+
+/* 抽屉 */
+.drawer{
+  border:1px solid hsl(var(--line)); border-radius:var(--r-lg); background:hsl(var(--bg-raised));
+  padding:var(--s3) var(--s4) var(--s4); box-shadow:var(--shadow);
+  position:sticky; top:82px; max-height:calc(100vh - 104px); overflow:auto;
+}
+.drawer .eyebrow{ font-family:var(--mono); font-size:11px; color:hsl(var(--text-3)); text-transform:uppercase; letter-spacing:.09em; }
+.drawer h3{ font-family:var(--mono); font-size:var(--fs-lg); margin-top:4px; color:hsl(var(--creation)); word-break:break-all; }
+.drawer .zh{ color:hsl(var(--text-2)); font-size:var(--fs-sm); margin-top:2px; }
+.drawer .desc{ margin-top:var(--s3); font-size:var(--fs-sm); color:hsl(var(--text-2)); line-height:1.75; }
+.kv{ margin-top:var(--s3); border-top:1px solid hsl(var(--line-soft)); }
+.kv .row{ display:grid; grid-template-columns:74px 1fr; gap:var(--s2); padding:9px 0; border-bottom:1px solid hsl(var(--line-soft)); font-size:var(--fs-sm); }
+.kv .row dt{ color:hsl(var(--text-3)); margin:0; }
+.kv .row dd{ margin:0; color:hsl(var(--text)); word-break:break-word; }
+.kv .row dd.mono{ font-family:var(--mono); font-size:var(--fs-mono); color:hsl(var(--creation)); }
+.badge{ display:inline-block; font-family:var(--mono); font-size:10.5px; padding:2px 7px; border-radius:var(--r-sm); border:1px solid hsl(var(--line)); color:hsl(var(--text-2)); }
+.badge.series{ color:hsl(var(--gate)); border-color:hsl(var(--gate-dim)); }
+.badge.ep{ color:hsl(var(--creation)); border-color:hsl(var(--creation-dim)); }
+.badge.warn{ color:hsl(var(--danger)); border-color:hsl(356 40% 34%); }
+.warnbox{ margin-top:var(--s3); padding:10px 12px; border-radius:var(--r-sm); font-size:var(--fs-sm);
+  background:hsl(356 74% 62% / .08); border:1px solid hsl(356 40% 30%); color:hsl(var(--text-2)); }
+.warnbox b{ color:hsl(var(--danger)); }
+
+/* ─── 门禁卡 ───────────────────────────────────────────────── */
+.gates{ display:grid; grid-template-columns:repeat(auto-fit,minmax(272px,1fr)); gap:var(--s3); }
+.gcard{
+  border:1px solid hsl(var(--line)); border-radius:var(--r-lg); background:hsl(var(--bg-raised));
+  padding:var(--s3); position:relative; overflow:hidden; transition:var(--ease);
+}
+.gcard:hover{ transform:translateY(-2px); border-color:hsl(var(--gate-dim)); box-shadow:var(--shadow); }
+.gcard::before{ content:""; position:absolute; inset:0 auto 0 0; width:3px; background:var(--grad-gate); }
+.gcard.no-block::before{ background:hsl(var(--danger) / .8); }
+.gcard .num{ font-family:var(--mono); font-size:11px; color:hsl(var(--text-3)); }
+.gcard h4{ font-family:var(--mono); font-size:var(--fs-md); margin-top:2px; }
+.gcard .where{ font-family:var(--mono); font-size:11.5px; color:hsl(var(--text-3)); margin-top:3px; }
+.gcard .verdict{ margin-top:var(--s2); }
+.gcard ul{ margin:var(--s2) 0 0; padding-left:17px; font-size:var(--fs-sm); color:hsl(var(--text-2)); }
+.gcard li{ margin-bottom:3px; }
+.gcard .note{ margin-top:var(--s2); font-size:var(--fs-sm); color:hsl(var(--text-3)); border-top:1px dashed hsl(var(--line)); padding-top:var(--s2); }
+
+/* ─── 媒体链 ───────────────────────────────────────────────── */
+.flow{ display:grid; gap:var(--s3); }
+.phase{ border:1px solid hsl(var(--line)); border-radius:var(--r-lg); background:hsl(var(--bg-raised)); overflow:hidden; }
+.phase-head{ display:flex; align-items:center; gap:var(--s2); padding:12px var(--s3);
+  border-bottom:1px solid hsl(var(--line-soft)); background:hsl(var(--surface) / .45); }
+.phase-head .ix{ font-family:var(--mono); font-size:var(--fs-sm); color:hsl(var(--media)); }
+.phase-head h3{ font-size:var(--fs-md); }
+.phase-head .meta{ margin-left:auto; font-family:var(--mono); font-size:11.5px; color:hsl(var(--text-3)); }
+.stage{ display:grid; grid-template-columns:38px minmax(0,1fr) 208px; gap:var(--s3);
+  padding:13px var(--s3); border-bottom:1px solid hsl(var(--line-soft)); transition:background var(--ease); }
+.stage:last-child{ border-bottom:0; }
+.stage:hover{ background:hsl(var(--surface) / .5); }
+.stage .n{ font-family:var(--mono); font-size:var(--fs-sm); color:hsl(var(--text-3)); padding-top:2px; }
+.stage .body h5{ margin:0; font-size:var(--fs-base); font-weight:600; }
+.stage .body p{ font-size:var(--fs-sm); color:hsl(var(--text-2)); margin-top:3px; }
+.stage .body .fx{ font-family:var(--mono); font-size:11.5px; color:hsl(var(--media)); margin-top:5px; word-break:break-all; }
+.stage .loc{ font-family:var(--mono); font-size:11.5px; color:hsl(var(--text-3)); text-align:right; padding-top:3px; line-height:1.85; }
+.stage .loc b{ color:hsl(var(--text-2)); font-weight:500; }
+.stage.key{ background:hsl(264 68% 66% / .05); }
+.stage.skip-mode{ opacity:.42; }
+.stage.skip-mode .body h5::after{ content:"pack 档跳过"; font-family:var(--mono); font-size:10.5px; margin-left:8px;
+  color:hsl(var(--danger)); border:1px solid hsl(356 40% 32%); border-radius:99px; padding:0 6px; font-weight:400; }
+@media (max-width:820px){
+  .stage{ grid-template-columns:30px minmax(0,1fr); }
+  .stage .loc{ grid-column:2; text-align:left; }
+}
+@media (max-width:720px){
+  .wrap, .masthead-in{ padding-left:var(--s3); padding-right:var(--s3); }
+  /* 标题右侧的行号徽章是不换行的长 mono 串 —— 窄屏必须允许它折到下一行，否则撑破版面 */
+  .sec-head{ flex-wrap:wrap; gap:var(--s2); }
+  .sec-head .tag{ margin-left:0; order:3; white-space:normal; }
+  .hero h1{ font-size:25px; }
+  .hero .thesis{ padding:var(--s2) var(--s3); }
+  .stats{ gap:var(--s4); }
+  .drawer{ position:static; max-height:none; }
+  td.mono{ white-space:normal; word-break:break-all; }
+  .controls{ gap:var(--s2); }
+  .ctl.reset{ margin-left:0; }
+  /* 图不能缩到 6px 才塞进屏幕 —— 让它横向平移，字号保持可读 */
+  .canvas{ overflow-x:auto; }
+  .canvas svg{ width:660px; max-width:none; height:auto; }
+  .pan-hint{ display:inline; }
+  /* 表格的 min-content 比窄屏视口还宽（长 mono 文件名 + 三列）⇒ 让卡片自己横向滚，别把文档撑破 */
+  .two-col{ grid-template-columns:minmax(0,1fr); }
+  .tbl-wrap{ overflow-x:auto; }
+  .tbl-wrap table{ min-width:460px; }
+}
+
+/* ─── 表格 ─────────────────────────────────────────────────── */
+table{ width:100%; border-collapse:collapse; font-size:var(--fs-sm); }
+th{ text-align:left; color:hsl(var(--text-3)); font-weight:500; font-size:11.5px; text-transform:uppercase;
+    letter-spacing:.07em; padding:0 var(--s2) 9px 0; border-bottom:1px solid hsl(var(--line)); }
+td{ padding:10px var(--s2) 10px 0; border-bottom:1px solid hsl(var(--line-soft)); vertical-align:top; color:hsl(var(--text-2)); }
+td.mono{ font-family:var(--mono); color:hsl(var(--creation)); white-space:nowrap; }
+tr:hover td{ background:hsl(var(--surface) / .45); }
+.tbl-wrap{ border:1px solid hsl(var(--line)); border-radius:var(--r-lg); background:hsl(var(--bg-raised)); padding:var(--s3) var(--s4); }
+.two-col{ display:grid; grid-template-columns:repeat(auto-fit,minmax(340px,1fr)); gap:var(--s4); align-items:start; }
+
+/* 图名清单 */
+.chips{ margin-top:var(--s3); padding-top:var(--s3); border-top:1px solid hsl(var(--line-soft));
+  display:flex; flex-wrap:wrap; gap:7px; align-content:flex-start; }
+.chips-l{ width:100%; font-size:11.5px; color:hsl(var(--text-3)); margin-bottom:2px; }
+.chip{ font-family:var(--mono); font-size:11.5px; color:hsl(var(--creation));
+  background:hsl(190 84% 55% / .07); border:1px solid hsl(var(--creation-dim));
+  border-radius:var(--r-sm); padding:2px 8px; transition:var(--ease); }
+.chip:hover{ background:hsl(190 84% 55% / .16); }
+
+/* ─── 发现卡 ───────────────────────────────────────────────── */
+.find{ border:1px solid hsl(var(--line)); border-radius:var(--r-lg); background:hsl(var(--bg-raised));
+  padding:var(--s3) var(--s4); display:grid; grid-template-columns:22px 1fr; gap:var(--s3); transition:var(--ease); }
+.find:hover{ border-color:hsl(var(--creation-dim)); }
+.find .mk{ width:22px; height:22px; border-radius:50%; display:grid; place-items:center;
+  font-family:var(--mono); font-size:11px; margin-top:2px; }
+.find.a .mk{ background:hsl(356 74% 62% / .15); color:hsl(var(--danger)); border:1px solid hsl(356 40% 32%); }
+.find.b .mk{ background:hsl(36 92% 58% / .13); color:hsl(var(--gate)); border:1px solid hsl(var(--gate-dim)); }
+.find h4{ font-size:var(--fs-base); }
+.find p{ font-size:var(--fs-sm); color:hsl(var(--text-2)); margin-top:5px; }
+.find .ev{ font-family:var(--mono); font-size:11.5px; color:hsl(var(--text-3)); margin-top:7px; }
+.find-list{ display:grid; gap:var(--s3); }
+
+/* ─── Footer ───────────────────────────────────────────────── */
+footer{ margin-top:var(--s6); padding-top:var(--s4); border-top:1px solid hsl(var(--line));
+  font-size:var(--fs-sm); color:hsl(var(--text-3)); display:flex; gap:var(--s4); flex-wrap:wrap; }
+footer code{ color:hsl(var(--text-2)); }
+::selection{ background:hsl(var(--creation) / .28); }
+</style>
+</head>
+<body>
+
+<header class="masthead">
+  <div class="masthead-in">
+    <div class="brand"><span class="dot"></span> AI 短剧生成工厂 · 流水线架构图</div>
+    <nav class="jump" id="jump">
+      <a href="#creation">01 创作链</a>
+      <a href="#gates">02 门禁</a>
+      <a href="#media">03 媒体链</a>
+      <a href="#graphs">04 图与状态</a>
+      <a href="#findings">05 待修偏差</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <!-- ═══════════ HERO ═══════════ -->
+  <section class="hero" id="top" style="padding-top:var(--s5)">
+    <h1>两条链，一套判据：<br><em>一条靠模型调度，一条靠代码执行</em></h1>
+    <p class="lede">
+      创作链是 supervisor 架构 —— 依赖序写在提示词纪律里，由模型自己按序 <code>task</code> 派发；
+      媒体链在图外 —— 是确定性流水线，唯一入口 <code>v5.media.pipeline.run</code>。
+      本页把两者的节点、顺序、门禁和代码定位摊开在同一张图上。
+    </p>
+    <div class="thesis">
+      ⚠️ 读图前要知道的一件事：<b>依赖关系在代码里有两份，且不一致</b>。
+      <code>guards.PREREQ</code> 是<b>门禁判据</b>用的，<code>orchestrator.PREREQ</code> 是<b>写进提示词给模型看的</b>，
+      两者相差 3 条边。用下面的「依赖图来源」开关切换，可以直接看出差在哪。
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="n">7</div><div class="l">被派发的角色节点<br>（director 不派发）</div></div>
+      <div class="stat"><div class="n">4</div><div class="l">输入门<br>（AGENTS.md 写的是 3）</div></div>
+      <div class="stat"><div class="n">17</div><div class="l">媒体链阶段<br>（0 号是前置锁与门）</div></div>
+      <div class="stat"><div class="n">9</div><div class="l">注册的 LangGraph<br>图数量</div></div>
+    </div>
+  </section>
+
+  <!-- ═══════════ 01 创作链 ═══════════ -->
+  <section id="creation">
+    <div class="sec-head">
+      <span class="sec-idx">01</span>
+      <div><h2>创作链 · supervisor 派发序</h2></div>
+      <span class="tag creation">ORCHESTRATOR_DISCIPLINE · orchestrator.py:272</span>
+    </div>
+    <p class="sec-sub">
+      <b>没有静态的链路图。</b>顺序不是图的边决定的 —— 旧静态链已废弃（<code>series.py:265</code>），
+      顺序来自写进 supervisor 提示词的六步纪律：上一次 <code>task</code> <b>返回后</b>才能调下一个
+      （子代理是 <code>CompiledSubAgent</code> 同步调用，返回即产物已落盘）。
+      点节点看它的产物路径、级别、上下游；聚焦后其余节点会淡出。
+    </p>
+
+    <div class="controls">
+      <div class="ctl">
+        <span>依赖图来源</span>
+        <div class="seg" id="segEdges">
+          <button data-v="guards" class="on">guards.PREREQ（门判据）</button>
+          <button data-v="orch">orchestrator.PREREQ（喂模型）</button>
+        </div>
+      </div>
+      <div class="ctl">
+        <span>集号</span>
+        <div class="seg" id="segEp">
+          <button data-v="1" class="on">第 1 集（全跑）</button>
+          <button data-v="n">第 2..N 集</button>
+        </div>
+      </div>
+      <div class="ctl reset"><button class="ghost" id="btnClear">清除聚焦</button></div>
+    </div>
+
+    <div class="rail" id="rail"></div>
+
+    <div class="dag-grid">
+      <div class="canvas">
+        <svg id="dag" viewBox="-70 0 810 800" role="img"
+             aria-label="创作链角色依赖图，自上而下七个派发层级，从 director 的制作规格到 reviewer"></svg>
+        <div class="hint">
+          自上而下 = <code>ORCHESTRATOR_DISCIPLINE</code> 的派发顺序。实线 = 两份定义一致的依赖边 ·
+          <span style="color:hsl(var(--gate))">虚线橙</span> = 只有 <code>guards.PREREQ</code> 里才有的边 ·
+          虚线框 = 第 2..N 集不派发<span class="pan-hint"> · 窄屏可左右拖动</span>
+        </div>
+      </div>
+      <aside class="drawer" id="drawer"></aside>
+    </div>
+  </section>
+
+  <!-- ═══════════ 02 门禁 ═══════════ -->
+  <section id="gates">
+    <div class="sec-head">
+      <span class="sec-idx">02</span>
+      <div><h2>门禁 · 谁能放行，谁其实拦不住</h2></div>
+      <span class="tag gate">series._input_gates · series.py:351</span>
+    </div>
+    <p class="sec-sub">
+      开放全链路（<code>SHORTDRAMA_OPEN_CHAIN=1</code>）之后，这几道门是<b>唯一的输入把关点</b> ——
+      外部调用方可以直达媒体链，但过不了门起不来。执行顺序按 <code>_input_gates</code> 源码逐字：
+      brief → 分镜契约 → 资产契约 → 对白逐字，然后才是图外的媒体门。
+      <b>红色左边框的那道从不阻断</b>，标着「契约门」但实际只打印警告。
+    </p>
+    <div class="gates" id="gateCards"></div>
+  </section>
+
+  <!-- ═══════════ 03 媒体链 ═══════════ -->
+  <section id="media">
+    <div class="sec-head">
+      <span class="sec-idx">03</span>
+      <div><h2>媒体链 · 图外确定性流水线</h2></div>
+      <span class="tag media">v5/media/pipeline.py:594</span>
+    </div>
+    <p class="sec-sub">
+      <code>pipeline.run</code> 先拿独占锁（<code>media/ep{N}/.running</code>，陈旧锁靠心跳 mtime 接管），
+      再过 <code>media_gate("render")</code>，然后才进 <code>_run_impl</code> —— 下面 17 行（0 号在 <code>_run_impl</code> 之前）就是它的实际调用顺序，
+      右侧每行都给了模块与行号。切换视频模式会改变阶段 11–14 的行为。
+    </p>
+
+    <div class="controls">
+      <div class="ctl">
+        <span>VIDEO_MODE</span>
+        <div class="seg" id="segMode">
+          <button data-v="reference" class="on">reference（默认）</button>
+          <button data-v="keyframe">keyframe（回退）</button>
+          <button data-v="pack">pack（打包档）</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="flow" id="flow"></div>
+  </section>
+
+  <!-- ═══════════ 04 图与状态 ═══════════ -->
+  <section id="graphs">
+    <div class="sec-head">
+      <span class="sec-idx">04</span>
+      <div><h2>注册图 · 状态黑板 · 人工介入信道</h2></div>
+      <span class="tag creation">langgraph.json · .agent_state.json · hitl.py</span>
+    </div>
+    <p class="sec-sub">
+      9 张图在 <code>v5/langgraph.json</code> 一次注册完：<code>supervisor</code> 本体 + 7 个角色子代理图 + 1 个单镜重渲图。
+      换项目必须重启 dev server —— 项目与类型包是<b>编译期绑定</b>的，换集不必。
+    </p>
+    <div class="two-col">
+      <div class="tbl-wrap">
+        <h4 style="font-size:var(--fs-md);margin-bottom:var(--s3)">注册的 9 张图</h4>
+        <table id="graphTbl"></table>
+        <div class="chips" id="graphChips"></div>
+      </div>
+      <div class="tbl-wrap">
+        <h4 style="font-size:var(--fs-md);margin-bottom:var(--s3)">状态与人工介入的六条信道</h4>
+        <table id="stateTbl"></table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════ 05 待修偏差 ═══════════ -->
+  <section id="findings">
+    <div class="sec-head">
+      <span class="sec-idx">05</span>
+      <div><h2>画图时代码与文档对不上的地方</h2></div>
+      <span class="tag gate">每条都跑过代码路径 · 461 用例全绿</span>
+    </div>
+    <p class="sec-sub">
+      这一节不是设计说明，是<b>本次核查的副产品</b>：画依赖图必须把每条边落到文件行号，
+      于是撞见五处「文档说的」和「代码做的」不一样。每条都<b>跑过代码路径取数</b>，不是 grep 出来的印象：
+      两份 PREREQ 用 AST 字面量 + 运行时 import 双向比对；<code>_assets_gate</code> 拿真实项目产物调了三臂（含最坏臂）；
+      <code>resolve_target</code> 的引用用 AST 扫全仓（连 <code>getattr</code> 的动态形态一起）；
+      「测试不红」是跑了 461 条用例（全绿）。判断留给人做。
+    </p>
+    <div class="find-list" id="findList"></div>
+  </section>
+
+  <footer>
+    <div>事实来源：<code>v5/guards.py</code> · <code>orchestrator.py</code> · <code>series.py</code> · <code>decision.py</code> · <code>media/pipeline.py</code> · <code>media/video.py</code> · <code>langgraph.json</code></div>
+    <div>对照基线：<code>AGENTS.md</code> 2026-09-28 · 生成于 2026-09-29</div>
+    <div>本文件自包含，无外部请求，双击即可离线打开。</div>
+  </footer>
+</div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════
+   数据 —— 逐字段取自 v5/ 当前代码，行号为核实位置
+   ═══════════════════════════════════════════════════════════════ */
+
+const NODES = [
+  { id:'director', zh:'监制 · 制作规格', rank:0, y:'b', sup:true,
+    output:'director/director.md', level:'全剧级', step:0, skipOnEpN:false,
+    desc:'它就是 supervisor 自己（create_deep_agent），不是被派发的角色节点。第 0 步在派发任何角色之前，用 write_file 把制作规格（片长 / 画幅 / 音频模式 / 视觉基准）落盘 —— worldbuilder 的开工契约把它列为上游，规格没落盘 worldbuilder 只能靠 brief 猜。',
+    src:'orchestrator.py:272（纪律第 0 步）· guards.py:29（OUTPUTS）',
+    warn:'GATE_ROLES 明确不含 director。没有任何代码路径会把 phases["director"] 记为 complete，所以旧口径（查 8 个）会让媒体门永远拦死。2026-09-12 起改为查被实际派发的 7 个。' },
+  { id:'worldbuilder', zh:'世界观与角色卡', rank:1, y:'b',
+    output:'worldbuilder/worldbuilder.md', level:'全剧级', step:1, skipOnEpN:true,
+    desc:'最先派发的角色。产物是全剧级、一次锁定全剧复用，也是角色参考图的唯一依据之一。',
+    src:'guards.py:19（PREREQ）· orchestrator.py:79',
+    note:'两份 PREREQ 在这里分叉：guards 说它依赖 director，orchestrator 给模型的是「无前置」。' },
+  { id:'assetdesigner', zh:'资产卡', rank:2, y:'a',
+    output:'assetdesigner/assets.md', level:'全剧级', step:2, skipOnEpN:true,
+    desc:'资产卡（角色 / 道具 / 场景）。与 plotdesigner 互不依赖，纪律第 2 步要求在同一条回复里并行发起两个 task。',
+    src:'orchestrator.py:285（第 2 步）' },
+  { id:'plotdesigner', zh:'剧情结构与分幕', rank:2, y:'c',
+    output:'plotdesigner/episodes.md', level:'全剧级', step:2, skipOnEpN:true,
+    desc:'分卷分集结构。产物必须按「## 第 N 卷 + ### 第 M 集」写且集条目自包含 —— 集数多时注入会按集切片，写「同上」会悬空。',
+    src:'guards.py:21（多一条 director 依赖）· orchestrator.py:81' },
+  { id:'scriptwriter', zh:'剧本执笔', rank:3, y:'b',
+    output:'scriptwriter/scriptwriter_ep{N}.md', level:'集级', step:3, skipOnEpN:false,
+    desc:'本集剧本。从这一步起产物全部是集级，每集一份、互不覆盖。',
+    src:'guards.py:22（多一条 worldbuilder 依赖）· orchestrator.py:82' },
+  { id:'dialogue', zh:'台词清单', rank:4, y:'a',
+    output:'dialogue/dialogue_ep{N}.md', level:'集级', step:4, skipOnEpN:false,
+    desc:'台词清单。每句必须逐字来自剧本 —— 第 4 道门会查。',
+    src:'series.py:369（_dialogue_gate）' },
+  { id:'scenedesigner', zh:'分镜 13 列', rank:5, y:'b',
+    output:'scenedesigner/scenedesigner_ep{N}.md', level:'集级', step:5, skipOnEpN:false,
+    desc:'分镜表，须等剧本 + 台词 + 资产三者齐。它是媒体链的第一个输入，字段越全（景别 / 角度 / 运镜 / 落幅）提示词越准。',
+    src:'pipeline.py:613（媒体链读它）· series.py:507（分镜契约门）' },
+  { id:'reviewer', zh:'独立审片', rank:6, y:'c',
+    output:'reviewer/review_ep{N}.md', level:'集级', step:6, skipOnEpN:false,
+    desc:'最后派发，temperature=0。返回 pass=true 才算创作链完成；判不通过时先做缺陷分级 —— 只给 advisory 没 reasons 视为通过，有阻断理由才回退。',
+    src:'decision.py:310（normalize_pass）· guards.py:516（force_passed）',
+    warn:'回退目标由谁算的，见 05 节第 4 条。' },
+];
+
+const EDGES = {
+  guards: [ ['director','worldbuilder'],['director','plotdesigner'],['worldbuilder','assetdesigner'],
+    ['worldbuilder','plotdesigner'],['worldbuilder','scriptwriter'],['plotdesigner','scriptwriter'],
+    ['scriptwriter','dialogue'],['scriptwriter','scenedesigner'],['dialogue','scenedesigner'],
+    ['assetdesigner','scenedesigner'],['scenedesigner','reviewer'] ],
+  orch: [ ['worldbuilder','assetdesigner'],['worldbuilder','plotdesigner'],['plotdesigner','scriptwriter'],
+    ['scriptwriter','dialogue'],['scriptwriter','scenedesigner'],['dialogue','scenedesigner'],
+    ['assetdesigner','scenedesigner'],['scenedesigner','reviewer'] ],
+};
+const ORCH_SRC = { guards:'guards.py:18-26', orch:'orchestrator.py:78-86' };
+
+const STEPS = [
+  { k:'第 0 步', v:'director', d:'落制作规格', par:false },
+  { k:'第 1 步', v:'worldbuilder', d:'', par:false },
+  { k:'第 2 步', v:'assetdesigner ∥ plotdesigner', d:'同一条回复里两个 task', par:true },
+  { k:'第 3 步', v:'scriptwriter', d:'', par:false },
+  { k:'第 4 步', v:'dialogue', d:'', par:false },
+  { k:'第 5 步', v:'scenedesigner', d:'剧本+台词+资产齐', par:false },
+  { k:'第 6 步', v:'reviewer', d:'pass=true 才算完', par:false },
+];
+
+const GATES = [
+  { n:1, id:'_brief_gate', where:'series.py:301', block:true, verdict:'BRIEF-REJECT（SystemExit）',
+    items:['缺必填字段直接终止整条链','多集时主动提示 must_have / target_duration 语义不同','节拍类启发在 episodes>1 下抑制'],
+    note:'brief 全文注入、没有长度截断 —— 3000 字注入预算是死代码（已于 2026-09-27 查证并删除那次调用）。' },
+  { n:2, id:'_storyboard_gate', where:'series.py:507', block:true, verdict:'STORYBOARD-REJECT',
+    items:['缺列 / 镜序错乱 / 空对白 / 要求画内文字','未覆盖 must_have、违反 audio_mode','镜内节拍不自洽：写了「0-2秒：」就必须从 0 起、首尾相接、终于本镜时长','解析出 0 镜按 fail-closed 拦下'],
+    note:'判决落 media/ep{N}/gates.json（HUMAN_IN_CHARGE=1 时降级为只报告）。' },
+  { n:3, id:'_assets_gate', where:'series.py:406', block:false, verdict:'实跑三臂全不抛 —— 从不阻断',
+    items:['跑在 cast 之前 ⇒ 首轮注册表必然还是空的，直接 return 跳过',
+           '注册表非空、但分镜点名的角色一个都没命中 → 也只 print 一行警告',
+           '实测（huashan-duel-v4 真产物）：删掉 2 个 character 条目后调用，stdout 出警告、无异常'],
+    note:'真正的完整性校验在 cast 之后：pipeline.py:735 的 assets.validate_assets 按磁盘事实查「有没有图」。AGENTS.md 写的「→ 阻断」与代码不符。' },
+  { n:4, id:'_dialogue_gate', where:'series.py:369', block:false, verdict:'默认只警告；DIALOGUE_VERBATIM_STRICT=1 才 DIALOGUE-REJECT',
+    items:['清单里每句台词必须逐字来自剧本','config.DIALOGUE_VERBATIM_STRICT 决定是否升为硬拦'],
+    note:'AGENTS.md 的「三道输入门」漏了这一道 —— 代码是 4 道。' },
+  { n:5, id:'guards.media_gate("render")', where:'guards.py:489 → 调用于 pipeline.py:547', block:true, verdict:'拦住则不进 _run_impl（不烧配额）',
+    items:['本集 7 个 GATE_ROLES 的 phase 全 complete','review.passed 或 force_passed','ml.rendered 且无 pending_revision 时挡住重复渲染'],
+    note:'SHORTDRAMA_HUMAN_IN_CHARGE=1 时「必须 reviewer.passed」降级为报告；「7 个产物齐」照旧硬拦 —— 与人在不在无关。' },
+];
+
+const PHASES = [
+  { name:'输入把关', meta:'烧任何配额之前', stages:[
+    { n:'0', t:'独占锁 + 媒体门', d:'media/ep{N}/.running；陈旧锁靠心跳 mtime 接管。media_gate("render") 在图外把住渲染入口。',
+      fx:'pipeline.run → _run_guarded', loc:['pipeline.py','334 / 547'] },
+    { n:'1', t:'brief.json 语法守卫', d:'存在但解析不出来 → 终止、不烧任何配额。因为读不出来时 pack 会静默回落到默认包，风格块 / still-refs / QC 词表一起变掉。',
+      fx:'style.brief_broken()', loc:['pipeline.py','603'], key:true },
+    { n:'2', t:'分镜读取与解析', d:'集级路径、新名优先旧名回退。ep 必须显式传，不传会拿到错集的分镜。',
+      fx:'resolve_path → storyboard.parse() → storyboard.parse', loc:['pipeline.py','613-615'] },
+    { n:'3', t:'镜数上限截断（响亮）', d:'超 AGNES_VIDEO_MAX_SHOTS 会截断，但必须打印「已截断」和砍掉的秒数 —— 曾有 127 镜被静默砍成 40 镜。',
+      fx:'config.VIDEO_MAX_SHOTS', loc:['pipeline.py','623'] },
+  ]},
+  { name:'身份与提示词组装', meta:'顺序有意义：注入在快照之前', stages:[
+    { n:'4', t:'角色卡解析', d:'从 worldbuilder.md 抽角色名，作为后续绑定与补漏的依据。',
+      fx:'cast.parse_characters / _names', loc:['pipeline.py','666'] },
+    { n:'5', t:'风格块注入', d:'按 brief.pack 载 style-block.md 并包裹 —— 逐镜注入，是画质的主要锁定手段。包名写错 = 静默退回朴素提示词。',
+      fx:'style.load() → style.wrap()', loc:['pipeline.py','696'] },
+    { n:'6', t:'定妆照 / 资产图', d:'按角色卡确定性生成单格正面像参考图（不是四视图）。带内容指纹，卡片重写后旧图自动作废。',
+      fx:'cast.ensure()', loc:['pipeline.py','711'], key:true },
+    { n:'7', t:'参考图绑定', d:'纯道具镜不限；1 人封顶 2 张；≥2 人封顶 3 张且先满足人脸。location 图只在宽景（全景/远景/大全景/空镜）绑。',
+      fx:'assets.bind() → validate_assets() :735', loc:['pipeline.py','727'] },
+    { n:'8', t:'文本身份锚点与场景行', d:'图绑不上的退化为文本锚点；场景列按「场景」名命中。人数声明由 cast_counts 注入。',
+      fx:'identity_lines :753 · scene_lines :769 · cast_counts :787', loc:['pipeline.py','753-787'] },
+    { n:'9', t:'镜间关系与落幅规划', d:'算相邻镜的首尾承接关系，决定哪些镜需要预生成落幅帧。',
+      fx:'relations.plan_frames()', loc:['pipeline.py','811'] },
+  ]},
+  { name:'静帧', meta:'视觉模型只描述，判不判由代码定', stages:[
+    { n:'10', t:'静帧生成', d:'逐镜出图，幂等按「URL 在盘就跳过」。只取镜内第一拍，所以角色锚点必须写在前面的拍里。',
+      fx:'stills.ensure() · prompt.build_still_prompt', loc:['pipeline.py','817'] },
+    { n:'11', t:'静帧硬伤 QC + 定向重画', d:'字幕 / 缺人物道具 / 多余清晰人脸 / 分屏为硬伤，加景别跨档校验。负面判定走复采确认；「人数与主体复制」豁免复采、抓到即重画。',
+      fx:'qc.review :902 · is_hard_issue :933 · is_count_issue :941 · 跨进程上限 :1053', loc:['pipeline.py','902-1053'], key:true },
+    { n:'12', t:'落幅帧预生成', d:'为需要承接的镜预生成末帧。',
+      fx:'stills.tail_needed → ensure_tails', loc:['pipeline.py','1135-1138'], packSkip:true },
+  ]},
+  { name:'视频', meta:'唯一的模式分岔点', stages:[
+    { n:'13', t:'视频计划', d:'「怎么提交 / 用什么图 / 要不要抽尾帧」的唯一决策点。',
+      fx:'video_plan.VideoPlan.of()', loc:['pipeline.py','1156'] },
+    { n:'14', t:'提交与轮询', d:'按模式分岔 —— 见上方模式开关。',
+      fx:'submit_packs :1164 → poll_all :1166 → expand_packs :1167', loc:['pipeline.py','1164-1181'], key:true, modeAware:true },
+    { n:'15', t:'成片抽帧复核', d:'每条 clip 抽首/中/尾三帧复核，不合格镜同时作废 clip 与 job 状态后重渲。',
+      fx:'clipqc.audit()', loc:['pipeline.py','1278'] },
+  ]},
+  { name:'合成出片', meta:'缺镜不拼接、不覆盖旧片', stages:[
+    { n:'16', t:'拼接与旁白', d:'media 审批检查 → compose.concat → 可选旁白 TTS。缺镜直接 status=incomplete，宁要「有瑕疵但完整」也不要「永远缺镜」。',
+      fx:'approvals.check :1364 · compose.concat :1374 · narration.attach :1388', loc:['pipeline.py','1364-1388'] },
+  ]},
+];
+
+const MODE_DETAIL = {
+  reference: { text:'静帧进 images，提示词里作 &lt;Picture 1&gt;。允许 images(≤5) / audios(≤3)，禁 first_frame / last_frame。',
+               tag:'并行提交 · 静帧兜底锚' },
+  keyframe:  { text:'静帧当首帧，构图被锁死。允许 first_frame / last_frame，禁 images / audios。官方规定与 reference 互斥。',
+               tag:'回退档' },
+  pack:      { text:'相邻同场景镜打包成一条 ≤12s 的 reference 请求，组级产物 clips/packNN.mp4。图序：人物设定表(≤2) → 场景空镜 → 本组首镜静帧 → 前组末镜静帧 → 道具补空位。★ 串行落盘：每组提交后立即轮询到落盘才提下一组，因为下一组要抽这组的真实末帧当锚。代价 +20-40 分钟。',
+               tag:'跳过逐镜 clipQC' },
+};
+
+const GRAPHS = [
+  ['supervisor','orchestrator.py:481','1 张','编译 supervisor 本体（= director，不派发）+ 7 个 CompiledSubAgent。SHORTDRAMA_APPROVE_EACH_ROLE=1 时对每次 task 加 interrupt_on。'],
+  ['role_*&nbsp;×7','orchestrator.py:239-245','7 张','由 ROLE_GRAPHS 注册表批量编译（:248）。每个角色节点自带 ROLE_RECURSION_LIMIT，默认 150 —— 父 run 传 600 也管不到它，这是多角色链路预算要按最大读写角色定的原因。'],
+  ['media_rerender','rerender_agent.py:218','1 张','单镜重渲子代理（NODE_NAME 同名）。--rerender 默认放行；简报头行只准写镜号与 from_still，多写一个镜号会被判歧义拒绝。'],
+];
+const GRAPH_NAMES = ['supervisor','role_worldbuilder','role_assetdesigner','role_plotdesigner',
+  'role_scriptwriter','role_dialogue','role_scenedesigner','role_reviewer','media_rerender'];
+
+const STATE = [
+  ['.agent_state.json','黑板 / 唯一写入方 guards.record_phase','phases 与 media_loop 都是二维按集 {"1":{…},"2":{…}}；review 与 revision_counts 是一维，换集清 revision_counts。⛔ 黑名单，勿手改。','guards.py:281-362'],
+  ['.tmp/hitl/pending.json','链路 → 人','每次 task 派发前 interrupt 时写。前端「继续 / 打回」确认条吃这一份。','hitl.py:57-64'],
+  ['.tmp/hitl/decision.json','人 → 链路','approve / reject / redo 三种决定；带 stamp 校验防陈旧决定。redo → reset_from（旧产物进 .rerun_backup/）。','hitl.py:129-141'],
+  ['media/ep{N}/gates.json','门 → 人','门判决落盘（含降级为报告的）。','guards.py:438-473'],
+  ['media/ep{N}/approvals.json','审批门','三道门（storyboard / stills / media）的 by / at / note + 产物指纹；上游一变批文自动作废。','approvals.py:34-87'],
+  ['video_quota.json','全局账本','⛔ 黑名单，勿手改。','AGENTS.md 硬约束 #2'],
+];
+
+const FINDINGS = [
+  { sev:'a', mark:'!', t:'依赖关系在代码里有两份，且不一致（已实跑双证）',
+    p:'门判据用 guards.PREREQ，写进提示词给模型看的是 orchestrator.PREREQ。实测：11 条边 vs 8 条边，只在 guards 里的正好 3 条 —— director→worldbuilder、director→plotdesigner、worldbuilder→scriptwriter；反向差集为空。两边角色键集合完全相同，于是 GATE_ROLES 仍是 7、长度没变，tests_guards / tests_graph / tests_core 共 179 条 + tests_flow / tests_roles / tests_validate 共 282 条全绿 —— 只有画边的时候才暴露。要不要收敛成一份，留给人判断。',
+    ev:'AST 取字面量并与运行时 import 的字典逐一比对（两边都相等）· guards.py:18-26 vs orchestrator.py:78-86 · 切 01 节开关可逐边比对' },
+  { sev:'a', mark:'!', t:'_assets_gate 名叫契约门，实际从不阻断（三臂实跑）',
+    p:'直接调用 series._assets_gate() 跑真实项目产物：① 注册表清空 → print「cast 尚未运行」后 return；② 注册表非空但删掉全部 character 条目、两个命名角色一个都不命中 → 只 print 一行警告，无异常；③ 注册表完好 → 通过。三条路径都没有 raise / SystemExit。源码注释自己写得很清楚（「旧的硬拦从未生效过，2026-09-12 实测」）。⇒ AGENTS.md 那条「未注册身份锚点 → 阻断」与代码不符，而且不只是「首轮因为跑在 cast 前所以不拦」——任何注册表状态下都不拦。',
+    ev:'series.py:406-468（return 分支 :455-458）· 实际校验在 cast 之后 pipeline.py:735' },
+  { sev:'a', mark:'!', t:'decision.resolve_target() 没有任何非测试调用点（AST 全仓扫）',
+    p:'把仓库里每个 .py（排除 .venv / node_modules）都 parse 成 AST，找 Attribute / Name / def 三种形态的 resolve_target：只有定义处 1 条 + tests_graph.py 6 条断言，排除这两类之后剩余为空 —— 也排除了 getattr 之类动态调用的可能形态。也就是 AGENTS.md 里「回退目标由 resolve_target() 算出」这句描述的是设计意图而非运行时事实：评审回退实际由 supervisor 按提示词自己决定，唯一的机械回退是 HITL 打回 → guards.reset_from。',
+    ev:'decision.py:281（def）· tests_graph.py:104-151 · 非测试引用 = 0' },
+  { sev:'b', mark:'i', t:'AGENTS.md 写「三道输入门」，代码是 4 道',
+    p:'AST 扫 _input_gates 的函数体，实际调用 4 个门函数：_storyboard_gate → _assets_gate → _dialogue_gate → _brief_gate（源码书写顺序是 brief → 分镜 → 资产 → 对白）。对白逐字门在文档的门清单里没出现，只在环境变量表里被顺带提到。★ 一个真实的限定：_brief_gate 包在 if data 里，所以 --resume-media 不带 brief 数据时只过 3 道 —— 文档的「三道」大概就是这么来的，但它列的三道不含对白门，仍然对不上。',
+    ev:'series.py:351-366 · 条件分支 = {data}' },
+  { sev:'b', mark:'i', t:'第 2..N 集跳过全剧级三件，但前提常被忽略',
+    p:'跳过条件是「ep>1 且三个产物都在盘上」。实算：三件齐时 ep=1 不跳、ep=2 跳；把 worldbuilder.md 拿掉后 ep=2 也**不跳**（照样重跑）—— 不是「第 2 集一定跳过」。要改角色卡必须回第 1 集改，否则跨集错位（上集分镜引用旧名字，参考图不跟着重画）。切 01 节「第 2..N 集」开关可看哪些节点变虚线。',
+    ev:'drive_chain.py:280-287（WHOLE_DRAMA + _have_whole 判定）' },
+];
+
+/* ═══════════════════════════════════════════════════════════════
+   渲染
+   ═══════════════════════════════════════════════════════════════ */
+const $ = s => document.querySelector(s);
+const state = { edgeSrc:'guards', ep:'1', sel:null, hover:null, mode:'reference' };
+
+/* ── 步骤轨 ── */
+$('#rail').innerHTML = STEPS.map(s => `
+  <div class="rail-step ${s.par?'par':''}">
+    <div class="k">${s.k}</div><div class="v">${s.v}</div>
+    ${s.d ? `<span class="pill">${s.d}</span>` : ''}
+  </div>`).join('');
+
+/* ── DAG ── */
+/* 纵向排布：7 个派发层级自上而下 = 真实执行顺序；viewBox 宽度 ≈ 容器宽度，
+   节点文字按原字号渲染（横向 7 列会把它缩到 10px 以下）。 */
+const NW = 200, NH = 62;
+const POS = {
+  director:[400,60], worldbuilder:[400,160],
+  assetdesigner:[225,260], plotdesigner:[575,260],
+  scriptwriter:[400,360], dialogue:[620,460],
+  scenedesigner:[400,560], reviewer:[400,660],
+};
+/* 跨层边要绕开中间层的节点，绕向逐条核过碰撞后写死 */
+const BOW = { 'director>plotdesigner':120 };
+const byId = Object.fromEntries(NODES.map(n => [n.id, n]));
+NODES.forEach(n => { [n.cx, n.cy] = POS[n.id]; });
+
+const isSkipped = n => state.ep === 'n' && n.skipOnEpN;
+
+function edgesNow(){
+  const g = EDGES.guards, o = EDGES.orch;
+  const active = state.edgeSrc === 'guards' ? g : o;
+  return active.map(([s,t]) => ({ s, t, onlyGuards: state.edgeSrc==='guards' && !o.some(e=>e[0]===s&&e[1]===t) }));
+}
+function related(id, eds){
+  const up = new Set(), down = new Set();
+  const walk = (id, dir, acc) => eds.filter(e => e[dir==='up'?'t':'s'] === id)
+      .forEach(e => { const nx = dir==='up' ? e.s : e.t; if(!acc.has(nx)){ acc.add(nx); walk(nx, dir, acc); } });
+  walk(id,'up',up); walk(id,'down',down);
+  return { up, down };
+}
+function path(sx,sy,tx,ty,bow){
+  const d = Math.max(30, (ty - sy) * .42);
+  return `M${sx},${sy} C${sx+bow},${sy+d} ${tx+bow},${ty-d} ${tx},${ty}`;
+}
+
+let curEdges = [];   // 悬停只改样式、不重建 DOM —— 重建会让 click 落在已移除的节点上
+
+function renderDag(){
+  curEdges = edgesNow();
+  const eds = curEdges;
+
+  const defs = `<defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="hsl(var(--line))"/></marker>
+    <marker id="ar-h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="hsl(var(--creation))"/></marker>
+    <marker id="ar-g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="hsl(var(--gate) / .75)"/></marker></defs>`;
+
+  const edgeSvg = eds.map(e => {
+    const s = byId[e.s], t = byId[e.t];
+    const mk = e.onlyGuards ? 'ar-g' : 'ar';
+    return `<path class="edge${e.onlyGuards ? ' guards-only' : ''}" data-s="${e.s}" data-t="${e.t}"
+      d="${path(s.cx, s.cy+NH/2, t.cx, t.cy-NH/2, BOW[e.s+'>'+e.t] || 0)}" marker-end="url(#${mk})"/>`;
+  }).join('');
+
+  const nodeSvg = NODES.map(n => {
+    const sk = isSkipped(n);
+    const cls = ['node', n.sup?'sup':'', sk?'skip':''].filter(Boolean).join(' ');
+    const lvl = n.level === '全剧级'
+      ? `<text class="lvl" x="${n.cx+NW/2-13}" y="${n.cy+18}" text-anchor="end" fill="hsl(var(--gate))">● 全剧级</text>`
+      : `<text class="lvl" x="${n.cx+NW/2-13}" y="${n.cy+18}" text-anchor="end" fill="hsl(var(--creation))">○ 集级</text>`;
+    const badge = sk ? `<text class="lvl" x="${n.cx+NW/2-13}" y="${n.cy-8}" text-anchor="end" fill="hsl(var(--danger))">ep&gt;1 不派发</text>` : '';
+    return `<g class="${cls}" data-id="${n.id}" tabindex="0" role="button" aria-label="角色 ${n.id}">
+      <rect class="box" x="${n.cx-NW/2}" y="${n.cy-NH/2}" width="${NW}" height="${NH}" rx="11"/>
+      <text class="id" x="${n.cx-NW/2+13}" y="${n.cy-8}">${n.id}</text>
+      <text class="zh" x="${n.cx-NW/2+13}" y="${n.cy+18}">${n.zh}</text>
+      ${lvl}${badge}</g>`;
+  }).join('');
+
+  const back = `<path class="edge backarc" style="stroke:hsl(var(--danger)/.5);stroke-dasharray:6 5"
+      d="M${byId.reviewer.cx-NW/2},${byId.reviewer.cy} C-42,${byId.reviewer.cy} -42,${byId.worldbuilder.cy} ${byId.worldbuilder.cx-NW/2},${byId.worldbuilder.cy}"
+      marker-end="url(#ar)"/>
+    <text class="arc-lab" x="-64" y="778" fill="hsl(var(--danger)/.85)">
+      左侧大弧 = reviewer pass:false / 人工打回 → 重置被点名的角色 + 它的全部下游（旧产物进 .rerun_backup/）</text>`;
+
+  $('#dag').innerHTML = defs + edgeSvg + nodeSvg + back;
+
+  $('#dag').querySelectorAll('.node').forEach(g => {
+    const id = g.dataset.id;
+    g.addEventListener('click', () => { state.sel = state.sel===id ? null : id; applyFocus(); renderDrawer(); });
+    g.addEventListener('mouseenter', () => { state.hover = id; applyFocus(); });
+    g.addEventListener('mouseleave', () => { state.hover = null; applyFocus(); });
+    g.addEventListener('focus', () => { state.hover = id; applyFocus(); });
+    g.addEventListener('blur', () => { if(state.hover===id){ state.hover = null; applyFocus(); } });
+    g.addEventListener('keydown', ev => { if(ev.key==='Enter'||ev.key===' '){ ev.preventDefault(); g.dispatchEvent(new Event('click')); } });
+  });
+  applyFocus();
+}
+
+/* 只切 class，不重建 DOM。
+   聚焦只点亮**直接**上下游 —— 这条链是全连通的，用闭包的话任何一个节点都会点亮全部，淡出等于没做。 */
+function applyFocus(){
+  const focus = state.sel || state.hover;
+  const ups = new Set(focus ? curEdges.filter(e => e.t === focus).map(e => e.s) : []);
+  const dns = new Set(focus ? curEdges.filter(e => e.s === focus).map(e => e.t) : []);
+  const lit = id => !focus || id===focus || ups.has(id) || dns.has(id);
+
+  $('#dag').querySelectorAll('.node').forEach(g => {
+    g.classList.toggle('dim', !lit(g.dataset.id));
+    g.classList.toggle('sel', state.sel === g.dataset.id);
+  });
+  $('#dag').querySelectorAll('.edge[data-s]').forEach(e => {
+    const s = e.dataset.s, t = e.dataset.t;
+    const on = !focus || s===focus || t===focus;
+    e.classList.toggle('dim', !on);
+    e.classList.toggle('hot', !!on && !!focus);
+    e.setAttribute('marker-end', `url(#${on && focus ? 'ar-h' : (e.classList.contains('guards-only') ? 'ar-g' : 'ar')})`);
+  });
+}
+
+function renderDrawer(){
+  const n = byId[state.sel];
+  const el = $('#drawer');
+  if(!n){
+    el.innerHTML = `<div class="eyebrow">节点详情</div><h3 style="color:hsl(var(--text-2))">还没选</h3>
+      <p class="desc">点上面任意一个角色节点，这里会显示它的产物路径、归属级别、上下游闭包，以及它为什么排在这个位置。
+      <br><br>键盘也能操作：<code>Tab</code> 走到节点、<code>Enter</code> 选中。</p>`;
+    return;
+  }
+  const eds = edgesNow();
+  const ups = eds.filter(e => e.t===n.id).map(e => e.s);
+  const dns = eds.filter(e => e.s===n.id).map(e => e.t);
+  const { up, down } = related(n.id, eds);
+  el.innerHTML = `
+    <div class="eyebrow">角色节点</div>
+    <h3>${n.id}</h3><div class="zh">${n.zh} · 第 ${n.step} 步</div>
+    <p class="desc">${n.desc}</p>
+    <dl class="kv">
+      <div class="row"><dt>产物</dt><dd class="mono">${n.output}</dd></div>
+      <div class="row"><dt>归属</dt><dd><span class="badge ${n.level==='全剧级'?'series':'ep'}">${n.level}</span></dd></div>
+      <div class="row"><dt>派发</dt><dd>${n.sup ? '<span class="badge warn">不派发 · 它是 supervisor 本体</span>' : '是（task 同步调用）'}</dd></div>
+      <div class="row"><dt>直接上游</dt><dd>${ups.length?ups.map(i=>`<code>${i}</code>`).join(' · '):'<span style="color:hsl(var(--text-3))">无（本来源下最先）</span>'}</dd></div>
+      <div class="row"><dt>直接下游</dt><dd>${dns.length?dns.map(i=>`<code>${i}</code>`).join(' · '):'<span style="color:hsl(var(--text-3))">无（终点）</span>'}</dd></div>
+      <div class="row"><dt>闭包</dt><dd style="color:hsl(var(--text-3))">回退它要重做 ${down.size} 个下游 / 依赖 ${up.size} 个上游</dd></div>
+      <div class="row"><dt>取证</dt><dd class="mono" style="color:hsl(var(--text-3))">${n.src}</dd></div>
+    </dl>
+    ${n.warn ? `<div class="warnbox"><b>注意</b> ${n.warn}</div>` : ''}
+    ${n.note ? `<div class="warnbox" style="background:hsl(36 92% 58% / .07);border-color:hsl(var(--gate-dim))">${n.note}</div>` : ''}`;
+}
+
+/* ── 门禁卡 ── */
+$('#gateCards').innerHTML = GATES.map(g => `
+  <div class="gcard ${g.block?'':'no-block'}">
+    <div class="num">GATE ${g.n}</div>
+    <h4>${g.id}</h4>
+    <div class="where">${g.where}</div>
+    <div class="verdict"><span class="badge ${g.block?'ep':'warn'}">${g.verdict}</span></div>
+    <ul>${g.items.map(i=>`<li>${i}</li>`).join('')}</ul>
+    <div class="note">${g.note}</div>
+  </div>`).join('');
+
+/* ── 媒体链 ── */
+function renderFlow(){
+  const pack = state.mode === 'pack';
+  $('#flow').innerHTML = PHASES.map(p => `
+    <div class="phase">
+      <div class="phase-head"><span class="ix">▸</span><h3>${p.name}</h3><span class="meta">${p.meta}</span></div>
+      ${p.stages.map(s => {
+        let fx = s.fx, dd = s.d;
+        if(s.modeAware){
+          fx = state.mode==='pack' ? 'submit_packs :1164 → poll_all :1166 → expand_packs :1167'
+             : state.mode==='keyframe' ? 'video.submit_chain()（串行）:1181'
+             : 'video.submit_all :1170 → poll_all :1173';
+          dd = MODE_DETAIL[state.mode].text;
+        }
+        const skip = pack && s.packSkip;
+        return `<div class="stage${s.key?' key':''}${skip?' skip-mode':''}${s.modeAware?' mode-aware':''}">
+          <div class="n">${s.n}</div>
+          <div class="body"><h5>${s.t}</h5><p>${dd}</p><div class="fx">${fx}</div>
+            ${s.modeAware?`<div class="fx" style="color:hsl(var(--text-3))">${MODE_DETAIL[state.mode].tag}</div>`:''}</div>
+          <div class="loc"><b>${s.loc[0]}</b><br>:${s.loc[1]}</div>
+        </div>`; }).join('')}
+    </div>`).join('');
+}
+
+/* ── 图与状态表 ── */
+$('#graphTbl').innerHTML = `<thead><tr><th style="width:20%">图</th><th style="width:24%">编译处</th><th>说明</th></tr></thead><tbody>` +
+  GRAPHS.map(g => `<tr><td class="mono">${g[0]}</td><td><span class="mono" style="color:hsl(var(--text-3))">${g[1]}</span></td><td>${g[3]}</td></tr>`).join('') + '</tbody>';
+$('#graphChips').innerHTML = `<div class="chips-l">langgraph.json 的 graphs 键（9 个，逐字）</div>` +
+  GRAPH_NAMES.map(n => `<span class="chip">${n}</span>`).join('');
+
+$('#stateTbl').innerHTML = `<thead><tr><th>信道</th><th>方向</th><th>契约</th></tr></thead><tbody>` +
+  STATE.map(s => `<tr><td class="mono">${s[0]}</td><td>${s[1]}</td>
+    <td>${s[2]}<br><span style="font-family:var(--mono);font-size:11px;color:hsl(var(--text-3))">${s[3]}</span></td></tr>`).join('') + '</tbody>';
+
+/* ── 发现 ── */
+$('#findList').innerHTML = FINDINGS.map(f => `
+  <div class="find ${f.sev}"><div class="mk">${f.mark}</div>
+    <div><h4>${f.t}</h4><p>${f.p}</p><div class="ev">取证：${f.ev}</div></div></div>`).join('');
+
+/* ── 交互绑定 ── */
+function seg(el, key, after){
+  el.addEventListener('click', ev => {
+    const b = ev.target.closest('button'); if(!b) return;
+    el.querySelectorAll('button').forEach(x => x.classList.remove('on'));
+    b.classList.add('on'); state[key] = b.dataset.v; after();
+  });
+}
+seg($('#segEdges'), 'edgeSrc', renderDag);
+seg($('#segEp'), 'ep', renderDag);
+seg($('#segMode'), 'mode', renderFlow);
+$('#btnClear').addEventListener('click', () => { state.sel=null; renderDag(); renderDrawer(); });
+document.addEventListener('keydown', e => { if(e.key==='Escape'){ state.sel=null; renderDag(); renderDrawer(); } });
+
+/* 滚动高亮当前小节 */
+const links = [...document.querySelectorAll('#jump a')];
+const obs = new IntersectionObserver(es => es.forEach(en => {
+  if(en.isIntersecting) links.forEach(a => a.classList.toggle('on', a.hash === '#'+en.target.id));
+}), { rootMargin:'-45% 0px -50% 0px' });
+['creation','gates','media','graphs','findings'].forEach(id => obs.observe(document.getElementById(id)));
+
+/* 窄屏下图是横向平移的：把滚动位置摆到主脊上，别让用户一进来只看到左半边 */
+function centerCanvas(){
+  const c = document.querySelector('.canvas'), s = $('#dag');
+  if(!c || !s) return;
+  c.scrollLeft = window.matchMedia('(max-width:720px)').matches
+    ? Math.max(0, (s.getBoundingClientRect().width - c.clientWidth) / 2) : 0;
+}
+window.addEventListener('resize', centerCanvas);
+window.addEventListener('load', centerCanvas);
+centerCanvas();
+
+renderDag(); renderDrawer(); renderFlow();
+</script>
+</body>
+</html>

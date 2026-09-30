@@ -1,0 +1,1166 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Abcyesno 架构地图 · v1.5.4</title>
+<meta name="description" content="Abcyesno 桌面 Agent 平台的交互式架构地图：React 渲染层 / AG-UI 桥 / Electron 外壳 / Hermes Python 后端 / 短剧生产链，每个模块可点开看真实文件与行号。">
+<style>
+/* ============================================================
+   设计系统 —— 取自本项目自己的 tokens（src/styles/index.css:1-41）
+   本页面不引入任何外部资源，可离线用 file:// 直接打开。
+   ============================================================ */
+:root{
+  --bg:#0f1419; --panel:#161b22; --panel-2:#232b34; --elevated:#1c2128;
+  --surface-3:#262d36; --surface-4:#2e353e;
+  --text:#e6edf3; --muted:#8b949e; --border:#21262d; --border-2:#30363d;
+  --error:#da3633; --error-text:#ff7b72; --success:#238636; --success-text:#3fb950;
+  --warning:#d29922; --warning-text:#e3b341;
+
+  /* 层色（低饱和，只用于左描边 + 标签，主体保持黑白灰） */
+  --l-renderer:20,184,166;   /* 来自 manifests.generated.js:369 的 #14b8a6 */
+  --l-bridge:210,153,34;     /* 来自 index.css 的 --warning */
+  --l-shell:139,148,158;     /* 来自 index.css 的 --muted */
+  --l-hermes:167,139,250;
+  --l-drama:240,136,62;
+
+  /* 字阶 / 间距阶 —— 有限制，不用魔法数字 */
+  --fs-11:11px; --fs-12:12px; --fs-13:13px; --fs-15:15px; --fs-20:20px; --fs-26:26px;
+  --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px; --sp-5:24px; --sp-6:32px; --sp-8:48px;
+  --r-sm:8px; --r-md:12px; --r-lg:16px; --r-pill:9999px;
+
+  --font-ui:"Microsoft YaHei","PingFang SC",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --font-mono:ui-monospace,"SFMono-Regular",Menlo,Consolas,"JetBrains Mono",monospace;
+
+  --ease:cubic-bezier(.4,0,.2,1);
+  --shadow:0 10px 30px -12px rgba(0,0,0,.7);
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--bg); color:var(--text);
+  font-family:var(--font-ui); font-size:var(--fs-13); line-height:1.6;
+  -webkit-font-smoothing:antialiased;
+}
+/* 极淡的层间背景网格，避免大片死黑 */
+body::before{
+  content:""; position:fixed; inset:0; pointer-events:none; z-index:0;
+  background:
+    radial-gradient(900px 420px at 12% -8%, rgba(20,184,166,.05), transparent 70%),
+    radial-gradient(900px 420px at 92% 108%, rgba(167,139,250,.05), transparent 70%);
+}
+::selection{background:rgba(20,184,166,.3)}
+
+/* ============================ 顶栏 ============================ */
+.topbar{
+  position:sticky; top:0; z-index:50;
+  display:flex; align-items:center; gap:var(--sp-4); flex-wrap:wrap;
+  padding:var(--sp-3) var(--sp-5);
+  background:rgba(15,20,25,.86); backdrop-filter:blur(12px);
+  border-bottom:1px solid var(--border);
+}
+.brand{display:flex; align-items:baseline; gap:var(--sp-2); margin-right:auto}
+.brand h1{font-size:var(--fs-20); font-weight:600; letter-spacing:-.2px; margin:0}
+.brand .fp{
+  font-family:var(--font-mono); font-size:var(--fs-11); color:var(--muted);
+  border:1px solid var(--border); border-radius:var(--r-pill); padding:2px 8px;
+}
+.search{position:relative}
+.search input{
+  width:220px; padding:7px 10px 7px 30px;
+  background:var(--elevated); border:1px solid var(--border-2); border-radius:var(--r-sm);
+  color:var(--text); font-family:var(--font-ui); font-size:var(--fs-12);
+  transition:border-color .2s var(--ease), width .2s var(--ease);
+}
+.search input:focus{outline:none; border-color:rgba(var(--l-renderer),.7); width:280px}
+.search::before{
+  content:"⌕"; position:absolute; left:10px; top:50%; transform:translateY(-50%);
+  color:var(--muted); font-size:var(--fs-15);
+}
+.tabs{display:flex; gap:2px; padding:3px; background:var(--panel); border:1px solid var(--border); border-radius:var(--r-sm)}
+.tab{
+  appearance:none; border:0; cursor:pointer; background:transparent; color:var(--muted);
+  font-family:var(--font-ui); font-size:var(--fs-12); padding:6px 12px; border-radius:6px;
+  transition:color .18s var(--ease), background .18s var(--ease);
+}
+.tab:hover{color:var(--text)}
+.tab[aria-selected="true"]{background:var(--surface-4); color:var(--text); box-shadow:inset 0 0 0 1px var(--border-2)}
+.btn-trace{
+  appearance:none; cursor:pointer; font-family:var(--font-ui); font-size:var(--fs-12); font-weight:600;
+  color:#04140f; background:linear-gradient(135deg,#0d9488,#14b8a6);
+  border:0; border-radius:var(--r-sm); padding:8px 14px;
+  display:inline-flex; align-items:center; gap:6px;
+  transition:transform .18s var(--ease), box-shadow .18s var(--ease);
+}
+.btn-trace:hover{transform:translateY(-1px); box-shadow:0 6px 18px -6px rgba(20,184,166,.6)}
+.btn-trace:active{transform:translateY(0)}
+.btn-trace[data-running="1"]{background:linear-gradient(135deg,#7d8590,#8b949e)}
+
+/* ============================ 主体骨架 ============================ */
+.shell{
+  position:relative; z-index:1;
+  display:grid; grid-template-columns:minmax(0,1fr) 404px; gap:var(--sp-5);
+  align-items:start; max-width:1560px; margin:0 auto; padding:var(--sp-5);
+}
+.view[hidden]{display:none}
+
+/* ============================ 图例 ============================ */
+.legend{display:flex; flex-wrap:wrap; gap:var(--sp-2); margin-bottom:var(--sp-4)}
+.chip{
+  appearance:none; cursor:pointer; font-family:var(--font-ui); font-size:var(--fs-11);
+  display:inline-flex; align-items:center; gap:6px;
+  background:var(--panel); border:1px solid var(--border); color:var(--muted);
+  border-radius:var(--r-pill); padding:4px 10px;
+  transition:border-color .18s var(--ease), color .18s var(--ease);
+}
+.chip:hover{color:var(--text)}
+.chip .dot{width:8px; height:8px; border-radius:50%; background:rgb(var(--c)); box-shadow:0 0 0 3px rgba(var(--c),.18)}
+.chip[aria-pressed="false"]{opacity:.4}
+.stat{margin-left:auto; font-family:var(--font-mono); font-size:var(--fs-11); color:var(--muted)}
+
+/* ============================ 层带 ============================ */
+.band{
+  --c:var(--l-shell);
+  position:relative; margin-bottom:var(--sp-2);
+  border:1px solid var(--border); border-left:2px solid rgb(var(--c));
+  border-radius:var(--r-md); background:linear-gradient(90deg, rgba(var(--c),.05), transparent 42%);
+  padding:var(--sp-4);
+  transition:opacity .3s var(--ease);
+}
+.band-head{display:flex; align-items:center; gap:var(--sp-3); flex-wrap:wrap; margin-bottom:var(--sp-3)}
+.band-head .idx{
+  font-family:var(--font-mono); font-size:var(--fs-11); color:rgb(var(--c));
+  border:1px solid rgba(var(--c),.4); border-radius:6px; padding:1px 6px;
+}
+.band-head h2{margin:0; font-size:var(--fs-15); font-weight:600; letter-spacing:.4px}
+.band-head .sub{color:var(--muted); font-size:var(--fs-12)}
+.band-head .port{
+  margin-left:auto; font-family:var(--font-mono); font-size:var(--fs-11); color:rgb(var(--c));
+  background:rgba(var(--c),.1); border-radius:var(--r-pill); padding:2px 9px;
+}
+.cards{display:grid; grid-template-columns:repeat(auto-fill,minmax(196px,1fr)); gap:var(--sp-2)}
+
+.node{
+  --c:var(--l-shell);
+  position:relative; text-align:left; cursor:pointer;
+  appearance:none; font-family:var(--font-ui);
+  background:var(--panel); border:1px solid var(--border); border-radius:var(--r-sm);
+  padding:10px 12px; color:var(--text); min-height:72px;
+  transition:transform .16s var(--ease), border-color .16s var(--ease), background .16s var(--ease);
+}
+.node:hover{transform:translateY(-2px); border-color:rgba(var(--c),.55); background:var(--elevated)}
+.node:focus-visible{outline:2px solid rgb(var(--c)); outline-offset:2px}
+.node .n{display:block; font-size:var(--fs-13); font-weight:600; letter-spacing:-.1px}
+.node .d{display:block; margin-top:3px; font-size:var(--fs-11); color:var(--muted); line-height:1.5}
+.node .cnt{
+  position:absolute; top:8px; right:9px; font-family:var(--font-mono); font-size:10px; color:var(--muted);
+  opacity:.65;
+}
+.node[aria-selected="true"]{border-color:rgb(var(--c)); background:rgba(var(--c),.1); box-shadow:inset 0 0 0 1px rgba(var(--c),.45)}
+.node.dim{opacity:.22; filter:saturate(.35)}
+.node.hit{border-color:rgb(var(--c)); box-shadow:0 0 0 1px rgba(var(--c),.5), 0 0 22px -4px rgba(var(--c),.55)}
+.node.related{border-color:var(--border-2)}
+.node.gate .n::before,.stage.gate .nm::before{content:"⏸ "; color:var(--warning-text)}
+
+/* ============================ 层间连接器 ============================ */
+.conn{
+  display:flex; align-items:center; gap:var(--sp-3);
+  margin:var(--sp-1) 0 var(--sp-2); padding:0 var(--sp-4);
+}
+.conn .rule{flex:1; height:1px; background:repeating-linear-gradient(90deg,var(--border-2) 0 6px,transparent 6px 12px)}
+.conn .lbl{
+  font-family:var(--font-mono); font-size:var(--fs-11); color:var(--muted); white-space:nowrap;
+  border:1px solid var(--border); border-radius:var(--r-pill); padding:3px 10px; background:var(--bg);
+  transition:color .25s var(--ease), border-color .25s var(--ease);
+}
+.conn .lbl b{color:var(--text); font-weight:600}
+.conn .arrow{color:var(--border-2); font-size:var(--fs-12)}
+.conn.lit .lbl{color:var(--text); border-color:rgba(var(--c),.6)}
+
+/* ============================ 详情面板 ============================ */
+.detail{
+  position:sticky; top:72px; max-height:calc(100vh - 96px); overflow:auto;
+  background:var(--panel); border:1px solid var(--border); border-radius:var(--r-md);
+  box-shadow:var(--shadow);
+}
+.detail::-webkit-scrollbar{width:10px}
+.detail::-webkit-scrollbar-thumb{background:var(--surface-4); border-radius:var(--r-pill); border:3px solid var(--panel)}
+.d-head{padding:var(--sp-4); border-bottom:1px solid var(--border)}
+.d-head .layer-tag{
+  display:inline-flex; align-items:center; gap:6px; font-size:var(--fs-11);
+  color:rgb(var(--c,var(--l-shell))); background:rgba(var(--c,var(--l-shell)),.1);
+  border-radius:var(--r-pill); padding:2px 9px; margin-bottom:var(--sp-2);
+}
+.d-head h3{margin:0; font-size:var(--fs-20); font-weight:600; letter-spacing:-.2px; line-height:1.3}
+.d-head .role{margin:var(--sp-2) 0 0; color:var(--muted); font-size:var(--fs-13); line-height:1.65}
+.d-sec{padding:var(--sp-4); border-bottom:1px solid var(--border)}
+.d-sec:last-child{border-bottom:0}
+.d-sec h4{
+  margin:0 0 var(--sp-3); font-size:var(--fs-11); font-weight:600; letter-spacing:.8px;
+  text-transform:uppercase; color:var(--muted);
+}
+.frow{
+  position:relative; display:block;
+  padding:7px 34px 8px 10px; border-radius:var(--r-sm); margin-bottom:2px;
+  transition:background .16s var(--ease);
+}
+.frow:hover{background:var(--elevated)}
+.frow code{
+  font-family:var(--font-mono); font-size:var(--fs-12); color:var(--text);
+  overflow-wrap:anywhere; hyphens:none;
+}
+.frow code .ln{color:rgb(var(--c)); font-weight:600}
+.frow .what{
+  display:block; font-size:var(--fs-11); color:var(--muted); line-height:1.55; margin-top:3px;
+  padding-left:9px; border-left:1px solid rgba(var(--c),.35);
+}
+.copy{
+  appearance:none; cursor:pointer; position:absolute; top:7px; right:6px;
+  font-family:var(--font-mono); font-size:10px;
+  background:var(--bg); border:1px solid var(--border); border-radius:6px; color:var(--muted);
+  padding:1px 5px; opacity:0; transition:opacity .16s var(--ease), color .16s var(--ease);
+}
+.frow:hover .copy{opacity:1}
+.copy:hover{color:var(--text); border-color:var(--border-2)}
+.rel{display:flex; flex-wrap:wrap; gap:6px}
+.rel button{
+  appearance:none; cursor:pointer; font-family:var(--font-ui); font-size:var(--fs-11);
+  background:var(--elevated); border:1px solid var(--border); border-radius:var(--r-pill);
+  color:var(--text); padding:3px 10px; transition:border-color .16s var(--ease)
+}
+.rel button:hover{border-color:var(--border-2)}
+.d-empty{padding:var(--sp-8) var(--sp-5); text-align:center; color:var(--muted)}
+.d-empty .k{
+  display:inline-block; font-family:var(--font-mono); font-size:11px; color:var(--text);
+  border:1px solid var(--border-2); border-radius:5px; padding:1px 5px; margin:0 3px;
+}
+.tracebox{
+  font-size:var(--fs-12); background:rgba(var(--l-renderer),.08);
+  border:1px solid rgba(var(--l-renderer),.35); border-radius:var(--r-sm); padding:10px 12px;
+}
+.tracebox .step{font-family:var(--font-mono); font-size:10px; color:rgb(var(--l-renderer)); letter-spacing:.6px}
+.tracebox p{margin:5px 0 0; color:var(--text); line-height:1.6}
+.tracebox .proto{margin-top:7px; font-family:var(--font-mono); font-size:10px; color:var(--muted)}
+.bar{height:2px; margin-top:10px; background:var(--surface-4); border-radius:var(--r-pill); overflow:hidden}
+.bar i{display:block; height:100%; width:0; background:rgb(var(--l-renderer)); transition:width .5s var(--ease)}
+
+/* ============================ 流水线视图 ============================ */
+.pipe-wrap{display:grid; gap:var(--sp-5)}
+.pipe-head{display:flex; align-items:baseline; gap:var(--sp-3); flex-wrap:wrap; margin-bottom:var(--sp-4)}
+.pipe-head h2{margin:0; font-size:var(--fs-15); font-weight:600}
+.pipe-head p{margin:0; color:var(--muted); font-size:var(--fs-12)}
+.stages{display:grid; gap:var(--sp-1)}
+.stage{
+  --c:var(--l-drama);
+  display:grid; grid-template-columns:34px minmax(140px,1.1fr) minmax(0,1.5fr) minmax(0,1.3fr) 92px;
+  gap:var(--sp-3); align-items:center;
+  width:100%; text-align:left; cursor:pointer; appearance:none;
+  font-family:var(--font-ui); color:var(--text);
+  background:var(--panel); border:1px solid var(--border); border-left:2px solid rgba(var(--c),.5);
+  border-radius:var(--r-sm); padding:10px 12px;
+  transition:transform .16s var(--ease), border-color .16s var(--ease), background .16s var(--ease);
+}
+.stage:hover{transform:translateX(2px); background:var(--elevated); border-color:rgba(var(--c),.5)}
+.stage[aria-selected="true"]{border-color:rgb(var(--c)); background:rgba(var(--c),.09)}
+.stage .no{font-family:var(--font-mono); font-size:var(--fs-11); color:var(--muted); text-align:right}
+.stage .nm{font-size:var(--fs-13); font-weight:600}
+.stage .nm small{display:block; font-weight:400; color:var(--muted); font-size:10px; letter-spacing:.4px}
+.stage .art{font-family:var(--font-mono); font-size:var(--fs-11); color:var(--muted); overflow-wrap:anywhere}
+.stage .src{font-family:var(--font-mono); font-size:10px; color:rgb(var(--c)); overflow-wrap:anywhere}
+.kind{
+  justify-self:end; font-size:10px; letter-spacing:.4px; border-radius:var(--r-pill); padding:2px 8px;
+  border:1px solid var(--border-2); color:var(--muted); white-space:nowrap;
+}
+.kind.llm{color:#a5d6ff; border-color:rgba(167,139,250,.45)}
+.kind.hitl{color:var(--warning-text); border-color:rgba(210,153,34,.5); background:rgba(210,153,34,.08)}
+.kind.media{color:var(--success-text); border-color:rgba(35,134,54,.5)}
+.kind.det{color:var(--muted)}
+.loopnote{
+  display:flex; align-items:center; gap:var(--sp-2); margin-top:var(--sp-2);
+  font-size:var(--fs-11); color:var(--muted); font-family:var(--font-mono);
+}
+.loopnote .rule{flex:1; height:1px; background:repeating-linear-gradient(90deg,rgba(240,136,62,.5) 0 5px,transparent 5px 10px)}
+.subhead{font-size:var(--fs-11); letter-spacing:.8px; text-transform:uppercase; color:var(--muted); margin:var(--sp-5) 0 var(--sp-2)}
+
+/* ============================ 表格视图 ============================ */
+.panel-card{
+  background:var(--panel); border:1px solid var(--border); border-radius:var(--r-md); padding:var(--sp-4);
+  margin-bottom:var(--sp-4);
+}
+.panel-card h2{margin:0 0 var(--sp-3); font-size:var(--fs-15); font-weight:600}
+table{width:100%; border-collapse:collapse; font-size:var(--fs-12)}
+th,td{padding:8px 10px; text-align:left; border-bottom:1px solid var(--border); vertical-align:top}
+th{font-size:var(--fs-11); letter-spacing:.6px; text-transform:uppercase; color:var(--muted); font-weight:600; white-space:nowrap}
+td code,td .code{font-family:var(--font-mono); font-size:var(--fs-12); color:var(--text)}
+tr:last-child td{border-bottom:0}
+tbody tr{transition:background .16s var(--ease)}
+tbody tr:hover{background:var(--elevated)}
+.callout{
+  border:1px solid rgba(210,153,34,.4); background:rgba(210,153,34,.07);
+  border-left:2px solid var(--warning); border-radius:var(--r-sm); padding:var(--sp-3) var(--sp-4);
+  font-size:var(--fs-12); line-height:1.7; margin-bottom:var(--sp-4);
+}
+.callout b{color:var(--warning-text)}
+.callout code{font-family:var(--font-mono); font-size:var(--fs-11)}
+.docs{display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:var(--sp-2)}
+.docs a{
+  display:block; text-decoration:none; color:var(--text); background:var(--elevated);
+  border:1px solid var(--border); border-radius:var(--r-sm); padding:9px 11px;
+  font-size:var(--fs-12); transition:border-color .16s var(--ease), transform .16s var(--ease);
+}
+.docs a:hover{border-color:var(--border-2); transform:translateY(-1px)}
+.docs a span{display:block; color:var(--muted); font-size:10px; margin-top:2px; line-height:1.5}
+.docs a b{font-family:var(--font-mono); font-weight:600; font-size:var(--fs-12)}
+
+footer{
+  position:relative; z-index:1; max-width:1560px; margin:0 auto; padding:var(--sp-5);
+  color:var(--muted); font-size:var(--fs-11); border-top:1px solid var(--border);
+  display:flex; gap:var(--sp-4); flex-wrap:wrap; align-items:center;
+}
+footer code{font-family:var(--font-mono)}
+
+@media (max-width:1120px){
+  .shell{grid-template-columns:minmax(0,1fr)}
+  .detail{position:relative; top:0; max-height:none; order:2}
+}
+@media (max-width:760px){
+  .topbar{padding:var(--sp-3) var(--sp-4)}
+  .brand{width:100%}
+  .search input,.search input:focus{width:100%}
+  .search{flex:1}
+  .shell{padding:var(--sp-4); gap:var(--sp-4)}
+  .cards{grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}
+  .stage{grid-template-columns:26px 1fr; gap:var(--sp-2)}
+  .stage .art,.stage .src,.stage .kind{grid-column:2}
+  .conn{flex-wrap:wrap}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <h1>Abcyesno 架构地图</h1>
+    <span class="fp" id="fingerprint">v1.5.4 · 83e77fa</span>
+  </div>
+
+  <nav class="tabs" role="tablist" aria-label="视图切换">
+    <button class="tab" role="tab" aria-selected="true" data-view="layers">分层架构</button>
+    <button class="tab" role="tab" aria-selected="false" data-view="pipeline">短剧流水线</button>
+    <button class="tab" role="tab" aria-selected="false" data-view="runtime">进程 · 端口 · 文档</button>
+  </nav>
+
+  <div class="search"><input id="q" type="search" placeholder="搜模块 / 文件名…" aria-label="搜索模块"></div>
+  <button class="btn-trace" id="trace">▶ 追踪一次请求</button>
+</header>
+
+<div class="shell">
+  <main>
+    <!-- ===================== 视图 1：分层架构 ===================== -->
+    <section class="view" id="view-layers">
+      <div class="legend" id="legend"></div>
+      <div id="bands"></div>
+    </section>
+
+    <!-- ===================== 视图 2：流水线 ===================== -->
+    <section class="view" id="view-pipeline" hidden>
+      <div class="pipe-wrap">
+        <div>
+          <div class="pipe-head">
+            <h2>A · manjucraft_agent — 15 节点 LangGraph 图</h2>
+            <p>Studio 工作台背后那条链。顺序按<strong>真实边</strong>排，不是按标签数组排。</p>
+          </div>
+          <div class="stages" id="stages-a"></div>
+          <div class="loopnote"><span>⑭ finalize_episode ── 条件边 loop ──▶ ② parse_script（下一集）</span><i class="rule"></i><span>finish ──▶ ⑮ END</span></div>
+        </div>
+
+        <div>
+          <div class="pipe-head">
+            <h2>B · shortdrama/v5 — 创作链 + 媒体链</h2>
+            <p>外部 agent / CLI 驱动的工厂。<strong>创作链在图内，媒体链在图外</strong>。</p>
+          </div>
+          <div class="subhead">创作链 · supervisor 按依赖序派发 7 个角色子图</div>
+          <div class="stages" id="stages-b1"></div>
+          <div class="subhead">媒体链 · 确定性流水线（图外，唯一入口 <code style="font-family:var(--font-mono)">pipeline.run</code>）</div>
+          <div class="stages" id="stages-b2"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== 视图 3：运行时事实 ===================== -->
+    <section class="view" id="view-runtime" hidden>
+      <div class="callout">
+        <b>对账结果（本页生成时逐条 grep 过代码）：</b>
+        ① README「完整架构」写 Electron 外壳有「单实例锁」，但 <code>requestSingleInstanceLock</code> 在
+        <code>electron/ src/ scripts/</code> 全仓 <b>0 命中</b> —— 这条是文档超前，代码未实现。
+        ② <code>manjucraft_agent/agent.py:268</code> 的 <code>WORKFLOW_STAGES</code> 只是<b>标签顺序</b>，把
+        <code>gate_first_frame</code> 排在 <code>batch_generate_keyframes</code> <b>之前</b>；真实边（<code>mc_graph.py:78-84</code>）是先出图再确认，
+        源码注释说明了原因（旧顺序下审批气泡里什么都没有）。本页 A 视图按<b>真实边</b>排。
+      </div>
+
+      <div class="panel-card">
+        <h2>进程与端口</h2>
+        <table id="t-ports"></table>
+      </div>
+      <div class="panel-card">
+        <h2>跨边界契约</h2>
+        <table id="t-contracts"></table>
+      </div>
+      <div class="panel-card">
+        <h2>会改变行为的环境变量（只列变量名，不列值）</h2>
+        <table id="t-env"></table>
+      </div>
+      <div class="panel-card">
+        <h2>自检命令</h2>
+        <table id="t-diag"></table>
+      </div>
+      <div class="panel-card">
+        <h2>文档索引 · 13 份规格</h2>
+        <div class="docs" id="docs"></div>
+      </div>
+    </section>
+  </main>
+
+  <aside class="detail" id="detail" aria-live="polite"></aside>
+</div>
+
+<footer>
+  <span>本页由 <code>docs/architecture-map.html</code> 单文件生成，无外部依赖，可离线打开</span>
+  <span>输入指纹：commit <code id="fp2">83e77fa</code> · 版本 <code>1.5.4</code> · 生成日期 <code>2026-09-29</code></span>
+  <span>行号取自该 commit；代码改动后需重新对账</span>
+</footer>
+
+<script>
+/* ==========================================================================
+   数据层 —— 每条 file:line 都是本仓库真实锚点（生成时 grep 抽查过）
+   ========================================================================== */
+const LAYERS = [
+  {id:'renderer', n:'REACT 渲染层',   sub:'沙箱 renderer · 无 Node · 不用 CopilotKit', c:'--l-renderer', port:'dev :5173'},
+  {id:'bridge',   n:'AG-UI 桥',       sub:'Node + Express · 事件转译与 SSE 分发',      c:'--l-bridge',   port:'动态 :9121+'},
+  {id:'shell',    n:'ELECTRON 外壳',  sub:'主进程 · 拉起并托管所有本地进程',            c:'--l-shell',    port:'CDP 18922'},
+  {id:'hermes',   n:'HERMES 后端',    sub:'Python 便携 venv · agent harness',          c:'--l-hermes',   port:'固定 :9120'},
+  {id:'drama',    n:'短剧生产链',     sub:'LangGraph 图 + 图外确定性媒体链',            c:'--l-drama',    port:'dev :2024'},
+];
+
+const CONN = [
+  {a:'SSE 流', b:'HTTP POST /api/ag-ui/run · 端口从主进程 IPC 取', dir:'↕'},
+  {a:'同进程宿主', b:'main.js:643 findAvailablePort("127.0.0.1",9121) → listen', dir:'↓'},
+  {a:'WS JSON-RPC', b:'ws://127.0.0.1:9120/api/ws · token 鉴权', dir:'↕'},
+  {a:'workflow-event', b:'HTTP POST → 桥 / HITL 决定文件 ← 反向', dir:'↕'},
+];
+
+const NODES = [
+/* ---------------- 渲染层 ---------------- */
+{id:'boot', layer:'renderer', name:'启动与窗口壳', d:'轮询到桥端口才挂 App，三选一根节点',
+ files:[['src/main.jsx',31,'parseBootMode()：读 ?panel=result|tab 决定挂哪个根'],
+        ['src/main.jsx',53,'Bootstrap：轮 window.hermes.getAguiPort()，为 0 就停在开屏'],
+        ['src/main.jsx',197,'boot 三分叉：DetachedApp(result) / (tab) / Bootstrap'],
+        ['src/DetachedApp.jsx',30,'独立窗口壳（结果面板 / 撕下的浏览器标签）'],
+        ['src/ErrorBoundary.jsx',null,'兜底 .error-fallback 屏 —— runtime-diag 专门检测它']],
+ links:['ipc','agui-core','diag']},
+
+{id:'tabs', layer:'renderer', name:'标签 / 工作台路由', d:'没有 router，靠 tabs 数组 + manifest.ui.type',
+ files:[['src/App.jsx',1113,'App：持有 tabs 数组、assistants、manifests、设置弹窗'],
+        ['src/App.jsx',1302,'守卫：只有 manifest.ui.type === "workbench" 才开 studio 标签'],
+        ['src/App.jsx',2191,'showWorkbench = activeTab.type==="studio" && activeManifest'],
+        ['src/App.jsx',2286,'挂载 StudioWorkbench'],
+        ['src/components/TabBar.jsx',null,'浏览器式标签 pill（pointer-events 拖拽排序）']],
+ links:['registry','contract','chat']},
+
+{id:'chat', layer:'renderer', name:'ChatShell 对话控制器', d:'约 740 行的真正对话中枢',
+ files:[['src/App.jsx',151,'ChatShell：串起 thread / monitor / composer'],
+        ['src/App.jsx',326,'useAgentStream(...) —— 回合状态从这里出'],
+        ['src/App.jsx',727,'useTaskManager(...) —— run→task 记账'],
+        ['src/components/ChatLayout.jsx',205,'布局组合：header + thread + composer']],
+ links:['thread','composer','sse']},
+
+{id:'thread', layer:'renderer', name:'消息时间线与过程流', d:'agent 逐行动为在这儿长出来',
+ files:[['src/components/MessageThread.jsx',1225,'根组件（全文 2037 行）'],
+        ['src/components/MessageThread.jsx',1057,'AgentProcessStream：工具过程逐行实况'],
+        ['src/components/MessageThread.jsx',1889,'ReasoningBlock：推理增量折叠区'],
+        ['src/components/MessageThread.jsx',404,'MarkdownView']],
+ links:['sse','panels']},
+
+{id:'composer', layer:'renderer', name:'输入区与审批气泡', d:'模型 / 权限 / 工作区选择 + HITL 应答',
+ files:[['src/components/Composer.jsx',null,'1030 行：@提及、队列、三个选择器'],
+        ['src/components/ApprovalBubble.jsx',186,'审批气泡（会带上门禁要看的图）'],
+        ['src/utils/approvalHuman.js',7,'把裸命令翻译成人话中文'],
+        ['src/components/TodoBubble.jsx',null,'todo.update 的落地卡']],
+ links:['hitl','ipc']},
+
+{id:'sse', layer:'renderer', name:'SSE 状态机', d:'直接消费桥，绕开 CopilotKit',
+ files:[['src/hooks/useAgentStream.js',217,'注释即契约：「完全绕开 CopilotKit」'],
+        ['src/hooks/useAgentStream.js',795,'handleEvent 大 switch'],
+        ['src/hooks/useAgentStream.js',804,'RUN_STARTED / 833 TEXT_MESSAGE_START / 852 _CONTENT'],
+        ['src/hooks/useAgentStream.js',888,'TOOL_CALL_START / 912 _ARGS / 923 _RESULT'],
+        ['src/hooks/useAgentStream.js',400,'handleCustom：stream.phase / reasoning.* / workflow.*'],
+        ['src/hooks/useAgentStream.js',287,'rAF 批量 publish，防逐 token 重排']],
+ links:['translator','contract','studio']},
+
+{id:'contract', layer:'renderer', name:'前端契约层', d:'按 manifest 渲染，不靠关键词猜',
+ files:[['src/contract/registry.js',48,'initContract(aguiPort) → GET /api/ag-ui/contract/manifests'],
+        ['src/contract/manifests.generated.js',216,'"type":"workbench" / "component":"StudioWorkbench"'],
+        ['src/contract/eventBus.js',8,'emitContractEvent(runId,event) + byRun 重放缓冲'],
+        ['src/hooks/useAgentStream.js',640,'按 threadId 派发：emitContractEvent(sess.id, …)'],
+        ['src/hooks/useContractEvents.js',6,'订阅端']],
+ links:['manifest','studio','tabs']},
+
+{id:'registry', layer:'renderer', name:'工作台注册表', d:'加工作台不改路由',
+ files:[['src/workbenches/registry.js',23,'WORKBENCHES = { Blueprint, Timeline, Studio }'],
+        ['src/workbenches/registry.js',34,'getWorkbench(name) —— manifest 给组件名，这里查表'],
+        ['src/workbenches/BlueprintWorkbench.jsx',null,'通用节点图（吃 manifest.graph.nodes）'],
+        ['src/workbenches/TimelineWorkbench.jsx',null,'通用纵向步骤条'],
+        ['src/workbenches/ArtifactSlot.jsx',null,'共享的单产物渲染格']],
+ links:['manifest','studio','panels']},
+
+{id:'studio', layer:'drama', name:'短剧制片工作台', d:'2665 行：分镜 / 资产 / 剪映时间轴',
+ files:[['src/workbenches/StudioWorkbench.jsx',917,'根组件'],
+        ['src/workbenches/StudioWorkbench.jsx',119,'PHASES：script → assets → storyboard → export'],
+        ['src/workbenches/StudioWorkbench.jsx',215,'phaseForStep()：LangGraph step_id → 阶段'],
+        ['src/workbenches/StudioWorkbench.jsx',381,'StoryboardEditor（分镜表可编辑）'],
+        ['src/workbenches/StudioWorkbench.jsx',613,'EditConsole：剪映式时间轴，PX_PER_SEC=48'],
+        ['src/workbenches/StudioWorkbench.jsx',1512,'subscribeContractEvents —— 产物按 runId 回流'],
+        ['src/workbenches/StudioWorkbench.css',1,'--st-* 作用域令牌；栅格 210px 1fr 300px']],
+ links:['contract','manjucraft','projects']},
+
+{id:'panels', layer:'renderer', name:'结果 / 浏览器 / DAG 面板', d:'侧栏三块可撕下的面板',
+ files:[['src/components/ResultPanel.jsx',206,'getWorkbench(activeManifest.ui.component) 出口'],
+        ['src/components/WorkflowGraphPanel.jsx',4,'实时 DAG + workflow.trace 动画'],
+        ['src/components/AgentRunMonitor.jsx',65,'后台 run 条'],
+        ['src/components/BrowserPanel.jsx',null,'<webview> + CDP 驱动的内置浏览器'],
+        ['src/components/TaskPanel.jsx',null,'run → task 模型'],
+        ['src/utils/mediaSrc.js',16,'把本地绝对路径改写成 abcyesno-local://']],
+ links:['protocol','sse']},
+
+/* ---------------- AG-UI 桥 ---------------- */
+{id:'agui-core', layer:'bridge', name:'Express SSE 服务', d:'唯一横跨前后台的门面',
+ files:[['electron/backend/agui-server.js',44,'createAgUIServer(getGatewayClient, storage, opts)'],
+        ['electron/backend/agui-server.js',505,'sendSSE(res, encoder, event) —— EventEncoder 编码'],
+        ['electron/backend/agui-server.js',1718,'POST /api/ag-ui/run：agent/connect | run | stop'],
+        ['electron/backend/agui-server.js',193,'GET /api/ag-ui/run/info'],
+        ['electron/main.js',625,'findAvailablePort 从 9121 起扫；桥先起，再拉 Hermes']],
+ links:['translator','gateway','sse']},
+
+{id:'translator', layer:'bridge', name:'回合事件翻译器', d:'~40 个 Hermes 事件名 → AG-UI 帧',
+ files:[['electron/backend/agui-server.js',551,'createTurnTranslator()'],
+        ['electron/backend/agui-server.js',589,'TEXT_MESSAGE_START / CONTENT / END'],
+        ['electron/backend/agui-server.js',638,'TOOL_CALL_START / ARGS / RESULT / END'],
+        ['electron/backend/agui-server.js',716,'message.start|delta · 742 thinking.delta'],
+        ['electron/backend/agui-server.js',940,'workflow.progress|artifact|approval|error|done|graph|trace'],
+        ['electron/backend/agui-server.js',968,'ui.render · 1011 subagent.* · 1039 review.summary']],
+ links:['sse','gateway','relay']},
+
+{id:'relay', layer:'bridge', name:'workflow 事件中继', d:'Python 推 → 找对 SSE 管道，掉线也不丢',
+ files:[['electron/backend/agui-server.js',1783,'POST /api/ag-ui/workflow-event'],
+        ['electron/backend/agui-server.js',1787,'剥掉 Python 多发的一层 workflow. 前缀（注释记了成因）'],
+        ['electron/backend/agui-server.js',1802,'无订阅者时先进缓冲，等重连重放'],
+        ['electron/backend/agui-server.js',1818,'started → keepOpen；done → finishBackgroundRun'],
+        ['electron/backend/agui-server.js',50,'workflowSubscribers / backgroundRuns / eventBuffer']],
+ links:['emitter','studio','translator']},
+
+{id:'hitl', layer:'bridge', name:'HITL 决定通道', d:'前端点按钮 → Python 轮询到文件',
+ files:[['electron/backend/agui-server.js',1841,'POST /api/ag-ui/interrupt'],
+        ['electron/backend/agui-server.js',1854,'run 已死就拒写'],
+        ['electron/main.js',1556,'respond-approval 必须带 sessionId，转 approval.respond'],
+        ['electron/main.js',754,'approval / sudo / secret / terminal-read / clarify 五类推给渲染层']],
+ links:['_wait','composer','ipc']},
+
+{id:'manifest', layer:'bridge', name:'manifest 注册表', d:'扫 agent 目录，前端因此零硬编码',
+ files:[['electron/backend/agui-server.js',283,'GET /api/ag-ui/contract/manifests'],
+        ['electron/backend/agui-server.js',207,'discoverManifests() 扫 skills/langgraph_agents/agents'],
+        ['electron/main.js',646,'注入 agentsDir / getWechatStatus / wechatNotify'],
+        ['docs/LANGRAPH_CONTRACT_SPEC.md',76,'L1 manifest / L2 input / L3 output / L4 HITL / L5 events']],
+ links:['contract','langgraph']},
+
+{id:'media-api', layer:'bridge', name:'语音与出图端点', d:'不走 agent 回合的直连小接口',
+ files:[['electron/backend/agui-server.js',2046,'POST /api/studio/generate-image'],
+        ['electron/backend/agui-server.js',2064,'POST /api/studio/generate-video'],
+        ['electron/backend/agui-server.js',1916,'POST /api/transcribe'],
+        ['electron/backend/agui-server.js',1972,'POST /api/tts'],
+        ['electron/backend/agui-server.js',2006,'POST /api/session-title']],
+ links:['provider','composer']},
+
+/* ---------------- Electron 外壳 ---------------- */
+{id:'window', layer:'shell', name:'窗口与生命周期', d:'主窗 + 两类附属窗',
+ files:[['electron/main.js',400,'createWindow()：1350×800 · titleBarStyle hidden'],
+        ['electron/main.js',409,'contextIsolation:true · nodeIntegration:false · webviewTag:true'],
+        ['electron/main.js',456,'dev → loadURL(http://localhost:5173)'],
+        ['electron/main.js',459,'prod → loadFile(../dist/index.html)'],
+        ['electron/main.js',443,'will-navigate 守卫：不许跳出去'],
+        ['electron/main.js',475,'detach-result-panel 独立窗（?panel=result）· 551 撕标签窗']],
+ links:['preload','protocol','boot']},
+
+{id:'protocol', layer:'shell', name:'abcyesno-local:// 特权协议', d:'本地媒体进 renderer 的唯一正道',
+ files:[['electron/main.js',60,'registerSchemesAsPrivileged(["abcyesno-local"]) —— app-ready 之前'],
+        ['electron/main.js',61,'privileges: standard/secure/supportFetchAPI/stream/bypassCSP'],
+        ['electron/main.js',812,'protocol.handle：百分号解码 + 还原盘符'],
+        ['electron/main.js',837,'按扩展名嗅 MIME'],
+        ['src/utils/mediaSrc.js',16,'渲染层侧的路径改写']],
+ links:['panels','window']},
+
+{id:'preload', layer:'shell', name:'preload 桥面', d:'renderer 能碰主进程的全部面积',
+ files:[['electron/preload.js',19,'唯一一次 contextBridge.exposeInMainWorld("hermes", …)'],
+        ['electron/preload.js',8,'on/off 包一层，别把 ipcRenderer 漏出去'],
+        ['electron/preload.js',92,'sendWorkflowInterrupt —— 先 await getAguiPort() 再打直连 HTTP'],
+        ['electron/preload.js',131,'文件 / 工作区族'],
+        ['electron/preload.js',167,'推送监听族']],
+ links:['ipc','boot']},
+
+{id:'ipc', layer:'shell', name:'IPC RPC 总线', d:'~60 个 handle 通道 + 若干 push',
+ files:[['electron/main.js',1013,'get-agui-port → gatewayReady ? aguiPort : 0（关键闸门）'],
+        ['electron/main.js',1028,'ensure-shortdrama'],
+        ['electron/main.js',1569,'gateway-request / 1576 interrupt-session / 1597 steer-session'],
+        ['electron/main.js',1421,'list-skills / 1452 skills-manage / 1479 skills-create'],
+        ['electron/main.js',1779,'read-file / 1759 list-workspace / 1956 read-local-image'],
+        ['electron/main.js',606,'win:minimize / toggle-maximize / close（on 而非 handle）']],
+ links:['preload','sse','hitl']},
+
+{id:'runner', layer:'shell', name:'Hermes Python 守护', d:'便携 venv 的自愈式启动',
+ files:[['electron/backend/hermes-runner.js',15,'const PORT = 9120'],
+        ['electron/backend/hermes-runner.js',166,'_resolveBasePython()：resources/runtime → pyvenv.cfg home → PATH'],
+        ['electron/backend/hermes-runner.js',209,'重写 pyvenv.cfg 的 home/executable（搬家后仍可用）'],
+        ['electron/backend/hermes-runner.js',237,'重写 __editable__*_finder.py 前缀'],
+        ['electron/backend/hermes-runner.js',495,'python -m hermes_cli.main serve --port … --skip-build'],
+        ['electron/backend/hermes-runner.js',520,'把 AGUI_PORT 传给 Python（反向信道的地址）'],
+        ['electron/backend/hermes-runner.js',422,'_waitForReady() 轮 /api/status，600ms 一跳，最多 300s'],
+        ['electron/backend/hermes-runner.js',717,'stop() = SIGTERM + taskkill /T /F（2.5s 上限）']],
+ links:['serve','gateway','wechat']},
+
+{id:'gateway', layer:'shell', name:'Gateway WS 客户端', d:'主进程里那条常驻 JSON-RPC',
+ files:[['electron/main.js',751,'new GatewayClient({ ws://127.0.0.1:9120/api/ws, token })'],
+        ['electron/backend/gateway-client.js',null,'NDJSON 分帧 + 指数退避重连'],
+        ['electron/backend/agui-server.js',342,'session.cwd.set / 363 session.status / 409 session.create'],
+        ['electron/backend/agui-server.js',1599,'prompt.submit / 1705 session.interrupt'],
+        ['electron/main.js',1244,'换 API key → 重建 GatewayClient 并重推 agui-ready']],
+ links:['agui-core','serve']},
+
+{id:'wechat', layer:'shell', name:'微信收发桥', d:'把 IM 变成第二个审批入口',
+ files:[['electron/backend/wechat-bridge-runner.js',16,'require("./wechat_bridge/dist/index.js")'],
+        ['electron/backend/wechat-bridge-runner.js',61,'onBridgeStatus → startBridge（进程内，非子进程）'],
+        ['electron/backend/wechat-bridge-runner.js',93,'微信会话 ↔ threadId 映射'],
+        ['electron/backend/wechat_bridge/build.mjs',14,'npm run bridge:build：esbuild → cjs → dist/index.js'],
+        ['electron/main.js',107,'pendingWechatApprovals + 4 分钟 TTL']],
+ links:['hitl','ipc']},
+
+{id:'updater', layer:'shell', name:'自动更新', d:'只在 NSIS 构建下活着',
+ files:[['electron/updater.js',37,'前置条件：resources/app-update.yml 存在'],
+        ['electron/updater.js',64,'electron-updater 接线 · autoDownload'],
+        ['electron/updater.js',118,'installUpdate() → 300ms 后 quitAndInstall（绝不自动重启）'],
+        ['electron/updater.js',136,'注册 updater-check / install + 30s 静默自检']],
+ links:['ipc']},
+
+{id:'diag', layer:'shell', name:'自检三件套', d:'静态扫描 + 真跑一遍 CDP',
+ files:[['scripts/runtime-diag.mjs',124,'CDP 驱动打包应用，收 pageerror / crash / 失败请求'],
+        ['scripts/runtime-diag.mjs',166,'以 window.hermes.getAguiPort() 作为后端就绪探针'],
+        ['scripts/runtime-diag.mjs',190,'断言 React 真挂上了 #root · 198 探 ErrorBoundary'],
+        ['scripts/check-tdz.js',2,'Babel AST：同一条同步路径上先读后声明的 const/let'],
+        ['scripts/check-undef.js',1,'扫「本文件里明明有声明却解析不到」的标识符']],
+ links:['boot','runner']},
+
+/* ---------------- Hermes 后端 ---------------- */
+{id:'serve', layer:'hermes', name:'hermes serve :9120', d:'被 Electron 托管的那个 Python 服务',
+ files:[['hermes-fork/hermes_cli/web_server.py',null,'HTTP + WS 面（Electron spawn 的就是它）'],
+        ['hermes-fork/hermes_cli/main.py',null,'serve 子命令入口'],
+        ['electron/backend/hermes-runner.js',385,'_portAvailable TCP bind 探测，9120…9139 逐个试'],
+        ['hermes-fork/hermes_runner_session',null,'会话 token：crypto.randomBytes(32) 每次启动新发']],
+ links:['gateway','loop']},
+
+{id:'loop', layer:'hermes', name:'AIAgent 回合循环', d:'同步 while 循环，窄腰',
+ files:[['hermes-fork/run_agent.py',403,'class AIAgent'],
+        ['hermes-fork/run_agent.py',5711,'run_conversation()：调模型 → 派发 tool_calls → 回填，直到无调用'],
+        ['hermes-fork/agent/iteration_budget.py',null,'迭代预算（与子代理共享）'],
+        ['hermes-fork/model_tools.py',904,'handle_function_call()'],
+        ['hermes-fork/docs/AGENTS.md',null,'两条硬律：prompt 缓存神圣不可破 / 消息角色严格交替']],
+ links:['tools','memory','provider']},
+
+{id:'tools', layer:'hermes', name:'工具注册表', d:'自动发现 + 显式接线两步走',
+ files:[['hermes-fork/tools/registry.py',58,'discover_builtin_tools()：凡顶层调 registry.register() 的都导入'],
+        ['hermes-fork/tools/registry.py',356,'ToolRegistry.register(name, toolset, schema, handler, check_fn)'],
+        ['hermes-fork/model_tools.py',279,'get_tool_definitions() —— 发给模型的 schema'],
+        ['hermes-fork/toolsets.py',null,'TOOLSETS：工具进 toolset 才会被暴露（发现 ≠ 暴露）'],
+        ['hermes-fork/tools/environments',null,'terminal 后端：local / docker / ssh / modal …']],
+ links:['loop','skills','cron']},
+
+{id:'skills', layer:'hermes', name:'技能系统与 curator', d:'能力长在边缘，不长在腰上',
+ files:[['hermes-fork/tools/skills_tool.py',1620,'skill_view（只读）'],
+        ['hermes-fork/tools/skill_manager_tool.py',1526,'skill_manage（写 / 补丁）'],
+        ['hermes-fork/agent/skill_commands.py',null,'斜杠命令扫描 —— 作为 user 消息注入以保缓存'],
+        ['hermes-fork/agent/curator.py',null,'后台生命周期：active → stale → archived（永不真删）'],
+        ['hermes-fork/tools/skill_usage.py',null,'.usage.json 计数侧车'],
+        ['hermes-fork/skills/langgraph_agents/SKILL.md',null,'本项目把 LangGraph 接成 skill 的那一份']],
+ links:['langgraph','tools']},
+
+{id:'memory', layer:'hermes', name:'记忆系统', d:'ABC + 编排器 + 插件后端',
+ files:[['hermes-fork/agent/memory_manager.py',353,'class MemoryManager'],
+        ['hermes-fork/agent/memory_manager.py',495,'prefetch_all()'],
+        ['hermes-fork/agent/memory_provider.py',null,'MemoryProvider ABC'],
+        ['hermes-fork/tools/memory_tool.py',1129,'memory 模型工具'],
+        ['hermes-fork/plugins/memory',null,'后端插件目录']],
+ links:['loop']},
+
+{id:'gateway-py', layer:'hermes', name:'消息网关', d:'一个内核，多个平台脸',
+ files:[['hermes-fork/gateway/run.py',null,'网关主循环（体积最大的一份）'],
+        ['hermes-fork/gateway/session.py',null,'按会话隔离'],
+        ['hermes-fork/gateway/platforms',null,'每平台一个适配器'],
+        ['hermes-fork/gateway/stream_events.py',null,'事件词表 —— 桥那边翻译的就是它'],
+        ['docs/STRIPPING_GUIDE.md',13,'本 fork 拆掉了哪些 IM 通道']],
+ links:['runner','emitter']},
+
+{id:'cron', layer:'hermes', name:'定时任务（已改道）', d:'fork 里没有 cron/ 目录了',
+ files:[['hermes-fork/tools/cronjob_tools.py',1109,'cronjob 工具：真正的调度入口在这儿'],
+        ['hermes-fork/plugins/cron_providers/chronos',null,'托管后端 chronos'],
+        ['hermes-fork/docs/chronos-managed-cron-contract.md',null,'契约'],
+        ['docs/STRIPPING_GUIDE.md',null,'解释了 cron/ 目录为何缺席']],
+ links:['tools','loop']},
+
+{id:'provider', layer:'hermes', name:'Agnes 供应商层', d:'凭据解析链，不硬编码 key',
+ files:[['hermes-fork/skills/langgraph_agents/langgraph_runtime.py',40,'DEFAULT_MODEL / apihub.agnes-ai.com/v1'],
+        ['hermes-fork/skills/langgraph_agents/langgraph_runtime.py',97,'_get_agnes_credentials()：env → config.yaml providers.custom → delegation → model.default'],
+        ['hermes-fork/skills/langgraph_agents/langgraph_runtime.py',138,'_openai_client()（lru 缓存；无 key 直接抛）'],
+        ['shortdrama/v5/config.py',109,'AGNES_API_KEYS 池 + 每条 key 的 base/限速映射'],
+        ['shortdrama/v5/vendors.py',null,'chat / image / video 厂商注册表：未注册的名字响亮报错']],
+ links:['mediaapi','v5media']},
+
+{id:'langgraph', layer:'hermes', name:'LangGraph 运行时', d:'发现图、跑图、把 interrupt 变成审批',
+ files:[['hermes-fork/skills/langgraph_agents/langgraph_runtime.py',190,'discover_agents() / 221 discover_manifests()'],
+        ['hermes-fork/skills/langgraph_agents/langgraph_runtime.py',258,'_load_agent_module() / 276 _get_agent_graph()'],
+        ['hermes-fork/skills/langgraph_agents/langgraph_runtime.py',578,'_run_graph_with_hitl() → 699 graph.astream(stream_mode="updates")'],
+        ['hermes-fork/skills/langgraph_agents/langgraph_runtime.py',616,'每个流出的节点 → workflow.progress；693 → workflow.trace'],
+        ['hermes-fork/skills/langgraph_agents/langgraph_runtime.py',431,'类型化产物抽取（角色卡 / shot_N_keyframe / video / tts …）'],
+        ['hermes-fork/skills/langgraph_agents/langgraph_runtime.py',825,'run_agent() 公开入口']],
+ links:['manjucraft','emitter','_wait']},
+
+{id:'_wait', layer:'hermes', name:'HITL 等待侧', d:'图暂停，等一个文件出现',
+ files:[['hermes-fork/skills/langgraph_agents/langgraph_runtime.py',702,'检测 __interrupt__'],
+        ['hermes-fork/skills/langgraph_agents/langgraph_runtime.py',770,'发 workflow.approval'],
+        ['hermes-fork/skills/langgraph_agents/langgraph_runtime.py',549,'_wait_for_decision(hitl_dir, run_id, timeout) 轮询文件'],
+        ['electron/backend/agui-server.js',1860,'决定原子写入 HERMES_HOME/workflow_hitl/<runId>.json'],
+        ['shortdrama/v5/hitl.py',null,'v5 自己的 pending.json / decision.json 信道']],
+ links:['hitl','gates']},
+
+{id:'emitter', layer:'hermes', name:'事件发射器', d:'Python 打回 Node 的那发 HTTP',
+ files:[['hermes-fork/tools/langgraph_agent_tool.py',65,'_make_http_emitter(run_id)'],
+        ['hermes-fork/tools/langgraph_agent_tool.py',72,'POST {type:"workflow.<x>", payload, runId} → http://127.0.0.1:$AGUI_PORT/api/ag-ui/workflow-event'],
+        ['hermes-fork/tools/langgraph_agent_tool.py',248,'fire-and-forget 后台线程 + 去重守卫'],
+        ['electron/backend/agui-server.js',1783,'落到这里'],
+        ['docs/ADR/002-event-bridge-isolation.md',null,'为什么事件走独立桥而不复用 WS']],
+ links:['relay','langgraph']},
+
+/* ---------------- 短剧生产链 ---------------- */
+{id:'manjucraft', layer:'drama', name:'manjucraft 15 节点图', d:'Studio 背后那条链（真实边序见流水线页）',
+ files:[['hermes-fork/skills/langgraph_agents/agents/manjucraft_agent/agent.py',268,'WORKFLOW_STAGES：15 条 (节点, 中文标签) —— 只是标签顺序'],
+        ['hermes-fork/skills/langgraph_agents/agents/manjucraft_agent/mc_graph.py',57,'build_graph()：add_node ×15，多数带 RetryPolicy(max_attempts=3)'],
+        ['hermes-fork/skills/langgraph_agents/agents/manjucraft_agent/mc_graph.py',78,'generate_characters → batch_generate_keyframes → gate_first_frame（注释解释过为何挪后）'],
+        ['hermes-fork/skills/langgraph_agents/agents/manjucraft_agent/mc_graph.py',98,'条件边 finalize_episode → {loop: parse_script | finish: finalize_series}'],
+        ['hermes-fork/skills/langgraph_agents/agents/manjucraft_agent/manifest.json',92,'x_ui 与门禁声明'],
+        ['hermes-fork/skills/langgraph_agents/agents/paper_rewriter_agent/agent.py',35,'同目录的第二个 agent（论文改写）']],
+ links:['langgraph','mc-state','studio']},
+
+{id:'mc-state', layer:'drama', name:'工件落盘约定', d:'每集一个 ep{NNN}/ 目录',
+ files:[['hermes-fork/skills/langgraph_agents/agents/manjucraft_agent/mc_state.py',172,'_hermes_home()：HERMES_HOME，默认 ~/.hermes_portable_data'],
+        ['hermes-fork/skills/langgraph_agents/agents/manjucraft_agent/mc_state.py',182,'projects/<safe-name>/'],
+        ['hermes-fork/skills/langgraph_agents/agents/manjucraft_agent/mc_nodes/',null,'15 个节点一文件（batch_generate_keyframes / merge_and_concat / generate_jianying_draft …）'],
+        ['electron/main.js',77,'userData 钉在 ~/.hermes_portable_data —— 与上面同源']],
+ links:['protocol','manjucraft']},
+
+{id:'v5super', layer:'drama', name:'v5 supervisor 创作链', d:'LLM 编排，按依赖序派子图',
+ files:[['shortdrama/v5/orchestrator.py',460,'build_supervisor()（name "director-supervisor"）'],
+        ['shortdrama/v5/orchestrator.py',481,'supervisor_graph = build_supervisor()'],
+        ['shortdrama/v5/orchestrator.py',239,'role_worldbuilder … role_reviewer（7 张已编译角色图）'],
+        ['shortdrama/v5/orchestrator.py',248,'ROLE_GRAPHS 登记表：sync 子代理直接内联'],
+        ['shortdrama/v5/roles.py',23,'FS_TOOLS = ls/read_file/write_file/edit_file/glob/grep'],
+        ['shortdrama/v5/roles.py',88,'ROLE_DESCRIPTIONS；role_input 拼注入文本（不截断）']],
+ links:['gates','v5packs','hitl']},
+
+{id:'v5graphs', layer:'drama', name:'9 张图注册表', d:'换项目必须重启 dev（编译期绑定）',
+ files:[['shortdrama/v5/langgraph.json',null,'graphs: supervisor + role_* ×7 + media_rerender（实测枚举）'],
+        ['shortdrama/v5/series.py',191,'run(project, brief, pack, …) —— CLI 主流程'],
+        ['shortdrama/v5/series.py',795,'main()：--episodes / --rerender / --resume-media / --hitl*'],
+        ['shortdrama/scripts/run_new_project.py',null,'全链路推荐入口'],
+        ['shortdrama/AGENTS.md',null,'外部 agent 的唯一契约（三道输入门 + 准入表）']],
+ links:['v5super','v5media']},
+
+{id:'v5media', layer:'drama', name:'v5 媒体链（图外）', d:'确定性出片，带独占锁',
+ files:[['shortdrama/v5/media/pipeline.py',371,'run(project_root, ep, …) —— 唯一入口'],
+        ['shortdrama/v5/media/pipeline.py',594,'_run_impl()：静帧 → QC → 视频 job → clip QC → 拼接'],
+        ['shortdrama/v5/media/pipeline.py',1350,'输出 media/ep{N}/episode_final.mp4'],
+        ['shortdrama/v5/media/pipeline.py',247,'注释：video_jobs.json 与 episode_final 都是单写入者假设'],
+        ['shortdrama/v5/media/video_plan.py',null,'group_shots()：同场景相邻贪心，≤12s 打包'],
+        ['shortdrama/v5/media/qc.py',null,'is_hard_issue / is_count_issue（计数类豁免复采）']],
+ links:['v5storyboard','provider','projects']},
+
+{id:'v5storyboard', layer:'drama', name:'分镜契约', d:'列缺失即 STORYBOARD-REJECT',
+ files:[['shortdrama/v5/media/storyboard.py',146,'parse(md) → 每镜 dict'],
+        ['shortdrama/v5/media/storyboard.py',143,'NO_HUMAN_MARKS = ("【无人像】",)：不绑设定表、人数记 0'],
+        ['shortdrama/v5/media/storyboard.py',80,'镜内节拍自洽校验（0 起 / 首尾相接 / 终于本镜时长）'],
+        ['shortdrama/v5/series.py',507,'_storyboard_gate —— 契约门'],
+        ['shortdrama/v5/media/prompt.py',null,'反烧字：文字概念词整句删；负面提法禁用'],
+        ['shortdrama/v5/media/cast.py',null,'ensure()：按资产卡确定性生成参考图']],
+ links:['gates','v5packs']},
+
+{id:'gates', layer:'drama', name:'门与 HITL 判据', d:'唯一一份判据，CLI 和前端共用',
+ files:[['shortdrama/v5/guards.py',18,'PREREQ：依赖序 dict（键 = 被真实派发的 7 个角色）'],
+        ['shortdrama/v5/guards.py',53,'GATE_ROLES = tuple(PREREQ) —— 注释明确「不含 director」'],
+        ['shortdrama/v5/guards.py',489,'media_gate(action, m, ep) —— 出片放行判定'],
+        ['shortdrama/v5/series.py',301,'_brief_gate / _storyboard_gate / _assets_gate 三道输入门'],
+        ['shortdrama/v5/hitl.py',null,'步级 HITL：pending.json / decision.json / redo_targets']],
+ links:['_wait','v5media','v5super']},
+
+{id:'v5packs', layer:'drama', name:'类型包与技法库', d:'9 个目录，pack.json 只 7 项真生效',
+ files:[['shortdrama/v5/skills/packs/',null,'实测：shortdrama(默认) / niulai-movie-style / wool-felt-story-short / chinese-style-short-drama / laofuzi-hk-retro / half-narrated-live-action / madfate-grim / xianxia-vfx-action / craft'],
+        ['shortdrama/v5/media/style.py',null,'script_craft_of() / read_craft()：brief > pack 优先级'],
+        ['shortdrama/v5/skills/packs/craft/',null,'5 个技法 SKILL（不是类型包，无 pack.json）'],
+        ['shortdrama/styles/',null,'两份文风研究'],
+        ['shortdrama/README.md',null,'§4 类型包目录 / §6 完整配置表（权威快照）']],
+ links:['v5media','v5storyboard']},
+
+{id:'projects', layer:'drama', name:'产物目录', d:'验收就看这几个路径',
+ files:[['shortdrama/projects/<名>/media/ep{N}/episode_final.mp4',null,'成片（含音轨）'],
+        ['shortdrama/projects/<名>/media/ep{N}/stills/*.jpg',null,'静帧 + stills.json（带每镜提示词）'],
+        ['shortdrama/projects/<名>/media/ep{N}/video_jobs.json',null,'断点续跑状态机：pending/submitted/completed/failed/expired'],
+        ['shortdrama/projects/<名>/media/ep{N}/gates.json',null,'每次过门的 by/at/note/产物指纹'],
+        ['shortdrama/projects/<名>/scenedesigner/scenedesigner_ep{N}.md',null,'分镜表（集级）'],
+        ['shortdrama/projects/<名>/.agent_state.json',null,'黑板 —— 硬约束：禁止手改']],
+ links:['studio','v5media']},
+];
+
+/* ---------------- 流水线 A：manjucraft 真实执行序 ---------------- */
+const STAGES_A = [
+ {no:1, id:'plan_episodes',        zh:'规划系列',   art:'集数切分 / total_episodes',        src:'mc_nodes/plan_episodes.py:9',        kind:'llm',  out:'（仅 state）'},
+ {no:2, id:'parse_script',         zh:'解析剧本',   art:'scenes / shots 列表',              src:'mc_nodes/parse_script.py:15',        kind:'llm',  out:'（仅 state）'},
+ {no:3, id:'generate_characters',  zh:'生成角色',   art:'角色卡 + 多视图参考图',            src:'mc_nodes/generate_characters.py:18', kind:'llm',  out:'ep{N}/characters/*.png'},
+ {no:4, id:'batch_generate_keyframes', zh:'生成分镜图', art:'每镜一张分镜静帧',            src:'mc_nodes/batch_generate_keyframes.py:46', kind:'media', out:'ep{N}/keyframes/shot_NN.png'},
+ {no:5, id:'gate_first_frame',     zh:'首帧确认',   art:'HITL：批了才锁 character_bible',   src:'mc_nodes/approval_gate.py:47',       kind:'hitl', out:'workflow_hitl/<runId>.json'},
+ {no:6, id:'consistency_check',    zh:'一致性检查', art:'感知相似度漂移分',                 src:'mc_nodes/consistency_check.py:23',   kind:'det',  out:'（仅 state）'},
+ {no:7, id:'gate_each_scene',      zh:'分镜确认',   art:'HITL：逐场 approve / steer',       src:'mc_nodes/approval_gate.py:91',       kind:'hitl', out:'workflow_hitl/'},
+ {no:8, id:'fix_drift',            zh:'修正漂移',   art:'超band的镜重画（覆盖旧静帧）',     src:'mc_nodes/fix_drift.py:17',           kind:'media', out:'ep{N}/keyframes/（覆写）'},
+ {no:9, id:'batch_generate_video', zh:'生成视频',   art:'每镜一条 mp4',                     src:'mc_nodes/batch_generate_video.py:97', kind:'media', out:'ep{N}/videos/shot_NN.mp4'},
+ {no:10, id:'generate_tts',        zh:'生成配音',   art:'每镜一条对白音频',                 src:'mc_nodes/generate_tts.py:12',        kind:'media', out:'ep{N}/audio/shot_NN.mp3'},
+ {no:11, id:'merge_and_concat',    zh:'合成成片',   art:'ffmpeg 拼接本集',                  src:'mc_nodes/merge_and_concat.py:11',    kind:'det',  out:'ep{N}/episode_final.mp4'},
+ {no:12, id:'generate_jianying_draft', zh:'导出剪映草稿', art:'剪映 / CapCut 工程 JSON',    src:'mc_nodes/generate_jianying_draft.py:22', kind:'det', out:'ep{N}/draft.json'},
+ {no:13, id:'gate_end',            zh:'成片确认',   art:'HITL：终剪确认',                   src:'mc_nodes/approval_gate.py:105',      kind:'hitl', out:'workflow_hitl/'},
+ {no:14, id:'finalize_episode',    zh:'本集完成',   art:'资产打包；条件边决定继续/收工',    src:'mc_nodes/finalize_episode.py:8',     kind:'det',  out:'ep{N}/assets.zip'},
+ {no:15, id:'finalize_series',     zh:'系列完成',   art:'跨集播放清单',                     src:'mc_nodes/finalize_series.py:10',     kind:'det',  out:'series_playlist.m3u → END'},
+];
+
+/* ---------------- 流水线 B：v5 创作链 + 媒体链 ---------------- */
+const STAGES_B1 = [
+ {no:'A', id:'director',      zh:'制作规格',  art:'director/director.md（全链输入）', src:'v5/orchestrator.py:441 supervisor_system_prompt', kind:'llm', out:'director/ 全剧级'},
+ {no:'B', id:'worldbuilder',  zh:'世界观',    art:'worldbuilder/worldbuilder.md',    src:'v5/orchestrator.py:240', kind:'llm', out:'全剧级 · 只第 1 集'},
+ {no:'C', id:'assetdesigner', zh:'资产设计',  art:'assets.md + assets.contract.json', src:'v5/orchestrator.py:241', kind:'llm', out:'全剧级 · 参考图唯一依据'},
+ {no:'D', id:'plotdesigner',  zh:'分集大纲',  art:'plotdesigner/episodes.md',        src:'v5/orchestrator.py:242', kind:'llm', out:'全剧级 · 按卷/集自包含'},
+ {no:'E', id:'scriptwriter',  zh:'脚本',      art:'scriptwriter_ep{N}.md',           src:'v5/orchestrator.py:243', kind:'llm', out:'集级'},
+ {no:'F', id:'dialogue',      zh:'对白',      art:'dialogue_ep{N}.md',               src:'v5/orchestrator.py:244', kind:'llm', out:'集级 · audio_mode 生效'},
+ {no:'G', id:'scenedesigner', zh:'分镜',      art:'scenedesigner_ep{N}.md + shotcheck_ep{N}.json', src:'v5/orchestrator.py:245', kind:'llm', out:'集级 · 媒体层主输入'},
+ {no:'H', id:'reviewer',      zh:'评审',      art:'review_ep{N}.md（pass / force_passed）', src:'v5/orchestrator.py:246', kind:'llm', out:'只有 advisory 视为通过'},
+];
+const STAGES_B2 = [
+ {no:'I', id:'assets-ref',  zh:'资产参考图', art:'images/ + images/_sheets/', src:'v5/media/cast.py ensure', kind:'media', out:'单格正面像才进参考条'},
+ {no:'J', id:'stills',      zh:'静帧 + QC',  art:'media/ep{N}/stills/*.jpg + stills.json', src:'v5/media/pipeline.py:594', kind:'media', out:'硬伤自动定向重画（单轮 ≤2）'},
+ {no:'K', id:'clips',       zh:'视频 job / clips', art:'clips/LNxx.mp4（pack 模式 packNN.mp4）+ video_jobs.json', src:'v5/media/video_plan.py group_shots', kind:'media', out:'pack 档串行落盘取真末帧做接续锚'},
+ {no:'L', id:'concat',      zh:'抽帧复核 + 拼接', art:'media/ep{N}/episode_final.mp4', src:'v5/media/pipeline.py:1350', kind:'det', out:'缺镜即 status=incomplete，不覆盖旧片'},
+];
+
+/* ---------------- 运行时表格 ---------------- */
+const PORTS = [
+ ['React renderer（Vite dev）',':5173','HTTP / file://','main.js:456 与 :459 二选一','dev 走 localhost:5173，打包后 loadFile(../dist/index.html)'],
+ ['AG-UI 桥（Node，在主进程内）',':9121 起动态','HTTP + SSE','main.js:625 findAvailablePort("127.0.0.1", 9121)','端口经 get-agui-port 交给渲染层；桥先起、Hermes 后起'],
+ ['Hermes Python 后端',':9120（可退到 9139）','WS JSON-RPC + HTTP','hermes-runner.js:15 / :495','python -m hermes_cli.main serve --port 9120 --host 127.0.0.1 --skip-build'],
+ ['Chromium CDP',':18922','CDP','main.js:54（PW_CDP_PORT）','runtime-diag 与 BrowserPanel 用它驱动页面'],
+ ['内置浏览器驱动',':18923','HTTP','main.js:73（PW_BROWSER_DRIVER_URL）','导出给渲染层与 Python 侧共用'],
+ ['LangGraph dev server',':2024','HTTP / Agent Protocol','v5/series.py 与 SHORTDRAMA_V5_AGENT_URL','v5 创作链驱动入口；9 张图注册在 v5/langgraph.json'],
+];
+const CONTRACTS = [
+ ['渲染层 → 桥','POST /api/ag-ui/run','useAgentStream.js:1065','返回 SSE 流；agent/connect | run | stop 三种动作'],
+ ['桥 → 后端','WS JSON-RPC（prompt.submit / command.dispatch / session.interrupt）','agui-server.js:1599 / :460 / :1705','常驻一条，token 每次启动新发'],
+ ['后端 → 桥','POST /api/ag-ui/workflow-event','langgraph_agent_tool.py:65 → agui-server.js:1783','{type, payload, runId}；桥剥重复前缀并缓冲'],
+ ['桥 → 渲染层','SSE CUSTOM(name:"workflow.*")','agui-server.js:505 → useAgentStream.js:636','graph/trace/progress/artifact/done/error'],
+ ['渲染层 → 后端','POST /api/ag-ui/interrupt → 文件','agui-server.js:1841 → langgraph_runtime.py:549','写在 HERMES_HOME/workflow_hitl/<runId>.json，Python 轮询'],
+ ['磁盘 → 渲染层','abcyesno-local://<encoded-path>','main.js:60 / :812 + mediaSrc.js:16','绕开 file://，带 MIME 嗅探'],
+];
+const ENVS = [
+ ['AGUI_PORT','桥动态端口','hermes-runner.js:520 注入','Python 反向发射事件的地址'],
+ ['HERMES_HOME','便携数据根','main.js:77 / mc_state.py:172','默认 ~/.hermes_portable_data；工件、HITL 文件都在这下面'],
+ ['AGNES_API_KEY / _KEYS / _BASE_URL / _MODEL','供应商凭据与池','.env（值不显示）','解析链见 langgraph_runtime.py:97；v5 用池 + 限速映射'],
+ ['SHORTDRAMA_VIDEO_MODE','reference / keyframe / pack','v5/config.py','pack 档串行落盘、跳逐镜 clipqc'],
+ ['SHORTDRAMA_OPEN_CHAIN / _ALLOW_RESUME','放行 --resume-media','shortdrama/AGENTS.md','默认拒绝；这是给"人"的开关'],
+ ['SHORTDRAMA_REQUIRE_APPROVAL','启用三道阶段级审批门','shortdrama/AGENTS.md','指纹绑定产物，上游一变批文作废'],
+ ['SHORTDRAMA_APPROVE_EACH_ROLE','启用步级 HITL','v5/webchain.py','⛔ 绝不写进 .env —— 会把全自动链一起挂住'],
+ ['SHORTDRAMA_STILL_QC / _CLIP_QC','质检自愈','media/pipeline.py','前端路径默认 0（判断权在人），CLI 走 config 默认 1'],
+];
+const DIAGS = [
+ ['npm run selfdiag','拉起打包应用，CDP 驱动，收 pageerror / crash / 失败请求 / React 挂载 / ErrorBoundary，出 JSON + Markdown + 截图','scripts/runtime-diag.mjs:111'],
+ ['npm run selfdiag:attach','附着到已跑实例（复用 PW_CDP_PORT），不重启','scripts/runtime-diag.mjs:1'],
+ ['npm run check:tdz','AST 扫「同一条同步路径上先读后写的 const/let」—— 即 Cannot access before initialization','scripts/check-tdz.js:2'],
+ ['npm run check:undef','AST 扫「本文件明明有声明却解析不到」的标识符；命中即 exit 1','scripts/check-undef.js:1'],
+ ['npm run bridge:build','esbuild 打 wechat_bridge → dist/index.js（cjs / node20）','wechat_bridge/build.mjs:14'],
+ ['npm run shortdrama:venv','建 / 修 shortdrama 侧的便携 venv','package.json scripts'],
+];
+const DOCS = [
+ ['docs/PRD.md','产品定位、用户故事、manju-craft 接入计划'],
+ ['docs/SPEC.md','总体架构、仓库结构、fork 改动范围、Electron 主进程职责'],
+ ['docs/WORKBENCH_ARCHITECTURE_SPEC.md','两级入口模型 + @提及委托协议 + manifest.ui 工作台契约'],
+ ['docs/SHORTDRAMA_STUDIO_SPEC.md','StudioView 布局、数据模型、复用清单、§6 agent.py 后端契约'],
+ ['docs/LANGRAPH_CONTRACT_SPEC.md','五层契约：L1 manifest / L2 input / L3 output / L4 HITL / L5 events'],
+ ['docs/MANJUCRAFT_AGENT_SPEC.md','§3 是流水线阶段清单的权威；§134 HITL 门；§161 workflow.* 事件'],
+ ['docs/UI_UX_SPEC.md','设计令牌与栅格（注意：spec 写蓝色 accent，代码实际是单色）'],
+ ['docs/ROADMAP.md','Phase 0-4：初始化 → 剥离 → harness 验证 → LangGraph 适配 → manju-craft'],
+ ['docs/ACCEPTANCE.md','逐阶段验收标准'],
+ ['docs/STRIPPING_GUIDE.md','§2 拆模块清单 —— 解释了 cron/ 目录为何缺席'],
+ ['docs/ADR/001-fork-hermes.md','为什么 fork 而不是插件'],
+ ['docs/ADR/002-event-bridge-isolation.md','为什么 workflow 事件走独立 HTTP 桥而非复用 WS'],
+ ['shortdrama/AGENTS.md','外部 agent 唯一契约：准入门 / brief 规范 / 类型包 / 产物验收'],
+];
+
+const TRACE = [
+ {n:'composer', l:'渲染层', p:'用户输入 → ChatShell', x:'在 Composer 里打字。Composer 先备好模型 / 权限 / 工作区三项设置。', proto:'src/App.jsx:151 · Composer.jsx'},
+ {n:'sse',      l:'渲染层', p:'POST /api/ag-ui/run',  x:'useAgentStream 直接 fetch 桥端点，拿回一个 SSE ReadableStream，不经过任何 SDK。', proto:'useAgentStream.js:1065 → agui-server.js:1718'},
+ {n:'agui-core',l:'AG-UI 桥', p:'路由派发 → gateway',  x:'桥把这一次 run 翻译成 JSON-RPC：需要时 session.create，然后 prompt.submit。', proto:'agui-server.js:409 · :1599'},
+ {n:'gateway',  l:'外壳',   p:'WS 送进 :9120',         x:'主进程里那条常驻 WebSocket 是唯一出口；沙箱 renderer 从不自连后端。', proto:'main.js:751 ws://127.0.0.1:9120/api/ws'},
+ {n:'loop',     l:'Hermes', p:'AIAgent 回合循环',      x:'run_conversation() 同步循环：调模型 → 有 tool_calls 就派发并回填，直到没有或预算耗尽。', proto:'run_agent.py:5711'},
+ {n:'emitter',  l:'Hermes', p:'命中 langgraph agent 工具', x:'工具起一个后台线程跑图，先回 workflow.started 作为 SSE keep-open 信号。', proto:'langgraph_agent_tool.py:248'},
+ {n:'manjucraft',l:'短剧链', p:'图节点逐个执行',        x:'graph.astream(stream_mode="updates")，每出一个节点就发 progress + trace，产物按类型抽取。', proto:'langgraph_runtime.py:699 · :616'},
+ {n:'relay',    l:'AG-UI 桥', p:'HTTP 打回桥',          x:'Python POST {type,payload,runId} 给 /workflow-event；桥剥重复前缀，无订阅者时进缓冲等重放。', proto:'langgraph_agent_tool.py:65 → agui-server.js:1783'},
+ {n:'translator',l:'AG-UI 桥', p:'转成 AG-UI CUSTOM 帧', x:'桥用 EventEncoder 把事件写成 SSE 帧，名字保持 workflow.<x>，从原来那条流推回去。', proto:'agui-server.js:505 · :940'},
+ {n:'studio',   l:'渲染层', p:'工作台长出新产物',      x:'useAgentStream 按 threadId 派发 → eventBus → StudioWorkbench 渲染静帧 / 视频 / 时间轴。', proto:'useAgentStream.js:636 · eventBus.js:8 · StudioWorkbench.jsx:1512'},
+];
+</script>
+<script>
+/* ==========================================================================
+   渲染层
+   ========================================================================== */
+const $ = s => document.querySelector(s);
+const byId = Object.fromEntries(NODES.map(n => [n.id, n]));
+const layerOf = id => LAYERS.find(l => l.id === id);
+const rootStyle = getComputedStyle(document.documentElement);
+const rgbOf = varName => rootStyle.getPropertyValue(varName).trim();
+const lrgb = l => rgbOf(l.c);
+
+/* ---------- 图例 ---------- */
+const legend = $('#legend');
+LAYERS.forEach(l => {
+  const b = document.createElement('button');
+  b.className = 'chip'; b.setAttribute('aria-pressed','true'); b.dataset.layer = l.id;
+  b.style.setProperty('--c', lrgb(l));
+  b.innerHTML = `<i class="dot"></i>${l.n}`;
+  b.onclick = () => {
+    const on = b.getAttribute('aria-pressed') === 'true';
+    b.setAttribute('aria-pressed', String(!on));
+    document.querySelector(`.band[data-layer="${l.id}"]`).hidden = on;
+  };
+  legend.appendChild(b);
+});
+const st = document.createElement('span'); st.className = 'stat';
+st.textContent = `${NODES.length} 个模块 · ${LAYERS.length} 层 · ${STAGES_A.length + STAGES_B1.length + STAGES_B2.length} 个流水线阶段`;
+legend.appendChild(st);
+
+/* ---------- 层带 + 卡片 ---------- */
+const bands = $('#bands');
+LAYERS.forEach((l, li) => {
+  const rgb = lrgb(l);
+  const band = document.createElement('section');
+  band.className = 'band'; band.dataset.layer = l.id;
+  band.style.setProperty('--c', rgb);
+  band.innerHTML = `<div class="band-head">
+      <span class="idx">L${li + 1}</span><h2>${l.n}</h2><span class="sub">${l.sub}</span>
+      <span class="port">${l.port}</span></div>
+    <div class="cards"></div>`;
+  const cards = band.querySelector('.cards');
+  NODES.filter(n => n.layer === l.id).forEach(n => {
+    const b = document.createElement('button');
+    b.className = 'node'; b.dataset.id = n.id; b.style.setProperty('--c', rgb);
+    b.innerHTML = `<span class="cnt">${n.files.length} 文件</span>
+      <span class="n">${n.name}</span><span class="d">${n.d}</span>`;
+    b.onclick = () => select(n.id);
+    cards.appendChild(b);
+  });
+  bands.appendChild(band);
+  if (li < LAYERS.length - 1) {
+    const k = CONN[li];
+    const c = document.createElement('div');
+    c.className = 'conn'; c.dataset.conn = li;
+    c.style.setProperty('--c', rgb);
+    c.innerHTML = `<i class="rule"></i><span class="arrow">${k.dir}</span>
+      <span class="lbl"><b>${k.a}</b> · ${k.b}</span><span class="arrow">${k.dir}</span><i class="rule"></i>`;
+    bands.appendChild(c);
+  }
+});
+
+/* ---------- 详情面板 ---------- */
+function esc(s){ return String(s).replace(/[&<>]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[m])); }
+function fileRow(f, cVar){
+  const [p, ln, what] = f;
+  const disp = ln ? `${p}:${ln}` : p;
+  return `<div class="frow" style="--c:${cVar}">
+    <code>${esc(p)}${ln ? `<span class="ln">:${ln}</span>` : ''}</code>
+    <button class="copy" data-copy="${esc(disp)}" title="复制路径">复制</button>
+    ${what ? `<span class="what">${esc(what)}</span>` : ''}</div>`;
+}
+function detailEmpty(){
+  $('#detail').innerHTML = `<div class="d-empty">
+    <p style="font-size:var(--fs-15);color:var(--text);margin:0 0 8px">点任意方块看它的真实文件</p>
+    <p>按 <span class="k">/</span> 搜索 · <span class="k">Esc</span> 取消 · <span class="k">T</span> 追踪请求</p>
+    <p style="margin-top:var(--sp-4);font-size:var(--fs-11)">全部行号取自 commit 83e77fa，逐条 grep 核对过</p></div>`;
+}
+function select(id){
+  document.querySelectorAll('.node,.stage').forEach(e => e.setAttribute('aria-selected', String(e.dataset.id === id)));
+  document.querySelectorAll('.node').forEach(e => e.classList.remove('related'));
+  const n = byId[id]; if (!n) return;
+  const l = layerOf(n.layer); const cVar = lrgb(l);
+  (n.links || []).forEach(k => {
+    const el = document.querySelector(`.node[data-id="${k}"]`); if (el) el.classList.add('related');
+  });
+  $('#detail').innerHTML = `
+    <div class="d-head" style="--c:${cVar}">
+      <span class="layer-tag" style="--c:${cVar}">
+        <i style="width:7px;height:7px;border-radius:50%;background:rgb(${cVar});display:inline-block"></i>${l.n}</span>
+      <h3>${esc(n.name)}</h3><p class="role">${esc(n.d)}</p></div>
+    <div class="d-sec" style="--c:${cVar}"><h4>真实文件 · ${n.files.length} 处</h4>
+      ${n.files.map(f => fileRow(f, cVar)).join('')}</div>
+    ${n.links && n.links.length ? `<div class="d-sec"><h4>关联模块</h4><div class="rel">
+      ${n.links.map(k => byId[k] ? `<button data-goto="${k}">${esc(byId[k].name)}</button>` : '').join('')}</div></div>` : ''}`;
+  $('#detail').scrollTop = 0;
+}
+/* 阶段详情复用同一个面板 */
+function detailStage(s, chainTitle){
+  const c = rgbOf('--l-drama');
+  document.querySelectorAll('.node,.stage').forEach(e => e.setAttribute('aria-selected', String(e.dataset.id === s.id)));
+  $('#detail').innerHTML = `
+    <div class="d-head" style="--c:${c}">
+      <span class="layer-tag" style="--c:${c}">
+        <i style="width:7px;height:7px;border-radius:50%;background:rgb(${c});display:inline-block"></i>${esc(chainTitle)} · 第 ${s.no} 步</span>
+      <h3>${esc(s.zh)}</h3><p class="role">${esc(s.art)}</p></div>
+    <div class="d-sec" style="--c:${c}"><h4>代码位置</h4>${fileRow([s.src, null, null], c)}</div>
+    <div class="d-sec"><h4>产物</h4><div class="frow" style="--c:${c}"><code>${esc(s.out)}</code></div></div>`;
+  $('#detail').scrollTop = 0;
+}
+
+$('#detail').addEventListener('click', e => {
+  const c = e.target.closest('.copy');
+  if (c) {
+    const t = c.dataset.copy;
+    (navigator.clipboard?.writeText(t) ?? Promise.reject()).then(() => {
+      c.textContent = '已复制';
+    }).catch(() => {
+      const r = document.createRange(); r.selectNodeContents(c.previousElementSibling);
+      const s = getSelection(); s.removeAllRanges(); s.addRange(r);
+      try { document.execCommand('copy'); c.textContent = '已复制'; } catch (_) { c.textContent = '手选'; }
+      s.removeAllRanges();
+    });
+    setTimeout(() => c.textContent = '复制', 1200); return;
+  }
+  const g = e.target.closest('[data-goto]');
+  if (g) {
+    select(g.dataset.goto);
+    document.querySelector(`.node[data-id="${g.dataset.goto}"]`)?.scrollIntoView({block:'nearest', behavior:'smooth'});
+  }
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    stopTrace(); select(null); detailEmpty();
+    document.querySelectorAll('.node,.stage').forEach(x => x.classList.remove('related','hit'));
+  }
+  if (e.key === '/' && !/input|textarea/i.test(document.activeElement.tagName)) { e.preventDefault(); $('#q').focus(); }
+  if ((e.key === 't' || e.key === 'T') && !/input|textarea/i.test(document.activeElement.tagName)) { e.preventDefault(); runTrace(); }
+});
+
+/* ---------- 流水线视图 ---------- */
+function kindLabel(k){ return {llm:'LLM', hitl:'人工门', media:'生成', det:'确定性'}[k]; }
+function renderStages(host, list, title){
+  const el = $(host);
+  list.forEach(s => {
+    const b = document.createElement('button');
+    b.className = 'stage' + (s.kind === 'hitl' ? ' gate' : ''); b.dataset.id = s.id;
+    b.innerHTML = `<span class="no">${s.no}</span>
+      <span class="nm">${esc(s.id)}<small>${esc(s.zh)}</small></span>
+      <span class="art">${esc(s.art)}</span>
+      <span class="src">${esc(s.src)}</span>
+      <span class="kind ${s.kind}">${kindLabel(s.kind)}</span>`;
+    b.onclick = () => detailStage(s, title);
+    el.appendChild(b);
+  });
+}
+renderStages('#stages-a', STAGES_A, 'manjucraft 图');
+renderStages('#stages-b1', STAGES_B1, 'v5 创作链');
+renderStages('#stages-b2', STAGES_B2, 'v5 媒体链');
+
+/* ---------- 表格视图 ---------- */
+function table(host, head, rows){
+  $(host).innerHTML = `<thead><tr>${head.map(h => `<th>${h}</th>`).join('')}</tr></thead>
+    <tbody>${rows.map(r => `<tr>${r.map(c => `<td>${c}</td>`).join('')}</tr>`).join('')}</tbody>`;
+}
+table('#t-ports', ['进程','端口','协议','谁起它 · 代码位置','说明'],
+  PORTS.map(r => [`<b>${r[0]}</b>`,`<code>${r[1]}</code>`,`<code>${r[2]}</code>`,`<span class="code">${r[3]}</span>`, r[4]]));
+table('#t-contracts', ['方向','信道','代码位置','内容'],
+  CONTRACTS.map(r => [`<b>${r[0]}</b>`,`<code>${r[1]}</code>`,`<span class="code">${r[2]}</span>`, r[3]]));
+table('#t-env', ['变量','作用','定义处','注意'],
+  ENVS.map(r => [`<code>${r[0]}</code>`, r[1], `<span class="code">${r[2]}</span>`, r[3]]));
+table('#t-diag', ['命令','它到底验了什么','实现'],
+  DIAGS.map(r => [`<code>${r[0]}</code>`, r[1], `<span class="code">${r[2]}</span>`]));
+$('#docs').innerHTML = DOCS.map(d => `<a href="${d[0]}" target="_blank" rel="noopener"><b>${d[0]}</b><span>${d[1]}</span></a>`).join('');
+
+/* ---------- 视图切换 ---------- */
+document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
+  document.querySelectorAll('.tab').forEach(x => x.setAttribute('aria-selected', String(x === t)));
+  document.querySelectorAll('.view').forEach(v => v.hidden = v.id !== 'view-' + t.dataset.view);
+  if (t.dataset.view !== 'layers') stopTrace();
+});
+
+/* ---------- 搜索 ---------- */
+$('#q').addEventListener('input', e => {
+  const q = e.target.value.trim().toLowerCase();
+  document.querySelectorAll('.node').forEach(el => {
+    const n = byId[el.dataset.id];
+    const hay = (n.name + ' ' + n.d + ' ' + n.files.map(f => f[0] + ' ' + (f[2] || '')).join(' ')).toLowerCase();
+    el.classList.toggle('dim', !!q && !hay.includes(q));
+  });
+});
+
+/* ---------- 请求追踪 ---------- */
+let traceTimer = null;
+function stopTrace(){
+  if (traceTimer) clearTimeout(traceTimer);
+  traceTimer = null;
+  document.querySelectorAll('.node.hit').forEach(e => e.classList.remove('hit'));
+  document.querySelectorAll('.conn.lit').forEach(e => e.classList.remove('lit'));
+  $('#trace').dataset.running = '0'; $('#trace').innerHTML = '▶ 追踪一次请求';
+}
+function runTrace(){
+  document.querySelectorAll('.tab').forEach(x => x.setAttribute('aria-selected', String(x.dataset.view === 'layers')));
+  document.querySelectorAll('.view').forEach(v => v.hidden = v.id !== 'view-layers');
+  stopTrace();
+  $('#trace').dataset.running = '1'; $('#trace').innerHTML = '■ 追踪中…（点击停止）';
+  $('#trace').onclick = () => { traceTimer ? stopTrace() : runTrace(); };
+  let i = 0;
+  const step = () => {
+    if (i >= TRACE.length) {
+      $('#trace').innerHTML = '▶ 再追一次'; $('#trace').dataset.running = '0';
+      const d = $('#trace'); d.onclick = runTrace;
+      return;
+    }
+    const t = TRACE[i];
+    document.querySelectorAll('.node.hit').forEach(e => e.classList.remove('hit'));
+    document.querySelectorAll('.conn.lit').forEach(e => e.classList.remove('lit'));
+    const el = document.querySelector(`.node[data-id="${t.n}"]`);
+    if (el) { el.classList.add('hit'); el.scrollIntoView({block:'nearest', behavior:'smooth'}); select(t.n); }
+    const n = byId[t.n]; if (n) {
+      $('#detail').querySelector('.d-head').insertAdjacentHTML('afterend',
+        `<div class="tracebox"><span class="step">STEP ${i + 1} / ${TRACE.length} · ${t.l}</span>
+         <p><b>${t.p}</b> —— ${t.x}</p><div class="proto">${t.proto}</div>
+         <div class="bar"><i style="width:${((i + 1) / TRACE.length) * 100}%"></i></div></div>`);
+    }
+    const li = LAYERS.findIndex(l => l.id === n.layer);
+    const conn = document.querySelector(`.conn[data-conn="${Math.max(0, li - 1)}"]`);
+    if (conn && li > 0) conn.classList.add('lit');
+    i++; traceTimer = setTimeout(step, 2400);
+  };
+  step();
+}
+$('#trace').onclick = runTrace;
+
+detailEmpty();
+select('studio');
+</script>
+</body>
+</html>
