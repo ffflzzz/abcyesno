@@ -298,6 +298,9 @@ projects/<项目名>/
 | `SHORTDRAMA_INLINE_UPSTREAM` | 1 | 上游产物**直接注入**下游角色的输入（`0` = 只给路径、让角色自己 `read_file`——实测后者要 8–10 轮 LLM 调用/角色）|
 | `SHORTDRAMA_LEAN_PROMPT` | 0 | 视频提示词走**精简形态**（删反分屏前置 / reference 用途声明 / 类型包风格块；保留内容四段 + 台词 + 环境声 + 禁字幕）|
 | `SHORTDRAMA_ASSET_GATE` | 0 | 资产完整性缺失时**硬拦**（`return blocked`）。默认只强告警不拦——存量项目多有部分缺图，直接拦会把它们全卡住 |
+| `SHORTDRAMA_AGE_VARIANTS` | 1 | **多集连载的分龄变体 / 新角色补卡**：`cast` 按本集分镜的 `@名（括注）` 派生「阿旺（14岁版）」这类卡（以基础定妆照做 img2img 锁脸）与从没进过注册表的新角色卡。设 `0` ⇒ 整段跳过，行为与改造前一字不变（修的两个实测缺口见 `v5/media/variants.py` 文件头）|
+| `SHORTDRAMA_VARIANTS_MIN_SHOTS` | 2 | 一个人在本集**出现在几镜**才值得给他一张定妆照。数的是镜数，不是 `@` 次数（同一镜里 `@阿旺` 可连写 5 次）|
+| `SHORTDRAMA_VARIANTS_MAX_CARDS` | 6 | 每集最多派生几张（生图配额敏感）。超出按出场镜数取前 N，被弃的会打日志 |
 | `SHORTDRAMA_DIALOGUE_VERBATIM_STRICT` | 0 | 对白**逐字门**在 `_input_gates` 里阻断。默认只警告——存量项目的旧 `dialogue` 产物多为改写版 |
 | `SHORTDRAMA_CHAIN_TIMEOUT` | 9000 | `run_new_project.py` 传给创作链的整体超时秒数（它据此给 `scripts/drive_chain.py` 传 `--timeout`）。⚠️ `run_new_project.py` **自身不解析** `--timeout`，直接传它会被静默忽略 |
 | `SHORTDRAMA_DEV_PORT` | 2024 | dev server 端口。**语义按入口分**：`run_new_project.py` 在**不设它时**从 2080-2099 自动挑空闲口（多项目并行的前提，扫描起点按项目名错开，`SHORTDRAMA_V5_AGENT_URL` 自动对齐；**设了就只用那一个，被占即响亮终止，绝不换口也不杀占口进程**）；`webchain.py` 仍固定用它 |
@@ -378,7 +381,7 @@ v5/
 ├── guards.py               # 记账 / 物化对账 / TokenBreaker / media_gate
 ├── validate.py             # brief 智能截断 / brief 完备性 / 产物忠实度 / 分镜契约
 ├── config.py  llm.py       # 配置与 LLM 供应商
-├── media/                  # 静态画面先行管线（24 个模块，不含 __init__）
+├── media/                  # 静态画面先行管线（25 个模块，不含 __init__）
 │   ├── pipeline.py         #   **媒体链唯一入口**（media_gate + 审批门 + 记账都收在这里）
 │   ├── jobs.py             #   video_jobs 显式状态机
 │   ├── storyboard.py       #   分镜解析
@@ -386,6 +389,7 @@ v5/
 │   ├── style.py            #   类型包风格块
 │   ├── cast.py             #   参考图确定性预生成（角色单格正面像 / 资产图）
 │   ├── assets.py           #   资产绑定 / 文本身份锚点
+│   ├── variants.py         #   从本集分镜的 `@名（括注）` 派生分龄变体卡与漏登记的新角色卡
 │   ├── stills.py  qc.py    #   静帧生成 / 硬伤 QC
 │   ├── video.py  clipqc.py #   图生视频 / 成片抽帧复核
 │   ├── compose.py          #   ffmpeg 拼接

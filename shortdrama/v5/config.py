@@ -479,6 +479,21 @@ STILL_QC = os.environ.get("SHORTDRAMA_STILL_QC", "1") != "0"
 # 默认**只强告警不拦**（现存项目多有部分缺图，直接拦会把它们全卡住）；
 # 设 1 则缺失时 `return blocked`（适合作为对外服务的准入条件）。
 ASSET_GATE_STRICT = os.environ.get("SHORTDRAMA_ASSET_GATE", "0") != "0"
+
+# ── 分龄变体与漏登记的新角色（2026-09-30，多集连载）───────────────────────────
+# 实测两个缺口（`shiguan-series-0926`，3 集已出片）：
+#   ① 剧本要求主角 10→14→16 岁，但全剧只有**一张** 10 岁定妆照，且 identity 明写
+#      「全片每镜必须完全一致」⇒ 冲突时图赢，第 2、3 集出片仍是孩童体型，
+#      而旁白在念"十六岁那年我辍学了"；
+#   ② 第 3 集 `@狮艺店老板娘` 被点名 29 次，注册表 12 条里一条没有 ⇒ 她的脸每镜自由发挥。
+# 现在 `cast` 会按**本集分镜的 `@名（括注）`** 派生「阿旺（14岁版）」这类变体卡与
+# 新角色卡（判据与三条过滤规则见 `media/variants.py` 文件头），变体以基础定妆照做
+# img2img 锁脸。设 `0` ⇒ 整段跳过，行为与改造前一字不变。
+AGE_VARIANTS = os.environ.get("SHORTDRAMA_AGE_VARIANTS", "1") != "0"
+#: 一个人在本集**出现在几镜**才值得给他一张定妆照（数的是镜数，不是 @ 次数）
+VARIANTS_MIN_SHOTS = int(os.environ.get("SHORTDRAMA_VARIANTS_MIN_SHOTS", "2"))
+#: 每集最多派生几张（生图配额敏感；超了按出场镜数取前 N，且日志列被弃的是谁）
+VARIANTS_MAX_CARDS = int(os.environ.get("SHORTDRAMA_VARIANTS_MAX_CARDS", "6"))
 # 对白**逐字门**（2026-09-14 新增）的严格开关。
 #
 # 背景：`dialogue` 角色的旧契约写着「负责对白润色与优化」「重写问题台词」，

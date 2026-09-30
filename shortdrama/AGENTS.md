@@ -367,6 +367,13 @@ pack 档**跳过**逐镜 clipqc（组产物多镜
   把人脸捞回来，"锁定长相与服装形制"会压过"没有站立的人形"（本包化身镜实测两轮）。
   不写该标记 = 行为与历史一字不变。
 - **同脸角色**（分身/替身/克隆）自动复用源角色参考图，不重新生成。
+- **分龄变体与漏登记的新角色由代码补卡**（2026-09-30，`v5/media/variants.py`）：`cast`
+  读**本集分镜的 `@名（括注）`**，派生「阿旺（14岁版）」这类变体（以基础定妆照做
+  img2img 锁脸）与从没进过注册表的新角色卡；绑定层按本镜括注里的年龄段选那张表。
+  ★ 为什么必须有它：多集连载里剧本会推主角年龄，而**全剧只有一张定妆照**——
+  identity 那句「全片每镜必须完全一致」与分镜的「14 岁瘦高」冲突时**图赢**，
+  实测三集出片第 2、3 集仍是孩童体型，而旁白在念"十六岁那年我辍学了"。
+  关掉设 `SHORTDRAMA_AGE_VARIANTS=0`，行为与改造前一字不变。
 - 升级参考图规则后，把注册表里的 `ref_ver` 删掉即可触发重生成（不必手工删图）。
 - 角色卡里**不要写人物关系**（"两件制服必须完全一致"会被画成两个穿制服的人）。
 
@@ -406,6 +413,7 @@ pack 档**跳过**逐镜 clipqc（组产物多镜
 | `SHORTDRAMA_V5_AGENT_URL` | http://127.0.0.1:2024 | 派发子任务的目标 Agent Protocol server（**必填**，端口须与 dev server 一致）|
 | `SHORTDRAMA_V5_EPISODE` | 1 | 起服默认集号（生产用 `--episodes`，不设此变量）|
 | `SHORTDRAMA_STUDIO_PACK` | shortdrama | supervisor / Studio 绑定的类型包 |
+| `SHORTDRAMA_AGE_VARIANTS` | 1 | **多集连载**：`cast` 按本集分镜的 `@名（括注）` 补「分龄变体 / 没登记的新角色」的定妆照（判据见 `v5/media/variants.py`）。`0` = 整段跳过，行为与改造前一字不变。另两个调参 `SHORTDRAMA_VARIANTS_MIN_SHOTS`（几镜才配一张图，默认 2）、`SHORTDRAMA_VARIANTS_MAX_CARDS`（每集上限，默认 6）见 README §6 |
 | `SHORTDRAMA_OPEN_CHAIN` | 0 | **人用开关**：`1` 开放全链路，`--resume-media` 放行 |
 | `SHORTDRAMA_ALLOW_RESUME` | 0 | **人用开关**：`1` 放行单次内部恢复 |
 | `SHORTDRAMA_REQUIRE_APPROVAL` | 0 | `1` 启用三道**阶段级**审批门（`storyboard` / `stills` / `media`；指纹绑定产物）|

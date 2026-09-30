@@ -119,6 +119,17 @@ def _source_ref_uri(root: Path, name: str) -> str:
     p = _source_photo(root, name)
     if not p:
         return ""
+    return _file_ref_uri(p)
+
+
+def _file_ref_uri(p) -> str:
+    """把**任意一张本地图**编成 data URI（供应商只吃 URL / data URI，不吃路径）。
+
+    `_source_ref_uri` 与「分龄变体以基础定妆照为源」共用这一份编码参数，
+    避免两处漂移（同一件事一套参数）。
+    """
+    if not p:
+        return ""
     try:
         from PIL import Image
 
@@ -127,7 +138,7 @@ def _source_ref_uri(root: Path, name: str) -> str:
         buf = io.BytesIO()
         im.save(buf, "JPEG", quality=86)
         return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
-    except Exception as e:  # noqa: BLE001 -- 编码失败就退回"无源图"，不阻断
+    except Exception:  # noqa: BLE001 -- 编码失败就退回"无源图"，不阻断
         return ""
 
 
@@ -595,6 +606,18 @@ def _char_prompt(c: dict, emphasis: str = "") -> str:
             "画面中只有这一个人物，不要出现第二个人。" % (c["appearance"], tail))
 
 
+def _char_identity(c: dict) -> str:
+    """注册表里那句**文字身份锚点**（无参考图、或生图失败时由它兜底）。
+
+    默认写「全片每镜必须完全一致」。**分龄变体必须换掉"全片"** —— 一句
+    "全片必须完全一致"压在 14 岁版卡上，等于命令模型不许让人长大（实测
+    shiguan-series-0926 第 2、3 集因此仍是孩童体型，而旁白在念"十六岁那年"）。
+    """
+    return ("%s的固定形象（%s每镜必须完全一致）：%s"
+            % (c["name"], c.get("identity_scope") or "全片",
+               str(c.get("appearance") or "")[:220]))
+
+
 def _turnaround(root: Path, c: dict, ratio: str, log=print,
                 source: str = "", emphasis: str = "") -> str:
     """2x2 四视图卷轴（正面/3-4/侧面/背面）→ 取**正面单格**作参考图。
@@ -889,6 +912,14 @@ def _register(root: Path, item: dict, ref_name: str, *,
     }
     if ident:
         rec["identity"] = ident
+    # ★ 分龄变体**必须落进注册表**：绑定层（`assets.hits_for_shot`）要靠它把
+    #   分镜里的 `@阿旺（14 岁…）` 选到「阿旺（14岁版）」这张图。只活在内存里的
+    #   `chars` 列表上，下一次进程读注册表就认不出来了（续跑会退回绑 10 岁那张）。
+    if item.get("alias_of"):
+        rec["alias_of"] = str(item["alias_of"])
+        rec["age_tag"] = str(item.get("age_tag") or "")
+    if item.get("alias_names"):
+        rec["alias_names"] = [str(x) for x in item["alias_names"] if x]
     # ★ 出图输入的**内容指纹**（2026-09-29）：`_ref_is_current` 靠它判定"卡改了、
     #   图该重画"。存的是**喂给生图的那段文字**，不是图片本身。
     _st = _src_text(item)
@@ -1022,11 +1053,51 @@ def _load_contract(root: Path):
     return None, None
 
 
+def _derive_variant_cards(root: Path, chars: list, items: list, ep, log=print) -> list:
+    """从**本集分镜**派生「分龄变体 + 漏登记的新角色」卡（两个实测缺口见 `variants.py` 文件头）。
+
+    任何一步不成立都**如实报一行**再返回空 —— 整条路径是加法：派生不出来就等于退回
+    今天的行为，但"退回"必须是看得见的，不能静默（本项目最忌的失败不可见）。
+    """
+    from .. import guards
+    from . import assets as assets_mod
+    from . import storyboard as sb_mod
+    from . import variants
+
+    e = int(ep or guards.load_manifest(root).get("episode_index", 1) or 1)
+    p = guards.resolve_path(root, "scenedesigner", e)
+    if not p.exists():
+        log("[variants] 第 %d 集分镜不在盘（%s）→ 不分龄、不补新角色" % (e, p))
+        return []
+    try:
+        shots = sb_mod.parse(p.read_text(encoding="utf-8"))
+    except Exception as ex:  # noqa: BLE001 -- 解析不了就退回旧行为，但要报出来
+        log("[variants] 分镜解析异常 → 不分龄：%s" % str(ex)[:90])
+        return []
+    if not shots:
+        log("[variants] !! 第 %d 集分镜**解析出 0 镜** → 不分龄（这本身就是异常，"
+            "查 `storyboard.parse` 与表格结构，别当成「这集没人物」）" % e)
+        return []
+    base = {str(c.get("name") or ""): str(c.get("appearance") or "")
+            for c in chars if c.get("name")}
+    known = set(base) | {str(a.get("name") or "") for a in items if a.get("name")}
+    known |= {str(a.get("name") or "")
+              for a in assets_mod.load_registry(root).get("assets", [])}
+    spk = {s for st in shots
+           for s in assets_mod._dialogue_speakers(st.get("dialogue") or "").split()}
+    return variants.derive_cards(shots, base, known, spk,
+                                 min_mentions=config.VARIANTS_MIN_SHOTS,
+                                 max_new=config.VARIANTS_MAX_CARDS, log=log)
+
+
 def ensure(root: Path, *, log=print, force: bool = False,
-           max_characters: int = 6, max_assets: int = 12) -> dict:
+           max_characters: int = 6, max_assets: int = 12, ep=None) -> dict:
     """为所有角色 / 资产生成权威参考图并登记注册表。返回统计。
 
     可续跑：图已在盘上且注册表有条目 → 跳过（生图是配额敏感操作）。
+
+    `ep` = 本集集号（不给则取 manifest 的 `episode_index`）。多集连载靠它读到**本集**
+    分镜来派生分龄变体与新角色卡；`SHORTDRAMA_AGE_VARIANTS=0` 时整段跳过。
     """
     ratio = config.STILL_RATIO
     wb = root / "worldbuilder" / "worldbuilder.md"
@@ -1071,6 +1142,13 @@ def ensure(root: Path, *, log=print, force: bool = False,
             % (wb.exists(), ad.exists()))
         return made
 
+    # ★ **分龄变体 + 漏登记的新角色**（2026-09-30）。多集连载的两个实测缺口：
+    #   主角第 2、3 集按剧本长大、但全剧只有一张 10 岁定妆照（冲突时图赢，人就不长了）；
+    #   后面集新登场的人从没进过注册表（她的脸每镜自由发挥）。
+    #   判据来自**本集分镜的 `@名（括注）`** —— 那是盘上已有的事实，不再要求模型写一遍。
+    if config.AGE_VARIANTS:
+        chars = list(chars) + _derive_variant_cards(root, chars, items, ep, log=log)
+
     reg = {}
     try:
         from . import assets as assets_mod
@@ -1101,13 +1179,23 @@ def ensure(root: Path, *, log=print, force: bool = False,
         log("[cast] pack 关闭参考图（still-refs=false）→ **只登记角色/道具、不生图**"
             "（图不会被绑定，生图=白烧配额；身份由注册表 identity 文字锚点承担）")
 
-    for c in chars[:max_characters]:
+    # ★ `max_characters` 是**基础角色卡的生图预算**，不作用于派生卡（2026-09-30）。
+    #   派生卡另有一份自己的上限（`config.VARIANTS_MAX_CARDS`），且它已在 `variants`
+    #   侧按出场镜数排过序 —— 若把它们也塞进这个切片，"3 个基础角色 + 2 个年龄段"
+    #   在 `max_characters=6` 下没事，但 6 个基础角色的项目会**把主角的 16 岁版挤掉**，
+    #   而那正是这次要修的那个病。与下方 `max_assets` 的截断可见性同一条纪律。
+    _base = [c for c in chars if not c.get("derived")]
+    _derived = [c for c in chars if c.get("derived")]
+    if len(_base) > max_characters:
+        log("[cast] ⚠️ 基础角色卡 %d 个超过预算 %d → 只出前 %d 个的图（被截断：%s）"
+            % (len(_base), max_characters, max_characters,
+               "、".join(str(x.get("name")) for x in _base[max_characters:])[:140]))
+    for c in _base[:max_characters] + _derived:
         dest = images_dir(root) / (c["name"] + ".png")
         if not refs_on:
             # 与下面的生成分支**设置完全相同的 identity/type**，只是不生图 ——
             # 保证 `identity_lines` 拿到的锚点文本与有图时一字不差。
-            c["identity"] = ("%s的固定形象（全片每镜必须完全一致）：%s"
-                             % (c["name"], c["appearance"][:220]))
+            c["identity"] = _char_identity(c)
             c["type"] = "character"
             _register(root, c, c["name"], with_image=False)
             made["noimg"] += 1
@@ -1116,9 +1204,29 @@ def ensure(root: Path, *, log=print, force: bool = False,
         if (not force) and _ref_is_current(reg, c["name"], dest, _src_text(c), log=log):
             made["skipped"] += 1
             continue
+        if c.get("alias_of"):
+            # **分龄变体：以基础角色的定妆照做 img2img**，只改年龄/体型/服装。
+            # 为什么不能纯文生图：那等于重新抽一个人 —— 与 `same_as` 那条同型的理由，
+            # **脸的依据必须来自已有的那张脸**（实测 nightshift-45 的"分身"事故）。
+            _alias_uri = _file_ref_uri(images_dir(root) / (str(c["alias_of"]) + ".png"))
+            if not _alias_uri:
+                log("[cast] ⚠️ %s 找不到基础定妆照 images/%s.png → 退回**纯文生图**"
+                    "（这一版脸会漂；先确认基础角色出图成功）"
+                    % (c["name"], c["alias_of"]))
+            c["identity"] = _char_identity(c)
+            c["type"] = "character"
+            if _turnaround(root, c, ratio, log=log, source=_alias_uri):
+                _register(root, c, c["name"])
+                made["characters"] += 1
+            else:
+                _register(root, c, c["name"], with_image=False)
+                made["noimg"] += 1
+                made["failed"] += 1
+                log("[cast] ⚠️ %s 分龄变体参考图生成失败 → **降级为文字身份锚点**"
+                    % c["name"])
+            continue
         log("[cast] 生成角色参考图：%s" % c["name"])
-        c["identity"] = ("%s的固定形象（全片每镜必须完全一致）：%s"
-                         % (c["name"], c["appearance"][:220]))
+        c["identity"] = _char_identity(c)
         c["type"] = "character"
         # 「与某人同一张脸」→ **直接复用那个人的参考图**。
         #
@@ -1189,8 +1297,7 @@ def ensure(root: Path, *, log=print, force: bool = False,
             _sp = sheet_mod.ensure(root, c["name"], _source_photo(root, c["name"]),
                                    costume=c.get("appearance") or "", log=log)
             if _sp:
-                c["identity"] = ("%s的固定形象（全片每镜必须完全一致）：%s"
-                                 % (c["name"], c["appearance"][:220]))
+                c["identity"] = _char_identity(c)
                 c["type"] = "character"
                 _register(root, c, c["name"])
                 made["characters"] += 1
@@ -1203,8 +1310,7 @@ def ensure(root: Path, *, log=print, force: bool = False,
         #   （取舍见 `config.SOURCE_TURNAROUND`）。
         if _src and not config.SOURCE_TURNAROUND:
             if _bind_source_photo(root, c, _src):
-                c["identity"] = ("%s的固定形象（全片每镜必须完全一致）：%s"
-                                 % (c["name"], c["appearance"][:220]))
+                c["identity"] = _char_identity(c)
                 c["type"] = "character"
                 _register(root, c, c["name"])
                 made["characters"] += 1
@@ -1223,8 +1329,7 @@ def ensure(root: Path, *, log=print, force: bool = False,
             # **参考图没了、文字身份锚点也没了**（双重失效）→ 成片人物只是
             # "像那么回事"，不是用户给的那个人（LN03 实测：脸型像、服装全错）。
             # ⇒ 降级登记（`with_image=False`，与反质量包同一条路径）：**图没有、描述留着**。
-            c["identity"] = ("%s的固定形象（全片每镜必须完全一致）：%s"
-                             % (c["name"], c["appearance"][:220]))
+            c["identity"] = _char_identity(c)
             c["type"] = "character"
             _register(root, c, c["name"], with_image=False)
             made["noimg"] += 1

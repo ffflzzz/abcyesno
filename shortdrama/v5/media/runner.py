@@ -386,7 +386,7 @@ def _exec_video(root: Path, ep: int, shots: list, log) -> dict:
 def _exec_assets(root: Path, ep: int, shots: list, log) -> dict:
     """生成资产参考图（可续跑：已在盘上的会跳过）。"""
     from . import cast
-    cast.ensure(root, log=log)
+    cast.ensure(root, log=log, ep=ep)
     return {"status": "ok", "stage": "assets"}
 
 

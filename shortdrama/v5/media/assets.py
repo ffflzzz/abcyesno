@@ -332,7 +332,69 @@ def resolve_mentions(text: str, reg: dict) -> tuple:
         if tok in rest:
             matched.append(n)
             rest = rest.replace(tok, " ")      # 抠掉已匹配的，避免重复计数
+    # ★ **简称也算点名**（2026-09-30，随 `variants` 派生的新角色卡）。
+    #   派生卡取的是**最长写法**（`狮艺店老板娘`），而分镜多数时候写简称
+    #   （`@老板娘`，实测 8 次简称 / 1 次全名）⇒ 不认简称的话，
+    #   她只有那一镜绑得上参考图，其余 8 镜仍是自由发挥。
+    #   只对**带 `alias_names` 的条目**生效（= 本系统派生出来的卡），
+    #   历史条目的 keywords 里有 他/她/主角 这类泛词，拿来做 `@` 匹配会绑错脸
+    #   （见 `_chars_by_name` 的 village-bees 事故记录）。
+    alias_map: dict = {}
+    for a in (reg or {}).get("assets", []):
+        real = str(a.get("name") or "")
+        for al in (a.get("alias_names") or []):
+            if al and al != real:
+                alias_map.setdefault(str(al), real)
+    for al in sorted(alias_map, key=len, reverse=True):
+        tok = "@" + al
+        if tok in rest:
+            real = alias_map[al]
+            if real not in matched:
+                matched.append(real)
+            rest = rest.replace(tok, " ")
     return matched, at_mentions(rest)
+
+
+def _variant_index(reg: dict) -> dict:
+    """`{基础名: {年龄段: 条目}}` —— 只收 `cast` 派生出来的分龄变体条目。"""
+    idx: dict = {}
+    for a in (reg or {}).get("assets", []):
+        base = str(a.get("alias_of") or "")
+        tag = str(a.get("age_tag") or "")
+        if base and tag:
+            idx.setdefault(base, {})[tag] = a
+    return idx
+
+
+def apply_age_variants(reg: dict, hits: list, text: str) -> list:
+    """把命中的**基础角色**换成"本镜括注点名的那个年龄段变体"。
+
+    为什么必须换（实测 shiguan-series-0926 第 2、3 集）：注册表里「阿旺」是 10 岁版，
+    分镜写 `@阿旺（14 岁，瘦高身形…）`，而静帧提示词还要求"以参考图锁定该角色的
+    长相、发型、**体型**"⇒ 不换就是拿孩童设定表去画青少年，**文字写 14 岁、
+    出片仍是小孩**，旁白还在念"十六岁那年我辍学了"。
+
+    没有变体条目、或本镜括注里没有年龄段 ⇒ 原样返回（行为与改造前一字不变）。
+    """
+    idx = _variant_index(reg)
+    if not idx:
+        return hits
+    from . import variants as variants_mod
+    ages: dict = {}
+    for name, paren in variants_mod.mentions(text):
+        for base in idx:
+            if base in name and variants_mod.age_of(paren):
+                ages.setdefault(base, variants_mod.age_of(paren))
+    out: list = []
+    for h in hits:
+        base = str(h.get("name") or "")
+        tag = ages.get(base)
+        e = (idx[base].get(tag) or h) if (tag and base in idx) else h
+        # 换完可能和已有的条目撞成同一张表（同一人被数两次）→ 按条目名去重保序
+        if any(o is e or str(o.get("name") or "") == str(e.get("name") or "") for o in out):
+            continue
+        out.append(e)
+    return out
 
 
 #: 「本镜出场角色」的识别上限 —— **不是参考图绑定上限**。
@@ -454,6 +516,9 @@ def hits_for_shot(reg: dict, shot: dict, max_n: int = 5) -> tuple:
         if (scene_a is not None and scene_a.get("type") == "location"
                 and scene_a not in hits):
             hits = hits + [scene_a]
+    # ★ **按本镜括注换到对应年龄的设定表**（2026-09-30，见 `apply_age_variants`）。
+    #   放在限流截断**之前**：换完才是"本镜真正该用的那张脸"，之后再按人物数上限裁。
+    hits = apply_age_variants(reg, hits, text)
     return hits[:max_n], leftover
 
 
