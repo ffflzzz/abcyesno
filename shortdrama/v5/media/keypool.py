@@ -200,3 +200,41 @@ class KeyPool:
             self._last[idx] = self._monotonic() + self._intervals[idx]
             self._rl[idx] += 1
             self._cv.notify_all()
+
+    def cool(self, idx: int, seconds: float) -> None:
+        """把某条 key 的窗口**直接推到 now + seconds**（绝对时长，不是"多停一轮"）。
+
+        为什么需要它（2026-09-30 实测）：文本通道的 429 不是"间隔太短"，而是
+        **这条 key 的用量额度到顶**，供应商直接回「已达到 API 用量上限，请在
+        2026-09-30 19:00 之后重试」——那是小时级的窗口。`note_rate_limited()` 只
+        多停一个 `interval`（聊天侧 interval=0 ⇒ 等于不罚），照它罚就会在同一条
+        死 key 上反复撞。本方法复用同一份 `_last` / `_intervals` 闸门字段，
+        **不另写一份限速**：`claim()` 的"最早到期优先"选择天然会绕开冷却中的 key。
+        """
+        with self._cv:
+            self._last[idx] = self._monotonic() + max(0.0, float(seconds))
+            self._rl[idx] += 1
+            self._cv.notify_all()
+
+    def claim_nowait(self) -> tuple | None:
+        """有窗口已放开的 key 就领一条（记账）并返回 `(idx, key)`；全都在等 ⇒ `None`。
+
+        为什么聊天侧必须用非阻塞版而视频侧不用：视频那边"等下一条 key 放开"是
+        正确语义（最多等一个 12/65 秒的窗口）；而额度耗尽时**所有 key 可能同时
+        在冷却到 19:00**，`claim()` 会睡到它的 300 轮上限 ⇒ 整条链挂在那里不报错。
+        拿不到 key 应当**立刻失败并说清最早什么时候恢复**，让人决定换 key 还是等。
+        """
+        with self._cv:
+            now = self._monotonic()
+            idx = min(range(len(self._keys)),
+                      key=lambda i: self._last[i] + self._intervals[i])
+            if (self._last[idx] + self._intervals[idx]) - now > 0:
+                return None
+            return self._reserve_locked(idx)
+
+    def earliest_free_s(self) -> float:
+        """还要等多久才有 key 放开（秒）。全放开 ⇒ 0。给失败信息用。"""
+        with self._cv:
+            now = self._monotonic()
+            return max(0.0, min(self._last[i] + self._intervals[i] - now
+                                for i in range(len(self._keys))))

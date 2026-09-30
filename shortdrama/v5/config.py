@@ -126,6 +126,29 @@ def _chat_endpoint_of() -> tuple[str, str]:
 CHAT_BASE_EFFECTIVE, CHAT_KEY_EFFECTIVE = _chat_endpoint_of()
 
 
+def chat_key_pool() -> list:
+    """文本通道可轮转的候选集 `[(key, base_url), …]`（2026-09-30 新增）。
+
+    只收**标了专属地址**的 key（`key@base#rpm` 写法）—— 没标的会落到 `AGNES_BASE`
+    （国际入口），而文本实测走的是国内入口（见上方 `_chat_endpoint_of`），
+    把它们混进来等于把请求发到另一个能力的端点上。
+
+    一条都没标 ⇒ 返回 `[(AGNES_API_KEY, "")]` ⇒ 候选只有一条，
+    **行为与改造前一字不变**（原先 `_chat_endpoint_of()` 就是死盯第一条带地址的 key）。
+    """
+    out = [(k, AGNES_KEY_BASE[k]) for k in AGNES_API_KEYS if AGNES_KEY_BASE.get(k)]
+    return out or ([(AGNES_API_KEY, "")] if AGNES_API_KEY else [])
+
+
+#: 文本通道撞 429 时是否换下一条 key（`0` = 退回"永远只用那一条"的历史行为）。
+#: 为什么默认开：2026-09-30 实测第一条 key 的**用量额度**到顶（供应商回「请在
+#: 19:00 之后重试」），而第 2、3 条文本额度是好的 —— 单 key 让整条创作链 20 秒内
+#: `status=error` 停摆，白等两小时。
+CHAT_KEY_ROTATE = os.environ.get("SHORTDRAMA_CHAT_KEY_ROTATE", "1") != "0"
+#: 撞 429 后该 key 的默认冷却秒数（供应商在文案里给了恢复时间时**以它为准**）。
+CHAT_COOLDOWN_SEC = float(os.environ.get("SHORTDRAMA_CHAT_COOLDOWN_SEC", "120"))
+
+
 def video_interval_for_key(key: str | None) -> float:
     """该 key 的提交间隔（秒）。配了 `#rpm` 的用 `60/rpm`；否则用全局闸门。
 

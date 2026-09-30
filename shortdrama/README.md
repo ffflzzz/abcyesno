@@ -247,6 +247,8 @@ projects/<项目名>/
 | `SHORTDRAMA_OPEN_CHAIN` | 0 | **人用开关**：设 `1` 开放全链路（`--resume-media` 放行，输入过三道门） |
 | `SHORTDRAMA_ALLOW_RESUME` | 0 | **人用开关**：设 `1` 放行 `--resume-media`（单次内部恢复） |
 | `SHORTDRAMA_REQUIRE_APPROVAL` | 0 | 设 `1` 启用三道审批门（storyboard / stills / media） |
+| `SHORTDRAMA_CHAT_KEY_ROTATE` | 1 | **文本通道换 key**（2026-09-30）。撞 429 就领下一条 key 重试，被拒的那条按供应商给的恢复时间冷却（文案里没有时间点时用 `..._COOLDOWN_SEC`）。此前文本**永远只用池里第一条**，那条额度到顶就整条链 20 秒内 `status=error` 停摆，而实测另两条的文本额度是好的（额度按 key 算，非账号级）。候选集只收**标了专属地址**的 key（`config.chat_key_pool()`）；一条都没标 ⇒ 只有一个候选 ⇒ 行为与改造前逐字节一致。设 `0` 强制退回单 key |
+| `SHORTDRAMA_CHAT_COOLDOWN_SEC` | 120 | 文本 key 撞 429 后的默认冷却秒数（供应商文案里给了"请在 X 之后重试"时**以它为准**，最长记 8 小时） |
 | `SHORTDRAMA_VIDEO_BGM` | 1 | 类型包禁忌 BGM 时设 `0` |
 | `SHORTDRAMA_STILL_CHAIN` | 1 | `0` = 并铺式（快，但连续镜画面重复） |
 | `SHORTDRAMA_TAIL_PREGEN` | 0 | 落幅帧预生成 → 视频可平铺。**代价**：预生成落幅 ≠ 实际尾帧，承接由"事实"降为"预期"；无连续镜则零收益 |
