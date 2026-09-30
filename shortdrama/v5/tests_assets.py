@@ -733,5 +733,110 @@ class TestNoHumanMark(unittest.TestCase):
                       "未带标记的多人镜照旧")
 
 
+class PropKeywordAlwaysMergedTests(unittest.TestCase):
+    """★ 道具的 keywords 命中**无条件并入**（2026-09-30，`hits_for_shot` 的 else 分支）。
+
+    事故（duanji-gui-0930 两集 60 镜）：旧逻辑是「`@` 只要命中任何资产就跳过 keywords
+    兜底」，而分镜**必然** @ 角色 ⇒ 兜底永不执行 ⇒ 道具只能靠 `@玄铁断戟` 全名点名。
+    但 scenedesigner 写道具一律简写（「断戟」「碎玉」「茶盏」），全名一次没出现过。
+    实测：**38 镜正文提到道具、绑到道具图的镜数 = 0**，三件资产的参考图从头到尾没进过
+    任何一次请求，且**全程日志全绿** —— 没有一道门、一行警告看得见这件事。
+
+    道具图的价值不是"把东西画出来"，是**跨镜同一件**（戟刃那处旧崩缺、戟头那条褪色旧红绳）；
+    绑不上 = `key_props` 逐字一致整层契约落空。
+    """
+
+    REG = json.dumps({"assets": [
+        {"name": "裴惊寒", "type": "character", "keywords": ["裴惊寒"],
+         "prompt": "玄色交领窄袖劲装"},
+        {"name": "老陈", "type": "character", "keywords": ["她", "老陈"],
+         "prompt": "灰色工装"},
+        {"name": "侯府正堂花厅", "type": "location", "keywords": ["花厅"],
+         "prompt": "红绸幔长案"},
+        {"name": "玄铁断戟", "type": "prop",
+         "keywords": ["断戟", "长戟", "玄铁戟", "旧红绳"],
+         "prompt": "玄铁哑光黑长戟、戟刃一处旧崩缺"},
+    ]})
+
+    def test_disease_sample_prop_bound_when_character_is_at_mentioned(self):
+        """病样本：@ 了角色、道具只写简称 ⇒ 必须照样绑上道具图。"""
+        reg = json.loads(self.REG)
+        shot = {"name": "LN08", "scene": "侯府正堂花厅", "shot_type": "近景",
+                "visual": "@裴惊寒（玄色交领窄袖劲装）双手横握断戟自上砸下"}
+        names = [h.get("name") for h in assets.hits_for_shot(reg, shot)[0]]
+        self.assertIn("玄铁断戟", names,
+                      "道具只以简称出现时也必须绑上参考图（旧行为：0/38 镜）")
+        self.assertIn("裴惊寒", names, "角色不能被道具挤掉")
+
+    def test_negative_control_no_prop_when_not_mentioned(self):
+        """反向对照：正文不提任何道具 ⇒ 一张道具图都不许多绑。
+
+        这条是改动的主要风险面（兜底从"偶尔跑"变成"总是跑"）。
+        实测基线：duanji-gui-0930 第 1 集 10 镜、第 2 集 12 镜完全不提道具。
+        """
+        reg = json.loads(self.REG)
+        shot = {"name": "LN02", "scene": "侯府正堂花厅", "shot_type": "全景",
+                "visual": "@裴惊寒 站在长案前，目光落在门口"}
+        names = [h.get("name") for h in assets.hits_for_shot(reg, shot)[0]]
+        self.assertNotIn("玄铁断戟", names, "没提道具却绑上 = 平白多一件道具")
+
+    def test_character_keywords_are_never_merged_unconditionally(self):
+        """⛔ 只并 prop：character 走无条件并会把别人的脸绑进来。
+
+        2026-09-13 实测 noodle-night LN09：keyword 表含泛词「她」，镜里其实是
+        「女孩」，因文本含「她」命中「老陈」→ 绑错脸。所以 prop 的口子不能顺手开给角色。
+        """
+        reg = json.loads(self.REG)
+        shot = {"name": "LN09", "scene": "侯府正堂花厅", "shot_type": "近景",
+                "visual": "@裴惊寒 看着她说：把戟放下"}
+        names = [h.get("name") for h in assets.hits_for_shot(reg, shot)[0]]
+        self.assertNotIn("老陈", names, "角色必须由 @ 或名字命中，不能靠泛词无条件并进来")
+
+    def test_guessed_prop_does_not_pollute_unresolved(self):
+        """补绑的道具**不许**混进 `unresolved`。
+
+        那个通道的语义是"@ 了但注册表查无此资产"。把补绑项塞进去会让日志反着说
+        （"引用了不存在的资产：玄铁断戟"），把一条正常路径报成事故。
+        """
+        reg = json.loads(self.REG)
+        shot = {"name": "LN10", "scene": "侯府正堂花厅", "shot_type": "近景",
+                "visual": "@裴惊寒 松开长戟，退半步"}
+        hits, unresolved = assets.hits_for_shot(reg, shot)
+        self.assertIn("玄铁断戟", [h.get("name") for h in hits], "补绑照常生效")
+        self.assertEqual(unresolved or [], [],
+                         "unresolved 只装真正的坏 @，补绑不是事故")
+
+    def test_full_name_in_parentheses_without_at_still_binds(self):
+        """★ 真实形态：全名写在**括号描述里、不加 `@`** ⇒ 照样要绑。
+
+        这条是被实测逼出来的：我一度给补绑加了「全名没出现在正文才算」的条件
+        （为了保住 `tests_flow` 那条旧断言），结果 duanji-gui-0930 第 1 集
+        从 17/20 掉回 7/20 —— 因为分镜的真实写法就是
+        「主案侧戟头（玄铁断戟、褪色旧红绳垂地）」「腰间细红绳挂半枚碎玉」，
+        全名在括号里、没有 `@`。**那个条件把整条修复废掉了。**
+        """
+        reg = json.loads(self.REG)
+        shot = {"name": "LN11", "scene": "侯府正堂花厅", "shot_type": "近景",
+                "visual": "@裴惊寒 侧身面向主案侧戟头（玄铁断戟、褪色旧红绳垂地）"}
+        names = [h.get("name") for h in assets.hits_for_shot(reg, shot)[0]]
+        self.assertIn("玄铁断戟", names,
+                      "全名在括号里、没加 @ —— 这正是要救的形态，不能漏")
+
+    def test_old_behaviour_would_still_be_caught(self):
+        """把旧病装回去，证明上面几条**会红** —— 否则断言是空的。"""
+        reg = json.loads(self.REG)
+        shot = {"name": "LN08", "scene": "侯府正堂花厅", "shot_type": "近景",
+                "visual": "@裴惊寒（玄色交领窄袖劲装）双手横握断戟自上砸下"}
+        # 旧行为复刻：@ 命中非空 ⇒ 完全不看 keywords
+        matched, _ = assets.resolve_mentions(shot["visual"], reg)
+        by_name = {str(a.get("name") or ""): a for a in reg["assets"]}
+        old = [by_name[n] for n in matched if n in by_name]
+        self.assertTrue(old, "前提：旧逻辑下 @ 已命中，兜底不会执行")
+        self.assertNotIn("玄铁断戟", [h.get("name") for h in old],
+                         "旧逻辑必须绑不到道具 —— 这条断言不成立就说明测试是空的")
+
+
+
+
 if __name__ == "__main__":
     unittest.main()

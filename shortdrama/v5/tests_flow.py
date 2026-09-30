@@ -1601,16 +1601,16 @@ class TestModelUpgradeAndQcTemperature(unittest.TestCase):
         self.assertIn("2.5", config.MODELS["video"])
 
     def test_chat_for_passes_temperature_through(self):
-        """温度要能透传：创作角色 0.1，评判类 0。"""
-        from unittest import mock
+        """温度要能透传：创作角色 0.1，评判类 0。
 
+        断言打在**返回的对象**上，不是 spy 构造函数：文本通道现在会在多条 key 时
+        返回 `RotatingChatOpenAI`（子类），spy `llm.ChatOpenAI` 会漏掉那条分支
+        —— 而"透传"这件事本来就该看最终对象上的值。
+        """
         from v5 import llm
 
-        with mock.patch.object(llm, "ChatOpenAI") as m:
-            llm.chat_for("agnes", 512, temperature=0)
-            self.assertEqual(m.call_args.kwargs["temperature"], 0)
-            llm.chat_for("agnes", 512)
-            self.assertEqual(m.call_args.kwargs["temperature"], 0.1)
+        self.assertEqual(llm.chat_for("agnes", 512, temperature=0).temperature, 0)
+        self.assertEqual(llm.chat_for("agnes", 512).temperature, 0.1)
 
     def test_qc_calls_use_temperature_zero(self):
         """QC 两个入口都必须传 temperature=0。
@@ -2867,13 +2867,25 @@ class TestAssetMentionAndIntegrity(unittest.TestCase):
         self.assertEqual(leftover, [])
 
     def test_exact_mention_preferred_over_keywords(self):
-        """@了具体资产 → 精确命中它，不靠 keywords 子串猜。"""
+        """@ 了具体资产 → 精确命中它；**但 prop 仍按 keywords 补绑**（2026-09-30 改）。
+
+        本测试原先断言 `hits == ["老魏"]`，即"@ 命中就不再靠子串猜"。
+        **那条策略被实测证伪了**：duanji-gui-0930 两集 60 镜里 38 镜提到道具、
+        绑到道具图的镜数 = 0、全程日志全绿 —— 因为分镜必然 @ 角色，而旧逻辑是
+        "@ 只要命中就整个跳过 keywords 兜底"，兜底这条路**从来没有执行过**。
+        而本测试自己的样本就是同一形态：「出租车里，@老魏握方向盘」——
+        出租车确实在画面中、老魏握着它的方向盘，不绑它不是"精确"，是**漏绑**。
+        ⇒ 角色与场景仍只认 @（它们各自有泛词误命中的事故记录，见 `hits_for_shot`），
+          道具改成无条件补绑。
+        """
         from v5.media import assets
 
         shot = {"visual": "出租车里，@老魏握方向盘", "dialogue": ""}
         hits, unresolved = assets.hits_for_shot(self._reg(), shot)
-        self.assertEqual([h["name"] for h in hits], ["老魏"])
-        self.assertEqual(unresolved, [])
+        self.assertEqual([h["name"] for h in hits], ["老魏", "出租车"],
+                         "角色仍由 @ 精确命中；道具按 keywords 补绑")
+        self.assertEqual(unresolved, [],
+                         "补绑不是「@ 引用失败」，不许混进 unresolved")
 
     def test_unresolved_mention_is_reported_not_silent(self):
         """@ 了注册表里没有的名字 → 如实返回 unresolved（**不许静默**）。
