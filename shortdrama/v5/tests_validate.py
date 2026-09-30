@@ -720,5 +720,35 @@ def eval_safe(text: str) -> dict:
     return json_loads(text)
 
 
+class TextTrapNegationTests(unittest.TestCase):
+    """「画内文字」判据必须放过**否定式**写法。
+
+    实错（2026-09-30 xianxia-60s5-0930）：LN04 写「剑首悬一枚小铜铃、表面无刻字」，
+    裸子串匹配 `刻字` 命中 ⇒ 分镜契约门判"该镜依赖画内文字"、整条媒体链被停。
+    明确写"没有字"被当成"要写字" —— 方向正好相反，而且是**致命拦停**不是警告。
+    """
+
+    def test_negated_mention_is_not_a_trap(self):
+        for s in ("表面无刻字", "碑身不见碑文", "剑格不带刻着铭文", "铜铃上没有写着字",
+                  "石面未刻字，只有风化凹坑"):
+            self.assertFalse(validate.hits_text_trap(s), "否定式被误判：%s" % s)
+
+    def test_real_text_dependency_still_fires(self):
+        """反向对照：真的要求渲染文字时必须仍然拦得住（否则这条门等于废掉）。"""
+        for s in ("碑文清晰可辨", "剑身刻着一行古字", "门匾写着青云二字", "纸上文字可见"):
+            self.assertTrue(validate.hits_text_trap(s), "漏判：%s" % s)
+
+    def test_mixed_shot_takes_the_positive_hit(self):
+        """同一镜里既有否定又有肯定 ⇒ 按肯定算（宁可多拦一次真的）。"""
+        self.assertTrue(validate.hits_text_trap("剑柄无刻字，但碑面刻着立碑年月"))
+
+    def test_real_LN04_cell_from_the_blocked_run(self):
+        """把当时被拦的那格原文装回来，证明这个病样本现在过得去。"""
+        cell = ("0-5秒：镜头自祭坛高空垂直俯瞰急拉远横摇至铁索悬桥、@柳无咎（灰白交领道袍、"
+                "腰束素练、深灰长发松束低髻、右手单持一柄青锋长剑（剑身泛水碧光泽、"
+                "剑首悬一枚小铜铃、表面无刻字））自桥远端旧索上蹬足踏索三步")
+        self.assertFalse(validate.hits_text_trap(cell), "LN04 仍被误判 ⇒ 媒体链还会被停")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -261,5 +261,26 @@ class TestVerifyWiring(unittest.TestCase):
             self.assertEqual(r["residual"], [], r)
 
 
+    def test_render_style_words_are_not_checked(self):
+        """★ 首跑真链路（2026-09-30 xianxia-60s5-0930）报出的 4 条假矛盾。
+
+        「瓷感次表面散射肤质」「成片发丝高光」「扁平剑罡」说的是**成片怎么渲染**、
+        **出招时发生什么** —— 白底设定表结构性地不可能画出来，要求它有 = 必判矛盾 +
+        白烧一次重画。而同一张卡上的真身份项（旧疤、发髻）必须**留下**，
+        否则这条判据就被自己削平了。
+        """
+        card = ("@柳无咎（灰白交领道袍、深灰长发松束低髻、"
+                "瓷感次表面散射肤质、成片发丝高光、挥出时拖一片扁平剑罡）")
+        items = sc.items_of(card)
+        self.assertEqual(items, ["灰白交领道袍", "深灰长发松束低髻"], items)
+
+    def test_real_identity_items_survive_the_widened_skip_list(self):
+        """反向对照：扩表之后，真该拦的两项仍在表内（不然这轮 ep2 的旧疤就漏了）。"""
+        card = "@姜屹（左肩一道浅旧疤、眉骨一抹干涸血痕、瓷感肤质）"
+        items = sc.items_of(card)
+        self.assertEqual(len(items), 2, items)
+        self.assertTrue(any("旧疤" in i for i in items), items)
+
+
 if __name__ == "__main__":
     unittest.main()

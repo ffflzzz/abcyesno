@@ -476,6 +476,27 @@ _REQUIRED_COLS = [("画面", "画面描述"), ("对白", "对白"), ("景别", "
 #   与「场景固有文字可保留」的新政策直接矛盾。
 _TEXT_TRAPS = ("刻字", "碑文", "写着", "文字清晰", "文字可见", "刻着")
 
+#: **否定式**写法不算"要求渲染画内文字"。前看 4 个字里出现这些词 ⇒ 这一处不计。
+#: 实错（2026-09-30 xianxia-60s5-0930）：LN04 的画面描述写「剑首悬一枚小铜铃、
+#: 表面无刻字」，裸子串匹配 `刻字` 命中 ⇒ 分镜契约门判"依赖画内文字"、整条媒体链被停。
+#: 明确写"没有字"被当成"要写字"，方向正好相反。
+_TEXT_NEG = ("无", "没有", "不带", "不含", "未", "不得有", "禁止", "不见", "去掉")
+
+
+def hits_text_trap(text: str) -> bool:
+    """画面描述是否**真的**要求渲染文字（"无刻字""不出现碑文"这类否定不算）。"""
+    t = text or ""
+    for k in _TEXT_TRAPS:
+        start = 0
+        while True:
+            i = t.find(k, start)
+            if i < 0:
+                break
+            if not any(neg in t[max(0, i - 4):i] for neg in _TEXT_NEG):
+                return True
+            start = i + len(k)
+    return False
+
 
 # 忠实度比对前要丢掉的**虚词/功能字**。它们不承载"拍的是什么"，却会挤进二元组分母，
 # 把真实内容信号稀释掉（见 `_content_bigrams` 的实测说明）。
@@ -749,7 +770,7 @@ def check_storyboard(md: str, brief: dict | None = None,
                 durations.append(sec)
         if vis_idx is not None and vis_idx < len(cells):
             vv = cells[vis_idx]
-            if any(k in vv for k in _TEXT_TRAPS):
+            if hits_text_trap(vv):
                 text_dep.append(shot_id)
             if style_keywords and not any(k in vv for k in style_keywords):
                 style_drift.append(shot_id)
