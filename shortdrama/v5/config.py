@@ -186,16 +186,28 @@ def image_pool_keys() -> list[str]:
     return [AGNES_API_KEY] if AGNES_API_KEY else []
 
 
-IMAGE_WORKERS_CAP = 4      # 自动档的封顶（再多也是自我限速，不是提速）
+#: 生图并发度的**缺省值**（自动档取它，也是"一波画完"所需的量级）。
+#: 一轮静帧 QC 判出的硬伤实测 6-10 镜，8 路 = 一波画完；首轮 30 镜 = 4 波。
+#: 真正的上界是调用处的 `min(image_workers(), 待画镜数)`，设得比批数大是空转。
+IMAGE_WORKERS_CAP = 8
 
 
 def image_workers() -> int:
     """并发生图的线程数（静帧 / 定妆照的四视图 / 落幅帧共用这一个口径）。
 
     `SHORTDRAMA_IMAGE_WORKERS`：
-      · **0（缺省）= 自动** = 带图片 rpm 的 key 数，封顶 `IMAGE_WORKERS_CAP`、保底 1；
+      · **0（缺省）= 自动** = `IMAGE_WORKERS_CAP`；
       · **1 = 串行**，等价于改造前逐张发的行为（回退开关）；
-      · >1 = 显式指定（超过可用 key 数会被压回 key 数，避免同一条 key 自我限速）。
+      · >1 = 显式指定，**原样采纳**（不再压回 key 数，见下）。
+
+    ★ **为什么不再按 key 数封顶**（2026-09-30 改）：旧判据 `min(want, key 数)` 的
+    直觉是从**视频**通道搬来的（那边实测 1rpm、同 key 60 秒内二次提交必 429，
+    一条 key 确实只能挂一张）。但图片通道标称 **2K 档 80rpm** —— 供应商明确允许
+    一条 key 每秒发 1.33 次提交，"多张在途"本来就是它的额定工况。旧判据的实际效果
+    是把 3 条 key 钉死在并发 3，而 80rpm 的天花板远没碰到。
+    **低 rpm 的 key 由闸门保护，不由线程数保护**：`keypool.KeyPool.image_pool()`
+    按 `60/图片rpm` 逐 key 计时（1rpm 的 4K 档 → 60 秒闸门），线程再多也会在
+    `claim()` 上排队，撞不出 429 风暴。
 
     为什么该并发：每张静帧是 66–107 秒的**纯等待**（IO 密集，GIL 不影响），
     17–18 镜串行下来就是 20 分钟。而**生图之间没有相互依赖**——跨镜传的是文字
@@ -209,10 +221,9 @@ def image_workers() -> int:
         want = 0
     if want == 1:
         return 1
-    avail = max(1, len(image_pool_keys()))
     if want > 1:
-        return min(want, avail)
-    return max(1, min(avail, IMAGE_WORKERS_CAP))
+        return want
+    return IMAGE_WORKERS_CAP
 
 # 单条 key 的提交最小间隔（秒）——**多 key 并行时的闸门单位**。
 #

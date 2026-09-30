@@ -1107,6 +1107,7 @@ def _run_impl(project_root: Path, ep: int = 1, log=print, max_regen: int = 2,
         log("[media] 静帧硬伤 %d 镜 → 重生成: %s" % (len(bad), [b[0] for b in bad]))
         names = [b[0] for b in bad]
         sub = [s for s in shots if s["name"] in names]
+        batch: list = []            # 攒齐这一批，循环外**一次**交给 stills.ensure
         # 重生成时身份锁定：有参考图就带参考图；反质量风格（still-refs=false）
         # 无参考图，身份由 _identity_line 文字锚点承担（分镜字段已在 sub 里）。
         sub_refs = {n: refs_by_shot[n] for n in names if refs_by_shot.get(n)}
@@ -1138,11 +1139,17 @@ def _run_impl(project_root: Path, ep: int = 1, log=print, max_regen: int = 2,
                 # 并如实记下未分类硬伤，便于后续补类别。
                 log("[media] %s 硬伤未归类，按原提示词重生成：%s"
                     % (s["name"], desc[:80]))
-            st = stills.ensure(project_root, [s], refs_by_shot=sub_refs, ep=ep,
-                               force=True, extra=extra,
-                               planned=[p for p in planned if p.get("name") == s["name"]],
-                               log=log, ref_names_by_shot=ref_names,
-                               ref_types_by_shot=ref_types)
+            batch.append({**s, "_qc_extra": extra})
+        # ★ **一次调用画完整批**（2026-09-30）。旧写法在上面的循环里逐镜调 `ensure([s])`，
+        #   于是生图并发度 `min(image_workers(), 待画镜数)` 恒等于 **1** —— 挡住它的
+        #   不是镜间依赖（没有），而是每镜的定向补充语不同、而批量入口只有一个全局
+        #   `extra`。补充语改走 `_qc_extra`（逐镜）后，整批交给一次调用即可并发。
+        #   ⛔ 别改成"给逐镜循环套线程池"：`ensure` 每次调用都「读全量清单→改→写全量」，
+        #   并发调它会让后一次写覆盖前一次（丢 url 记录而图还在盘上 = 典型假成功）。
+        st = stills.ensure(project_root, batch, refs_by_shot=sub_refs, ep=ep,
+                           force=True, planned=planned, log=log,
+                           ref_names_by_shot=ref_names,
+                           ref_types_by_shot=ref_types)
         # 记满这一轮的重画次数（跨进程持久化——上限依据，见上方 still_tally 注释）
         for b in bad:
             still_tally[b[0]] = still_tally.get(b[0], 0) + 1

@@ -75,13 +75,21 @@ class TestImagePool(unittest.TestCase):
             self.assertEqual(len(p), 1)
             self.assertEqual(p.keys, ["only"])
 
-    def test_workers_default_follows_pool_and_caps(self):
+    def test_workers_default_is_cap_regardless_of_key_count(self):
+        """**2026-09-30 改的契约**：自动档恒为 `IMAGE_WORKERS_CAP`，不再等于 key 数。
+
+        旧判据（自动档 = key 数、封顶 4）的直觉是从**视频**通道搬的（1rpm、同 key
+        60 秒内二次提交必 429）。图片通道标称 2K 档 80rpm，"同一条 key 多张在途"
+        就是它的额定工况 —— 按 key 数封顶等于把 80rpm 的通道钉在并发 3。
+        """
         from v5 import config
-        for n, want in ((1, 1), (3, 3), (9, config.IMAGE_WORKERS_CAP)):
+        for n in (1, 3, 9):
             with mock.patch.object(config, "image_pool_keys",
                                    return_value=["k%d" % i for i in range(n)]), \
                     mock.patch.dict("os.environ", {}, clear=True):
-                self.assertEqual(config.image_workers(), want, "%d 条 key" % n)
+                self.assertEqual(config.image_workers(), config.IMAGE_WORKERS_CAP,
+                                 "%d 条 key 时自动档该是 %d（不看 key 数）"
+                                 % (n, config.IMAGE_WORKERS_CAP))
 
     def test_workers_one_means_serial(self):
         """`SHORTDRAMA_IMAGE_WORKERS=1` 是回退开关：整条路退回逐张发。"""
@@ -90,12 +98,27 @@ class TestImagePool(unittest.TestCase):
                 mock.patch.dict("os.environ", {"SHORTDRAMA_IMAGE_WORKERS": "1"}):
             self.assertEqual(config.image_workers(), 1)
 
-    def test_workers_never_exceed_available_keys(self):
-        """显式写 8 但只有 2 条 key ⇒ 压回 2（同一条 key 自我限速不是提速）。"""
+    def test_explicit_value_is_not_clamped_to_key_count(self):
+        """显式写 12、只有 2 条 key ⇒ **采纳 12**（旧行为是压回 2）。
+
+        保护低 rpm key 的是**闸门**不是线程数，见下一条。
+        """
         from v5 import config
         with mock.patch.object(config, "image_pool_keys", return_value=["a", "b"]), \
-                mock.patch.dict("os.environ", {"SHORTDRAMA_IMAGE_WORKERS": "8"}):
-            self.assertEqual(config.image_workers(), 2)
+                mock.patch.dict("os.environ", {"SHORTDRAMA_IMAGE_WORKERS": "12"}):
+            self.assertEqual(config.image_workers(), 12)
+
+    def test_low_rpm_key_is_protected_by_its_gate_not_by_thread_count(self):
+        """★ 上一条为什么安全：1rpm 的 key（4K 档）闸门 = 60 秒，线程再多也在
+        `claim()` 上排队，撞不出 429 风暴。这条把"保护在闸门"这件事钉住——
+        否则放开线程数上限就等于放开限速。
+        """
+        from v5 import config
+        from v5.media import keypool
+        with mock.patch.object(config, "image_pool_keys", return_value=["slow"]), \
+                mock.patch.object(config, "AGNES_KEY_IMAGE_RPM", {"slow": 1}):
+            p = keypool.KeyPool.image_pool()
+            self.assertEqual([round(x) for x in p._intervals], [60.0])
 
 
 class TestStillsParallelAndSerialAgree(unittest.TestCase):
@@ -169,6 +192,69 @@ class TestStillsParallelAndSerialAgree(unittest.TestCase):
             out = self._run(3, shots, flaky, Path(d))
         self.assertEqual(len(out), 4, "首次 429 之后必须重试成功，不能丢镜")
         self.assertEqual(state["n"], 5, "4 镜 + 1 次 429 重试 = 5 次调用，多一次就是重复烧图")
+
+    def test_workers_above_key_count_draws_every_shot(self):
+        """★ 并发度 > key 数（1 条 key 发 8 张）必须**一张不丢、一张不重**。
+
+        这是放开 `image_workers()` 后新增的工况：旧代码不可能出现（线程数被压在
+        key 数以下）。8 张都挤在一条 key 上排队提交，若 `claim()` 的记账或清单
+        合并有并发缺陷，最先丢的就是这种配置。
+        """
+        from v5 import config
+        from v5.media import providers, stills
+        fake = _FakeImage()
+        with TemporaryDirectory() as d:
+            with mock.patch.object(providers, "gen_image", fake), \
+                    mock.patch.object(stills, "_download",
+                                      lambda url, p: Path(p).write_bytes(b"JPG")), \
+                    mock.patch.object(config, "image_pool_keys", return_value=["only"]), \
+                    mock.patch.object(config, "AGNES_KEY_IMAGE_RPM", {"only": 6000}), \
+                    mock.patch.object(config, "image_workers", return_value=8):
+                out = stills.ensure(Path(d), [_shot(i) for i in range(1, 9)],
+                                    log=lambda *_: None)
+        self.assertEqual(len(out), 8, "8 镜必须产出 8 条")
+        self.assertEqual(len(fake.calls), 8, "调用次数 = 镜数（多一次就是重复烧图）")
+        self.assertEqual({k for _fp, k in fake.calls}, {"only"})
+
+    def test_per_shot_qc_extra_lands_only_on_its_own_prompt(self):
+        """★ `_qc_extra` 逐镜生效：**A 镜的定向补充语不得混进 B 镜**。
+
+        为什么单独锁这条：QC 重画一批多镜时，每镜的硬伤类别不同（缺字 / 分屏 /
+        未归类），补充语靠镜对象自带的 `_qc_extra` 传。批量入口只有一个全局
+        `extra`——若有人图省事把整批用同一份 `extra`，缺字镜会被追加反分屏句、
+        而未归类镜会被别人的句子污染，且**日志全绿**。
+        """
+        from v5 import config
+        from v5.media import providers, stills
+        prompts: dict = {}
+
+        def rec(prompt, refs=None, ratio=None, timeout=120, key=None):
+            fp = hashlib.md5(prompt.encode("utf-8")).hexdigest()[:8]
+            for i in (1, 2, 3):
+                if prompt.endswith("补充语LN%02d" % i):
+                    prompts["LN%02d" % i] = prompt
+            return "f.jpg", "https://cdn/" + fp
+
+        shots = []
+        for i in (1, 2, 3):
+            s = _shot(i)
+            s["_qc_extra"] = "补充语LN%02d" % i
+            shots.append(s)
+        with TemporaryDirectory() as d:
+            with mock.patch.object(providers, "gen_image", rec), \
+                    mock.patch.object(stills, "_download",
+                                      lambda url, p: Path(p).write_bytes(b"JPG")), \
+                    mock.patch.object(config, "image_pool_keys", return_value=["k1"]), \
+                    mock.patch.object(config, "AGNES_KEY_IMAGE_RPM", {"k1": 6000}), \
+                    mock.patch.object(config, "image_workers", return_value=3):
+                out = stills.ensure(Path(d), shots, log=lambda *_: None)
+        self.assertEqual(len(out), 3, "3 镜必须真产出 3 条（0 条会让断言全绿）")
+        self.assertEqual(sorted(prompts), ["LN01", "LN02", "LN03"], "三镜各自的补充语没被记录")
+        for name, p in prompts.items():
+            for other in ("LN01", "LN02", "LN03"):
+                if other != name:
+                    self.assertNotIn("补充语%s" % other, p,
+                                     "%s 的提示词串进了 %s 的补充语" % (name, other))
 
 
 if __name__ == "__main__":

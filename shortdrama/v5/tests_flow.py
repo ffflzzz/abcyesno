@@ -1580,6 +1580,91 @@ class TestStillQcNarrowReview(unittest.TestCase):
                                     "类别变化（text→drift）时必须继续重画")
 
 
+class TestStillQcRegenBatch(unittest.TestCase):
+    """★ QC 重画必须**一次调用画完整批**（2026-09-30）。
+
+    病（旧代码，装回来这条就红）：重画在逐镜循环里调 `stills.ensure([s])`，一次只
+    喂一个镜 ⇒ 生图并发度 `min(image_workers(), 待画镜数)` **恒等于 1**，一轮 8 镜
+    白等 2.5 分钟。挡住它的不是镜间依赖（没有），而是每镜的定向补充语不同、
+    而批量入口只有一个全局 `extra` 参数 —— 所以逐镜补充语改走 `_qc_extra`。
+
+    这里锁两件事：① 整批一次调用（旧写法必然 3 次）；② 每镜带上**自己**的补充语，
+    未归类的镜补充语为空 —— 这条是①得以并发的前提，不能靠"大家都用同一份 extra"糊过去。
+    """
+
+    DEFECTS = {"LN01": "画面出现可读字符",       # text
+               "LN02": "画面上下两格拼接",        # split
+               "LN03": "缺少关键道具：站牌未出现"}  # unclassified
+
+    def _run(self, max_regen: int = 1):
+        import contextlib
+        from unittest import mock
+
+        from v5.media import pipeline, scaffold, storyboard
+
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "scenedesigner").mkdir(parents=True)
+            (root / "scenedesigner" / "scenedesigner.md").write_text(
+                scaffold.build("t", [{"name": "店-夜",
+                                      "shots": [{"seconds": 5}] * 3}]),
+                encoding="utf-8")
+            shots = storyboard.parse(
+                (root / "scenedesigner" / "scenedesigner.md").read_text(encoding="utf-8"))
+            names = [s["name"] for s in shots]
+            _seed_passing_manifest(root)
+            pool = {n: {"name": n, "path": "/x/%s.jpg" % n, "url": "u"} for n in names}
+            (root / "media" / "ep1").mkdir(parents=True, exist_ok=True)
+
+            def fake_review(path, shot=None, style_spec="", style_watch_spec="", **kw):
+                who = str(path).rsplit("/", 1)[-1].replace(".jpg", "")
+                desc = self.DEFECTS.get(who)
+                return {"issues": [{"level": "P0", "desc": desc}]} if desc else {"issues": []}
+
+            patches = [
+                mock.patch.object(pipeline.cast, "ensure", lambda *a_, **k_: {}),
+                mock.patch.object(pipeline.style, "load", lambda *a_, **k_: ""),
+                mock.patch.object(pipeline.style, "wrap", lambda *a_, **k_: ""),
+                mock.patch.object(pipeline.style, "still_refs_enabled", lambda *a_, **k_: False),
+                mock.patch.object(pipeline.assets, "bind", lambda *a_, **k_: {}),
+                mock.patch.object(pipeline.assets, "identity_lines", lambda *a_, **k_: {}),
+                mock.patch.object(pipeline.stills, "ensure",
+                                  mock.MagicMock(return_value=pool)),
+                mock.patch.object(pipeline.stills, "load", lambda *a_, **k_: {}),
+                mock.patch.object(pipeline.stills, "stills_dir", lambda *a_, **k_: root),
+                mock.patch.object(pipeline.qc, "review", side_effect=fake_review),
+                mock.patch.object(pipeline.qc, "review_shot_type",
+                                  lambda *a_, **k_: {"ok": True}),
+            ]
+            with contextlib.ExitStack() as st:
+                ms = [st.enter_context(p) for p in patches]
+                with contextlib.redirect_stdout(io.StringIO()):
+                    pipeline.run(root, ep=1, max_regen=max_regen, stills_only=True)
+            return ms[6]
+
+    def test_whole_batch_regenerated_in_one_call(self):
+        """3 镜全被判硬伤 ⇒ **一次** `force=True` 调用、里面装着 3 个镜。"""
+        ensure = self._run()
+        regen = [c for c in ensure.call_args_list if c.kwargs.get("force")]
+        self.assertEqual(len(regen), 1,
+                         "重画该整批一次调用；%d 次 = 退回逐镜画（并发恒为 1）" % len(regen))
+        self.assertEqual(len(regen[0].args[1]), 3, "这一次调用必须装着 3 个镜")
+
+    def test_each_shot_carries_its_own_directive(self):
+        """每镜的补充语按**自己的**硬伤类别算：text≠split≠未归类(空)。"""
+        ensure = self._run()
+        regen = [c for c in ensure.call_args_list if c.kwargs.get("force")]
+        batch = {s["name"]: s for s in regen[0].args[1]}
+        self.assertEqual(sorted(batch), ["LN01", "LN02", "LN03"])
+        self.assertFalse(batch["LN03"]["_qc_extra"],
+                         "未归类的镜不该借别人的补充语（它是换种子重画，得如实为空）")
+        self.assertNotEqual(batch["LN01"]["_qc_extra"], batch["LN02"]["_qc_extra"],
+                            "两类硬伤的定向约束相同 = 类别没起作用")
+        # 全局 `extra` 不再被逐镜循环借用（否则整批共用第一镜的句子）
+        self.assertNotIn("extra", regen[0].kwargs,
+                         "补充语必须逐镜走 `_qc_extra`，不是整批一份 `extra`")
+
+
 class TestModelUpgradeAndQcTemperature(unittest.TestCase):
     """主模型升级 agnes-3.0-flash + 评判类温度归零（2026-09-10）。
 
@@ -3994,6 +4079,43 @@ class TestPackMode(unittest.TestCase):
                 self.assertEqual(compose.concat(clip_dir, clip_dir / "out.mp4"), 2,
                                  "pack 模式的 clips/ 必须能被 concat 识别并拼接")
             self.assertTrue((clip_dir / "out.mp4").exists())
+
+
+    def test_rate_limit_rotates_keys_within_the_same_group(self):
+        """★ 撞 429 要在**同一组内换 key 重试**，不是一撞就放弃（2026-09-30 实测）。
+
+        事故：duanji-gui-0930 ep2 的 pack10 是最后一组，旧行为是
+        「拉黑当前 key + break」—— 拉黑的意义是让**下一组**换 key，可它后面没有组了。
+        连续三次实测读数完全一样：`k1=1/429x1  k2=0  k3=0`
+        ⇒ 三条通道里两条从没被试过，而新进程的轮转又固定从 k1 开始，
+        所以"再跑一次"必然再撞同一个 429（这把"重跑就好"这个假设证伪了）。
+        """
+        from v5.media import video as V
+
+        # 3 条通道：第 1、2 次撞 429 后应换 key 再试，第 3 次（一圈试完）才放弃
+        self.assertEqual([V.rate_limit_should_retry(q, 3) for q in range(3)],
+                         [True, True, False])
+        # 2 条通道
+        self.assertEqual([V.rate_limit_should_retry(q, 2) for q in range(2)],
+                         [True, False])
+        # 单 key 池 ⇒ 立刻放弃 = **与改造前逐字等价**（不多等一轮）
+        self.assertEqual(V.rate_limit_should_retry(0, 1), False)
+        # 池为空（len(pool)=0）⇒ 按 1 条通道算 ⇒ **立刻放弃**，
+        # 不能因为"还有没试过的"这种话去空转重试
+        self.assertEqual([V.rate_limit_should_retry(q, 0) for q in range(2)],
+                         [False, False])
+
+    def test_rate_limit_giveup_still_frees_the_batch(self):
+        """一圈 key 试完仍要"跳过本组、其余组继续" —— 不许退回旧的"中断整批"。
+
+        2026-09-16 那次修的就是"429 一 break 把后面所有镜全挡掉"（LN11 之后的镜
+        连提交机会都没有）。这次换 key 重试不能把那条保险又拆回去。
+        """
+        from v5.media import video as V
+
+        # 3 通道一圈之后（q_try=2,3,4…）必须持续返回 False ⇒ 循环会 break 而非死转
+        self.assertEqual([V.rate_limit_should_retry(q, 3) for q in range(2, 8)],
+                         [False] * 6)
 
 
 if __name__ == "__main__":

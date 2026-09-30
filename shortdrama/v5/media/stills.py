@@ -203,6 +203,8 @@ def ensure(project_root: Path, shots: list[dict], refs_by_shot: dict[str, list[s
     retries: 生图是概率性长任务（实测偶发 read timeout）——单次失败不能让
     该镜永久无首帧（否则视频阶段整镜被跳过）。失败重试，仍失败才放弃。
     extra: 追加到 prompt 的强化约束（如硬伤重生成时的强化反烧字指令）。
+        **整批共用**；逐镜不同的那份走 shot 字典里的 `_qc_extra`
+        （QC 重画用它，才能把多个硬伤镜交给同一次调用并发画）。
     planned: 镜间关系计划（用于组装提示词；缺省则按 cut 处理）。
     提示词由 prompt.build_still_prompt 组装（镜头语言+风格+内容+落幅+反烧字），
     而不是直接丢 visual 原文——旧实现浪费了景别/角度/运镜等已解析字段。
@@ -277,7 +279,11 @@ def _generate(project_root, todo, sd, data, plan_by_name, refs_by_shot,
             prompt_mod.build_still_prompt(s, plan_by_name.get(name)), refs,
             (ref_names_by_shot or {}).get(name),
             (ref_types_by_shot or {}).get(name))
-        prompt = base + (extra or "")
+        # `_qc_extra` = **本镜自己的**定向强化约束（硬伤按类别不同）。
+        # ★ 为什么必须有它：批量的 `extra` 参数只有一个全局值，而 QC 重画时
+        # 「缺字」「多脸」「景别跑偏」要追加不同的句子。缺这条通道 ⇒ 调用方只能
+        # 一次喂一个镜（实测让并发恒为 1，一整轮重画白等 2.5 分钟）。
+        prompt = base + (extra or "") + str(s.get("_qc_extra") or "")
         url = ""
         for attempt in range(retries + 1):
             idx, key = pool.claim()
