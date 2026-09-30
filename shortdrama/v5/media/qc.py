@@ -344,6 +344,14 @@ def review_shot_type(still_path: str, shot: dict, *, provider: str = "") -> dict
     ang = str(shot.get("angle") or "").strip()
     if not st and not ang:
         return {"ok": True, "actual": "", "reason": "分镜未写景别"}
+    # ★ **空镜 / 无人像镜不判景别**（2026-09-30 实测，代价是第 2 集首镜废掉）。
+    #   档位定义通篇以人物为尺（"中景：人物腰部以上"），拿它判一个巷口空镜，模型
+    #   只能答"实际远景 ≠ 要求中景 → 跨档不合格"；重画于是被追加"人物腰部以上入画"，
+    #   与同句的"空镜：环境静物"打架，模型选择**塞一位老太太进空镜**。
+    from . import prompt as _prompt      # 延迟导入：两侧都有依赖，避免模块环
+    if _prompt.shot_has_no_person(shot):
+        return {"ok": True, "actual": "",
+                "reason": "空镜/无人像镜：景别档位以人物为尺，不判（判了会逼重画塞人）"}
     msg = HumanMessage(content=[
         {"type": "text", "text": SHOT_TYPE_PROMPT.format(shot_type=st or "未写",
                                                          angle=ang or "未写")},

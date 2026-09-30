@@ -221,5 +221,153 @@ class CastWiringTests(unittest.TestCase):
         self.assertEqual(seen, ["阿旺"])
 
 
+class SameNameAgeCardTests(unittest.TestCase):
+    """同名多张年龄卡必须拆成各自独立的表（2026-09-30 实测的新缺陷）。
+
+    上游 `xiaoman-workshop-1030` 写了「8 岁」和「13 岁」两张小满卡，而 `_register`
+    按 name upsert、图片也叫 `<name>.png` ⇒ 后一张覆盖前一张，全剧只剩一张不知道
+    几岁的脸。
+    """
+
+    def test_second_card_becomes_its_own_variant(self):
+        from v5.media import cast
+
+        out = cast.split_same_name_cards(
+            [{"name": "小满", "heading": "# 角色卡：小满（8 岁，第 1 集）",
+              "appearance": "圆脸带婴儿肥，脸颊饱满圆润"},
+             {"name": "小满", "heading": "# 角色卡：小满（13 岁，第 2 集）",
+              "appearance": "明显抽条，比 8 岁时下颌线更清晰"}],
+            log=lambda *_: None)
+        self.assertEqual([c["name"] for c in out], ["小满", "小满（13岁版）"],
+                         "年龄要取标题自述 —— 13 岁卡通篇在跟 8 岁比，取第一个会取成 8 岁")
+        v = out[1]
+        self.assertEqual((v["alias_of"], v["age_tag"], v["alias_names"]),
+                         ("小满", "13岁", ["小满"]))
+        self.assertTrue(v["derived"], "拆出来的表不该占基础角色的生图预算")
+
+    def test_age_falls_back_to_largest_in_text(self):
+        """标题没写年龄时取正文里**最大**的（比较句里的参照年龄总是较小的那个）。"""
+        from v5.media import variants
+
+        self.assertEqual(variants.card_age_tag(
+            {"heading": "# 角色卡：小满", "appearance": "比 8 岁时抽条，13 岁，下颌线清晰"}),
+            "13岁")
+
+    def test_second_card_without_age_is_loud_not_guessed(self):
+        """没写绝对年龄就**不猜** —— 猜出来的年龄会静默锁错脸。"""
+        from v5.media import cast
+
+        lines = []
+        out = cast.split_same_name_cards(
+            [{"name": "小满", "heading": "# 角色卡：小满（童年）", "appearance": "圆脸带婴儿肥"},
+             {"name": "小满", "heading": "# 角色卡：小满（少年）", "appearance": "抽条了，下颌线更清晰"}],
+            log=lambda m: lines.append(m))
+        self.assertEqual([c["name"] for c in out], ["小满", "小满"])
+        self.assertIn("没写绝对年龄", " ".join(lines))
+
+    def test_covered_ages_includes_base_card_own_age(self):
+        from v5.media import cast
+
+        cov = cast.covered_ages([
+            {"name": "小满", "heading": "# 角色卡：小满（8 岁，第 1 集）",
+             "appearance": "圆脸带婴儿肥"},
+            {"name": "小满（13岁版）", "alias_of": "小满", "age_tag": "13岁"}])
+        self.assertEqual(cov, {"小满": {"8岁", "13岁"}})
+
+    def test_plan_needs_its_own_sheet_not_a_mention_in_the_text(self):
+        """判据漏洞的反向对照：卡文本里**出现过**这个年龄 ≠ 这一集有自己的表。
+
+        旧判据拿"13 岁卡里提到了 8 岁"就当 8 岁那集已锚定 ⇒ 不出表，全剧共用一张。
+        """
+        shots = shots_of("@小满（8 岁，圆脸，红色雨衣）站在巷口看着修车铺",
+                         "@小满（8 岁）蹲下摸轮胎，视线落在水洼上")
+        # 真实情形：注册表里活下来的是 13 岁那张卡，它的文本顺带提到 8 岁（对照用）
+        need, rest = variants.plan(shots, {"小满": "13 岁，明显抽条，比 8 岁时下颌线更清晰"},
+                                   ("小满",), ())
+        self.assertEqual([r["why"] for r in need], ["age-variant"],
+                         "8 岁那集没有自己的表 ⇒ 必须派生，不能被卡里的「8 岁」字样骗过")
+        self.assertEqual(rest, [])
+        # 给了 covered（拆表之后 8 岁已有自己的表）⇒ 才允许判"已锚定"
+        need2, rest2 = variants.plan(shots, {"小满": "8 岁，圆脸"}, ("小满",), (),
+                                     covered={"小满": {"8岁"}})
+        self.assertEqual(need2, [])
+        self.assertEqual([r["why"] for r in rest2], ["already-anchored"])
+
+
+class EpisodeDefaultTests(unittest.TestCase):
+    """**整集**的默认年龄段：拆出表之后，还得让这一集真的去用那张表。
+
+    2026-09-30 实测 `xiaoman-workshop-1030` 第 2 集：分镜契约只在第一拍写全角色锚点，
+    后续拍一律 `@小满（蓝色工装马甲）`——**不带年龄**。实测本集 `@小满` 18 次、
+    **17 次不带年龄** ⇒ 只按本镜括注选表的话，这一集绝大多数镜仍绑回 8 岁孩童表，
+    画面上就是小学生，而旁白在念"十三岁"。
+    """
+
+    EP = ("@阿旺（14岁，明显抽条，蓝白校服外套）站在修理铺门口",
+          "@阿旺（蓝白校服外套）蹲下摸轮胎，视线落在水洼上",
+          "@阿旺（蓝白校服外套）抬头看向巷口")
+
+    def test_one_age_tag_in_the_episode_becomes_its_default(self):
+        shots = shots_of(*self.EP)
+        self.assertEqual(variants.default_ages(shots, ("阿旺",), (), {"阿旺"}),
+                         {"阿旺": "14岁"})
+
+    def test_ageless_mention_uses_the_episode_default(self):
+        """不带年龄的点名 ⇒ 绑本集那张表（这才是"这一集用上了新表"）。"""
+        s = shots_of("@阿旺（蓝白校服外套）蹲下摸轮胎")[0]
+        hits, _ = assets.hits_for_shot(VARIANT_REG, s,
+                                       defaults={"阿旺": "14岁"})
+        self.assertEqual([h.get("name") for h in hits], ["阿旺（14岁版）"])
+
+    def test_parenthetical_age_beats_the_default(self):
+        """闪回镜自己写了 10 岁 ⇒ 括注优先，不能被整集默认盖掉。"""
+        s = shots_of("@阿旺（10岁，圆脸，洗白蓝校服短袖）蹲在老樟树下想起从前")[0]
+        hits, _ = assets.hits_for_shot(VARIANT_REG, s, defaults={"阿旺": "14岁"})
+        self.assertEqual([h.get("name") for h in hits], ["阿旺"])
+
+    def test_two_age_tags_in_one_episode_are_not_guessed(self):
+        """本集同时出现两个年龄段 ⇒ 不设默认 + 响亮一行（猜了就会静默锁错脸）。"""
+        lines: list = []
+        got = variants.default_ages(shots_of(
+            "@阿旺（14岁，瘦高身形，蓝白校服外套）站在祠堂门口",
+            "@阿旺（10岁，圆脸，洗白蓝校服短袖）蹲在老樟树下",
+            "@阿旺（16岁，肩宽，深色夹克）从巷口走过来"),
+            ("阿旺",), (), {"阿旺"}, log=lines.append)
+        self.assertEqual(got, {})
+        self.assertIn("不设默认", " ".join(lines))
+
+    def test_defaults_come_from_the_registry_not_a_handmade_dict(self):
+        """生产路径：`assets.episode_defaults(注册表, 本集分镜)` 自己算得出默认年龄段。"""
+        self.assertEqual(assets.episode_defaults(VARIANT_REG, shots_of(*self.EP)),
+                         {"阿旺": "14岁"})
+
+    def test_registry_without_variant_entries_is_byte_untouched(self):
+        """没有变体条目的历史项目 ⇒ 传了默认年龄段也不许改绑定的任何东西。"""
+        s = shots_of("@阿旺（蓝色外套）蹲在台阶上，视线落在自己的鞋尖")[0]
+        hits, _ = assets.hits_for_shot(BASE_REG, s, defaults={"阿旺": "14岁"})
+        self.assertEqual([h.get("name") for h in hits], ["阿旺"])
+
+
+class MissingVariantSheetTests(unittest.TestCase):
+    """年龄表没出图 ⇒ 绑定会静默回落基础卡，这一行必须喊出来。"""
+
+    def test_missing_derived_sheet_is_loud(self):
+        from unittest import mock
+
+        d, root = CastWiringTests._root(None, [
+            "@阿旺（14岁，瘦高身形，蓝白校服外套）在下铺看手机",
+            "@阿旺（14岁，蓝白校服外套）抬头"])
+        lines: list = []
+        with d, mock.patch.object(cast, "_turnaround",
+                                  side_effect=lambda *a, **kw: ""), \
+                mock.patch.object(cast, "_single",
+                                  side_effect=AssertionError("不该生资产图")):
+            cast.ensure(root, log=lines.append, ep=2)
+        text = " ".join(lines)
+        self.assertIn("阿旺（14岁版）", text)
+        self.assertIn("年龄表不在盘上", text,
+                      "表没落地却静默回落孩童脸 = 本次要修的病，不许看不见")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

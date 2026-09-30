@@ -366,15 +366,23 @@ def _variant_index(reg: dict) -> dict:
     return idx
 
 
-def apply_age_variants(reg: dict, hits: list, text: str) -> list:
-    """把命中的**基础角色**换成"本镜括注点名的那个年龄段变体"。
+def apply_age_variants(reg: dict, hits: list, text: str, defaults=None) -> list:
+    """把命中的**基础角色**换成"本镜该用的那张年龄表"。
+
+    优先级：① 本镜括注里写了年龄段 → 按括注（最准确，闪回镜靠它）；
+    ② 没写 → 用 `defaults`（**本集**的默认年龄段，见 `variants.default_ages`）。
+
+    为什么必须有 ② （2026-09-30 实测 xiaoman-workshop-1030 第 2 集）：分镜契约要求
+    只有**第一拍**写全角色锚点，后续拍写 `@小满（蓝色工装马甲）`——**不带年龄**。
+    只按括注换表的话，本集 18 次点名有 17 次绑回 8 岁那张孩童表 ⇒ 拆了表也没用上。
 
     为什么必须换（实测 shiguan-series-0926 第 2、3 集）：注册表里「阿旺」是 10 岁版，
     分镜写 `@阿旺（14 岁，瘦高身形…）`，而静帧提示词还要求"以参考图锁定该角色的
     长相、发型、**体型**"⇒ 不换就是拿孩童设定表去画青少年，**文字写 14 岁、
     出片仍是小孩**，旁白还在念"十六岁那年我辍学了"。
 
-    没有变体条目、或本镜括注里没有年龄段 ⇒ 原样返回（行为与改造前一字不变）。
+    没有变体条目、本镜括注没年龄、本集也没默认年龄段 ⇒ 原样返回
+    （行为与改造前一字不变）。
     """
     idx = _variant_index(reg)
     if not idx:
@@ -388,13 +396,27 @@ def apply_age_variants(reg: dict, hits: list, text: str) -> list:
     out: list = []
     for h in hits:
         base = str(h.get("name") or "")
-        tag = ages.get(base)
+        tag = ages.get(base) or ((defaults or {}).get(base)
+                                 if base in idx else "")
         e = (idx[base].get(tag) or h) if (tag and base in idx) else h
         # 换完可能和已有的条目撞成同一张表（同一人被数两次）→ 按条目名去重保序
         if any(o is e or str(o.get("name") or "") == str(e.get("name") or "") for o in out):
             continue
         out.append(e)
     return out
+
+
+def episode_defaults(reg: dict, shots: list, log=None) -> dict:
+    """本集每个角色的**默认年龄段**（判据与"不猜"纪律见 `variants.default_ages`）。"""
+    from . import variants as variants_mod
+
+    entries = (reg or {}).get("assets", []) or []
+    known = [str(a.get("name") or "") for a in entries if a.get("name")]
+    chars = {str(a.get("name") or "") for a in entries if a.get("type") == "character"}
+    spk = {s for st in shots
+           for s in _dialogue_speakers(st.get("dialogue") or "").split()}
+    return variants_mod.default_ages(shots, known, spk, chars,
+                                     log=log or (lambda *_: None))
 
 
 #: 「本镜出场角色」的识别上限 —— **不是参考图绑定上限**。
@@ -472,8 +494,11 @@ def _chars_by_name(reg: dict, text: str, max_n: int = 2) -> list:
     return found[:max_n]
 
 
-def hits_for_shot(reg: dict, shot: dict, max_n: int = 5) -> tuple:
+def hits_for_shot(reg: dict, shot: dict, max_n: int = 5, defaults=None) -> tuple:
     """按镜匹配参考图。返回 `(hits, unresolved)`。
+
+    `defaults` = **本集**的默认年龄段（`episode_defaults()` 算，见 `apply_age_variants`）。
+    逐镜调用方没有整集视野时传 None —— 那时只有括注写了年龄才换表。
 
     **优先 `@资产名` 精确匹配**（注册表驱动，见 `resolve_mentions`）；
     **没有 @ 或一个都没匹配上** → 回退旧的 keywords 子串匹配（兼容旧分镜）。
@@ -551,7 +576,7 @@ def hits_for_shot(reg: dict, shot: dict, max_n: int = 5) -> tuple:
             hits = hits + [scene_a]
     # ★ **按本镜括注换到对应年龄的设定表**（2026-09-30，见 `apply_age_variants`）。
     #   放在限流截断**之前**：换完才是"本镜真正该用的那张脸"，之后再按人物数上限裁。
-    hits = apply_age_variants(reg, hits, text)
+    hits = apply_age_variants(reg, hits, text, defaults=defaults)
     return hits[:max_n], leftover
 
 
@@ -923,9 +948,11 @@ def identity_lines(root: Path, shots: list[dict], max_n: int = 5) -> dict[str, s
     """
     reg, prot, fallback = _cast_ctx(root)
     skip = _photo_bound_names(root, reg)
+    defaults = episode_defaults(reg, shots)
     out: dict[str, str] = {}
     for s in shots:
-        lines = _shot_cast_lines(s, reg, prot, fallback, max_n=max_n)
+        lines = _shot_cast_lines(s, reg, prot, fallback, max_n=max_n,
+                                 defaults=defaults)
         if skip:
             lines = [ln for ln in lines
                      if not any(ln.startswith(n + "的固定形象") for n in skip)]
@@ -943,7 +970,8 @@ def _cast_ctx(root: Path):
 
 
 def _shot_cast_lines(shot: dict, reg: dict, prot: dict | None,
-                     fallback: list[dict], max_n: int = 5) -> list[str]:
+                     fallback: list[dict], max_n: int = 5,
+                     defaults=None) -> list[str]:
     """本镜的**身份锚点文本**（每人一条）。
 
     ★ 这是「本镜有谁出场」的**唯一判据** —— `identity_lines`（写锚点）与
@@ -966,7 +994,7 @@ def _shot_cast_lines(shot: dict, reg: dict, prot: dict | None,
     if "空镜" in (shot.get("visual") or ""):
         return []
     text = (shot.get("visual") or "") + " " + (shot.get("dialogue") or "")
-    hits, _unresolved = hits_for_shot(reg, shot, max_n=max_n)
+    hits, _unresolved = hits_for_shot(reg, shot, max_n=max_n, defaults=defaults)
     if not any(h.get("type") == "character" for h in hits) and prot:
         hits = [prot] + [h for h in hits if h is not prot]
     lines: list[str] = []
@@ -1052,12 +1080,15 @@ def bind(root: Path, shots: list[dict], max_n: int = 5,
              if a.get("type") == "character"]
     if not names:
         names = [c.get("name") or "" for c in _chars_from_worldbuilder(root)]
+    # ★ 本集**默认年龄段**：分镜契约只在第一拍写全角色锚点，后续拍的 `@名（衣装）`
+    #   不带年龄 ⇒ 只按括注换表会让整集 17/18 次点名绑回孩童表（实测见 apply_age_variants）
+    defaults = episode_defaults(reg, shots)
     out: dict[str, list[str]] = {}
     for s in shots:
         text = (s.get("visual") or "") + " " + (s.get("dialogue") or "")
         # 优先 `@资产名` **精确匹配**（2026-09-12）：分镜契约要求写 @资产名，
         # 有 @ 就按名字取注册表条目；没有则回退 keywords 子串（兼容旧分镜）。
-        hits, _unresolved = hits_for_shot(reg, s, max_n=max_n)
+        hits, _unresolved = hits_for_shot(reg, s, max_n=max_n, defaults=defaults)
         # 主角兜底：一个角色都没命中 **且本镜确实有人物出场** → 强制绑主角肖像。
         # 空镜/道具镜/纯屏幕镜不兜底——绑了会把物件画成真人（实测 LN02）。
         if (not any(h.get("type") == "character" for h in hits)

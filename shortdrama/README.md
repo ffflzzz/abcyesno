@@ -265,7 +265,7 @@ projects/<项目名>/
 | `SHORTDRAMA_VIDEO_SUBMIT_MIN_INTERVAL_S` | 65 | 供应商 1rpm 平铺闸门（**单条 key** 的最小提交间隔） |
 | `SHORTDRAMA_VIDEO_KEY_ROTATE` | 0 | `1` = 各镜**轮流用不同 key** 提交 → 提交段按 key 数摊薄（需 `AGNES_API_KEYS` 多于 1 条）。只摊薄提交节流，不加快渲染 |
 | `SHORTDRAMA_VIDEO_SUBMIT_MIN_INTERVAL_PER_KEY_S` | 同上一行 | 覆盖 per-key 间隔；未设时**实时**跟随 `SHORTDRAMA_VIDEO_SUBMIT_MIN_INTERVAL_S` |
-| `SHORTDRAMA_IMAGE_WORKERS` | 0（自动） | **并发生图**线程数：`0` = 自动 = 标了图片 rpm 的 key 数（封顶 4、保底 1）；`1` = 逐张串行（= 改造前行为，回退开关）；`>1` 显式指定但会被压到可用 key 数（同一条 key 自我限速不是提速）。作用于**静帧**与**定妆照四视图**——它们之间没有依赖（跨镜传的是文字「承接上一镜落点」，不是上一张图）。⛔ **不影响两处真串行依赖**：`keyframe`/`mixed` 档的首尾帧链、pack 档**视频组之间**抽真实末帧当接续锚（2026-09-28 特意串行）。闸门按 key 独立计时 = `60/图片rpm`（80rpm → 0.75s/条），与视频的 12s 闸门分开算 |
+| `SHORTDRAMA_IMAGE_WORKERS` | 0（自动 = **8**） | **并发生图**线程数：`0` = 自动 = `IMAGE_WORKERS_CAP`（当前 8）；`1` = 逐张串行（= 改造前行为，回退开关）；`>1` = 显式指定，**原样采纳**。★ **2026-09-30 起不再压到"可用 key 数"**：旧判据的直觉是从视频通道搬来的（那边 1rpm、同 key 60 秒内二次提交必 429），而图片通道 2K 档标称 80rpm，"一条 key 挂多张在途"就是它的额定工况。**低 rpm 的 key 由闸门保护，不由线程数保护**——闸门按 key 独立计时 = `60/图片rpm`（80rpm → 0.75s/条；4K 档 1rpm → 60s），线程再多也会在 `claim()` 上排队，撞不出 429 风暴。作用于**静帧首轮**、**QC 硬伤重画**（2026-09-30 起整批一次调用，此前逐镜调 ⇒ 并发恒为 1）、**定妆照四视图**——它们之间没有依赖（跨镜传的是文字「承接上一镜落点」，不是上一张图）。⛔ **不影响两处真串行依赖**：`keyframe`/`mixed` 档的首尾帧链、pack 档**视频组之间**抽真实末帧当接续锚（2026-09-28 特意串行）。真正的上界是 `min(本值, 这一批的镜数)`，设得比批数大是空转 |
 | `SHORTDRAMA_MAX_REVISIONS` | 2 | 渲染被**媒体门**因"评审未通过"拦下的次数上限，**超过**即记 `review.force_passed` 放行并响亮列缺陷（2026-09-29 由 3 改为 2，用户口径「超 2 次就放行」）。★ 计数是门自己按集累计的 `review_blocks`（落盘、跨进程）；⚠️ **不是** `revision_counts` —— 真实链路上它常年为 `null`（要角色自调 `record_phase(count=True)` 才累加，而实际重派由调度器 LLM 发起，不经过 `guards.reset_from()`） |
 | `SHORTDRAMA_TOKEN_BUDGET_RUN` | 3000000 | 整轮 token 熔断预算 |
 | `SHORTDRAMA_CHAT_VENDOR` | agnes | 文本通道厂商（`v5/vendors.py`）。旧名 `NEWDEEP_LLM_PROVIDER` 仍兼容回落 |
@@ -300,7 +300,7 @@ projects/<项目名>/
 | `SHORTDRAMA_INLINE_UPSTREAM` | 1 | 上游产物**直接注入**下游角色的输入（`0` = 只给路径、让角色自己 `read_file`——实测后者要 8–10 轮 LLM 调用/角色）|
 | `SHORTDRAMA_LEAN_PROMPT` | 0 | 视频提示词走**精简形态**（删反分屏前置 / reference 用途声明 / 类型包风格块；保留内容四段 + 台词 + 环境声 + 禁字幕）|
 | `SHORTDRAMA_ASSET_GATE` | 0 | 资产完整性缺失时**硬拦**（`return blocked`）。默认只强告警不拦——存量项目多有部分缺图，直接拦会把它们全卡住 |
-| `SHORTDRAMA_AGE_VARIANTS` | 1 | **多集连载的分龄变体 / 新角色补卡**：`cast` 按本集分镜的 `@名（括注）` 派生「阿旺（14岁版）」这类卡（以基础定妆照做 img2img 锁脸）与从没进过注册表的新角色卡。设 `0` ⇒ 整段跳过，行为与改造前一字不变（修的两个实测缺口见 `v5/media/variants.py` 文件头）|
+| `SHORTDRAMA_AGE_VARIANTS` | 1 | **多集连载的分龄变体 / 新角色补卡**：`cast` 按本集分镜的 `@名（括注）` 派生「阿旺（14岁版）」这类卡（以基础定妆照做 img2img 锁脸）与从没进过注册表的新角色卡。同一开关还管两条配套：同名多张年龄卡**拆成各自独立的表**（否则后一张覆盖前一张，全剧只剩一张不知道几岁的脸）、以及**本集默认年龄段**（后续拍的 `@名` 不带年龄时按它选表，本集出现两个年龄段则不猜、只报一行）。设 `0` ⇒ 整段跳过，行为与改造前一字不变（修的两个实测缺口见 `v5/media/variants.py` 文件头）|
 | `SHORTDRAMA_VARIANTS_MIN_SHOTS` | 2 | 一个人在本集**出现在几镜**才值得给他一张定妆照。数的是镜数，不是 `@` 次数（同一镜里 `@阿旺` 可连写 5 次）|
 | `SHORTDRAMA_VARIANTS_MAX_CARDS` | 6 | 每集最多派生几张（生图配额敏感）。超出按出场镜数取前 N，被弃的会打日志 |
 | `SHORTDRAMA_DIALOGUE_VERBATIM_STRICT` | 0 | 对白**逐字门**在 `_input_gates` 里阻断。默认只警告——存量项目的旧 `dialogue` 产物多为改写版 |
@@ -317,7 +317,7 @@ projects/<项目名>/
 | `SHORTDRAMA_WEB_ALLOW_ORIGIN` | （空） | 额外放行的 CORS Origin，逗号分隔 |
 | `SHORTDRAMA_WEB_BASE` | （自动） | 媒体 URL 对外基础地址；不传用 `http://<host>:<port>` |
 | `SHORTDRAMA_WEB_MANUAL_STEPS` | 0 | `1` = webchain 全手动步进（每步等人确认） |
-| `SHORTDRAMA_WEB_ROOT` | （内置） | web 前端静态目录覆盖（server `--web-root` 的 env 默认值） |
+| `SHORTDRAMA_WEB_ROOT` | `frontend/dist` | 要同源托管的前端静态目录（server `--web-root` 的 env 默认值）。没构建时**只起 API 并响亮提示**去 `npm run build` |
 | `SHORTDRAMA_COMPOSE_FIT` | crop | 拼接规格统一方式：`crop` 等比放大居中裁切（竖屏推荐）/ `pad` 等比缩小补黑边 / `off` 不统一 |
 | `SHORTDRAMA_COMPOSE_TRIM` | 0.15 | 拼接时每镜首尾各剪秒数（掐头去尾）；`0` = 关。取小值防切 dialogue-led 台词 |
 | `SHORTDRAMA_COMPOSE_XFADE` | 0.3 | 相邻镜 xfade 叠化秒数（音频 acrossfade 同步交叉）；`0` = 关 |

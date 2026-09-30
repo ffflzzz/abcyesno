@@ -864,5 +864,62 @@ class TestCountIssueExemptFromRecheck(unittest.TestCase):
         self.assertFalse(qc.is_count_issue(None))
 
 
+class TestEmptyShotNotForcedToHavePerson(unittest.TestCase):
+    """空镜不许被景别复核判不合格，也不许被追加"人物入画"补充语。
+
+    2026-09-30 实测（xiaoman-workshop-1030 第 2 集 LN01）：分镜写的是巷口空镜，
+    而景别档位定义通篇以人物为尺（"中景：人物腰部以上"）⇒ 复核判"跨档不合格"
+    ⇒ 定向重生成的提示词被追加"本镜必须是中景：人物腰部以上入画"，与同句的
+    "空镜：环境静物"直接打架 ⇒ 模型选择**塞一位老年妇人进空镜**。
+    """
+
+    def test_predicate(self):
+        self.assertTrue(prompt.shot_has_no_person({"_cast_n": 0, "visual": "巷口空镜"}))
+        self.assertTrue(prompt.shot_has_no_person({"no_human": True, "visual": "能量体炸开"}))
+        self.assertFalse(prompt.shot_has_no_person({"_cast_n": 1, "visual": "小满站着"}))
+        # 没有 `_cast_n`（老分镜 / 非媒体链路径）⇒ 回落 `_has_person`
+        self.assertTrue(prompt.shot_has_no_person(
+            {"visual": "雨后巷口水泥路，卷帘门半拉，水珠已干"}))
+        self.assertFalse(prompt.shot_has_no_person(
+            {"visual": "小满蹲下摸轮胎找漏气", "_names": ["小满"]}))
+
+    def test_review_does_not_call_the_model_for_empty_shot(self):
+        from unittest import mock
+
+        from v5.media import qc
+
+        with mock.patch.object(
+                qc, "chat_for",
+                side_effect=AssertionError("空镜不该调用景别复核模型")):
+            r = qc.review_shot_type(
+                "不必存在的图.jpg", {"shot_type": "中景", "angle": "平视", "_cast_n": 0})
+        self.assertTrue(r["ok"])
+        self.assertIn("空镜", r["reason"])
+
+    def test_review_still_runs_for_a_person_shot(self):
+        """反向对照：有人镜**必须**照旧判 —— 否则这条豁免等于关掉一道画面审。"""
+        from unittest import mock
+
+        from v5.media import qc
+
+        called = []
+
+        class _FakeModel:
+            def invoke(self, msgs):
+                called.append(1)
+
+                class _R:
+                    content = '```json\n{"ok": false, "actual": "远景"}\n```'
+
+                return _R()
+
+        with mock.patch.object(qc, "chat_for", return_value=_FakeModel()), \
+                mock.patch.object(qc, "_data_uri", return_value="data:,"):
+            r = qc.review_shot_type(
+                "x.jpg", {"shot_type": "中景", "_cast_n": 1, "visual": "小满站着"})
+        self.assertEqual(called, [1], "有人镜必须仍然调模型判景别")
+        self.assertFalse(r["ok"])
+
+
 if __name__ == "__main__":
     unittest.main()

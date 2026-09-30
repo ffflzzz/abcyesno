@@ -47,6 +47,21 @@ def age_of(text: str) -> str:
     return ("%s岁" % m.group(1)) if m else ""
 
 
+def card_age_tag(card: dict) -> str:
+    """这张卡**自己**是多少岁：先看标题，其次取正文里最大的那个年龄。
+
+    为什么不能取正文里出现的第一个年龄（我第一版就是这么错的）：13 岁卡通篇在跟
+    8 岁比 —— 实测「8 岁」出现 9 次、「13 岁」2 次，取第一个会得到 8 岁，
+    拆出来的变体名与基础卡撞车，注册表仍然只剩一张脸。
+    标题（`# 角色卡：小满（13 岁，第 2 集）`）才是这张卡的自述。
+    """
+    t = age_of(card.get("heading") or "")
+    if t:
+        return t
+    ages = [int(x) for x in _AGE_RE.findall(str(card.get("appearance") or ""))]
+    return ("%d岁" % max(ages)) if ages else ""
+
+
 def mentions(texts) -> list:
     """抽出 `[(点名串, 紧跟其后的圆括注)]`，保序、不去重。
 
@@ -152,8 +167,34 @@ def collect(shots: list, known_names=(), speakers=(), char_names=()) -> dict:
     return agg
 
 
+def default_ages(shots: list, known_names=(), speakers=(), char_names=(),
+                 log=print) -> dict:
+    """本集的**默认年龄段** `{人名: "13岁"}` —— 只在该人本集只出现一个年龄段时才给。
+
+    为什么必须有它（2026-09-30 实测 `xiaoman-workshop-1030` 第 2 集）：拆表之后基础卡
+    是「小满（8 岁）」、变体是「小满（13岁版）」，而分镜只在第一拍写全角色锚点
+    （分镜契约明写**后续拍不许重复 `@名（衣装）`**，实测 ep2 的 18 次 `@小满` 里
+    **17 次不带年龄**）⇒ 只按本镜括注选表的话，这一集 17/18 次点名会绑回孩童那张表，
+    画面依旧是小学生，而旁白在念"十三岁"。**拆表只解决"有没有这张表"，
+    这条解决"这一集会不会去用那张表"。**
+
+    本集出现**两个**年龄段（闪回 / 混写）⇒ **不猜**，只报一行：那种镜必须靠括注点名，
+    猜了就会静默锁错脸（与 `cast.split_same_name_cards` 同一条纪律）。
+    """
+    agg = collect(shots, known_names, speakers, char_names)
+    out: dict = {}
+    for name, g in agg.items():
+        tags = sorted(k for k in g["tags"] if k)
+        if len(tags) == 1:
+            out[name] = tags[0]
+        elif len(tags) > 1:
+            log("[variants] %s 在本集出现多个年龄段 %s → 不设默认（该镜必须自己写括注）"
+                % (name, "、".join(tags)))
+    return out
+
+
 def plan(shots: list, base_cards: dict, known_names=(), speakers=(),
-         min_mentions: int = 2, max_new: int = 6):
+         min_mentions: int = 2, max_new: int = 6, covered=None):
     """出**决定清单**（不生成任何东西，便于测试与日志）。
 
     `base_cards`: `{角色名: 角色卡文本}` —— 全剧级角色卡（worldbuilder / 资产清单）。
@@ -200,14 +241,20 @@ def plan(shots: list, base_cards: dict, known_names=(), speakers=(),
             rest.append(row("no-appearance", tag))
             continue
         base = str((base_cards or {}).get(name) or "")
-        base_ages = {"%s岁" % m for m in _AGE_RE.findall(base)}
+        # ★ 判"这一集有没有自己的表"要看**已登记的年龄段集合**（`covered`，由 cast
+        #   在拆表之后算），不能看卡文本里出现过这个年龄 —— 实测上游写一张
+        #   "比 8 岁时更立体"的 13 岁卡，文本同时含 8 与 13，于是 8 岁那集也被判
+        #   "已锚定"，而注册表里根本没有它自己的表（0930 我第一版就判错在这里）。
+        #   调用方没传时，只能按"每张卡自己的第一个年龄段"估（= 单卡场景下的正确值）。
+        have = (set((covered or {}).get(name) or ()) if covered is not None
+                else {t for t in [age_of(base)] if t})
         if not base:
             need.append(row("no-base-card", tag, ap))
-        elif tag and tag not in base_ages:
+        elif not tag or tag in have:
+            rest.append(row("already-anchored", tag))
+        else:
             need.append(row("age-variant", tag, ap,
                             "%s（%s版）" % (name, tag), name))
-        else:
-            rest.append(row("already-anchored", tag))
     _kept = need[:max_new]
     _cut = [dict(r, why="over-cap") for r in need[max_new:]]
     # 被上限砍掉的必须单独报因：否则日志里它顶着 `no-base-card` 出场，
@@ -216,15 +263,19 @@ def plan(shots: list, base_cards: dict, known_names=(), speakers=(),
 
 
 def derive_cards(shots: list, base_cards: dict, known_names=(), speakers=(),
-                 min_mentions: int = 2, max_new: int = 6, log=print) -> list:
+                 min_mentions: int = 2, max_new: int = 6, covered=None,
+                 log=print) -> list:
     """把 `plan()` 的结论变成 `cast` 能直接吃的**角色卡字典**。
 
     带 `alias_of` 的项（分龄变体）由 `cast` 拿基础角色的定妆照当源图做 img2img ——
     这样"14 岁的阿旺"和"10 岁的阿旺"是**同一张脸长大**，而不是重新抽一个人。
     新增角色没有源图，走纯文生图。
+
+    `covered` = `{基础名: {已有独立表的年龄段}}`，由 cast 在**拆同名卡之后**算 ——
+    判"这一集有没有自己的表"全靠它（不传则退化成"只认基础卡"，会重复出图）。
     """
     need, rest = plan(shots, base_cards, known_names, speakers,
-                      min_mentions=min_mentions, max_new=max_new)
+                      min_mentions=min_mentions, max_new=max_new, covered=covered)
     out: list = []
     for r in need:
         c = {"name": r["card_name"], "appearance": r["appearance"],

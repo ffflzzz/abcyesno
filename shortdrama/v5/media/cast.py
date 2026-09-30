@@ -327,7 +327,11 @@ def parse_characters(worldbuilder_md: str) -> list[dict]:
         # 这类角色必须用主角图做 img2img（source），否则参考图本身就是穿帮源。
         same_as = _same_face_as(blk, ap)
         out.append({"name": name, "appearance": ap[:900], "keywords": kws,
-                    "same_as": same_as})
+                    # ★ 标题原样带着（`角色卡：小满（13 岁，第 2 集）`）—— 判"这张卡
+                    #   自己是多少岁"只能靠它：13 岁卡正文通篇在跟 8 岁比，
+                    #   "8 岁"出现 9 次、"13 岁"2 次（2026-09-30 实测），
+                    #   按"第一个年龄"取会取成 8 岁。
+                    "heading": head, "same_as": same_as})
     return out
 
 
@@ -1053,6 +1057,68 @@ def _load_contract(root: Path):
     return None, None
 
 
+def split_same_name_cards(chars: list, log=print) -> list:
+    """**同名多张卡**（典型：上游给主角写了「8 岁」和「13 岁」两张）⇒ 拆成各自独立的表。
+
+    不拆的后果（2026-09-30 实测 `xiaoman-workshop-1030`）：`_register` 按 `name`
+    upsert、图片文件名也是 `<name>.png` ⇒ **后一张把前一张覆盖掉**，全剧只剩一张表；
+    而活下来的那张 identity 里只有"比 8 岁时更立体"这种**相对说法、没有绝对年龄**，
+    于是第 1 集和第 2 集共用一张不知道几岁的脸。
+
+    拆法：按出现顺序第一张留作基础条目，其余按卡里的年龄段改名成 `名（13岁版）`
+    并标 `alias_of` —— 绑定层（`assets.apply_age_variants`）会按分镜括注里的
+    年龄段选对应那张，所以**哪张在前都不影响正确性**。
+    卡里连年龄段都没写 ⇒ 只能响亮报，不猜（猜出来的年龄会静默锁错脸）。
+    """
+    from . import variants as variants_mod
+
+    seen: dict = {}
+    out: list = []
+    for c in chars:
+        n = str(c.get("name") or "")
+        if not n or n not in seen:
+            seen[n] = True
+            out.append(c)
+            continue
+        tag = variants_mod.card_age_tag(c)
+        if not tag:
+            log("[cast] !! %s 有同名多张卡，这张**没写绝对年龄** → 拆不开，"
+                "后一张仍会覆盖前一张（修法：让上游每张卡都写「N 岁」）" % n)
+            out.append(c)
+            continue
+        v = dict(c)
+        v["name"] = "%s（%s版）" % (n, tag)
+        v["alias_of"] = n
+        v["age_tag"] = tag
+        v["alias_names"] = [n]
+        v["identity_scope"] = "本阶段（%s）" % tag
+        v["derived"] = True
+        out.append(v)
+        log("[cast] 同名年龄卡拆开登记：%s → 另立「%s」（否则两张互相覆盖，全剧只剩一张脸）"
+            % (n, v["name"]))
+    return out
+
+
+def covered_ages(chars: list) -> dict:
+    """`{基础名: {已被独立表覆盖的年龄段}}` —— 判"这一集有没有自己的表"的依据。
+
+    ️ 不能用"卡文本里出现过这个年龄段"来判（我第一版就是这么写的，实测判错）：
+      上游写一张"比 8 岁时更立体"的 13 岁卡，文本里同时含 8 岁和 13 岁，
+      于是 8 岁那集也被判成"已锚定"，而注册表里根本没有 8 岁那张表。
+    """
+    from . import variants as variants_mod
+
+    out: dict = {}
+    for c in chars:
+        base = str(c.get("alias_of") or c.get("name") or "")
+        if not base:
+            continue
+        tag = str(c.get("age_tag") or "") or variants_mod.card_age_tag(c)
+        if tag:
+            out.setdefault(base, set()).add(tag)
+    return out
+
+
 def _derive_variant_cards(root: Path, chars: list, items: list, ep, log=print) -> list:
     """从**本集分镜**派生「分龄变体 + 漏登记的新角色」卡（两个实测缺口见 `variants.py` 文件头）。
 
@@ -1085,9 +1151,14 @@ def _derive_variant_cards(root: Path, chars: list, items: list, ep, log=print) -
               for a in assets_mod.load_registry(root).get("assets", [])}
     spk = {s for st in shots
            for s in assets_mod._dialogue_speakers(st.get("dialogue") or "").split()}
+    dflt = variants.default_ages(shots, known, spk, set(base), log=log)
+    if dflt:
+        log("[variants] 第 %d 集**默认年龄段**（后续拍的 `@名` 不带年龄时按它绑表）：%s"
+            % (e, "、".join("%s→%s" % (k, v) for k, v in sorted(dflt.items()))))
     return variants.derive_cards(shots, base, known, spk,
                                  min_mentions=config.VARIANTS_MIN_SHOTS,
-                                 max_new=config.VARIANTS_MAX_CARDS, log=log)
+                                 max_new=config.VARIANTS_MAX_CARDS,
+                                 covered=covered_ages(chars), log=log)
 
 
 def ensure(root: Path, *, log=print, force: bool = False,
@@ -1133,6 +1204,9 @@ def ensure(root: Path, *, log=print, force: bool = False,
         elif _declared > _got:
             log("[cast] ⚠️ assets.md 有 %d 个场景小节，只解析出 %d 个 location（丢了 %d 个）"
                 % (_declared, _got, _declared - _got))
+    # ★ 同名多张年龄卡先拆表（必须在 `char_names` 去重与生图循环**之前**）
+    if config.AGE_VARIANTS:
+        chars = split_same_name_cards(chars, log=log)
     # 角色卡的姓名若已出现在资产卡里，以角色卡为准（避免重复生成同一人）
     char_names = {c["name"] for c in chars}
     items = [a for a in items if a["name"] not in char_names]
@@ -1336,6 +1410,19 @@ def ensure(root: Path, *, log=print, force: bool = False,
             made["failed"] += 1
             log("[cast] ⚠️ %s 参考图生成失败 → **降级为文字身份锚点**"
                 "（图没有、描述留着；避免身份双重失效）" % c["name"])
+
+    # ★ **年龄表没落地必须单独喊一行**（2026-09-30，放在生图循环**之后**才可比盘）。
+    #   绑定层（`assets.apply_age_variants`）找不到变体条目时**回落基础卡** ——
+    #   那正是本次要修的病：第 2 集 18 次点名里 17 次不带年龄，全绑回 8 岁那张孩童表，
+    #   而旁白在念"十三岁"。回落本身是必要的（没图就不能绑），但它不能是静默的。
+    if config.AGE_VARIANTS:
+        _miss = [str(c.get("name")) for c in chars if c.get("derived")
+                 and c.get("age_tag")
+                 and not (images_dir(root) / (str(c.get("name")) + ".png")).exists()]
+        if _miss:
+            log("[cast] !! 本集要用的**年龄表不在盘上**：%s → 绑定静默回落基础卡"
+                "（同一张脸演所有年龄）。查上面这些卡为什么没出图，别把这次当成"
+                "「分龄已生效」。" % "、".join(_miss))
 
     from . import assets as _assets_mod   # 函数内导入：类型口径只定义在一处
     # ★ `max_assets` 是**生图预算**，不是"资产条数上限"（2026-09-15 实测事故）。

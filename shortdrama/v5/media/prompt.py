@@ -680,6 +680,26 @@ def _has_person(shot: dict) -> bool:
     return False
 
 
+def shot_has_no_person(shot: dict) -> bool:
+    """本镜**不该有真人**（空镜 / 【无人像】镜）。判据与 `person_directive` 同源。
+
+    为什么必须抽出来给**两处**用（2026-09-30 实测，代价是第 2 集首镜废掉）：
+      景别档位定义通篇以人物为尺（"中景：人物腰部以上"），拿它判一个巷口空镜，
+      模型只能答"实际是远景，要求中景 → 跨档不合格"；于是定向重生成的提示词被追加
+      "本镜必须是中景：人物腰部以上入画" —— 与同一句里的"空镜：环境静物"直接打架，
+      模型选择**塞一位老年妇人进空镜**。两处各写一份判据必然漂移，所以只留这一份。
+    """
+    if shot.get("no_human"):
+        return True
+    n = shot.get("_cast_n")
+    if n is not None:
+        try:
+            return int(n) <= 0
+        except (TypeError, ValueError):
+            return True
+    return not _has_person(shot)
+
+
 def person_directive(shot: dict) -> str:
     """本镜的**人物数量声明**：0 → 空镜；1 → 单人；≥2 → 多人。
 
