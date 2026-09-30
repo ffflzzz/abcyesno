@@ -164,6 +164,39 @@ async def _wait_decision(root: Path, project: str, tid: str, rid: str,
     return None
 
 
+def reroll_plan(dec: dict, until: str = "", redo_left: int = 0) -> tuple:
+    """评审判决 → 该不该自动打回、打回谁。返回 `(action, target, note)`。
+
+    `action` 三种：`"reroll"`（照 target 打回重做）/ `"exhausted"`（重试用完，交给门）
+    / `"no-target"`（评审说不过但判不出该重做谁 —— **绝不能挪走产物却派不出重做）
+    / `""`（不该动：判决是通过、或读不出判决、或那条路径根本没有评审）。
+
+    判据为什么抽成纯函数：副作用（清 phases、挪产物、发新 run）留在驱动器循环里，
+    这些分支才能被单测钉住 —— 否则"要不要打回"只能等真跑一小时才知道。
+    """
+    if until or not isinstance(dec, dict) or not dec:
+        return "", "", ""
+    try:
+        from v5 import decision as _dec
+        if _dec.normalize_pass(dec):
+            return "", "", ""
+    except Exception:  # noqa: BLE001 -- normalize 判不了就当没过，但下面仍要认目标
+        pass
+    note = "；".join(str(x) for x in (dec.get("reasons") or []))[:600]
+    tgt = ""
+    try:
+        from v5 import decision as _d2
+        tgt = _d2.resolve_target(dec) or ""
+    except Exception:  # noqa: BLE001
+        tgt = ""
+    tgt = tgt or str((dec.get("rerun") or [""])[0])
+    if tgt not in ROLES:
+        return "no-target", "", note
+    if redo_left <= 0:
+        return "exhausted", tgt, note
+    return "reroll", tgt, note
+
+
 def redo_message(tgt: str, note: str) -> str:
     """把「打回」翻成一条发给导演的消息（**纯函数**，便于单测）。
 
@@ -351,10 +384,63 @@ async def main() -> int:
     #   → UnboundLocalError → 重跑**已完成的集**1 秒炸 rc=1（被误报"重跑必须加 --fresh"）。
     #   空串语义 = "未跑任何 run"，error/timeout 判定自然不命中。
     status = ""
+    # ★ **评审没过 = 没收工**（2026-09-30 实测，代价是一整集白跑 64 分钟）。
+    #   旧收工判据只看"7 个产物在不在盘上"：supervisor 交出 `pass: false` 之后
+    #   驱动器照样 break，`run_new_project` 再去问门 → 门拦下 rc=1 —— 于是盘上是
+    #   "齐全但不合格"的产物，而**没有任何一步去执行打回**。
+    #   设计意图原先写在 run_new_project 的注释里（"评审判 fail 时 supervisor 会在
+    #   同一个 run 内重派上游"），但实测它不重派 —— **靠 LLM 自觉的律，这轮没兑现**。
+    #   ⇒ 打回改由**驱动器确定性执行**：清本集 phases + 旧产物移 `.rerun_backup/`，
+    #   下一轮用 `redo_message()` 只重派目标角色及其下游。
+    #   重试上限**沿用门那一份**（`SHORTDRAMA_MAX_REVISIONS`，默认 2），不新造数字；
+    #   用完仍不过 ⇒ 照旧交给门（门数够次数会 `force_passed` 并响亮列出未消化条目）。
+    redo_left = int(config.MAX_REVISIONS_PER_PHASE)
+
+    def review_state():
+        """读本集评审判决 → `(passed, decision)`。读不到 ⇒ `(None, None)`，不据此打回。"""
+        p = resolve_path(root, "reviewer", ep)
+        if not p.exists():
+            return None, None
+        try:
+            from v5 import decision as _dec
+            d = _dec.parse_decision(p.read_text(encoding="utf-8"))
+            if not d:
+                return None, None
+            return bool(_dec.normalize_pass(d)), d
+        except Exception as e:  # noqa: BLE001 -- 判不了就交给门，但必须说出口
+            print("[drive] ⚠️ 评审判决解析失败（%s: %s）→ 本轮不据此打回"
+                  % (type(e).__name__, str(e)[:100]), flush=True)
+            return None, None
+
     while time.time() - t0 < timeout:
         got = done_roles()
         if reached(got, until):
-            # 2026-09-19：`--until` 时"够"= 达成到该角色为止（不是 7 个都齐）
+            # ★ 产物齐了先问一句**评审过没过**（见上方 `review_state` 的事故记录）。
+            #   `--until` 是前端两段式的"跑到某角色为止"，那条路径上没有评审，
+            #   所以只在跑完整链时才据此打回。
+            _, _dec = review_state() if not until else (None, None)
+            act, tgt, note = reroll_plan(_dec or {}, until, redo_left)
+            if act == "no-target":
+                print("[drive] !! 评审判 fail，但**回退目标判不出来**（rerun=%s）"
+                      "→ 不动盘，交给渲染门处理。评审原因：%s"
+                      % ((_dec or {}).get("rerun"), note[:200]), flush=True)
+            elif act == "exhausted":
+                print("[drive] !! 评审判 fail，且**自动打回已用完**（上限见 "
+                      "SHORTDRAMA_MAX_REVISIONS）→ 收工，交给渲染门按次数决定"
+                      "（数够会 force_passed 并列出未消化条目）。仍未消化：%s"
+                      % note[:200], flush=True)
+            elif act == "reroll":
+                redo_left -= 1
+                _m = load_manifest(root)
+                _moved = reset_from(tgt, _m, root, ep)
+                save_manifest(root, _m)
+                print("[drive] ⏪ 产物齐全但**评审判 fail** → 打回 `%s` 及其下游重做"
+                      "（剩余重试 %d 次）。旧产物已移入 .rerun_backup/：%s"
+                      % (tgt, redo_left, "、".join(_moved) or "—"), flush=True)
+                print("[drive]    评审原因：%s" % (note or "（评审没写）"), flush=True)
+                GOAL = ("本项目当前要产出的是**第 %d 集**。\n%s%s"
+                        % (ep, _DISPATCH, redo_message(tgt, note)))
+                continue
             print("[drive] %s %s"
                   % ("全部角色完成" if not until else "已达成 --until %s" % until, got),
                   flush=True)

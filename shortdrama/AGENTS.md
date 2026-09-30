@@ -467,6 +467,13 @@ pack 档**跳过**逐镜 clipqc（组产物多镜
 "不会卡死"是文档超前于代码——评审反复判 fail 的真实结局是重派到撞墙钟预算、`rc=0` 静默收工不出片。
 现在的计数源是**门自己**按集累计、落盘的 `review_blocks`（`scripts/run_new_project.py` 也改为
 问同一道门，判据只留一份）；放行时日志会列出评审仍未消化的条目，**不许静默**。
+★ **2026-09-30：执行打回的是驱动器，不是 supervisor**。上面那句"回退时 phases 被清空
+→ 重跑"此前**没有执行者**——`scripts/drive_chain.py` 的收工判据只看"7 个产物在不在盘上"，
+于是它拿到 `pass: false` 也照样 break，外层问门、门拦下 rc=1，盘上留下"齐全但不合格"的
+产物（实测白跑 64 分钟）。现在改成：产物齐 → 读判决（`reroll_plan()`，纯函数、有测试）→
+判 fail 就 `reset_from()` 清本集该角色及下游 + 旧产物进 `.rerun_backup/` → 用
+`redo_message()` 只重派那一段。**重试上限沿用门那一份** `SHORTDRAMA_MAX_REVISIONS`，
+不新造数字；用完仍不过 ⇒ 照旧交给门 `force_passed`。判不出回退目标时**不动盘**。
 
 **旧项目（旧产物名 / 一维 manifest）**：老项目的集级产物是 `dialogue.md` /
 `scenedesigner.md` / `review.md`。读取走 `guards.resolve_path()`（新名优先、旧名回退）。
