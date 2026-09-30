@@ -1369,13 +1369,16 @@ def resolve_styles(shots: list[dict]) -> list[dict]:
 # ─── pack 档：打包 prompt（2026-09-22，自 scripts/pack_render.py 搬入）────────
 #
 # 12s 打包法（三项目 37 次提交零拒绝 + 捕梦师 213s 成片闭环）的 prompt 骨架：
-# 参考图逐拍点名 + 时间段边界（±1s 弹性）+ 逐拍完整内容（场景/镜头语言/画面/
+# 参考图分工声明 + 时间边界（±1s 弹性）+ 逐镜完整内容（场景/镜头语言/画面/
 # 台词/音效/落幅）。与单镜六段式（build_video_prompt）的区别：
-#   · `<Picture i>` 不是"素材分工"而是"节拍锚点" —— 第 i 张图 = 第 i 拍的
-#     画面参考，模型按时间边界自然衔接；
-#   · 全局块声明"这是同一条连续素材"—— 人物/服装/道具跨节拍完全一致，
-#     光线色调随场景自然过渡（这是逐镜 reference 做不到的：它不知道相邻镜存在）。
-# 旁路脚本 pack_render.py 保留为独立验证入口；prompt 文本两处必须同步。
+#   · 参考图**不再逐镜点名**（2026-09-28 A 臂）——身份来自人物设定表，静帧只当
+#     场景实现与接续锚，见 `pack_ref_declaration`；
+#   · 全局块**按镜数分流**说清"切不切"（2026-09-29）：多镜明说切点、单镜明说
+#     不切镜。原先这里写的是「连续发生的 N 个节拍」+「同一条连续素材」，通篇没有
+#     "镜头/切"二字，等于一路劝模型顺成一条 —— 与 pack 档本意相反（官方原则 6：
+#     一镜到底与多分镜只能选一种）。人物/服装/道具跨镜一致仍由这句话承担。
+# 旁路脚本 `pack_render.py` 是独立验证入口，**图序与措辞都已与生产不同步**
+# （留作对照臂，见 AGENTS.md 的媒体管线一节）。
 
 def _pack_fmt_dialogue(d: str) -> str:
     d = (d or "").strip()
@@ -1463,8 +1466,23 @@ def pack_ref_declaration(ref_roles: list[tuple[str, str]]) -> str:
         parts.append("第 %s 张只用于锁定场景内的建筑与地貌。"
                      % "、".join(str(c) for c in scenes))
     parts.append("构图、景别、机位与镜头运动一律按下面的文字描述执行。"
-                 "各节拍画面与本片段时间边界严格对应。")
+                 "画面内容与它的时间边界严格对应。")
     return "".join(parts)
+
+
+def _pack_structure_line(n: int, total: int, bounds: list[tuple[int, int]]) -> str:
+    """pack 档"这是几个镜头、在第几秒切"的声明。
+
+    多镜 ⇒ 明说切点；单镜 ⇒ 明说不切。两种情况**都必须说**：官方原则 6
+    （一镜到底与多分镜只能选一种）针对的就是"想要连续却写了分段"这种自相矛盾。
+    """
+    if n <= 1:
+        return ("本片段总长 %d 秒，就是**一个连续镜头**，全程不切镜、"
+                "不出现第二个机位。" % total)
+    cuts = "、".join(str(r) for _l, r in bounds[:-1])
+    return ("本片段总长 %d 秒，由 %d 个镜头依次切镜构成——镜头之间直接切换，"
+            "不是同一机位的一镜到底。切点在第 %s 秒（允许 ±1 秒弹性）；"
+            "每个镜头各自成画，画面内容按下列时间分配执行：" % (total, n, cuts))
 
 
 def build_pack_prompt(group: list[dict], declared: list[int], total: int,
@@ -1489,7 +1507,7 @@ def build_pack_prompt(group: list[dict], declared: list[int], total: int,
     left = 0
     for i, s in enumerate(group):
         right = left + declared[i]
-        maps.append("<Picture %d> 为第 %d-%d 秒节拍的画面参考" % (i + 1, left, right))
+        maps.append("<Picture %d> 为第 %d-%d 秒镜头的画面参考" % (i + 1, left, right))
         bounds.append((left, right))
         left = right
     # ★ 跨组静帧链（2026-09-23）：上一打包组末镜的静帧追加为**最后一张**参考图，
@@ -1499,7 +1517,7 @@ def build_pack_prompt(group: list[dict], declared: list[int], total: int,
     tail_map = ""
     if prev_shot_name:
         tail_map = ("<Picture %d> 为**上一片段的结束画面**——仅用于衔接人物姿态、"
-                    "道具位置与场景连续性，**不对应本片段任何节拍**" % (n + 1))
+                    "道具位置与场景连续性，**不对应本片段的任何镜头**" % (n + 1))
     segs = [
         pack_ref_declaration(ref_roles) if ref_roles else
         ("、".join(maps)
@@ -1512,13 +1530,21 @@ def build_pack_prompt(group: list[dict], declared: list[int], total: int,
          #   而是**顺手把场景与构图一起交了出去**。
          + "。参考图只用于锁定身份——长相、发型、服装形制与兵刃；"
            "构图、景别、机位与镜头运动一律按下面的文字描述执行。"
-           "各节拍画面与本片段时间边界严格对应。"),
-        "本片段总长 %d 秒，由连续发生的 %d 个节拍组成，各节拍按下列时间分配自然衔接，"
-        "节拍边界允许 ±1 秒弹性：" % (total, n),
+           "画面内容与它的时间边界严格对应。"),
+        # ★ 2026-09-29 措辞收口（对账 Agnes Video 2.5 官方模板指南）：这一段原先写的是
+        #   「由**连续发生**的 N 个**节拍**组成，各节拍按下列时间分配**自然衔接**」，
+        #   加上全局块的「这是**同一条连续素材**」，通篇没有"镜头"也没有"切"——
+        #   pack 档的本意是把 N 个独立镜头塞进一条请求、要求它在边界切开，
+        #   而话术一直在往"顺成一条"的方向推。官方原则 6 正是这条：一镜到底与多分镜
+        #   只能选一种。⇒ 现在按镜数分流：多镜**明说切点**，单镜**明说不切**。
+        #   ⚠️ 这只改了说法，没有新增任何要求（镜数与秒数都是分镜表里已有的事实）。
+        _pack_structure_line(n, total, bounds),
     ]
     for i, ((l, r), s) in enumerate(zip(bounds, group)):
         scene = (s.get("scene") or "").strip()
         head = "【第 %d-%d 秒" % (l, r)
+        if n > 1:
+            head += "｜镜头 %d/%d" % (i + 1, n)
         if scene:
             head += "｜%s" % scene
         head += "｜%s·%s·%s】" % (s.get("shot_type"), s.get("angle"), s.get("camera"))
@@ -1534,16 +1560,16 @@ def build_pack_prompt(group: list[dict], declared: list[int], total: int,
                join_line, style_line,
                _pack_fmt_dialogue(s.get("dialogue")),
                (s.get("sfx") or "").strip() or "无",
-               (s.get("tail") or "").strip() or "自然收在该拍动作结束处"))
+               (s.get("tail") or "").strip() or "自然收在该镜头动作结束处"))
+    cont = ("这是同一条素材里的 %d 个镜头，镜头之间直接切换、不叠化；"
+            "各镜头的光线与色调随场景保持一致，人物造型跨镜头完全一致。" % n
+            if n > 1 else
+            "这是一个连续镜头，全程不切镜；光线与色调随动作自然变化，"
+            "人物造型全程一致。")
     if style_block:
-        segs.append(
-            style_block.rstrip("。 ")
-            + "。这是同一条连续素材，"
-            "各节拍光线与色调随场景自然过渡，转场干脆利落，人物造型跨节拍完全一致。")
+        segs.append(style_block.rstrip("。 ") + "。" + cont)
     else:
-        segs.append(
-            "画面风格：电影级实拍剧照质感；这是同一条连续素材，"
-            "各节拍光线与色调随场景自然过渡，转场干脆利落，人物造型跨节拍完全一致。")
+        segs.append("画面风格：电影级实拍剧照质感；" + cont)
     segs.append("全片不得出现任何文字、字幕、水印；不得分屏；%s。" % framing_clause())
     # 声音指令（2026-09-22，对标官方出片拍板）：同款模型实测能原生执行
     # 「全程 BGM+环境音、禁止静音段」（官方 12s 示例音轨零静音）。

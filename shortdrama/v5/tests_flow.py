@@ -3722,6 +3722,41 @@ class TestPackMode(unittest.TestCase):
         self.assertNotIn("一律以对应参考图为准", p,
                          "旧句回来了 = 构图权又被交出去，成片会退回平铺构图")
 
+    def test_pack_structure_line_says_shots_and_cuts(self):
+        """★ 2026-09-29：pack 档必须**按镜数说清切不切**。
+
+        原先这一段写的是「由**连续发生**的 N 个**节拍**组成，各节拍**自然衔接**」，
+        全局块还写着「这是**同一条连续素材**」——通篇没有"镜头"也没有"切"，
+        而 pack 档的本意是把 N 个独立镜头塞进一条请求、要求模型在边界切开。
+        成片实测（huashan-duel-v4-0928 ep1，逐 0.5 秒看帧）：声明 3 镜的组里
+        看到 5 种构图，其中两种分镜根本没写 ⇒ 模型自己发挥了。
+        官方原则 6 就是这条：一镜到底与多分镜只能选一种。
+        """
+        from v5.media.prompt import build_pack_prompt
+
+        def shot(nm, sec, st):
+            return {"name": nm, "scene": "石台", "seconds": sec, "shot_type": st,
+                    "angle": "平视", "camera": "固定",
+                    "visual": "0-%d秒：@甲 出招，@乙 应招。" % sec,
+                    "dialogue": "", "sfx": "", "tail": ""}
+
+        p = build_pack_prompt([shot("LN01", 4, "全景"), shot("LN02", 3, "中景"),
+                               shot("LN03", 3, "近景")], [4, 3, 3], 10,
+                              style_block="电影级 CG 质感。")
+        self.assertIn("由 3 个镜头依次切镜构成", p)
+        self.assertIn("切点在第 4、7 秒", p, "不写切点 = 模型自己决定在哪切")
+        self.assertIn("镜头 1/3", p)
+        self.assertIn("镜头 3/3", p)
+        self.assertIn("【第 0-4 秒", p, "时间边界前缀必须还在（量表与剪辑靠它）")
+        for bad in ("连续发生的", "同一条连续素材", "个节拍组成"):
+            self.assertNotIn(bad, p, "旧话术回来了 = 一边说切一边劝它顺成一条")
+
+        # 单镜组：必须明说**不切**（多镜说切、单镜不说 = 反向误伤）
+        one = build_pack_prompt([shot("LN01", 6, "全景")], [6], 6, style_block="")
+        self.assertIn("一个连续镜头", one)
+        self.assertIn("全程不切镜", one)
+        self.assertNotIn("切点在", one, "单镜组出现切点 = 无中生有一刀")
+
     def test_pack_ref_declaration_locks_identity_on_costume_sheet(self):
         """A 臂图序（2026-09-28 实测）：pack 档视频请求的**身份来源必须是人物设定表**，
         静帧降级为"场景实现 + 跨组接续"两张，且声明里要写明冲突时忽略静帧的人物。
