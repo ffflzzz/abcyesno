@@ -17,7 +17,9 @@
     "shortdrama:venv": "node scripts/setup-shortdrama-venv.mjs",
     "shortdrama:web": "cd shortdrama/frontend && npm ci && npm run build",
     "test:bridge": "node scripts/test-wechat-bridge-unit.mjs",
-    "test:browser-panel": "node scripts/test-browser-panel/build.mjs && node scripts/test-browser-panel/run.mjs"
+    "test:browser-panel": "node scripts/test-browser-panel/build.mjs && node scripts/test-browser-panel/run.mjs",
+    "test:reconcile": "node scripts/test-session-reconcile.mjs",
+    "test:bg-procs": "node scripts/test-background-processes.mjs && node scripts/test-background-process-bar/run.mjs"
   },
   "build": {
     "appId": "com.hermes.agent",

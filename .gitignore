@@ -100,3 +100,6 @@ shortdrama/tmp/
 # 仓库根 tmp/ 是 scripts/test-browser-panel/build.mjs 的默认输出目录，
 # 每次跑都会长出来，别再让它进 status。
 /tmp/
+
+# 后台进程条无头截图验收的中间产物（bundle + 截图）
+scripts/test-background-process-bar/.tmp/

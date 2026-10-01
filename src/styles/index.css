@@ -9440,3 +9440,114 @@ body[--resizing="1"] .result-panel-resize-handle::before {
 .wf-progress-bar { flex: 1; height: 6px; border-radius: var(--radius-xs); background: #0f1419; overflow: hidden; border: 1px solid var(--border, #21262d); }
 .wf-progress-fill { height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width 0.3s ease; }
 .wf-progress-text { font-size: 11px; color: var(--text-dim, #8b949e); white-space: nowrap; }
+
+/* ── 后台进程常驻条（BackgroundProcessBar）──────────────────────────
+   2026-10-01：agent 用 terminal 后台跑长任务时，回合早已结束、界面和空闲
+   长得一样，用户完全看不出有活在跑。这条常驻显示"几个在跑 / 已多久 / 最后一
+   行输出"。宽度约束与 .agent-run-monitor 对齐；所有文本节点 min-width:0 +
+   ellipsis，窄窗口下换行不溢出。 */
+.bpm-bar {
+  margin: 8px auto 4px;
+  width: 100%;
+  max-width: 900px;
+  box-sizing: border-box;
+  border: 1px solid var(--border, #21262d);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated, #1b1f29);
+  font-size: 13px;
+  overflow: hidden;
+}
+.bpm-bar.is-running { border-color: rgba(210, 153, 34, 0.55); }
+.bpm-bar.is-idle { border-color: var(--border, #21262d); }
+
+.bpm-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--text, #e6edf3);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+}
+.bpm-header:hover { background: rgba(255, 255, 255, 0.03); }
+
+.bpm-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--muted, #8b949e);
+  flex: 0 0 auto;
+}
+.bpm-bar.is-running .bpm-dot { background: var(--warning, #d29922); }
+.bpm-dot-pulse { animation: bpm-pulse 1.6s ease-in-out infinite; }
+@keyframes bpm-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(0.82); }
+}
+
+.bpm-label { flex: 0 0 auto; font-weight: 600; white-space: nowrap; }
+.bpm-tail {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--muted, #8b949e);
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bpm-spacer { flex: 1 1 auto; min-width: 0; }
+.bpm-tail + .bpm-spacer { flex: 0 0 auto; }
+
+.bpm-icon-btn { display: inline-flex; align-items: center; color: var(--muted, #8b949e); cursor: pointer; }
+.bpm-icon-btn:hover { color: var(--text, #e6edf3); }
+.bpm-caret { display: inline-flex; align-items: center; color: var(--muted, #8b949e); transition: transform 0.15s ease; }
+.bpm-caret.is-open { transform: rotate(90deg); }
+
+.bpm-list { border-top: 1px solid var(--border, #21262d); padding: 4px 0; }
+.bpm-row { padding: 8px 10px; }
+.bpm-row + .bpm-row { border-top: 1px solid rgba(33, 38, 45, 0.7); }
+
+/* 展开态给完整命令（折叠态才截断）：多行 shell 折成一行，允许换行不截尾，
+   否则最有用的"跑的是哪个脚本"会被 72 字截断吃掉。 */
+.bpm-cmd-full {
+  margin: 0 0 6px;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text, #e6edf3);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+.bpm-row-sub { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.bpm-chip {
+  font-size: 11px;
+  color: var(--muted, #8b949e);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border, #21262d);
+  border-radius: var(--radius-xs);
+  padding: 1px 6px;
+  white-space: nowrap;
+}
+.bpm-state { font-weight: 600; }
+.bpm-state.c-running { color: var(--warning, #d29922); border-color: rgba(210, 153, 34, 0.45); }
+.bpm-state.c-exited { color: var(--success, #2ea043); }
+.bpm-cwd { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.bpm-out {
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  border-radius: var(--radius-xs);
+  background: rgba(0, 0, 0, 0.28);
+  color: var(--muted, #8b949e);
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 4.5em;
+  overflow: hidden;
+}

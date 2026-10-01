@@ -84,6 +84,8 @@ contextBridge.exposeInMainWorld('hermes', {
   deleteSession: (id) => ipcRenderer.invoke('delete-session', id),
   getSession: (id) => ipcRenderer.invoke('get-session', id),
   updateSession: (id, data) => ipcRenderer.invoke('update-session', id, data),
+  // 本会话的后台进程登记表（常驻"正在跑"记号的数据源）
+  listBackgroundProcesses: (sessionId) => ipcRenderer.invoke('list-background-processes', sessionId),
 
   // Approval & gateway passthrough
   respondApproval: (id, choice, sessionId) => ipcRenderer.invoke('respond-approval', id, choice, sessionId),

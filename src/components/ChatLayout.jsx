@@ -6,6 +6,8 @@ import SkillPanel from "./SkillPanel.jsx";
 import ContextUsage from "./ContextUsage.jsx";
 import Toasts from "./Toasts.jsx";
 import AgentRunMonitor from "./AgentRunMonitor.jsx";
+import BackgroundProcessBar from "./BackgroundProcessBar.jsx";
+import { useBackgroundProcesses } from "../hooks/useBackgroundProcesses.js";
 import { inferStreamingPhase } from "../utils/streamingPhase.js";
 import { useTts } from "../hooks/useTts.jsx";
 import { stripMarkdownToText } from "../utils/stripMarkdown.js";
@@ -202,6 +204,11 @@ export default function ChatLayout({
     onSend(fullText, mentions, opts);
   }
 
+  // 本会话有没有还在跑的 terminal 后台任务。网关的 process.list 早就存在
+  // （注释写着 "desktop status stack"），桌面端一直没调用，所以后台跑一小时
+  // 和空闲在界面上完全一样（2026-10-01）。
+  const bgProcs = useBackgroundProcesses(session?.id || null);
+
   return (
     <main className={`chat-layout ${sidebarOpen ? "" : "full"}`}>
       <div className="chat-header">
@@ -267,6 +274,12 @@ export default function ChatLayout({
         )}
         <div ref={bottomRef} style={{ display: "none" }} />
       </div>
+
+      <BackgroundProcessBar
+        running={bgProcs.running}
+        justFinished={bgProcs.justFinished}
+        onRefresh={bgProcs.refresh}
+      />
 
       {liveTask && (
         <AgentRunMonitor

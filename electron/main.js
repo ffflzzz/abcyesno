@@ -1607,6 +1607,26 @@ ipcMain.handle('update-session', async (_event, id, data) => {
   return storage.updateSession(id, data);
 });
 
+// 后台进程常驻条的数据源：把网关的 process.list 转给渲染端。
+// 这个 RPC 早就存在（docstring 写着 "desktop status stack"，且已在
+// _LONG_HANDLERS 里走线程池、明确给前端轮询用），但桌面端从来没调用过 ——
+// 于是 agent 用 terminal 后台跑一小时的活，界面上和完全空闲长得一样（2026-10-01）。
+ipcMain.handle('list-background-processes', async (_event, appSessionId) => {
+  if (!appSessionId) return { ok: true, processes: [] };
+  if (!gatewayClient || !gatewayClient.ready) {
+    return { ok: false, error: 'gateway not connected', processes: [] };
+  }
+  try {
+    const hermesSessionId = await storage.getThreadMapping(appSessionId);
+    if (!hermesSessionId) return { ok: true, processes: [] };
+    const res = await gatewayClient.request('process.list', { session_id: hermesSessionId }, 8000);
+    return { ok: true, processes: (res && res.processes) || [] };
+  } catch (err) {
+    // 会话还没在本进程 resume（例如刚重启后）是常态，不当错误抛给界面。
+    return { ok: false, error: err.message, processes: [] };
+  }
+});
+
 ipcMain.handle('respond-approval', async (_event, id, choice, sessionId) => {
   if (!gatewayClient || !gatewayClient.ready) {
     throw new Error('gateway not connected');
