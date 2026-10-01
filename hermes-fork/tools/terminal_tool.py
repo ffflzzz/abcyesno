@@ -2579,6 +2579,18 @@ def terminal_tool(
                             proc_session.watcher_user_name = _gw_user_name
                             proc_session.watcher_thread_id = _gw_thread_id
                             proc_session.watcher_message_id = _gw_message_id
+                            # Re-checkpoint: spawn_local() already wrote the
+                            # file with empty watcher fields, and the gateway
+                            # watcher rebuilt after a restart reads that file.
+                            process_registry.arm_notifications(
+                                proc_session,
+                                watcher_platform=_gw_platform,
+                                watcher_chat_id=_gw_chat_id,
+                                watcher_user_id=_gw_user_id,
+                                watcher_user_name=_gw_user_name,
+                                watcher_thread_id=_gw_thread_id,
+                                watcher_message_id=_gw_message_id,
+                            )
 
                 # Mutual exclusion: if both notify_on_complete and watch_patterns
                 # are set, drop watch_patterns. The combination produces duplicate
@@ -2598,14 +2610,23 @@ def terminal_tool(
 
                 # Mark for agent notification on completion
                 if notify_on_complete and background:
-                    proc_session.notify_on_complete = True
+                    # Must go through arm_notifications, not a bare attribute
+                    # write: spawn_local() already persisted a checkpoint with
+                    # notify_on_complete=False, and recover_from_checkpoint()
+                    # reads that file — so a restart used to drop the promise
+                    # while the live run kept honouring it (2026-10-01, 3/3).
+                    process_registry.arm_notifications(
+                        proc_session, notify_on_complete=True
+                    )
                     result_data["notify_on_complete"] = True
 
                     # In gateway mode, auto-register a fast watcher so the
                     # gateway can detect completion and trigger a new agent
                     # turn.  CLI mode uses the completion_queue directly.
                     if proc_session.watcher_platform:
-                        proc_session.watcher_interval = 5
+                        process_registry.arm_notifications(
+                            proc_session, watcher_interval=5
+                        )
                         process_registry.pending_watchers.append({
                             "session_id": proc_session.id,
                             "check_interval": 5,
@@ -2621,7 +2642,9 @@ def terminal_tool(
 
                 # Set watch patterns for output monitoring
                 if watch_patterns and background:
-                    proc_session.watch_patterns = list(watch_patterns)
+                    process_registry.arm_notifications(
+                        proc_session, watch_patterns=list(watch_patterns)
+                    )
                     result_data["watch_patterns"] = proc_session.watch_patterns
 
                 return json.dumps(result_data, ensure_ascii=False)

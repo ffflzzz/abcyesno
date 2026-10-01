@@ -1087,6 +1087,86 @@ class TestCheckpoint:
                     proc.kill()
                     proc.wait(timeout=5)
 
+    def test_arm_notifications_rewrites_the_checkpoint(self, registry, tmp_path):
+        """notify_on_complete 只能在 spawn 之后才决定 —— 那就必须重写检查点。
+
+        病样本（2026-10-01，3/3 复现）：spawn_local() 写完 processes.json 之后，
+        terminal_tool 才把 notify_on_complete 挂到对象上，所以文件里永远是
+        False，而工具回执明明印的是 true。本轮不出事（watcher 读内存对象），
+        但 recover_from_checkpoint() 读的是文件，用的是
+        entry.get("notify_on_complete", False) —— 一重启，"跑完会告诉你"这个
+        承诺就静默没了。
+        """
+        cp = tmp_path / "procs.json"
+        with patch("tools.process_registry.CHECKPOINT_PATH", cp):
+            s = _make_session()
+            registry._running[s.id] = s
+            registry._write_checkpoint()
+            assert json.loads(cp.read_text())[0]["notify_on_complete"] is False, (
+                "spawn 时刻就是 False —— 这正是旧行为留下的形状"
+            )
+
+            registry.arm_notifications(s, notify_on_complete=True)
+
+            data = json.loads(cp.read_text())
+            assert data[0]["notify_on_complete"] is True, "arm 之后必须落盘"
+            assert s.notify_on_complete is True
+
+    def test_armed_session_survives_recovery(self, registry, tmp_path):
+        """端到端：arm 过的进程重启后仍然会通知。这才是修它的目的。"""
+        cp = tmp_path / "procs.json"
+        proc = _spawn_python_sleep(30)
+        try:
+            with patch("tools.process_registry.CHECKPOINT_PATH", cp):
+                s = _make_session(sid="proc_arm")
+                s.pid = proc.pid
+                s.pid_scope = "host"
+                registry._running[s.id] = s
+                registry._write_checkpoint()
+                registry.arm_notifications(
+                    s, notify_on_complete=True, watcher_interval=5
+                )
+
+                fresh = ProcessRegistry()
+                recovered = fresh.recover_from_checkpoint()
+                assert recovered == 1
+                restored = fresh.get("proc_arm")
+                assert restored is not None
+                assert restored.notify_on_complete is True, (
+                    "重启后丢了 notify_on_complete，就等于长任务跑完没人说"
+                )
+                assert restored.watcher_interval == 5
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except Exception:
+                proc.kill()
+                proc.wait(timeout=5)
+
+    def test_arm_notifications_rejects_unknown_fields(self, registry, tmp_path):
+        """白名单外的字段名是拼写错误，必须响，不能静悄悄设个没人读的属性。"""
+        s = _make_session()
+        with pytest.raises(ValueError, match="not deferred-session fields"):
+            registry.arm_notifications(s, notify_on_compelte=True)
+
+    def test_arm_notifications_persists_watch_patterns_and_watcher(self, registry, tmp_path):
+        cp = tmp_path / "procs.json"
+        with patch("tools.process_registry.CHECKPOINT_PATH", cp):
+            s = _make_session()
+            registry._running[s.id] = s
+            registry._write_checkpoint()
+            registry.arm_notifications(
+                s,
+                watch_patterns=["READY"],
+                watcher_platform="telegram",
+                watcher_chat_id="999",
+            )
+            entry = json.loads(cp.read_text())[0]
+            assert entry["watch_patterns"] == ["READY"]
+            assert entry["watcher_platform"] == "telegram"
+            assert entry["watcher_chat_id"] == "999"
+
 
 # =========================================================================
 # Kill process

@@ -304,6 +304,12 @@ class ProcessRegistry:
 
         if return_early:
             if should_disable:
+                # The promotion above flipped notify_on_complete on the live
+                # object only; without this the checkpoint still says False and
+                # a restart loses the fallback notification. Outside
+                # session._lock on purpose — _write_checkpoint takes the
+                # registry lock and reads these fields as-is.
+                self._write_checkpoint()
                 # Emit exactly one "watch disabled, falling back to notify_on_complete"
                 # summary event so the agent/user sees why things went quiet.
                 self.completion_queue.put({
@@ -1809,6 +1815,54 @@ class ProcessRegistry:
             atomic_json_write(CHECKPOINT_PATH, entries)
         except Exception as e:
             logger.debug("Failed to write checkpoint file: %s", e, exc_info=True)
+
+    # Attributes that may only be decided *after* spawn, and therefore must
+    # re-checkpoint. Anything outside this list is a typo, not a setting.
+    _DEFERRED_SESSION_FIELDS = (
+        "notify_on_complete",
+        "watch_patterns",
+        "watcher_interval",
+        "watcher_platform",
+        "watcher_chat_id",
+        "watcher_user_id",
+        "watcher_user_name",
+        "watcher_thread_id",
+        "watcher_message_id",
+    )
+
+    def arm_notifications(self, session: ProcessSession, **fields) -> None:
+        """Set completion-notification settings on a live session and re-write
+        the checkpoint so a restart can honour them.
+
+        Why this exists: `spawn_local()` / `spawn_via_env()` write the
+        checkpoint while the session still carries its spawn-time defaults, and
+        `terminal_tool` used to assign `notify_on_complete`, `watcher_*` and
+        `watch_patterns` straight onto the object afterwards. Nothing re-wrote
+        the file, so the on-disk record kept `notify_on_complete: false` for a
+        process whose live object had it true — reproduced 3/3 on 2026-10-01,
+        with the tool response echoing `true` each time.
+
+        The live run still notified (the watcher reads the in-memory object),
+        which is why this looked fine in daily use. But
+        `recover_from_checkpoint()` restores
+        `entry.get("notify_on_complete", False)`, so a gateway/app restart
+        silently dropped the promise and the job finished with nobody telling
+        the user — the "silent blindness" class AGENTS.md records from PR
+        #31231, narrowed to "across a restart".
+
+        Mutates under the lock, then re-checkpoints outside it
+        (`_write_checkpoint` takes the same non-reentrant lock).
+        """
+        unknown = set(fields) - set(self._DEFERRED_SESSION_FIELDS)
+        if unknown:
+            raise ValueError(
+                "arm_notifications: not deferred-session fields: %s"
+                % ", ".join(sorted(unknown))
+            )
+        with self._lock:
+            for name, value in fields.items():
+                setattr(session, name, value)
+        self._write_checkpoint()
 
     def recover_from_checkpoint(self) -> int:
         """
