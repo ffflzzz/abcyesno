@@ -15,6 +15,10 @@ import {
   shortCommand,
   exitLabel,
   pickVisible,
+  silentLabel,
+  isStale,
+  pickLiveliest,
+  STALE_AFTER_SECONDS,
 } from '../src/utils/backgroundProcesses.js';
 
 test('partition 按状态分组，未知状态算在跑', () => {
@@ -101,4 +105,30 @@ test('displayCommand 不截断，多行折成一行', () => {
   assert.equal(out.split('\n').length, 1);
   assert.ok(out.includes('⏎'));
   assert.equal(displayCommand(''), '');
+});
+
+test('silentLabel 只报事实，不下"卡住"的判断', () => {
+  assert.equal(silentLabel(0), '刚刚有输出');
+  assert.equal(silentLabel(45), '刚刚有输出');
+  assert.equal(silentLabel(120), '已 2 分钟无新输出');
+  assert.equal(silentLabel(3600 + 60), '已 1 小时 1 分无新输出');
+  assert.equal(silentLabel(undefined), '刚刚有输出');
+});
+
+test('isStale 阈值边界：599 不算陈旧，600 算', () => {
+  assert.equal(isStale(0), false);
+  assert.equal(isStale(undefined), false);
+  assert.equal(isStale(1), false, '1 秒绝不能算陈旧（运算符优先级坑）');
+  assert.equal(isStale(STALE_AFTER_SECONDS - 1), false);
+  assert.equal(isStale(STALE_AFTER_SECONDS), true);
+  assert.equal(isStale(99999), true);
+});
+
+test('pickLiveliest 取最近还在动的那个，不是跑得最久的', () => {
+  const quiet = { session_id: 'quiet', uptime_seconds: 5000 };
+  const lively = { session_id: 'lively', uptime_seconds: 60 };
+  const silentOf = (p) => (p.session_id === 'quiet' ? 900 : 5);
+  assert.equal(pickLiveliest([quiet, lively], silentOf).session_id, 'lively');
+  assert.equal(pickLiveliest([], silentOf), null);
+  assert.equal(pickLiveliest([quiet], silentOf).session_id, 'quiet');
 });

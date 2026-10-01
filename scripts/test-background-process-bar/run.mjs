@@ -74,6 +74,10 @@ try {
   const runningText = await page.locator('#case-running .bpm-bar').innerText();
   check('在跑时显示"1 个在跑 · 已 23 分钟"', runningText.includes('1 个在跑 · 已 23 分钟'), runningText);
   check('折叠态就能看到最后一行输出', runningText.includes('reviewer OK'), runningText);
+  const staleText = await page.locator('#case-stale .bpm-bar').innerText();
+  check('15 分钟无输出时说清多久没动', staleText.includes('已 15 分钟无新输出'), staleText);
+  check('陈旧时整条转红', (await page.locator('#case-stale .bpm-bar').getAttribute('class')).includes('is-stale'));
+  check('陈旧时圆点不再闪动（还在闪会让人以为在动）', (await page.locator('#case-stale .bpm-dot-pulse').count()) === 0);
   check('全部空闲时不渲染任何条', (await page.locator('#case-empty .bpm-bar').count()) === 0);
 
   const finishedText = await page.locator('#case-finished .bpm-bar').innerText();

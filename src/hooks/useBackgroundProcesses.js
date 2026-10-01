@@ -23,6 +23,8 @@ export function useBackgroundProcesses(sessionId) {
   const [justFinished, setJustFinished] = useState([]);
   const wasRunning = useRef(new Map()); // procId -> proc 快照
   const finishedAt = useRef(new Map()); // procId -> 观察到退出的时间
+  const lastTail = useRef(new Map()); // procId -> 上次看到的输出尾
+  const lastChangeAt = useRef(new Map()); // procId -> 输出最后一次变化的时刻
   const timer = useRef(null);
   const mounted = useRef(true);
 
@@ -30,6 +32,8 @@ export function useBackgroundProcesses(sessionId) {
     mounted.current = true;
     wasRunning.current = new Map();
     finishedAt.current = new Map();
+    lastTail.current = new Map();
+    lastChangeAt.current = new Map();
     setRunning([]);
     setJustFinished([]);
     return () => {
@@ -37,6 +41,29 @@ export function useBackgroundProcesses(sessionId) {
       if (timer.current) clearTimeout(timer.current);
     };
   }, [sessionId]);
+
+  /** 输出尾行变了就把"上次变化时刻"推到 now；没变就沿用旧值。 */
+  function touchSilence(proc, now) {
+    const tail = String(proc.output_tail ?? proc.output_preview ?? "");
+    const id = proc.session_id;
+    if (lastTail.current.get(id) !== tail) {
+      lastTail.current.set(id, tail);
+      lastChangeAt.current.set(id, now);
+    } else if (!lastChangeAt.current.has(id)) {
+      lastChangeAt.current.set(id, now);
+    }
+    return { ...proc, _silentSeconds: Math.max(0, Math.round((now - lastChangeAt.current.get(id)) / 1000)) };
+  }
+
+  /** 清掉已经不在表里的进程的跟踪状态，避免 Map 无限增长。 */
+  function pruneSilence(aliveIds) {
+    for (const id of [...lastTail.current.keys()]) {
+      if (!aliveIds.has(id)) {
+        lastTail.current.delete(id);
+        lastChangeAt.current.delete(id);
+      }
+    }
+  }
 
   const tick = useCallback(async () => {
     const api = typeof window !== "undefined" ? window.hermes : null;
@@ -68,8 +95,12 @@ export function useBackgroundProcesses(sessionId) {
         if (byId.has(id) && !prevIds.has(id)) carried.push({ ...byId.get(id), _seenExitedAt: at });
       }
 
-      wasRunning.current = new Map(run.map((p) => [p.session_id, p]));
-      setRunning(run);
+      const stamped = run.map((p) => touchSilence(p, now));
+      pruneSilence(
+        new Set([...stamped.map((p) => p.session_id), ...finishedAt.current.keys()])
+      );
+      wasRunning.current = new Map(stamped.map((p) => [p.session_id, p]));
+      setRunning(stamped);
       setJustFinished([...fresh, ...carried]);
       nextDelay = run.length > 0 ? ACTIVE_MS : IDLE_MS;
     } catch {

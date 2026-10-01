@@ -6,9 +6,12 @@ import {
   exitLabel,
   finishedLabel,
   formatUptime,
+  isStale,
   lastOutputLine,
+  pickLiveliest,
   pickVisible,
   shortCommand,
+  silentLabel,
 } from "../utils/backgroundProcesses.js";
 
 /**
@@ -32,17 +35,24 @@ export default function BackgroundProcessBar({
   if (rows.length === 0) return null;
 
   const anyRunning = running.length > 0;
+  // 心跳：折叠态也要说清"最后一次有新输出是多久前"。今天最坑的就是后端静默
+  // 25 分钟、界面上完全看不出区别。
+  const liveliest = pickLiveliest(running, (p) => p._silentSeconds || 0);
+  const silent = liveliest ? liveliest._silentSeconds || 0 : 0;
+  const stale = anyRunning && isStale(silent);
   // 折叠态也要交代结果：只说"已结束"会把"跑完"和"挂了"混成一个词。
-  const label = anyRunning ? barLabel(running) : finishedLabel(justFinished);
-  // 折叠态也给出"最新一行输出"，这样不展开也能看出它确实在动而不是卡住。
-  const newest = [...rows].sort(
-    (a, b) => (Number(b.uptime_seconds) || 0) - (Number(a.uptime_seconds) || 0)
-  )[0];
-  const tailLine = lastOutputLine(newest && (newest.output_tail || newest.output_preview));
+  const label = anyRunning
+    ? `${barLabel(running)} · ${silentLabel(silent)}`
+    : finishedLabel(justFinished);
+  // 折叠态给出"最新一行输出"——取最近还在动的那个，不是跑得最久的那个。
+  const tailSource = liveliest || rows[0];
+  const tailLine = lastOutputLine(
+    tailSource && (tailSource.output_tail || tailSource.output_preview)
+  );
 
   return (
     <div
-      className={`bpm-bar ${anyRunning ? "is-running" : "is-idle"}`}
+      className={`bpm-bar ${stale ? "is-stale" : anyRunning ? "is-running" : "is-idle"}`}
       data-testid="background-process-bar"
     >
       <button
@@ -51,7 +61,7 @@ export default function BackgroundProcessBar({
         onClick={() => setOpen((v) => !v)}
         title={open ? "收起后台任务" : "展开后台任务"}
       >
-        <span className={`bpm-dot ${anyRunning ? "bpm-dot-pulse" : ""}`} />
+        <span className={`bpm-dot ${anyRunning && !stale ? "bpm-dot-pulse" : ""}`} />
         <span className="bpm-label">{label}</span>
         {!open && tailLine ? <span className="bpm-tail">{shortCommand(tailLine, 60)}</span> : null}
         <span className="bpm-spacer" />
@@ -102,6 +112,11 @@ export default function BackgroundProcessBar({
                   <span className={`bpm-chip bpm-state ${isRun ? "c-running" : "c-exited"}`}>
                     {isRun ? `已跑 ${formatUptime(p.uptime_seconds)}` : exitLabel(p)}
                   </span>
+                  {isRun ? (
+                    <span className={`bpm-chip ${isStale(p._silentSeconds || 0) ? "c-stale" : ""}`}>
+                      {silentLabel(p._silentSeconds || 0)}
+                    </span>
+                  ) : null}
                   {p.pid ? <span className="bpm-chip">PID {p.pid}</span> : null}
                   {p.started_at ? <span className="bpm-chip">{p.started_at}</span> : null}
                   {p.cwd ? <span className="bpm-chip bpm-cwd" title={p.cwd}>{p.cwd}</span> : null}

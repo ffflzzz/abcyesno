@@ -101,3 +101,41 @@ export function exitLabel(proc) {
 export function pickVisible(running, justFinished) {
   return [...(running || []), ...(justFinished || [])];
 }
+
+/**
+ * 距上次新输出多久了 —— 心跳的判据。
+ *
+ * 阈值为什么是 600 秒：短剧驱动一个正常阶段（reviewer 137-175s、scenedesigner
+ * 611s）期间驱动本身不打新日志，输出尾行本来就会静止几分钟；把阈值定在 3 分钟
+ * 会在每次正常运行时误报。10 分钟是"这一天里从没出现过这么长的静默"那一档。
+ * 措辞只报事实（"已 N 分钟无新输出"），不下"卡住了"的判断。
+ */
+// 分成两行写而不是 `export const`：scripts/check-tdz.js 会把
+// ExportNamedDeclaration 当成一次"先于声明的引用"，对 `export const` 误报
+// TDZ。别合并回去，否则守卫会红。
+const STALE_AFTER_SECONDS = 600;
+export { STALE_AFTER_SECONDS };
+
+export function silentLabel(silentSeconds) {
+  const s = Math.max(0, Math.floor(Number(silentSeconds) || 0));
+  if (s < 60) return "刚刚有输出";
+  if (s < 3600) return `已 ${Math.floor(s / 60)} 分钟无新输出`;
+  return `已 ${formatUptime(s)}无新输出`;
+}
+
+export function isStale(silentSeconds) {
+  return (Number(silentSeconds) || 0) >= STALE_AFTER_SECONDS;
+}
+
+/**
+ * 折叠态该拿哪个进程的输出当"最新一行"。
+ * 取"最近还在动"的那个（静默秒数最小），而不是跑得最久的 —— 后者会一直显示
+ * 一个早已不动的进程的尾巴。
+ */
+export function pickLiveliest(list, silentOf) {
+  const rows = (list || []).filter(Boolean);
+  if (rows.length === 0) return null;
+  return rows.reduce((best, p) =>
+    silentOf(p) < silentOf(best) ? p : best
+  , rows[0]);
+}
