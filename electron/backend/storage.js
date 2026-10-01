@@ -267,6 +267,21 @@ class Storage {
     return data ? data[threadId] || null : null;
   }
 
+  /**
+   * Full app-threadId -> hermes-session-id table.
+   *
+   * Needed by the session reconciler, which works in the reverse direction:
+   * a gateway session id arrives on a `message.complete` event and we must
+   * find which desktop session owns it. `getThreadMapping` only answers the
+   * forward question, so callers used to have nothing to look at and the
+   * autonomous-turn output simply had nowhere to go (2026-10-01).
+   */
+  async listThreadMappings() {
+    const data = await this._readJsonSafe(this.threadsFile, null);
+    if (!data || typeof data !== 'object') return {};
+    return data;
+  }
+
   async setThreadMapping(threadId, hermesSessionId) {
     if (!threadId) return;
     return this._withLock(this.threadsFile, async () => {

@@ -11,6 +11,7 @@ const { createWechatBridgeRunner } = require('./backend/wechat-bridge-runner');
 const { GatewayClient } = require('./backend/gateway-client');
 const { createAgUIServer } = require('./backend/agui-server');
 const { Storage } = require('./backend/storage');
+const { createSessionReconciler } = require('./backend/session-reconcile');
 const { log } = require('./backend/logger');
 const { unpacked } = require('./backend/app-paths');
 const updater = require('./updater');
@@ -97,6 +98,46 @@ let gatewayClient = null;
 let aguiServer = null;
 let aguiPort = 0;
 let gatewayReady = false; // true only after gatewayClient WS 'open' fires
+
+// ── 自主唤醒回合回写桌面存档 ─────────────────────────────────────
+// 后台进程完成通知触发的 agent 回合由 tui_gateway 的 notification poller
+// 直接起，不经过桌面端的 AG-UI SSE（那条流只在用户主动 prompt.submit 时开着）。
+// 于是这类回合只进引擎侧 state.db，界面上怎么点都看不到（2026-10-01 实测：
+// 界面停在 15:47，同会话在引擎侧已到 16:50，三份汇报含终版验收全部悬空）。
+// 每完成一个回合就把网关会话历史与桌面存档对一遍，缺的补进存档。
+const sessionReconciler = createSessionReconciler({
+  getGatewayClient: () => gatewayClient,
+  storage,
+  log,
+  onAppended: () => {
+    // 渲染端已有的 loadSessions → hydrateSession 链路会把新消息显示出来。
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('sessions-updated');
+    }
+  },
+});
+
+// 回合密集时 message.complete 会连着来；按会话去重、合并成一次对账。
+const pendingReconcile = new Set();
+let reconcileTimer = null;
+const RECONCILE_DEBOUNCE_MS = 800;
+
+function reconcileOnTurnComplete(params) {
+  const sid = params && params.session_id;
+  if (!sid) return;
+  pendingReconcile.add(sid);
+  if (reconcileTimer) return;
+  reconcileTimer = setTimeout(() => {
+    reconcileTimer = null;
+    const batch = [...pendingReconcile];
+    pendingReconcile.clear();
+    for (const s of batch) {
+      sessionReconciler.reconcileHermesSession(s).catch((err) => {
+        log('reconcile', `failed for ${s}: ${err.message}`);
+      });
+    }
+  }, RECONCILE_DEBOUNCE_MS);
+}
 
 // ── 2026-08-29 微信授权「原路返回」 ────────────────────────────────────────
 // 微信 bridge 驱动的 turn 触发工具授权时，审批请求不再弹到桌面
@@ -776,6 +817,10 @@ async function doStartBackend() {
       if (mainWindow) {
         mainWindow.webContents.send('clarify-request', params.payload || params);
       }
+    } else if (type === 'message.complete') {
+      // 桌面端没在等这条回合时（后台完成通知自主唤醒的回合），事件到这里就
+      // 断了——交给对账把产出捞回桌面存档。
+      reconcileOnTurnComplete(params);
     }
   });
 
@@ -786,6 +831,10 @@ async function doStartBackend() {
 
   gatewayClient.on('open', () => {
     gatewayReady = true;
+    // 连上就把上次退出后引擎侧新增的回合捞回来（含应用没开时跑完的长任务）。
+    sessionReconciler.reconcileAll().catch((err) => {
+      log('reconcile', `startup sweep failed: ${err.message}`);
+    });
     if (mainWindow) {
       mainWindow.webContents.send('gateway-status', { connected: true });
       // Inform the frontend that it can re-read the AG-UI port and start
@@ -1275,6 +1324,8 @@ ipcMain.handle('set-api-key', async (_event, key) => {
         if (mainWindow) {
           mainWindow.webContents.send('clarify-request', params.payload || params);
         }
+      } else if (type === 'message.complete') {
+        reconcileOnTurnComplete(params);
       }
     });
     gatewayClient.on('close', () => {
@@ -1283,6 +1334,9 @@ ipcMain.handle('set-api-key', async (_event, key) => {
     });
     gatewayClient.on('open', () => {
       gatewayReady = true;
+      sessionReconciler.reconcileAll().catch((err) => {
+        log('reconcile', `restart sweep failed: ${err.message}`);
+      });
       if (mainWindow) {
         mainWindow.webContents.send('gateway-status', { connected: true });
         mainWindow.webContents.send('agui-ready', { port: aguiPort });
