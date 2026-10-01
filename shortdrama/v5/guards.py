@@ -602,22 +602,46 @@ def revision_exhausted(role: str, m: dict) -> bool:
 
 # ─── 3. post_validate：物化守卫（磁盘实况优先）───────────────────────────────
 
+def artifact_fresh(path: Path, since: float | None) -> bool:
+    """产物是不是 `since`（epoch 秒）之后写的。`since=None` → 不判，返回 True。
+
+    为什么需要它（2026-10-01）：正规"打回重做"会先 `reset_from(root=...)` 把旧产物
+    移进 `.rerun_backup/`，所以那条路上"文件还在"确实等于"本轮新写的"。但**没走那条
+    路**的调用方（当天是外部 agent 临时写的恢复驱动）让角色重跑时，盘上留着上一轮的
+    同名文件，`exists()` 照样成立 ⇒ 判 complete、判决照旧从旧文件解析、据此写
+    force_passed 放行渲染。实测：`review_ep1.md` 的 mtime 停在 15:33:33、md5 未变，
+    两轮 reviewer（175s / 137s）一次都没碰它，日志却两次都写 "OK"。
+
+    1 秒容差是给文件系统时间粒度留的余量，不是放宽判据。
+    """
+    if since is None:
+        return True
+    try:
+        return path.stat().st_mtime >= since - 1.0
+    except OSError:
+        return False
+
+
 def post_validate(role: str, m: dict, root: Path,
                   wrote: list[str] | None = None,
-                  ep: int | None = None) -> tuple[bool, str, str]:
+                  ep: int | None = None,
+                  since: float | None = None) -> tuple[bool, str, str]:
     """返回 (ok, why, path)。账本没记但盘上有非空产物 → 承认（不假失败）。
 
     `ep` 不传则取 manifest 的 `episode_index`（既有调用方零改动）。
+    `since` 传了就必须是本轮写的（见 `artifact_fresh`）；不传行为一字不变。
     """
     if ep is None:
         ep = int(m.get("episode_index", 1) or 1)
     for w in (wrote or []):
         p = root / w
         try:
-            if p.exists() and len(p.read_text(encoding="utf-8").strip()) > 0:
+            if (p.exists() and len(p.read_text(encoding="utf-8").strip()) > 0
+                    and artifact_fresh(p, since)):
                 return True, "", w
         except UnicodeDecodeError:
-            return True, "", w          # 二进制产物：存在即算
+            if artifact_fresh(p, since):
+                return True, "", w          # 二进制产物：存在即算（但仍要本轮写的）
         except Exception:  # noqa: BLE001
             continue
     rel = out_path(role, ep)
@@ -664,6 +688,11 @@ def post_validate(role: str, m: dict, root: Path,
             return False, "产物为空（%s）" % rel, ""
     except UnicodeDecodeError:
         pass
+    if not artifact_fresh(p, since):
+        # 判据要说清"怎么修"，不然调用方只会照着"未物化"去查一个存在的文件。
+        return False, ("产物未被本轮改写（%s 的 mtime 早于本轮起点）"
+                       "——重跑该角色前先调 reset_from(root=...) 把旧产物移进 "
+                       ".rerun_backup/" % rel), ""
     return True, "（账本未记但产物在盘，按声明路径对账承认）", rel
 
 

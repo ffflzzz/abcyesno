@@ -30,7 +30,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from v5 import config
-from v5.guards import (PREREQ, load_manifest, out_path,  # noqa: E402
+from v5.guards import (PREREQ, artifact_fresh, load_manifest, out_path,  # noqa: E402
                        reset_from, resolve_path, save_manifest)
 
 # ★ 完成判据必须用**被派发的 7 个角色**（`PREREQ` 的键），**不含 `director`**。
@@ -291,18 +291,35 @@ async def main() -> int:
     tid = th["thread_id"]
     print("[drive] thread = %s" % tid, flush=True)
 
-    def done_roles() -> list:
+    _stale_demoted = set()   # 只响一次，别每轮刷同一条
+
+    def done_roles(since: float | None = None) -> list:
         """产物侧进展（不依赖 server 状态）。
 
         ★ M3：判据必须是**本集**的产物文件（含 `_ep{N}`）。用 `glob("*.md")` 会让
         第 2 集被第 1 集的产物满足 → 判"全跑完"→ 白跑一轮媒体链。
         读走 `resolve_path`：第 1 集的历史项目产物是旧名，也要认。
+
+        ★ `since` 传了就不再承认"上一轮留下的文件"（见 `guards.artifact_fresh`）。
+        2026-10-01 实测：外部驱动让 reviewer 重跑，`review_ep1.md` 的 mtime 停在
+        15:33:33 一次没变，`exists()` 照样成立 → 判 complete、判决照旧从旧文件
+        解析、据此写 force_passed 放行渲染。"在盘"不等于"本轮写的"。
+        豁免：`ep>1` 且全剧级产物已在盘时，那三个角色本轮**根本不跑**，按磁盘事实
+        算完成是设计（见下面 M5 那段），不许要求它们被本轮改写。
         """
         got = []
         for r in ROLES:
             p = resolve_path(root, r, ep)
-            if p.exists() and p.stat().st_size > 0:
-                got.append(r)
+            if not (p.exists() and p.stat().st_size > 0):
+                continue
+            if since is not None and r not in skipped_whole and not artifact_fresh(p, since):
+                if r not in _stale_demoted:
+                    _stale_demoted.add(r)
+                    print("[drive] ⚠️ %s 的产物在盘，但 mtime 早于本轮起点 → **本轮不算它完成**。"
+                          "重跑前需先 reset_from(root=...) 把旧产物移进 .rerun_backup/，"
+                          "否则'重跑'只是空转。" % r, flush=True)
+                continue
+            got.append(r)
         return got
 
     # ★ supervisor 是**按批次**推进的（一次 run 只做一个批次）——
@@ -322,9 +339,13 @@ async def main() -> int:
     #   ② **跨集错位**：角色卡/资产名一变，ep1 的分镜就引用着旧名字，而参考图
     #      （`cast.ensure` 幂等）不会跟着重画 ⇒ 文字与图对不上 ⇒ 静帧 QC 残留暴增。
     # ⇒ 第 2 集起，只要**全剧级产物已在盘**，就在目标提示里明确**跳过**这三步。
-    #   （`done_roles()` 判"全剧级文件在盘"照样成立，所以完成判据不受影响。）
+    #   （`done_roles()` 照样认这三个的旧文件 —— 它们列在 `skipped_whole` 里，
+#     是新鲜度判据唯一的豁免项。）
     WHOLE_DRAMA = ("worldbuilder", "assetdesigner", "plotdesigner")
     _have_whole = all(resolve_path(root, r, 1).exists() for r in WHOLE_DRAMA)
+    # 本轮**根本不跑**的那三个 —— 也正是 `done_roles(since=...)` 唯一豁免新鲜度
+    # 判据的角色（它们的产物本来就该是旧的）。
+    skipped_whole = WHOLE_DRAMA if (ep > 1 and _have_whole) else ()
     if ep > 1 and _have_whole:
         _plan = ("本集**用 `task` 依次派发**这 4 个角色："
                  "scriptwriter → dialogue → scenedesigner → reviewer。"
@@ -427,7 +448,7 @@ async def main() -> int:
             return None, None
 
     while time.time() - t0 < timeout:
-        got = done_roles()
+        got = done_roles(t0)
         if reached(got, until):
             # ★ 产物齐了先问一句**评审过没过**（见上方 `review_state` 的事故记录）。
             #   `--until` 是前端两段式的"跑到某角色为止"，那条路径上没有评审，
@@ -491,7 +512,7 @@ async def main() -> int:
             except Exception as e:  # noqa: BLE001
                 status = "poll-err:%s" % str(e)[:50]
                 poll_err += 1
-            _now = done_roles()
+            _now = done_roles(t0)
             print("[%5ds] r%d run=%-12s 产物=%s"
                   % (time.time() - t0, round_no, status, _now), flush=True)
             # ★ 2026-09-19：`--until` 已达成 ⇒ **不等这一轮 run 结束**
@@ -557,7 +578,7 @@ async def main() -> int:
             # 新 run）—— 那样会**丢掉挂起的 thread 状态**、从头重跑一遍。
             _wait_t0 = time.time()
             dec = await _wait_decision(root, project, tid, rid,
-                                       done_roles(), hitl_timeout)
+                                       done_roles(t0), hitl_timeout)
             # ★ **等人不算链的时间**（2026-09-18）：把这段补回 `t0`。
             #   不补的话，人思考 10 分钟就等于从链的 90 分钟预算里扣掉 10 分钟
             #   —— 全手动模式下这是**必然**发生的误判，不是边缘情况。
@@ -614,7 +635,7 @@ async def main() -> int:
         if status in ("error", "timeout"):
             print("[drive] 本轮终止 status=%s" % status, flush=True)
             break
-    _got = done_roles()
+    _got = done_roles(t0)
 
     # ★★ 2026-09-18：**人工结束**（中止 / 打回失败 / 等待超时）⇒ 专用退出码 `4`。
     #

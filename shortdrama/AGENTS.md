@@ -491,6 +491,11 @@ pack 档**跳过**逐镜 clipqc（组产物多镜
 而无 `reasons`（阻断理由）**视为通过**；有阻断理由才回退，目标由
 `decision.resolve_target()` 算出（取 `rerun` 与 `reason_owners` 中**更上游**的那个）。
 回退时该角色**及其下游**的 `phases` 被清空、旧产物移到 `.rerun_backup/<时间戳>/` 后重跑。
+★ 完成判据认的是**本轮写的**，不是"在盘"：`guards.artifact_fresh(path, since)` +
+  `post_validate(..., since=)` / `drive_chain.done_roles(since=)`。**没走 `reset_from` 的调用方**
+  让角色重跑时，上一轮的同名文件会让 `exists()` 照样成立 ⇒ "重跑"空转、判决从旧文件解析。
+  唯一豁免是 `ep>1` 已锁定的全剧级三件套（`skipped_whole`，它们本轮根本不跑）。
+  不传 `since` 时行为与改造前一字不变。
 同一角色回退**超过** `SHORTDRAMA_MAX_REVISIONS`（默认 **2**）次后记 `force_passed` **强制放行**
 （媒体门认 `passed or force_passed`，不会卡死）。
 ★ 2026-09-29 才真正接线：此前 `force_passed` **零写入点**、`revision_exhausted()` 零生产调用点，

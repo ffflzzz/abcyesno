@@ -124,6 +124,62 @@ class TestPostValidate(unittest.TestCase):
             self.assertFalse(ok)
             self.assertIn("未物化", why)
 
+    def _sw(self, root, text="剧本内容" * 10, mtime=None):
+        """落一个 scriptwriter 产物，可选把 mtime 钉到指定时刻。"""
+        import os, time
+        p = root / "scriptwriter" / "scriptwriter_ep1.md"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text, encoding="utf-8")
+        if mtime is not None:
+            os.utime(str(p), (mtime, mtime))
+        return p
+
+    def test_since_none_keeps_disk_truth_behaviour(self):
+        """不传 since → 行为与改造前一字不变（既有调用方零改动）。"""
+        import tempfile, time
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            self._sw(root, mtime=time.time() - 86400)   # 一天前的旧文件
+            ok, why, path = guards.post_validate("scriptwriter", _m(), root)
+            self.assertTrue(ok, why)
+
+    def test_stale_artifact_rejected_when_since_given(self):
+        """传了 since → "在盘但上一轮留下的"不再算完成。
+
+        病样本（2026-10-01）：review_ep1.md mtime 停在 15:33:33，两轮 reviewer
+        都没碰它，exists() 照样成立 → 判 complete、判决从旧文件解析、据此
+        force_passed 放行渲染。
+        """
+        import tempfile, time
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            self._sw(root, mtime=time.time() - 600)     # 10 分钟前写的
+            ok, why, path = guards.post_validate("scriptwriter", _m(), root,
+                                                 since=time.time())
+            self.assertFalse(ok, "旧产物不该算本轮完成")
+            self.assertIn("未被本轮改写", why)
+            self.assertIn(".rerun_backup/", why, "判据要说清怎么修")
+
+    def test_fresh_artifact_passes_with_since(self):
+        import tempfile, time
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            self._sw(root, mtime=time.time())
+            ok, why, path = guards.post_validate("scriptwriter", _m(), root,
+                                                 since=time.time() - 5)
+            self.assertTrue(ok, why)
+
+    def test_artifact_fresh_has_one_second_tolerance(self):
+        """1 秒容差是给文件系统时间粒度的，不是放宽判据。"""
+        import tempfile, time
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            now = time.time()
+            p = self._sw(root, mtime=now - 0.5)
+            self.assertTrue(guards.artifact_fresh(p, now))
+            self.assertFalse(guards.artifact_fresh(p, now + 60))
+            self.assertTrue(guards.artifact_fresh(p, None), "since=None 一律放行")
+
 
 class TestTokenBreaker(unittest.TestCase):
     def test_run_budget(self):
