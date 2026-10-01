@@ -90,6 +90,7 @@
       "!shortdrama/.dev/**",
       "!shortdrama/.qoder/**",
       "!shortdrama/.workbuddy/**",
+      "!shortdrama/**/node_modules/**",
       "!shortdrama/.langgraph_api/**",
       "!shortdrama/.langgraph_api.bak-*/**",
       "!shortdrama/.env",
