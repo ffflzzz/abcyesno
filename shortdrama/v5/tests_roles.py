@@ -364,6 +364,65 @@ class TestPackSkillEpisodePathConsistency(unittest.TestCase):
                 self.assertIn("第 3 集", s, "%s 的开工契约没声明集号（M4 要求集感知）" % role)
 
 
+class TestStillBeatClaimMatchesPipeline(unittest.TestCase):
+    """包 SKILL 里「静帧取哪一拍」的说法必须与代码一致（2026-10-02 收口）。
+
+    为什么这是真实故障而不是措辞洁癖：`prompt.content_line(beat_pick=...)` 从
+    2026-09-26 起取**第一拍**（取最后一拍会让静帧提示词里一个服装词都不剩——
+    brawl 实测同组三张静帧穿出两套外套），而**四个包的 scenedesigner SKILL 还在教
+    「静帧取最后一拍」「朝向必须进最后一拍（静帧取它）」**。分镜师照 SKILL 写，
+    身份锚点与朝向就落在静帧拿不到的那一拍上：定妆照没有服装词 → 视频继承错的衣服。
+    同一个文件里甚至同时存在两种说法（shortdrama 第 101/116 行说"最后"、
+    第 128 行说"第一"），模型只能挑一个听。
+    """
+
+    #: 已废弃的说法（剥掉 markdown 粗体后比对）
+    _STALE = ("静帧取最后一拍", "静帧只取最后一拍",
+              "朝向必须进最后一拍", "尤其最后一拍")
+
+    def _skills(self):
+        packs = config.SKILLS_DIR / "packs"
+        files = sorted(packs.glob("*/scenedesigner/SKILL.md"))
+        self.assertTrue(files, "没扫到 scenedesigner SKILL —— 路径不对，测试本身失效了")
+        return files
+
+    def test_no_pack_teaches_the_abandoned_last_beat(self):
+        bad = []
+        for f in self._skills():
+            body = f.read_text(encoding="utf-8").replace("*", "")
+            for pat in self._STALE:
+                if pat in body:
+                    bad.append("%s：%s" % (f.parts[-3], pat))
+        self.assertEqual(bad, [], "SKILL 在教静帧拿不到的那一拍：" + "；".join(bad))
+
+    def test_packs_teaching_still_consumption_point_at_first_beat(self):
+        """**正向锁**：不许用"把那句话删掉"糊过上一条测试。
+
+        凡是写了「静帧取…拍」的包，必须写成取第一拍；且这种包不得少于 4 个
+        （五个自带分镜契约的包都该讲清这件事）。
+        """
+        covered = []
+        for f in self._skills():
+            body = f.read_text(encoding="utf-8").replace("*", "")
+            if "静帧取" not in body and "静帧只取" not in body:
+                continue
+            self.assertTrue("静帧取第一拍" in body or "静帧只取第一拍" in body,
+                            "%s 写了静帧取哪一拍，却没写第一拍" % f.parts[-3])
+            covered.append(f.parts[-3])
+        self.assertGreaterEqual(
+            len(covered), 4,
+            "讲清「静帧取第一拍」的包只剩 %s —— 契约不能靠删语句来合规" % covered)
+
+    def test_pipeline_still_takes_the_first_beat(self):
+        """代码侧的锚：判据变了要同时改文档，不许只改一边。"""
+        from v5.media.prompt import content_line
+
+        shot = {"visual": "0-2秒：@阿劲（灰蓝旧运动外套）抬手；2-4秒：他转身走开"}
+        self.assertIn("灰蓝旧运动外套", content_line(shot, beat_pick="first"),
+                      "静帧路径不再取第一拍 ⇒ 上面两条 SKILL 判据要一起重新对账")
+        self.assertNotIn("灰蓝旧运动外套", content_line(shot, beat_pick="last"))
+
+
 class TestDirectorReceivesCraft(unittest.TestCase):
     """★ M4 缺口（2026-09-17 修）：supervisor（= director）**必须**收到叙事技法。
 
