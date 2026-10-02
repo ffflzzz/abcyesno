@@ -33,34 +33,43 @@ from v5.media import storyboard                           # noqa: E402
 
 FRACS = (0.25, 0.55, 0.90)
 PUNCT = "「」『』“”\"'（）()、，。．：:；;！!？?—–-…· \t\r\n【】"
+KINDS = {"缺道具", "道具凭空出现", "动作没发生", "服装不符", "发饰不符",
+         "人数不符", "说话人不在场", "可读文字", "镜内漂移"}
 
-# ── 人工逐帧看过的确证项（用来算召回）────────────────────────────────────────
-GROUND_TRUTH = {
-    "1": {
-        "LN10": "静帧里她手上并没有腰牌，成片凭空多出一块牌，牌面还刻着一列像字的纹样",
-        "LN05": "同一镜内她的服装从浅青广袖变成墨黑窄袖，房间也换了",
-        "LN04": "袖型与角色卡的「窄袖」不符（广袖），颜色偏浅青",
-    },
-    "2": {
-        "LN01": "她多了一件卡上没有的浅色披衫",
-        "LN02": "同一角色下一镜变成肘上短袖，与「窄袖襦裙」不符",
-        "LN03": "腰牌牌面出现一列刻字（可读文字）",
-    },
+# ── 回归样本：上一轮**人工逐帧**确证过的，用来量这版探针准不准 ──────────────
+#   must_catch：真问题，探针必须报出来（`keys` = 报出来时句子里应出现的词）
+#   must_not：上一轮探针的**瞎报**，这一轮必须不再出现
+MUST_CATCH = {
+    "1:LN10": ("腰牌静帧里没有、成片凭空多出，牌面刻着一列字", ("刻字", "文字", "錾纹", "凭空", "牌")),
+    "1:LN05": ("同一镜内她服装从浅青广袖变墨黑窄袖、房间也换", ("变", "袖", "颜色", "衣")),
+    "1:LN04": ("袖型与「窄袖」不符（广袖），颜色偏浅青", ("袖",)),
+    "2:LN01": ("她多了一件卡上没有的浅色披衫", ("披", "外", "衫", "袖", "衣")),
+    "2:LN02": ("同一角色下一镜变肘上短袖，与「窄袖襦裙」不符", ("袖",)),
+    "2:LN03": ("腰牌牌面出现一列刻字（可读文字）", ("字", "錾")),
+    "2:LN08": ("分镜写「两人只有剪影」，画面里人脸清清楚楚", ("剪影",)),
+}
+MUST_NOT = {
+    "1:LN06": "光线冷暖/暖边（上一轮瞎报）",
+    "2:LN02": "背景雨幕虚化程度（上一轮瞎报）",
 }
 
 PROMPT_SHOT = """你是短剧**成片**质检。下面是**同一个镜头**按时间先后的三帧（25%、55%、90%），以及这一镜的分镜原文。
 
-只回答一件事：**这一镜有没有在演它写的那件事。**
+回答两件事：
+A. **这一镜有没有在演它写的那件事。** 该有的人在不在、该有道具在不在、动作有没有真的发生、服装发饰对不对、画面里有没有可读文字、人数对不对。
+B. **有没有"不该变的东西"在三帧之间变了**：同一个人的服装颜色/袖型、发饰、所在的房间。
+   ⚠️ 因剧情动作造成的变化**不算**（衣服被她解下、东西被他放下、人转身走开 —— 这些都是本该发生的）。
 
-规则（违反任何一条，你这条就不作数）：
-- 只报**画面里看得见**的问题，不许推测画外、不许推测下一镜。
-- 每条问题必须给 `quote`：**从下面分镜原文里逐字抄**被违背的那一段（10~40 字）。抄不出来就别报这条。
-- 每条问题必须给 `seen`：你在画面里看到了什么（≤30 字）。
-- 要报：人物该在不在、道具该在不在、动作有没有发生、服装颜色与袖型对不对、发饰对不对、画面里有没有可读文字、人数对不对。
-- 一律不报：景别、光线、构图、风格、审美、演技好坏。
+每条问题给三个字段：
+- `kind`：从这几个里选 —— 缺道具 / 道具凭空出现 / 动作没发生 / 服装不符 / 发饰不符 / 人数不符 / 说话人不在场 / 可读文字 / 镜内漂移
+- `quote`：**从下面分镜原文里逐字抄**被违背的那一段（10~40 字）
+- `seen`：你在画面里看到了什么（≤30 字，写看得见的东西）
+
+以下这些**不属于你的活**，不要写进 items（写了我也会当噪声滤掉）：光线明暗、色温冷暖、背景虚化程度、构图、景别、审美、演技。
 
 只输出 JSON，不要解释：
-{"verdict":"ok|bad","items":[{"kind":"缺道具|道具凭空出现|动作没发生|服装不符|人数不符|可读文字|说话人不在场|其他","quote":"逐字抄的分镜原文","seen":"画面里看到了什么"}]}
+{"verdict":"ok|bad","items":[{"kind":"...","quote":"...","seen":"..."}],
+ "drift":{"changed":true,"what":"≤30字，说清什么变了；没变就留空"}}
 
 分镜原文（画面描述）：
 {visual}
@@ -71,15 +80,16 @@ PROMPT_SHOT = """你是短剧**成片**质检。下面是**同一个镜头**按�
 
 PROMPT_EP = """这是一集竖屏短剧的**故事板**，格子按镜号顺序排列，每格取自该镜中段，格上标了镜号。
 
-回答三件事：
-1. `summary`：用一句话说清这一集在讲什么。看不出来就老实写"看不出来"，并写 `summary_ok:false`。
-2. `breaks`：哪两个**相邻镜**之间接不上（人数、站位、服装、道具、空间突然变了）。每条给 `between`（形如 "LN05→LN06"）和 `seen`（≤30 字，说看见什么变了）。
-3. `not_acting`：哪一镜没在演分镜写给它的事。每条给 `shot`、`seen`，以及 `quote`——**从下面分镜清单里逐字抄**被违背的那一段（10~40 字），抄不出就别报。
+回答两件事：
+1. `summary`：用一句话说清这一集在讲什么。
+2. `breaks`：哪两个**相邻镜**之间接不上 —— 人数、左右站位、服装、手里拿的东西、所在的房间突然变了。
+   每条给 `between`（形如 "LN05→LN06"）和 `seen`（≤30 字，说清**看得见**的变了什么）。
+   只报人物/道具/空间的可辨变化；光线、氛围、构图、剪辑节奏不算。
 
-只报看得见的。只输出 JSON：
-{"summary":"...","summary_ok":true,"breaks":[{"between":"LN01→LN02","seen":"..."}],"not_acting":[{"shot":"LN05","quote":"...","seen":"..."}]}
+只输出 JSON：
+{"summary":"...","breaks":[{"between":"LN05→LN06","seen":"..."}]}
 
-分镜清单：
+这一集的分镜清单（用来对照格子里该有什么）：
 {board}
 """
 
@@ -104,7 +114,7 @@ def grab(video: Path, frac: float, out: Path) -> Path | None:
     return out if out.exists() else None
 
 
-def ask(imgs: list[Path], text: str, tries: int = 3) -> str:
+def ask(imgs: list[Path], text: str, tries: int = 3, max_tokens: int = 1200) -> str:
     parts = [{"type": "text", "text": text}]
     for p in imgs:
         parts.append({"type": "image_url", "image_url": {"url": data_uri(p)}})
@@ -112,7 +122,7 @@ def ask(imgs: list[Path], text: str, tries: int = 3) -> str:
     last = None
     for i in range(tries):
         try:
-            r = llm.chat_for("", 1200, temperature=0).invoke([msg])
+            r = llm.chat_for("", max_tokens, temperature=0).invoke([msg])
             return r.content if hasattr(r, "content") else str(r)
         except Exception as e:                                  # noqa: BLE001
             last = e
@@ -121,6 +131,17 @@ def ask(imgs: list[Path], text: str, tries: int = 3) -> str:
                 continue
             time.sleep(3)
     raise RuntimeError(f"视觉调用失败：{str(last)[:120]}")
+
+
+def ask_json(imgs: list[Path], text: str):
+    """拿不回合法 JSON 就**响亮报错** —— 静默当成"没查出问题"是最坏的方向。"""
+    txt = ""
+    for i in range(2):
+        txt = ask(imgs, text, max_tokens=1400 + 1400 * i)
+        d = parse_json(txt)
+        if d:
+            return d, txt
+    raise RuntimeError(f"模型输出解析不出 JSON（不静默放行）：{txt[:140]}")
 
 
 def parse_json(txt: str) -> dict:
@@ -174,22 +195,30 @@ def review_shot(ep, sh, clip, work):
                         for i, fr in enumerate(FRACS)) if f]
     if not imgs:
         return {"shot": sh["name"], "error": "抽不到帧"}
-    txt = ask(imgs, PROMPT_SHOT.replace("{visual}", (sh.get("visual") or "")[:1600])
-              .replace("{tail}", (sh.get("tail") or "")[:400]))
-    d = parse_json(txt)
+    d, txt = ask_json(imgs, PROMPT_SHOT.replace("{visual}", (sh.get("visual") or "")[:1600])
+                      .replace("{tail}", (sh.get("tail") or "")[:400]))
     pool = pool_of(sh)
     kept, dropped = [], []
     for it in (d.get("items") or []):
+        kind = str(it.get("kind") or "").strip()
         q = norm(str(it.get("quote") or ""))
-        if not q or q not in pool:
-            dropped.append({"quote": str(it.get("quote") or "")[:60], "seen": str(it.get("seen") or "")[:60],
-                            "why": "引用在分镜里核不到" if q else "没给引用"})
-        elif not str(it.get("seen") or "").strip():
-            dropped.append({"quote": q[:60], "why": "没描述看到什么"})
+        seen = str(it.get("seen") or "").strip()
+        if kind not in KINDS:
+            dropped.append({"kind": kind, "quote": q[:60], "seen": seen[:60],
+                            "why": "类别不在白名单（光线/构图/抠字面一律不认）"})
+        elif not q or q not in pool:
+            dropped.append({"kind": kind, "quote": str(it.get("quote") or "")[:60],
+                            "seen": seen[:60], "why": "引用在分镜里核不到"})
+        elif not seen:
+            dropped.append({"kind": kind, "quote": q[:60], "why": "没描述看到什么"})
         else:
             kept.append(it)
+    dr = d.get("drift") or {}
+    drift = {"changed": bool(dr.get("changed")), "what": str(dr.get("what") or "").strip()}
+    if drift["changed"] and not drift["what"]:
+        drift["changed"] = False
     return {"shot": sh["name"], "verdict": d.get("verdict") or "?", "kept": kept,
-            "dropped": dropped, "raw_head": txt[:160]}
+            "drift": drift, "dropped": dropped, "raw_head": txt[:160]}
 
 
 def main():
@@ -250,53 +279,66 @@ def main():
                 f = grab(root / f"media/ep{ep}/clips/{name}.mp4", 0.55, out / f"e{ep}_{name}_mid.jpg")
                 if f:
                     mid.append((name, f))
-        # 整集审
+        # 整集审：每 7 格一张（相邻两张共用首镜，跨张的接缝也看得见）
         if mid:
             mid.sort(key=lambda x: x[0])
-            sheet = contact_sheet(mid, out / f"e{ep}_board.jpg")
-            txt = ask([sheet], PROMPT_EP.replace("{board}", board_text(shots)))
-            d = parse_json(txt)
-            kept_b, kept_n, dropped = [], [], []
-            for b in (d.get("breaks") or []):
-                mm = re.findall(r"LN\d+", str(b.get("between") or ""))
-                if len(mm) == 2 and mm[0] in by_name and mm[1] in by_name:
-                    kept_b.append(b)
-                else:
-                    dropped.append({"kind": "break", "raw": str(b)[:80], "why": "镜号不存在"})
-            for it in (d.get("not_acting") or []):
-                sh = by_name.get(str(it.get("shot") or ""))
-                q = norm(str(it.get("quote") or ""))
-                if sh and q and q in pool_of(sh):
-                    kept_n.append(it)
-                else:
-                    dropped.append({"kind": "not_acting", "shot": it.get("shot"),
-                                    "quote": str(it.get("quote") or "")[:60],
-                                    "why": "镜号不存在" if not sh else "引用核不到"})
-            result["episode"][ep] = {"summary": d.get("summary"), "summary_ok": d.get("summary_ok"),
-                                     "breaks": kept_b, "not_acting": kept_n, "dropped": dropped}
-            result["calls"] += 1
-            print(f"   整集审：断点 {len(kept_b)} / 没在演 {len(kept_n)} / 丢弃 {len(dropped)}")
-            print(f"   summary: {str(d.get('summary'))[:120]}")
+            chunks = [mid[i:i + 7] for i in range(0, len(mid), 6)]
+            kept_b, dropped = [], []
+            for ci, ch in enumerate(chunks, 1):
+                sheet = contact_sheet(ch, out / f"e{ep}_board{ci}.jpg", cols=4, tile_w=380)
+                d, _t = ask_json([sheet], PROMPT_EP.replace("{board}", board_text(shots)))
+                result["calls"] += 1
+                if d.get("summary"):
+                    result["episode"].setdefault(ep, {})["summary"] = d.get("summary")
+                    result["episode"][ep]["summary_ok"] = d.get("summary_ok")
+                for b in (d.get("breaks") or []):
+                    mm = re.findall(r"LN\d+", str(b.get("between") or ""))
+                    if len(mm) == 2 and mm[0] in by_name and mm[1] in by_name:
+                        kept_b.append(b)
+                    else:
+                        dropped.append({"kind": "break", "raw": str(b)[:80],
+                                        "why": "镜号不存在或不成对"})
+            result["episode"].setdefault(ep, {})["breaks"] = kept_b
+            result["episode"][ep]["dropped"] = dropped
+            print(f"   整集审：{len(chunks)} 张拼版 ｜ 断点 {len(kept_b)} ｜ 丢弃 {len(dropped)}")
+            print(f"   summary: {str(result['episode'][ep].get('summary'))[:120]}")
 
-    # 对账：人工确证项抓到没有
-    hits = {}
-    for ep, items in GROUND_TRUTH.items():
-        for name, desc in items.items():
-            got = [i for i in (result["shots"].get(f"{ep}:{name}", {}) or {}).get("kept") or []]
-            got += [i for i in result["episode"].get(ep, {}).get("not_acting") or []
-                    if i.get("shot") == name]
-            hits[f"ep{ep} {name}"] = {"确证问题": desc, "探针报了吗": bool(got),
-                                      "内容": [str(i.get("kind") or i.get("quote") or "")[:70] + "｜" +
-                                               str(i.get("seen") or "")[:70] for i in got]}
-    result["ground_truth"] = hits
+    def said(key):
+        v = result["shots"].get(key) or {}
+        bits = [str(i.get("kind") or "") + str(i.get("quote") or "") + str(i.get("seen") or "")
+                for i in (v.get("kept") or [])]
+        dr = v.get("drift") or {}
+        if dr.get("changed"):
+            bits.append("镜内漂移" + str(dr.get("what") or ""))
+        return " ".join(bits)
+
+    catch, leak = {}, {}
+    for key, (desc, keys) in MUST_CATCH.items():
+        txt = said(key)
+        catch[key] = {"真问题": desc, "报了吗": bool(txt) and any(k in txt for k in keys),
+                      "探针原话": txt[:160]}
+    for key, desc in MUST_NOT.items():
+        txt = said(key)
+        bad = [w for w in ("光线", "暖边", "色温", "冷暖", "虚化", "构图", "景别") if w in txt]
+        leak[key] = {"该消失的瞎报": desc, "还在报": bool(bad), "命中词": bad, "探针原话": txt[:160]}
+    result["must_catch"] = catch
+    result["must_not"] = leak
     result["seconds"] = round(time.time() - t0, 1)
     (out / "probe_result.json").write_text(json.dumps(result, ensure_ascii=False, indent=2),
                                            encoding="utf-8")
-    n_hit = sum(1 for v in hits.values() if v["探针报了吗"])
+    hit = sum(1 for v in catch.values() if v["报了吗"])
+    fp = sum(1 for v in leak.values() if v["还在报"])
+    n_items = sum(len(v.get("kept") or []) for v in result["shots"].values())
+    n_drop = sum(len(v.get("dropped") or []) for v in result["shots"].values())
     print(f"\n耗时 {result['seconds']}s ｜ 模型调用 {result['calls']} 次 ｜ "
-          f"人工确证 {len(hits)} 项，探针抓到 {n_hit} 项")
-    for k, v in hits.items():
-        print(f"  {'✅' if v['探针报了吗'] else '❌'} {k} —— {v['确证问题'][:46]}")
+          f"留下 {n_items} 条 / 代码挡掉 {n_drop} 条")
+    print(f"真问题 {hit}/{len(catch)} 抓到 ｜ 上一轮的瞎报残留 {fp}/{len(leak)}（要 0）")
+    for k, v in catch.items():
+        print(f"  {'✅' if v['报了吗'] else '❌'} {k} —— {v['真问题'][:44]}"
+              + (f"｜它说：{v['探针原话'][:60]}" if v["报了吗"] else ""))
+    for k, v in leak.items():
+        print(f"  {'❌还在报' if v['还在报'] else '✅已消失'} {k} —— {v['该消失的瞎报']}"
+              + (f"｜命中 {v['命中词']}" if v["还在报"] else ""))
     print("明细：", out / "probe_result.json")
 
 
