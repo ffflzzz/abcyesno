@@ -755,6 +755,10 @@ def role_input(role: str, root: Path, m: dict, reasons: list[str] | None = None)
                                            use_judge=(config.SHOTCHECK == "full"),
                                            chars=shotcheck.character_names(root),
                                            target_shots=_rng,
+                                           # ★ 摄影/光学两条只在**本项目声明了那份技法**时才判
+                                           #   （反质量包要的是僵硬锁定机位，判了就是误报）
+                                           camera_light=("camera-light-physics"
+                                                         in _craft_refs(root)),
                                            audio_mode=validate.audio_mode_of(_brief),
                                            log=lambda *a: None)
                 if _pl:

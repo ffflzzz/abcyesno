@@ -93,11 +93,34 @@ MOVE_VERBS = ("蹬地", "前冲", "掠", "翻", "劈", "踏", "扑", "甩", "崩
 
 WIDE_WORDS = ("大全景", "全景", "远景", "空镜")
 
+# ─── 摄影与光学两条（`camera-light-physics` 技法开启时才判，2026-10-03）────────
+#
+# 出处是当晚的五臂探针（`scripts/probe_prompt_detail.py`）：同一条 12 秒素材、
+# 画面描述一字不动，只把「运镜」列从 `缓推` 换成带速度/行程/终点/静止段的写法，
+# 末镜最后两秒的帧间差就从 10.9 掉到 6.7 与 5.7（同文本两次的抖动带宽只有 2.8），
+# 而**没声明运镜**的那一臂停在 10.8 与老写法一致 ⇒ 这句写法是有效的那一句。
+#
+# ★ 为什么判据放在这里、且**默认不生效**：
+#   · 这是可数的（列里有没有那些字），按本文件既有的纪律，可数的事不该写进提示词
+#     让模型自觉；
+#   · ⛔ 但反质量包（牛来要的是僵硬、锁定机位、线性起停）会把它当噪声——
+#     所以整块由调用方传的 `camera_light` 开关控制，**没开技法就一条不判**，
+#     其余项目的行为与改造前一字不变；
+#   · 只进**退回清单**（`punch_list`），不进分镜契约门——不新增拦片的判据。
+CAM_MOVE_WORDS = ("推", "拉", "摇", "横移", "移镜", "跟", "甩", "升", "降", "环绕", "轨")
+#: 出现任一项 = 这条运镜写清了"去哪、多快、什么时候停"。
+CAM_SPEC_WORDS = ("m/s", "米/秒", "速度", "行程", "终点", "停在", "静止", "不动", "保持")
+#: 光落点词表（物理描述，不是画质参数）。⚠️ 故意不收 `4K`/`fps`/`无噪点` 那一类——
+#: 它们与类型包风格块方向相反（写实风格块有意保留轻微噪点与真实光学瑕疵）。
+LIGHT_WORDS = ("高光", "亮边", "反光", "光斑", "轮廓光", "透光", "受光", "背光",
+               "吃光", "哑光", "阴影", "逆光")
+
 
 def countable(shots: list[dict], target_seconds: int = 0,
               chars: list[str] | None = None,
               target_shots: tuple[int, int] | None = None,
-              audio_mode: str = "dialogue-led") -> list[dict]:
+              audio_mode: str = "dialogue-led",
+              camera_light: bool = False) -> list[dict]:
     """能数的判据。返回 `[{name, check, detail}]`，空列表 = 全过。
 
     ★ 这一层的存在意义（2026-09-29）：**凡程序能确定的，就别写进提示词让模型自觉**。
@@ -133,6 +156,24 @@ def countable(shots: list[dict], target_seconds: int = 0,
     no_join = [s["name"] for s in shots[1:] if not (s.get("join_note") or "").strip()]
     need(not no_join, "「承接」列必填（首镜除外）",
          "空 %d 镜" % len(no_join), names=no_join)
+
+    # —— 摄影与光学（⛔ 只在 `camera-light-physics` 技法打开时判，见上面的词表注释）——
+    if camera_light:
+        vague = [s["name"] for s in shots
+                 if any(w in (s.get("camera") or "") for w in CAM_MOVE_WORDS)
+                 and not any(w in (s.get("camera") or "") for w in CAM_SPEC_WORDS)]
+        need(not vague, "「运镜」写了位移就得带速度/行程/终点/静止段",
+             "命中 %d 镜 —— 例：缓慢向前推近，速度0.3m/s，行程0.5米，终点停在她手边，"
+             "全程保持近景（静止要写到秒、终点要落在实体、景别别在运镜里改）"
+             % len(vague), names=vague)
+        nolight = [s["name"] for s in shots
+                   if (s.get("visual_style") or "").strip()
+                   and "同上" not in (s.get("visual_style") or "")
+                   and not any(w in (s.get("visual_style") or "") for w in LIGHT_WORDS)]
+        need(not nolight, "「视觉风格」缺光落点（高光在哪、阴影在哪、什么材质吃光）",
+             "命中 %d 镜 —— 在原四要素后追加一句、约 60 字内；只写物理不写画质参数"
+             "（4K/fps/无噪点 与风格块方向相反），也不要写负面句" % len(nolight),
+             names=nolight)
 
     # —— 打戏密度类 ——
     # ★ 「兵刃接触 ≥8 镜」这条**已删**（2026-09-29 16:9 六臂探针 + 官方范例逐帧全量）：
@@ -247,20 +288,22 @@ def clear_punch(root, ep: int) -> None:
 def punch_list(shots: list[dict], *, target_seconds: int = 0, use_judge: bool = True,
                workers: int = 8, log=print, chars: list[str] | None = None,
                target_shots: tuple[int, int] | None = None,
-               audio_mode: str = "dialogue-led") -> list[str]:
+               audio_mode: str = "dialogue-led",
+               camera_light: bool = False) -> list[str]:
     """给角色看的**退回清单**（一镜一行，带镜号与逐字原文）。
 
     为什么要有这个形状：分镜角色拿到的如果是"你自己检查一遍"，它会逐镜重读整张表
     （实测 2 小时）；拿到"这 5 镜、这几条、原文在此"，它只需要改那 5 镜。
     """
-    hard = countable(shots, target_seconds, chars, target_shots, audio_mode)
+    hard = countable(shots, target_seconds, chars, target_shots, audio_mode,
+                     camera_light=camera_light)
     out = []
     for h in hard:
         out.append("【%s】%s（%s）" % (h["check"], h["name"] or "全表", h["detail"]))
     if use_judge:
         r = check(shots, target_seconds=target_seconds, use_judge=True,
                   workers=workers, log=log, chars=chars, target_shots=target_shots,
-                  audio_mode=audio_mode)
+                  audio_mode=audio_mode, camera_light=camera_light)
         for s in r["semantic"]:
             out.append("【%s】镜 %s：「%s」—— %s"
                        % (CODE_LABELS.get(s["code"], s["code"]), s["name"],
@@ -346,12 +389,16 @@ def check(shots: list[dict], *, target_seconds: int = 0, use_judge: bool = True,
           workers: int = 8, log=print, llm=None,
           chars: list[str] | None = None,
           target_shots: tuple[int, int] | None = None,
-          audio_mode: str = "dialogue-led") -> dict:
+          audio_mode: str = "dialogue-led",
+          camera_light: bool = False) -> dict:
     """两层体检的总入口。返回 `{countable, semantic, unverifiable, errors, blocking}`。
 
     `llm` 可注入（离线单测用）—— 缺省才去建真实客户端。
+    `camera_light` = 本项目开了 `camera-light-physics` 技法（调用方从
+    `media.style.script_craft_of(root)` 判），关掉时摄影/光学两条**一条不判**。
     """
-    hard = countable(shots, target_seconds, chars, target_shots, audio_mode)
+    hard = countable(shots, target_seconds, chars, target_shots, audio_mode,
+                     camera_light=camera_light)
     for h in hard:
         log("[shotcheck] ❌ %s —— %s%s"
             % (h["check"], h["detail"], ("（%s）" % h["name"]) if h["name"] else ""))

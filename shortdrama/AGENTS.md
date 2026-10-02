@@ -287,8 +287,16 @@ brief 是外部 Agent 唯一的强杠杆——它决定"拍什么"，而画质�
 这是设计内的（`niulai-movie-style` 只定义 5 个角色）。
 
 **另有 `craft/`——不是类型包，是技法库**：`v5/skills/packs/craft/<技法名>/SKILL.md`
-（当前 **5 个**：`pixar-lighting` / `short-drama-hooks` / `short-drama-opening` /
-`short-drama-satisfaction` / `micro-expression-acting`）。它**没有 `pack.json`、不定义角色**。
+（当前 **6 个**：`pixar-lighting` / `short-drama-hooks` / `short-drama-opening` /
+`short-drama-satisfaction` / `micro-expression-acting` / `camera-light-physics`）。
+`camera-light-physics` 是**摄影与光学写法**（运镜写速度/行程/终点/静止段、视觉风格加"光落点"、
+空间尺寸写在**场景卡**不是每镜）——依据是 1002 夜的五臂探针 `scripts/probe_prompt_detail.py`
+（`缓推` → 带数值与静止段的写法，末镜最后两秒帧间差 10.9 → 6.7/5.7，同文本抖动带宽只有 2.8，
+且未声明运镜的对照臂停在 10.8）。它配套两条**可数检查**（`shotcheck.countable(camera_light=…)`：
+运镜写了位移却没写数值/终点、视觉风格没有光落点 → 进退回清单带镜号），
+⛔ **只在 brief 声明了该技法时才判**（反质量包要的是僵硬锁定机位，判了是误报），
+且只出清单、不进分镜契约门。它**未全面实测**（只在 9:16 写实包的一处场景验过）。
+它**没有 `pack.json`、不定义角色**。
 **已接线**（`v5/media/style.py` `script_craft_of()`/`read_craft()` + `v5/roles.py` 注入）：
 brief.json 的 `script-craft` 列表（项目级）> pack.json 的 `script-craft`（包级默认），
 **opt-in、未声明不注入**；技法 frontmatter 的 `inject-to: [...]` 指定注入角色，

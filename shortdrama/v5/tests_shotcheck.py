@@ -307,5 +307,76 @@ class TestWiring(unittest.TestCase):
         self.assertTrue(any("台词镜" in c for c in checks), checks)
 
 
+def _cl_row(name, camera, style_txt):
+    """可配「运镜」「视觉风格」两列的行（其余与 `_row` 同）。"""
+    return ("| %s | 中景 | 平视 | %s | 4 | 石台 | %s | 裴烛单手把对方手腕格开、"
+            "脚下石板擦出一道痕 | 收在格开 | 裴烛：接住。 | 风声 | 否 | 承接上镜 |\n"
+            % (name, camera, style_txt))
+
+
+class TestCameraLightContract(unittest.TestCase):
+    """`camera-light-physics` 的两条可数判据（1003 五臂探针之后接入）。
+
+    探针的账：同一条 12 秒素材、画面描述一字不动，只把「运镜」列从 `缓推`
+    换成带速度/行程/终点/静止段的写法，末镜最后两秒的帧间差就从 10.9 掉到
+    6.7 与 5.7（同文本两次的抖动带宽 2.8），而**没声明运镜**的那一臂停在 10.8
+    ⇒ 有效的是那句写法，不是运气。守的四件事：
+      ① 没声明技法 ⇒ 两条**一条不判**（反质量包要的是僵硬锁定机位，判了是误报）；
+      ② 旧产物装回来必须**会红**（`缓推` + 无光落点，就是 leak-upstairs 的真实形状）；
+      ③ 写清楚了就必须**不报**（否则分镜会被推着往列里灌水）；
+      ④ `固定` 与「同上」两种合法写法不许报。
+    """
+
+    def _shots(self, *rows):
+        from .media import storyboard
+        got = storyboard.parse(SB_HEAD + "".join(rows))
+        self.assertEqual(len(got), len(rows), "解析出的镜数必须等于行数（否则测了个空）")
+        return got
+
+    def test_off_by_default_history_unchanged(self):
+        shots = self._shots(_cl_row("1", "缓推", "冷白晨光"))
+        checks = [h["check"] for h in shotcheck.countable(shots)]
+        self.assertEqual([c for c in checks if "运镜" in c or "光落点" in c], [],
+                         "没声明技法就多判了，这会污染所有现役项目：%s" % checks)
+
+    def test_old_wording_is_caught(self):
+        hits = {h["check"]: h["name"] for h in
+                shotcheck.countable(self._shots(_cl_row("1", "缓推", "冷白晨光")),
+                                    camera_light=True)}
+        cam = [k for k in hits if "运镜" in k]
+        lit = [k for k in hits if "光落点" in k]
+        self.assertEqual(len(cam), 1, "只写「缓推」必须被判：%s" % list(hits))
+        self.assertEqual(len(lit), 1, "没有光落点必须被判：%s" % list(hits))
+        self.assertEqual(hits[cam[0]], "LN01", "退回清单必须带镜号")
+
+    def test_spec_writes_silence_both(self):
+        shots = self._shots(_cl_row(
+            "1",
+            "缓慢向前推近，推进速度0.3m/s，行程0.5米，终点停在她手边，全程保持近景",
+            "冷白晨光，光从左上方压下来，颧骨一道高光边，绒面吃光、边缘不发亮"))
+        checks = [h["check"] for h in shotcheck.countable(shots, camera_light=True)]
+        self.assertEqual([c for c in checks if "运镜" in c or "光落点" in c], [], checks)
+
+    def test_static_camera_not_flagged(self):
+        # 「固定」没有位移 ⇒ 不许要求它写速度（包契约本来就允许固定机位）
+        shots = self._shots(_cl_row("1", "固定", "冷白晨光，颧骨一道高光边"))
+        checks = [h["check"] for h in shotcheck.countable(shots, camera_light=True)]
+        self.assertEqual([c for c in checks if "运镜" in c], [], checks)
+
+    def test_inherited_style_exempt(self):
+        # 同场景不同镜允许写「同上」（包契约明写），判了就是逼模型逐镜重述
+        shots = self._shots(_cl_row("1", "固定", "同上"))
+        checks = [h["check"] for h in shotcheck.countable(shots, camera_light=True)]
+        self.assertEqual([c for c in checks if "光落点" in c], [], checks)
+
+    def test_punch_list_carries_the_flag(self):
+        """`punch_list` 必须把这个开关透下去——角色拿的是那份清单，不是 countable。"""
+        shots = self._shots(_cl_row("1", "缓推", "冷白晨光"))
+        on = shotcheck.punch_list(shots, use_judge=False, camera_light=True)
+        off = shotcheck.punch_list(shots, use_judge=False)
+        self.assertTrue(any("运镜" in x for x in on), on)
+        self.assertFalse(any("运镜" in x for x in off), off)
+
+
 if __name__ == "__main__":
     unittest.main()

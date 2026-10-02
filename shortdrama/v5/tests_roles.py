@@ -730,5 +730,45 @@ class TestCatalogSlicing(unittest.TestCase):
                     os.environ[SLICE_SOFT_ENV] = old
 
 
+class TestCameraLightCraftReachesRoles(unittest.TestCase):
+    """`camera-light-physics` 必须**真的到达**它声明的角色（1003 接入）。
+
+    为什么单独测这条：技法是靠 `_craft_block` 在 `role_input` 里注入的，
+    而"声明了却没到达"在这项目里发生过两次——
+    ① supervisor 不走 role_input ⇒ director 收到了 0 份（M4，已修）；
+    ② 系统级规则只写在某个包的 SKILL 里 ⇒ 自带该角色 SKILL 的包收不到
+      （village-scale 因此交出 65% 片长被门拦下）。
+    还有一条纪律：**没声明就必须一字不注入**（反质量包不要真实摄影的物理）。
+    """
+
+    def _root(self, craft=None):
+        d = Path(tempfile.mkdtemp(prefix="cl_craft_"))
+        self.addCleanup(shutil.rmtree, d, True)
+        b = {"topic": "测试片", "pack": "shortdrama"}
+        if craft is not None:
+            b["script-craft"] = craft
+        (d / "brief.json").write_text(json.dumps(b), encoding="utf-8")
+        return d
+
+    def test_declared_reaches_scenedesigner(self):
+        root = self._root(["camera-light-physics"])
+        s = role_input("scenedesigner", root, {"episode_index": 1})
+        self.assertIn("camera-light-physics", s, "技法名都没到 ⇒ inject-to 或 opt-in 断了")
+        self.assertIn("终点停", s, "运镜写法的核心（终点）没到，注入被截了？")
+        self.assertIn("光落点", s, "光落点那句没到 ⇒ 第二要素等于没提")
+
+    def test_declared_reaches_assetdesigner(self):
+        """空间尺寸写在**场景卡**是这技法的关键分工——卡的角色收不到就会漂回每镜。"""
+        root = self._root(["camera-light-physics"])
+        s = role_input("assetdesigner", root, {"episode_index": 1})
+        self.assertIn("camera-light-physics", s)
+
+    def test_undeclared_injects_nothing(self):
+        for role in ("scenedesigner", "assetdesigner", "director"):
+            s = role_input(role, self._root(), {"episode_index": 1})
+            self.assertNotIn("camera-light-physics", s, "%s 被没声明的技法污染了" % role)
+            self.assertNotIn("光落点", s)
+
+
 if __name__ == "__main__":
     unittest.main()

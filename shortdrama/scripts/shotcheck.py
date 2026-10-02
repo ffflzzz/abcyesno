@@ -40,8 +40,11 @@ def main() -> int:
         print("⚠️ brief 读不到（%s）→ 跳过片长这条" % str(e)[:60])
     print("=== %s 第 %s 集：%d 镜 / %d 秒（目标 %ds）"
           % (project, ep, len(shots), sum(int(s.get("seconds") or 0) for s in shots), tgt))
+    from v5.media import style as _style
     r = shotcheck.check(shots, target_seconds=tgt,
                         chars=shotcheck.character_names(root),
+                        camera_light=("camera-light-physics"
+                                      in _style.script_craft_of(root)),
                         use_judge=("--no-judge" not in sys.argv))
     if "--json" in sys.argv:
         print(json.dumps(r, ensure_ascii=False, indent=1))
