@@ -55,16 +55,25 @@ def has_speech(shot: dict) -> bool:
     return bool(d) and not SILENT_MARK.match(d)
 
 
-def _clauses(visual: str) -> list[str]:
-    """把镜内正文按子句切开（时间戳剥掉后按逗号/顿号/分号），**顺序不变**。
+def _plain(visual: str) -> str:
+    """去掉时间戳、**保留全部正文**（含第一个标记之前的总起句）。
 
-    ⚠️ 时间戳的剥离**不自己写正则**——直接走 `storyboard.split_beats` 拿正文。
-    本仓库刚为"文档抄一份判据、代码改了文案没跟着改"付过账（"静帧取最后一拍"）。
-    实测本项目写的是 `0-2s：`（拉丁 s），照"秒"字写正则会把标记当成子句留下。
+    ⚠️ 时间戳的剥离**不自己写正则**——直接走 `storyboard.split_beats` /
+    `beat_prefix` 拿正文。本仓库刚为"文档抄一份判据、代码改了文案没跟着改"付过账
+    （"静帧取最后一拍"）。实测本项目写的是 `0-2s：`（拉丁 s），
+    照"秒"字写正则会把标记当成子句留下。
     """
-    beats = storyboard.split_beats(visual or "")
-    body = "；".join(t for _a, _b, t in beats if t) if beats else (visual or "")
-    return [c.strip(" 。\n\t") for c in CLAUSE_SPLIT.split(body)
+    beats = storyboard.split_beats(visual)
+    if not beats:
+        return visual
+    segs = ([p] if (p := storyboard.beat_prefix(visual)) else [])
+    segs += [t for _a, _b, t in beats if t]
+    return "；".join(segs)
+
+
+def _clauses(visual: str) -> list[str]:
+    """把镜内正文按子句切开（时间戳剥掉后按逗号/顿号/分号），**顺序不变**。"""
+    return [c.strip(" 。\n\t") for c in CLAUSE_SPLIT.split(_plain(visual or ""))
             if len(c.strip(" 。\n\t")) >= 2]
 
 
@@ -89,11 +98,12 @@ def to_half(visual: str, span: float, step_want: float = 0.5) -> str:
         stamps.append([cur, nb, c])
         cur = nb
     stamps[-1][1] = float(span)                   # 末拍收到本镜右界，不留缝隙
-    head = storyboard.beat_prefix(visual)         # 总起句（身份锚点）不能被节拍吃掉
-    body = "；".join("%s-%s秒：%s" % (storyboard.beat_label(a),
+    # 不再单独前置总起句：`_clauses` 走 `_plain`，**已经把标记前的锚点收进子句序列**
+    # （再拼一次会让锚点在同一镜里出现两遍 —— 而"同一个人被描述两次会多画一个人"
+    #  正是本仓库记过的实测病）。
+    return "；".join("%s-%s秒：%s" % (storyboard.beat_label(a),
                                       storyboard.beat_label(b), c)
                      for a, b, c in stamps)
-    return (head + "；" + body) if head else body
 
 
 def rewrite(group: list[dict], declared: list[int], arm: str,
