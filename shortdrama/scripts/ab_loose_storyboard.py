@@ -170,6 +170,9 @@ def main() -> int:
     ap.add_argument("--ep", type=int, default=1)
     ap.add_argument("--arms", default="tight,loose")
     ap.add_argument("--render", action="store_true", help="各渲第一组出片对比")
+    ap.add_argument("--reuse", action="store_true",
+                    help="复用 tmp/AB/proj_<臂>/ 里已有的分镜表（写表那一步不再跑，"
+                         "只补渲）——中途崩过一轮时用")
     ap.add_argument("--out", default="tmp/AB")
     a = ap.parse_args()
 
@@ -182,6 +185,15 @@ def main() -> int:
 
     res, inputs = {}, {}
     for arm in [x.strip() for x in a.arms.split(",") if x.strip()]:
+        scratch = out / ("proj_%s" % arm)
+        md = scratch / "scenedesigner" / ("scenedesigner_ep%d.md" % a.ep)
+        if a.reuse and md.exists():
+            print("[ab] %s 臂复用盘上分镜表：%s" % (arm, md), flush=True)
+            st = stats(md)
+            res[arm] = st
+            print("[ab] %s → %d 镜 / %s 秒" % (arm, st["shots"], st["sec_total"]),
+                  flush=True)
+            continue
         print("[ab] %s 臂开工（loose=%s）…" % (arm, arm == "loose"), flush=True)
         md, in_len, delta = run_arm(a.project, a.ep, arm, out)
         inputs[arm] = (in_len, delta)
