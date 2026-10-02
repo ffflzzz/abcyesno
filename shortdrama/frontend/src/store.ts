@@ -12,7 +12,7 @@
    ========================================================================== */
 
 import { useSyncExternalStore } from 'react';
-import type { Episode, Project, StylePack, Vendors } from './types';
+import type { Episode, Health, Project, StylePack, Vendors } from './types';
 import { Api } from './api';
 
 export interface Toast {
@@ -24,6 +24,8 @@ export interface Toast {
 export interface AppState {
   styles: StylePack[];
   vendors: Vendors | null;
+  /** `GET /health` 的载荷（画幅候选等）。与 styles/vendors 同理：**不落 localStorage**。 */
+  health: Health | null;
   projects: Project[];
   /** 当前打开的项目（向导页 / 分镜页用） */
   project: Project | null;
@@ -36,6 +38,7 @@ export interface AppState {
 let state: AppState = {
   styles: [],
   vendors: null,
+  health: null,
   projects: [],
   project: null,
   episode: null,
@@ -91,6 +94,7 @@ export const Store = {
 
   setStyles(list: StylePack[]): void { set({ styles: list || [] }); },
   setVendors(v: Vendors | null): void { set({ vendors: v || null }); },
+  setHealth(h: Health | null): void { set({ health: h || null }); },
   setHydrate(r: AppState['hydrate']): void { set({ hydrate: r }); },
 
   /**

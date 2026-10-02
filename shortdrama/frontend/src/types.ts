@@ -12,10 +12,40 @@ export interface StylePack {
   sample_project?: string;
   sample_shot?: string;
   sample_stills?: number;
+  /**
+   * 以下三项是后端 `styles()` 从每个包 `pack.json` 直接读出来给的（`webmap.styles`），
+   * 2026-10-02 才补进声明 —— 之前只有向导页用一处**局部转型**在读，
+   * 于是"后端一直在给、类型里却查无此字段"，第二个页面想用就得再 cast 一次（两份口径）。
+   * 展示口径统一在 `lib/packcaps.ts`。
+   */
+  audio_modes?: string[];
+  still_refs?: boolean | null;
+  has_style_block?: boolean;
 }
 
-export interface VendorItem {
-  code: string;
+/**
+ * `GET /health` 的载荷（`v5/webmap.py` 的 `health()`）。
+ *
+ * ★ 为什么要专门水合它：`ratio_choices` / `ratio_default` 是**后端**的画幅候选
+ *   （单一来源 `config.RATIO_CHOICES`），而前端原先把选择器**写死成只有 `9:16`** ——
+ *   但 `brief.ratio` 是**真的会生效**的（`media/runner.py:244` 拿它写子进程的
+ *   `SHORTDRAMA_STILL_RATIO` + `SHORTDRAMA_ASPECT`），于是横屏包（如 xianxia-vfx-action）
+ *   在网页上**根本建不出 16:9 的项目**。与 `styles` / `vendors` 同一条教训：
+ *   **候选列表不许在前端写死**，后端加了档位前端看不到就是静默偏差。
+ *   `video_mode` / `aspect_ratio` 也一并给，出片页可以直接说清真实现场。
+ */
+export interface Health {
+  ok: boolean;
+  projects_dir?: string;
+  projects?: number;
+  packs?: string[];
+  video_mode?: string;
+  aspect_ratio?: string;
+  ratio_choices?: string[];
+  ratio_default?: string;
+}
+
+export interface VendorItem {  code: string;
   name?: string;
   short?: string;
   builtin?: boolean;

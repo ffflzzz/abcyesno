@@ -8,7 +8,7 @@
    ========================================================================== */
 
 import type {
-  ApiError, HitlState, HydrateResult, Project, RouteInfo, RunRecord,
+  ApiError, Health, HitlState, HydrateResult, Project, RouteInfo, RunRecord,
   StylePack, StoryboardDetail, Vendors,
 } from './types';
 import { qcPayload } from './lib/quality';
@@ -79,6 +79,8 @@ export interface HydrateStore {
   upsertStoryboard: (pid: string, eid: string, sb: unknown) => void;
   setStyles: (s: StylePack[]) => void;
   setVendors: (v: Vendors | null) => void;
+  /** 可选：拿不到就不水合画幅候选（老调用方与测试不必跟着改签名）。 */
+  setHealth?: (h: Health | null) => void;
 }
 
 /* ------------------------------------------------------------------ HTTP 驱动 */
@@ -326,6 +328,17 @@ export const Api = {
   /** 可选**厂商档**。local 驱动没有厂商（不调模型）⇒ null，视图据此禁用并说明原因。 */
   getVendors(): Promise<Vendors> {
     return http<Vendors>('GET', '/v1/pixa/short-drama/vendors');
+  },
+
+  /**
+   * 后端现场（画幅候选 / 视频档 / 包清单 / 项目数）。
+   *
+   * ★ 为什么单独一条而不复用 `ping()`：`ping` 的职责是**连通性**（它把
+   *   `{ok, driver}` 与载荷合在一起，错误要兜住不上抛），而这里要的是**数据本身**，
+   *   失败必须让调用方知道（拿不到候选就只能退回写死的那一份并**如实说明**）。
+   */
+  getHealth(): Promise<Health> {
+    return http<Health>('GET', '/health');
   },
 
   /** 后端探活（设置页显示连通状态用）。 */
@@ -626,6 +639,14 @@ export async function hydrate(
       (list) => { store.setStyles(list || []); return (list || []).length; },
       () => 0,      // 风格拉不到不该让整个列表水合失败
     );
+    // ★ 画幅候选也必须以**后端**为准（新建项目的那个选择器就在这页）。
+    //   写死一份的代价实测过：`brief.ratio` 是**真生效**的
+    //   （`media/runner.py:244` 拿它写子进程 env），而前端只列 `9:16`
+    //   ⇒ 横屏包在网页上根本建不出 16:9 的项目，而界面没有任何地方说"是前端少了选项"。
+    const putHealth = store.setHealth;          // 先取局部变量，闭包里窄化才不会丢
+    const health = putHealth
+      ? Api.getHealth().then((h) => { putHealth(h); return h; }, () => null)
+      : Promise.resolve(null);
     // ⚠️ 这里固定 `is_demo=false` —— 水合的是「**我的项目**」那批。
     //    精选项目**不进水合**：它是视图级的临时数据（只看一次），
     //    混进 Store 就等于让"精选"参与 localStorage 的读写周期，
@@ -634,7 +655,12 @@ export async function hydrate(
     // ★ `replace=true`：列表以服务端为全集，**移除**不在返回里的项目
     //   （否则出厂种子项目会与真项目混在一起 —— 旧版真实浏览器实测到）
     store.upsertProjects((d && d.list) || [], true);
-    return { hydrated: true, from: 'projects', styles: await styles };
+    const hh = await health;
+    return {
+      hydrated: true, from: 'projects', styles: await styles,
+      ratios: (hh && hh.ratio_choices && hh.ratio_choices.length)
+        ? hh.ratio_choices.length : 0,
+    };
   }
 
   return { hydrated: false, from: 'unmapped' };

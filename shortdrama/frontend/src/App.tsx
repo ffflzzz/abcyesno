@@ -48,7 +48,11 @@ export function App() {
   const routeKey = route.path + '|' + JSON.stringify(route.params);
 
   useEffect(() => {
-    // 离线模式（local 驱动）用出厂种子数据 —— 直接引用旧 web/ 的那份，不复制。
+    // 离线（local）驱动：React 版**没有数据来源** —— 出厂种子 `PAVO_SEED` 原本由旧
+    // `web/assets/js/data/seed.js` 挂到 window 上，而 React 入口从不引用它；
+    // 旧 web 已于 2026-09-30 退役删除 ⇒ `Store.loadSeed()` 只会 console.warn。
+    // ⚠️ 这条分支留着**不是**因为它能用：它保证"驱动被设成 local 时界面不崩、
+    // 也不假装拿到了数据"。要恢复离线演示得先给 React 产一份种子，或把这一档删掉。
     if (Api.driver !== 'http') {
       Store.loadSeed();
       Store.setHydrate({ hydrated: false, from: 'local' });
@@ -80,6 +84,7 @@ export function App() {
       upsertStoryboard: (pid, eid, sb) => Store.upsertStoryboard(pid, eid, sb),
       setStyles: (s) => Store.setStyles(s),
       setVendors: (v) => Store.setVendors(v),
+      setHealth: (h) => Store.setHealth(h),
     })
       .then((r) => { if (seq === seqRef.current) Store.setHydrate(r); })
       .catch((err: Error & { isNetwork?: boolean; status?: number }) => {
