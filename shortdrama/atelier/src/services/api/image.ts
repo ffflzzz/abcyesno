@@ -854,16 +854,24 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     }
 
     const imageParams = resolveOpenAiImageParams(requestConfig, n);
-    const formData = new FormData();
-    formData.set("model", requestConfig.model);
-    formData.set("prompt", withSystemPrompt(requestConfig, requestPrompt));
-    appendOpenAiImageParams(formData, imageParams);
-    const files = await Promise.all(references.map(async (image) => dataUrlToFile({ ...image, dataUrl: await imageToDataUrl(image) })));
-    files.forEach((file) => formData.append("image", file));
-    if (mask) formData.set("mask", dataUrlToFile(mask));
+    if (mask) throw new Error("同源代理不支持蒙版编辑：后端生图接口没有 mask 参数，静默丢掉蒙版会出「看起来按蒙版改了、其实没有」的图");
+    /**
+     * ★ 本仓库（shortdrama）改动：参考图以 **data URI 放进 JSON**，不再走 multipart 上传文件。
+     *
+     * 两个理由：① 后端 venv **没装** `python-multipart`，FastAPI 收不了表单式文件上传；
+     * ② 实测供应商**收 data URI** —— 拿真静帧转 base64 塞进 `extra_body.image` 返回 200，
+     * 且结果 URL 落在 `images/i2i/` 路径下（说明确实按图生图处理了）。
+     * 要恢复上游的 multipart 形态，只改这一处即可，其余代码不依赖传输形式。
+     */
+    const imageRefs = await Promise.all(references.map(async (image) => await imageToDataUrl(image)));
 
     try {
-        const response = await axios.post<ImageApiResponse>(aiApiUrl(requestConfig, "/images/edits"), formData, { headers: aiHeaders(requestConfig), signal: options?.signal });
+        const response = await axios.post<ImageApiResponse>(aiApiUrl(requestConfig, "/images/edits"), {
+            model: requestConfig.model,
+            prompt: withSystemPrompt(requestConfig, requestPrompt),
+            ...imageParams,
+            image: imageRefs,
+        }, { headers: aiHeaders(requestConfig, "application/json"), signal: options?.signal });
         const images = parseImagePayload(response.data);
         return images;
     } catch (error) {

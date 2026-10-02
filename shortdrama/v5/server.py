@@ -226,7 +226,7 @@ def create_app(base: str | None = None, web_root: str | None = None):
     """
     from fastapi import FastAPI, Request
     from fastapi.middleware.cors import CORSMiddleware
-    from fastapi.responses import FileResponse, JSONResponse
+    from fastapi.responses import FileResponse, JSONResponse, Response
     from . import webmap as wm
 
     web_root = web_root if web_root is not None else os.environ.get("SHORTDRAMA_WEB_ROOT", "")
@@ -443,31 +443,43 @@ def create_app(base: str | None = None, web_root: str | None = None):
                 "message": "生图失败：%s" % str(exc)[:300], "type": "shortdrama_proxy"}})
         return aigc.image_response(urls)
 
-    # ── 尚未接线的通道：**明确报"为什么不行"**，而不是让它变成"能点但永远转圈" ──
-    _AIGC_UNWIRED = {
-        "/v1/images/edits": "带参考图的图生图未接线：画布按 multipart 上传**文件**，"
-                            "而后端的参考图约定是 **URL**（`extra_body.image`）。"
-                            "文件→URL 这一步没做，硬接等于赌供应商收不收 base64",
-        "/v1/chat/completions": "文本通道未做流式（SSE）转发，画布是按流读的",
-        "/v1/videos": "生视频未接：查进度要走 `GET {base}/agnesapi?video_id=&model_name=`，"
-                      "与 OpenAI 的 `/videos/{id}` 形状不同，照原样转发只会让画布永远转圈",
-    }
+    @r.post("/v1/images/edits")
+    def aigc_image_edits(payload: dict):
+        """带参考图的编辑。请求体是 **JSON + data URI**，不是 multipart 上传 ——
+        理由与实测结论写在 `aigc.edit_images` 的文档里。"""
+        try:
+            urls = aigc.edit_images(payload or {})
+        except Exception as exc:                       # noqa: BLE001
+            return JSONResponse(status_code=502, content={"error": {
+                "message": "参考图编辑失败：%s" % str(exc)[:300], "type": "shortdrama_proxy"}})
+        return aigc.image_response(urls)
 
-    def _aigc_unwired(path: str, why: str):
-        def _handler():                              # noqa: ANN202
-            return JSONResponse(status_code=501, content={"error": {
-                "message": "shortdrama 代理未接线：%s" % why, "type": "not_implemented"}})
-        _handler.__name__ = "aigc_" + path.strip("/").replace("/", "_").replace("-", "_"
-                                                                                  ) + "_blocked"
-        return _handler
+    @r.post("/v1/chat/completions")
+    def aigc_chat(payload: dict):
+        try:
+            if (payload or {}).get("stream"):
+                return Response(content=aigc.chat_sse(payload),
+                                media_type="text/event-stream")
+            return aigc.chat_completion(payload or {})
+        except Exception as exc:                       # noqa: BLE001
+            return JSONResponse(status_code=502, content={"error": {
+                "message": "文本生成失败：%s" % str(exc)[:300], "type": "shortdrama_proxy"}})
 
-    for _p, _why in _AIGC_UNWIRED.items():
-        r.add_api_route(_p, _aigc_unwired(_p, _why), methods=["POST"], include_in_schema=False)
+    @r.post("/v1/videos")
+    def aigc_video_submit(payload: dict):
+        try:
+            return aigc.submit_video_task(payload or {})
+        except Exception as exc:                       # noqa: BLE001
+            return JSONResponse(status_code=502, content={"error": {
+                "message": "视频提交失败：%s" % str(exc)[:300], "type": "shortdrama_proxy"}})
 
-    @r.get("/v1/videos/{video_id}", include_in_schema=False)
-    def aigc_video_query_blocked(video_id: str):      # noqa: ARG001
-        return JSONResponse(status_code=501, content={"error": {
-            "message": _AIGC_UNWIRED["/v1/videos"], "type": "not_implemented"}})
+    @r.get("/v1/videos/{video_id}")
+    def aigc_video_status(video_id: str):
+        try:
+            return aigc.video_status(video_id)
+        except Exception as exc:                       # noqa: BLE001
+            return JSONResponse(status_code=502, content={"error": {
+                "message": "视频查询失败：%s" % str(exc)[:300], "type": "shortdrama_proxy"}})
 
     # ⚠️ 必须**显式**列 HEAD：FastAPI 的 `APIRoute` 不像 Starlette 的 `Route` 那样
     #    在注册 GET 时自动补 HEAD（实测 HEAD → 405）。而 `HEAD` 是

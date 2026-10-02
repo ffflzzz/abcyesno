@@ -218,7 +218,8 @@ def _builtin_submit_video(prompt: str, *, first_frame: str | None = None,
         if not (images or audios):
             raise ValueError("reference 模式需要 images 和/或 audios 至少一类非空")
     else:
-        raise ValueError("不支持的 mode：%r（仅 text/keyframe/reference）" % mode)
+        raise ValueError("不支持的 mode：%r（本实现只有 keyframe / reference 两档；"
+                             "供应商也没有纯文字生视频：keyframe 要首帧、reference 要参考图）" % mode)
 
     spec = vendors.spec_for("video")
     body = {"model": config.MODELS["video"], "prompt": prompt, "mode": mode,

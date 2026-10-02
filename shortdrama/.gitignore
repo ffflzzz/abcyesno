@@ -8,3 +8,4 @@
 #    没构建时 `v5/server.py` 会响亮提示去 `npm run build`，不会静默空挂。
 atelier/node_modules/
 atelier/dist/
+atelier/tsconfig.tsbuildinfo

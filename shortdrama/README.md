@@ -429,16 +429,38 @@ AGENTS.md                   # 外部 Agent 调用规范（权威）
 | 路由 | 状态 |
 |---|---|
 | `POST /v1/images/generations` | ✅ 已通（真出图） |
-| `GET /v1/models` | ✅ 列后端真能服务的模型 |
-| `POST /v1/images/edits`（带参考图） | ⛔ 501 + 原因：画布上传**文件**，后端的参考图约定是 **URL** |
-| `POST /v1/chat/completions` | ⛔ 501 + 原因：未做流式（SSE）转发 |
-| `POST /v1/videos`、`GET /v1/videos/{id}` | ⛔ 501 + 原因：查进度要走 `GET {base}/agnesapi?video_id=&model_name=`，与 OpenAI 形状不同 |
+| `POST /v1/images/edits`（带参考图） | ✅ 已通（请求体是 **JSON + data URI**，见下） |
+| `POST /v1/chat/completions` | ✅ 已通（`stream:true` 回 SSE；是**一次性完整回答切成两块**，不是逐 token） |
+| `POST /v1/videos` + `GET /v1/videos/{id}` | ✅ 已通（**必须挂一张参考图**，见下） |
+| `GET /v1/models` | ✅ 列后端真能服务的三条（生图 / 文本 / 生视频） |
+| 音频 | ⛔ 不列也不接（列出来只会让按钮"能点但永远转圈"） |
 
-★ **为什么要这层**：直连要在浏览器里再填一份密钥，且绕过密钥池轮换 / 429 冷却 / 配额记账
-—— 生成的东西在日志和账本里看不见。走代理后密钥只有 `.env` 那一份，出图仍调
-`providers.gen_image`（与媒体链同一条路，不另写一份调用逻辑）。
+★ **为什么要这层**：直连要在浏览器里再填一份密钥，且绕过 `providers` 的密钥池与限速。
+走代理后密钥只有 `.env` 那一份，出图出片仍调 `providers.gen_image` / `submit_video`
+（与媒体链同一条路，不另写一份调用逻辑）。
 `atelier/` 的默认渠道已改成同源地址 + 占位密钥（它的"就绪"判据要求密钥非空，代理不看这个值），
 ⇒ 开箱不用配置。
+⚠️ 但**别说成"配额记账照旧生效"**：`video_quota.json` 在本仓库**不存在、`v5/` 也没有任何代码写它**
+（AGENTS.md 把它列进黑名单属于文档超前于代码）。真正继承到的只有密钥与限速两件事。
+
+★ **多 key 轮换是代理自己做的**（`gen_with_fallback`）：媒体链的轮换由调用方显式传 key，
+`providers` 自己不换 ⇒ 代理若只传 `key=None` 就永远用第一条，"用上多 key"会是假话。
+实测：撞 429 逐条试到能用、全部用完才抛。
+
+★ **参考图走 data URI 而不是 multipart**：venv **没装** `python-multipart`，FastAPI 收不了
+表单式文件上传；与其为省一个依赖手写 multipart 解析器，不如把 vendored 画布那侧改成发
+data URI（只改 `atelier/src/services/api/{image,video}.ts` 各一处）。实测供应商**收 data URI**：
+真静帧转 base64 塞进 `extra_body.image` 返回 200，结果 URL 落在 `images/i2i/` 下
+（说明确实按图生图处理，不是当文生图糊弄）。蒙版**明确报错不支持** —— 后端生图接口没有
+mask 参数，静默丢掉会出「看起来按蒙版改了、其实没有」的图。
+
+★ **生视频必须有参考图**：供应商只有 `keyframe`（要首帧）与 `reference`（要参考图）两档，
+**没有纯文字生视频**。⚠️ `providers.submit_video` 的报错原先写着「仅 text/keyframe/reference」
+而代码里**没有 text 分支** —— 照那句写 `mode="text"` 实测被拒，文案已改回与代码一致。
+本项目本来静帧先行 ⇒ 画布上的正确用法是**把某一镜的静帧挂成参考图再生成视频**。
+
+★ **查询必须回用提交时那条 key**（跨 key 查会查不到，`providers` 文档写死）。代理用进程内
+映射记 `video_id → key`；服务重启后映射丢了 ⇒ 按池里的 key 逐条试，不直接报"任务不存在"。
 
 ★ **代理顺手修掉了"假开关"**：实测 Agnes **忽略**像素串 `size`（画布发 `1024x1792`、
 后端发 `1K`+`ratio:"9:16"`，两边出图完全一样 736×1312）。`aigc.ratio_from_size` 把任意

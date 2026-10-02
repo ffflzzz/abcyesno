@@ -74,6 +74,8 @@ const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com";
 const PROXY_BASE_URL = typeof location === "undefined" ? "http://127.0.0.1:8787" : location.origin;
 const PROXY_KEY_PLACEHOLDER = "shortdrama-proxy";
 const PROXY_IMAGE_MODEL = "agnes-image-2.5-flash";
+const PROXY_VIDEO_MODEL = "agnes-video-2.5-flash";
+const PROXY_TEXT_MODEL = "agnes-3.0-flash";
 
 export const defaultConfig: AiConfig = {
     channelMode: "local",
@@ -87,17 +89,19 @@ export const defaultConfig: AiConfig = {
             baseUrl: PROXY_BASE_URL,
             apiKey: PROXY_KEY_PLACEHOLDER,
             apiFormat: "openai",
-            // 只列后端**真能服务**的能力：生视频/文本/音频在代理侧尚未接线
-            // （`v5/server.py` 会回 501 并说明原因），列进下拉只会让按钮"能点但永远转圈"。
+            // 列后端**真能服务**的四条：生图 / 参考图编辑 / 文本 / 生视频。
+            // 音频不列 —— 代理不服务它，列出来只会让按钮"能点但永远转圈"。
             models: [
                 { name: PROXY_IMAGE_MODEL, capability: "image" },
+                { name: PROXY_VIDEO_MODEL, capability: "video" },
+                { name: PROXY_TEXT_MODEL, capability: "text" },
             ],
         },
     ],
     model: `default::${PROXY_IMAGE_MODEL}`,
     imageModel: `default::${PROXY_IMAGE_MODEL}`,
-    videoModel: "",
-    textModel: "",
+    videoModel: `default::${PROXY_VIDEO_MODEL}`,
+    textModel: `default::${PROXY_TEXT_MODEL}`,
     audioModel: "",
     audioVoice: "alloy",
     audioFormat: "mp3",
