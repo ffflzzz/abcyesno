@@ -140,6 +140,36 @@ _DEFECT_EXTRA = {
 }
 
 
+def regen_extra(shot: dict, kinds, anti_text: str, log=print) -> str:
+    """按硬伤类别拼这一镜重画时要追加的**定向补充语**（正向描述，不用负面提法）。
+
+    ★ 2026-10-02 从 `_run_impl` 的重画循环里抽出来——不是为了整洁，是因为那段里
+    写着 `prompt_mod.shot_has_no_person(s)`，而本模块的导入名是 `prompt`，
+    **`prompt_mod` 根本不存在**。后果不是"这条豁免没生效"，而是：**只要复核报出
+    「景别跑偏」这一类硬伤，整条媒体链当场 NameError 崩掉**（fd02103 想修"空镜被塞人"，
+    实际把重画路径变成必崩；AGENTS.md 里"这条豁免同时管判据与重画提示词两处"的说法
+    比能跑的代码早了三天）。内联在 1100 行的循环里没法单测，所以它活了这么久。
+    """
+    extra = ""
+    if "text" in kinds:
+        extra += anti_text
+    for _k, _txt in _DEFECT_EXTRA.items():
+        if _k in kinds:
+            extra += _txt
+    if "framing" in kinds:
+        # 景别跑偏：把要求的景别**再说一遍**并给占比量化，比泛泛重试有效
+        st_name = str(shot.get("shot_type") or "").strip()
+        if st_name and prompt.shot_has_no_person(shot):
+            # 兜底（复核器已对空镜豁免，正常走不到这里）：`_FRAMING_HINT`
+            # 通篇是"人物腰部/胸部以上入画"，给无人镜追加它 = 命令模型塞人。
+            log("[media] %s 是空镜/无人像镜 → 跳过景别补充语（它会逼模型塞人）"
+                % shot.get("name"))
+        elif st_name:
+            extra += ("，本镜必须是%s：%s"
+                      % (st_name, _FRAMING_HINT.get(st_name, "严格按要求的取景范围")))
+    return extra
+
+
 
 #: 静帧 QC 的**跨轮次已审记录**（2026-09-18）
 #: `{镜名: {"mtime": <静帧文件 mtime>, "clean": <上次是否判干净>}}`
@@ -1119,23 +1149,7 @@ def _run_impl(project_root: Path, ep: int = 1, log=print, max_regen: int = 2,
             # 类别**只有一处判据**（`_DEFECT_KINDS` / `_defect_kinds`）——原先这段是
             # 内联的一串 `if any(k in desc ...)`，与"同类判断"会各写一份必然漂移。
             kinds = _defect_kinds(desc)
-            extra = ""
-            if "text" in kinds:
-                extra += anti_text
-            for _k, _txt in _DEFECT_EXTRA.items():
-                if _k in kinds:
-                    extra += _txt
-            if "framing" in kinds:
-                # 景别跑偏：把要求的景别**再说一遍**并给占比量化，比泛泛重试有效
-                st_name = str(s.get("shot_type") or "").strip()
-                if st_name and prompt_mod.shot_has_no_person(s):
-                    # 兜底（复核器已对空镜豁免，正常走不到这里）：`_FRAMING_HINT`
-                    # 通篇是"人物腰部/胸部以上入画"，给无人镜追加它 = 命令模型塞人。
-                    log("[media] %s 是空镜/无人像镜 → 跳过景别补充语（它会逼模型塞人）"
-                        % s["name"])
-                elif st_name:
-                    extra += ("，本镜必须是%s：%s"
-                              % (st_name, _FRAMING_HINT.get(st_name, "严格按要求的取景范围")))
+            extra = regen_extra(s, kinds, anti_text, log=log)
             if not extra:
                 # 硬伤不属于任何已知类别（如"缺少关键道具"、"多出人脸"、"血腥"）。
                 # 原实现把重生成放在 `if extra:` 里 —— 于是这类镜**根本不重画**，

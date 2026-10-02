@@ -1356,6 +1356,53 @@ class TestStillRegenConvergence(unittest.TestCase):
                     res = pipeline.run(root, ep=1, max_regen=max_regen, stills_only=True)
             return res, ms[6]
 
+    def test_framing_defect_regen_path_does_not_crash(self):
+        """★ 病样本（2026-10-02 分镜 A/B 撞出）：硬伤里带「景别不符」⇒ 整条媒体链 NameError。
+
+        `pipeline.py` 那段引用 `prompt_mod.shot_has_no_person`，而本模块的导入名是
+        `prompt` —— **`prompt_mod` 从来不存在**。于是 fd02103 那条"空镜不再被塞人"的
+        豁免不但没生效，还把重画路径变成必崩（AGENTS.md 里"豁免同时管两处"的说法比
+        能跑的代码早了三天）。内联在 1100 行的循环里没法单测，所以它活了这么久。
+
+        ⚠️ 夹具必须**真的走到那一行**：`景别不符` 单独一句不算硬伤
+        （`qc.is_hard_issue` 不认，压根不进重画队列 —— 第一版测试就是这么假绿的），
+        要写成"景别不符 + 一个硬伤词"。
+        """
+        res, ensure = self._run(["景别不符，且画面出现字幕条"], max_regen=1, n_shots=1)
+        self.assertNotEqual(res.get("status"), "failed",
+                            "报景别不符就崩：%s" % str(res)[:200])
+        calls = ensure.call_args_list
+        self.assertTrue(calls, "夹具没走到重画路径 = 这条测试是假的")
+        batch = calls[-1][0][1]
+        extras = [(s.get("_qc_extra") or "") for s in batch]
+        self.assertTrue(all(extras), "定向补充语没拼上：%s" % extras)
+        # ⚠️ 不拿"字幕/文字"这种字面去断言：反烧字走的是**正向描述**
+        #   （负面提法会诱发模型烧字，见 tests_core 锁死的铁律），
+        #   默认包那句是「画面表面为真实连续的材质」。
+
+    def test_regen_extra_framing_branches(self):
+        """有人镜要**再说一遍景别**；无人像镜必须跳过（它会逼模型塞人）。"""
+        from v5.media import pipeline
+
+        logs: list[str] = []
+        with_person = {"name": "LN01", "shot_type": "中景", "_cast_n": 1,
+                       "visual": "0-3秒：@甲抬手按住@画纸"}
+        out = pipeline.regen_extra(with_person, ["framing"], "", log=logs.append)
+        self.assertIn("本镜必须是中景", out, "景别跑偏的定向补充语没拼上 = 重试还是泛泛画")
+        self.assertEqual(logs, [])
+
+        empty = {"name": "LN02", "shot_type": "全景", "no_human": True,
+                 "visual": "0-3秒：巷口空镜"}
+        self.assertEqual(pipeline.regen_extra(empty, ["framing"], "", log=logs.append), "",
+                         "给无人镜追加'人物腰部以上入画' = 命令模型塞一个人进来")
+        self.assertTrue(any("跳过景别补充语" in x for x in logs), "跳过要出声，不许静默")
+
+        # 多类别叠加（文字 + 景别）：两段都要在，顺序不影响拼装
+        both = pipeline.regen_extra(with_person, ["text", "framing"], "ANTI-TEXT",
+                                    log=logs.append)
+        self.assertIn("ANTI-TEXT", both)
+        self.assertIn("本镜必须是中景", both)
+
     def test_regen_capped_by_cross_process_tally(self):
         """累计重画达上限 → **不再重画**（否则跨重启无限烧配额）。
 
