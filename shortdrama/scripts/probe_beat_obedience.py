@@ -45,12 +45,15 @@ PROBE = ROOT / "scripts" / "probe_beat_density.py"
 FRAME_STEP = 0.25          # 抽帧步长（秒）：要分辨 0.33 秒的拍，至少得比它细
 TOL = 0.5                  # 依据帧落在拍窗口内允许的容差（秒）
 
-JUDGE = """你在做**逐拍核对**。下面是一段视频里**某一个镜头**按 {step} 秒抽出的帧，
-每帧前面标了它的时间戳；后面是这个镜头的节拍清单（编号是**全局拍号**，请原样回填）。
+JUDGE = """你在做**逐拍核对**。下面是某段视频里**一个镜头**按 {step} 秒抽出的帧，
+拼成 4 列的网格图（每张图最多 16 格），**每格左上角黄字标着该帧的时间戳（秒）**；
+后面是这个镜头的节拍清单（编号是**全局拍号**，请原样回填）。
+⚠️ 视觉接口单次最多 4 张图，所以帧是拼成网格送的——引用时**写格子上标的时间戳**，
+不要写"第几张图"。
 
 对每一条节拍，回答它有没有在画面里出现：
-- 命中：给出**依据帧的时间戳**，并**抄出你在该帧里看到的东西**（谁、做了什么、在画面
-  哪里）。抄不出来就不要判命中。
+- 命中：给出**依据帧的时间戳**（照抄格子上的黄字），并**抄出你在该格里看到的东西**
+  （谁、做了什么、在画面哪里）。抄不出来就不要判命中。
 - 未命中：hit=false，quote 留空。
 - 依据帧要落在该拍声明的时间窗内（前后允许 {tol} 秒）。窗外判命中无效。
 
@@ -129,17 +132,52 @@ def beats_of(arm: str, project: str, ep: int):
     return beats, bounds
 
 
-def judge(beats: list[dict], frames: list[tuple[float, Path]]) -> list[dict]:
+def make_sheets(frames: list[tuple[float, Path]], out_dir: Path,
+                cols: int = 4, cell_w: int = 300) -> list[Path]:
+    """把帧拼成 4 列网格（每格左上角标时间戳）。
+
+    ★ 为什么拼图而不是逐帧送：视觉接口**单次最多 4 张图**（实测报
+    `Image count 16 exceeds limit 4 per request`），一个 4 秒镜 16 帧直接送不下。
+    """
+    from PIL import Image, ImageDraw
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    per = cols * 4                       # 每张最多 16 格
+    sheets: list[Path] = []
+    for ci in range(0, len(frames), per):
+        chunk = frames[ci:ci + per]
+        ims = [Image.open(x[1]).convert("RGB") for x in chunk]
+        h = int(ims[0].height * cell_w / ims[0].width)
+        rows = (len(ims) + cols - 1) // cols
+        grid = Image.new("RGB", (cols * cell_w, rows * (h + 22)), (24, 24, 24))
+        for i, im in enumerate(ims):
+            im = im.resize((cell_w, h))
+            d = ImageDraw.Draw(im)
+            t = chunk[i][0]
+            d.rectangle([0, 0, 96, 20], fill=(0, 0, 0))
+            d.text((5, 4), "%.2fs" % t, fill=(255, 255, 0))
+            grid.paste(im, ((i % cols) * cell_w, (i // cols) * (h + 22)))
+        p = out_dir / ("sheet%d.jpg" % (len(sheets) + 1))
+        grid.save(p, quality=90)
+        sheets.append(p)
+    return sheets
+
+
+def judge(beats: list[dict], frames: list[tuple[float, Path]],
+          out_dir: Path) -> list[dict]:
     from langchain_core.messages import HumanMessage
 
     from v5 import llm
 
     listing = "\n".join("%d）[%s] %s" % (b["no"], b["win"], b["text"]) for b in beats)
+    # ★ 帧**拼成网格**再送：视觉接口单次最多 4 张图（逐帧送会撞
+    #   `Image count 16 exceeds limit 4 per request`）。
+    sheets = make_sheets(frames, out_dir)
     parts: list[dict] = [{"type": "text",
-                          "text": "帧清单：" + "、".join("%.2fs" % t for t, _ in frames)}]
-    for t, p in frames:
-        parts.append({"type": "text", "text": "以下是 %.2f 秒的帧：" % t})
-        parts.append({"type": "image_url", "image_url": {"url": data_uri(p)}})
+                          "text": "帧时间戳范围：%.2fs ~ %.2fs，共 %d 帧，拼成 %d 张网格图"
+                                  % (frames[0][0], frames[-1][0], len(frames), len(sheets))}]
+    for sp in sheets:
+        parts.append({"type": "image_url", "image_url": {"url": data_uri(sp)}})
     parts.append({"type": "text",
                   "text": JUDGE.format(step=FRAME_STEP, tol=TOL, beats=listing)})
     r = llm.chat_for("", 3000, temperature=0).invoke([HumanMessage(content=parts)])
@@ -168,11 +206,13 @@ def score(beats: list[dict], verdicts: list[dict], frame_ts: list[float]):
         if len(quote) < 4:
             rejected.append((b["no"], b["win"], b["text"][:26], "命中但抄不出依据"))
             continue
-        try:
-            ft = float(v.get("frame"))
-        except (TypeError, ValueError):
+        # 时间戳宽松取数：模型会写成 "4.25" / "4.25s" / "第4.25秒"，
+        # 只认 `float()` 会把**真命中的拍**判成"没给时间戳"（实测 PROD 5 拍里 2 拍栽在这）。
+        fm = re.search(r"\d+(?:\.\d+)?", str(v.get("frame") or ""))
+        if not fm:
             rejected.append((b["no"], b["win"], b["text"][:26], "没给依据帧时间戳"))
             continue
+        ft = float(fm.group(0))
         if not frame_ts or min(abs(x - ft) for x in frame_ts) > FRAME_STEP:
             rejected.append((b["no"], b["win"], b["text"][:26],
                              "依据帧 %.2fs 不是抽出来的帧" % ft))
@@ -225,10 +265,12 @@ def main() -> int:
                 sub = [x for x in beats if x["shot"] == nm]
                 if not sub:
                     continue
-                frames = grab_frames(clip, out / ("frames_%s_%s" % (arm, nm)), lo, hi)
-                print("[ob] %s 第%d轮 %s [%.0f-%.0fs] 帧%d张 待判%d拍"
-                      % (arm, rnd, nm, lo, hi, len(frames), len(sub)), flush=True)
-                vs = judge(sub, frames)
+                fdir = out / ("frames_%s_%s" % (arm, nm))
+                frames = grab_frames(clip, fdir, lo, hi)
+                print("[ob] %s 第%d轮 %s [%.0f-%.0fs] 帧%d张→网格%d张 待判%d拍"
+                      % (arm, rnd, nm, lo, hi, len(frames),
+                         (len(frames) + 15) // 16, len(sub)), flush=True)
+                vs = judge(sub, frames, fdir / "sheets")
                 h, r = score(sub, vs, [t for t, _ in frames])
                 hits += h
                 rej += r
@@ -239,7 +281,8 @@ def main() -> int:
                             "rejected": rej, "verdicts": raw},
                            ensure_ascii=False, indent=1), encoding="utf-8")
             print("[ob] %s 第%d轮：命中 %d/%d" % (arm, rnd, hits, len(beats)), flush=True)
-        (h1, r1), (h2, r2) = per_round[0], per_round[1]
+        h1, r1 = per_round[0]
+        h2, r2 = per_round[1] if len(per_round) > 1 else (h1, r1)
         disagree = len({x[0] for x in r1} ^ {x[0] for x in r2})
         rows.append((arm, len(beats), h1, h2, disagree, r1, r2))
 
