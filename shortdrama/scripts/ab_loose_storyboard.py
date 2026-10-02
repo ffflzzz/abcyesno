@@ -139,6 +139,7 @@ def render_first_group(scratch: Path, ep: int, arm: str, out: Path, project: str
     人数声明/参考图绑定），手抄一份必然漏项（2026-09-16 就是这么烧过一轮）。
     走同一入口的受限调用：`only=` 第一组、`from_still=True` 连静帧重画。
     """
+    from v5 import config
     from v5.media import pipeline, storyboard, video_plan
 
     shots = storyboard.parse(
@@ -154,11 +155,24 @@ def render_first_group(scratch: Path, ep: int, arm: str, out: Path, project: str
                      log=lambda *x, **k: print(*x, **k, flush=True))
     print("[ab] %s 臂 run → %s" % (arm, str(r)[:160]), flush=True)
     cd = scratch / "media" / ("ep%d" % ep) / "clips"
-    for cand in ("pack01.mp4", names[0] + ".mp4"):
+    # ★ 先说清楚这一臂**实际跑在哪个档**：`SHORTDRAMA_VIDEO_MODE` 默认是 `reference`
+    #   （一镜一条），而生产跑的是 `pack`（一组一条、产物叫 pack01.mp4）。
+    #   第一版没带这个 env，两臂都退回逐镜档，脚本把 `LN01.mp4`（4.5 秒）当成
+    #   "第一组 11 秒"复制出来了 —— 报给用户的秒数是错的。现在把模式与文件名都打出来。
+    print("[ab] %s 臂 VIDEO_MODE=%s，clips 目录：%s"
+          % (arm, config.VIDEO_MODE, sorted(p.name for p in cd.glob("*.mp4"))[:6]),
+          flush=True)
+    want = "pack01.mp4" if config.VIDEO_MODE == "pack" else (names[0] + ".mp4")
+    for cand in (want, names[0] + ".mp4", "pack01.mp4"):
         if (cd / cand).exists():
             dest = out / ("BD_%s_%s.mp4" % (project, arm))
             shutil.copy2(cd / cand, dest)
-            print("[ab] %s 臂成片 → %s" % (arm, dest), flush=True)
+            print("[ab] %s 臂成片 → %s（源 %s，%s 秒）"
+                  % (arm, dest.name, cand,
+                     __import__("subprocess").run(
+                         ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                          "-of", "csv=p=0", str(dest)],
+                         capture_output=True, text=True).stdout.strip()[:6]), flush=True)
             return dest
     print("[ab] !! %s 臂没有成片" % arm, flush=True)
     return None
