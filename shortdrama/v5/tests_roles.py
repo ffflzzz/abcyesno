@@ -770,5 +770,57 @@ class TestCameraLightCraftReachesRoles(unittest.TestCase):
             self.assertNotIn("光落点", s)
 
 
+class TestEveryPackDeclaresVerdictBlock(unittest.TestCase):
+    """每个包的 reviewer 契约都**必须**给出围栏判定块示例（1003 零成片事故）。
+
+    病根：`guards.media_gate` 只认 `decision.parse_decision` 能解析出的
+    `pass / rerun / reasons`；散文写「## 通过判定 ✅」它读不到 ⇒ 产物七份齐全、
+    评审也写了通过，链仍停在「评审未通过」上。实测 `drydock-dawn-1003`
+    白跑 1 小时 55 分、零成片。而漏写示例的正是**回落基准包 shortdrama**
+    ——所有不自带 reviewer 的包都照它学，漏在这里代价最大。
+    """
+
+    @staticmethod
+    def _has_block(text: str) -> bool:
+        """契约里是否给了「机器可读判决」的围栏块示例。
+
+        必需三件：围栏 + `pass` + `rerun`/`reasons`。`advisory` 是可选字段
+        （牛来包的判定块就没写它，那份契约是完整的），⛔ 别把它列进必需项——
+        那会把合法的契约判成缺陷，正是本测试要防的"假红"。
+        """
+        fence = chr(96) * 3
+        return (fence in text and "pass:" in text
+                and "rerun" in text and "reasons" in text)
+
+    def test_all_packs_declare_it(self):
+        packs = sorted(p.parent.parent.name
+                       for p in (config.SKILLS_DIR / "packs").glob("*/reviewer/SKILL.md"))
+        self.assertGreaterEqual(len(packs), 5, "扫到的包太少，这条测试会假绿")
+        missing = []
+        for pk in packs:
+            body = (config.SKILLS_DIR / "packs" / pk / "reviewer" / "SKILL.md").read_text(
+                encoding="utf-8")
+            if not self._has_block(body):
+                missing.append(pk)
+        self.assertEqual([], missing,
+                         "这些包的 reviewer 契约没给判定块示例，产物会读不出判决：%s" % missing)
+
+    def test_fallback_base_pack_is_the_one_that_matters(self):
+        """shortdrama 是回落基准——它必须自己带上（缺了就是全链的坑）。"""
+        body = (config.SKILLS_DIR / "packs" / "shortdrama" / "reviewer" / "SKILL.md").read_text(
+            encoding="utf-8")
+        self.assertTrue(self._has_block(body),
+                        "基准包 reviewer 缺判定块示例 ⇒ 所有回落它的包都不会写判决块")
+
+    def test_measure_would_catch_the_old_contract(self):
+        """反向对照：把旧版契约（没有判定块那一节）装回来，这条检查必须红。"""
+        body = (config.SKILLS_DIR / "packs" / "shortdrama" / "reviewer" / "SKILL.md").read_text(
+            encoding="utf-8")
+        cut = body.split("## ★ 判定块")[0]
+        self.assertTrue(cut.strip(), "切片失败（找不到那一节的开头？）")
+        self.assertFalse(self._has_block(cut),
+                         "删掉判定块那节后仍然算通过 = 这项检查测不到旧病")
+
+
 if __name__ == "__main__":
     unittest.main()
