@@ -55,7 +55,7 @@ def has_speech(shot: dict) -> bool:
 
 
 def prepare_scratch(src: Path, dst: Path, ep: int) -> Path:
-    """项目副本：**删掉本集分镜产物**，让两臂都从零写一张。"""
+    """项目副本：**删掉本集分镜产物** + **把 manifest 的集号钉到本集**。"""
     if dst.exists():
         shutil.rmtree(dst)
     dst.mkdir(parents=True)
@@ -68,6 +68,14 @@ def prepare_scratch(src: Path, dst: Path, ep: int) -> Path:
         if s.exists():
             shutil.copytree(s, dst / d)
     (dst / "scenedesigner").mkdir(exist_ok=True)
+    # ★ 集号必须改写：角色节点用的是 `load_manifest(root)['episode_index']`（不是我们
+    #   传的参数）。实测 `luanzhen-xue-1001` 的账本停在第 2 集 ⇒ 不改写的话分镜师会
+    #   去写 `scenedesigner_ep2.md`，本脚本回头找 ep1 的文件，两臂都"没产物"。
+    st = dst / ".agent_state.json"
+    if st.exists():
+        d = json.loads(st.read_text(encoding="utf-8"))
+        d["episode_index"] = ep
+        st.write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
     return dst
 
 
