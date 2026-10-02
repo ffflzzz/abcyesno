@@ -74,11 +74,37 @@ HEADER_KEYS = ("镜头号", "景别", "角度", "运镜", "时长", "画面描�
 # ★ 必须跟冒号：`2-3秒后他转身` 这类**时长描述**不是节拍标记——
 #   认错了会被静帧/pack 路径当节拍切割（误伤面大）；不满足完整格式
 #   （数字-数字+秒/s+冒号）的文本一律当普通描述，安全降级。
-_BEAT_RE = re.compile(r"(\d+)\s*[-–—]\s*(\d+)\s*(?:秒|s)\s*[：:]")
+# ★ **端点允许小数**（`0-0.5秒：`）。旧正则是纯 `(\d+)`，遇到小数标记不是"认不出"
+#   而是**认错**：`0.5-1秒：` 里的前导 `0` 被丢掉，匹配成起点 5、终点 1 的**倒挂拍**。
+#   实测后果两处：① `beats_tiling_error` 报「第一节拍未从 0 秒开始（起点 5 秒）」
+#   ——一条与作者意图无关的假理由把整张分镜表拦下；② 侥幸过了门的，
+#   `_remap_beats` 会按这个倒挂轴做全局重映射。现在小数按浮点如实解析，
+#   整数端点仍返回 int（**未写小数的项目输出逐字不变**）。
+_BEAT_RE = re.compile(
+    r"(\d+(?:\.\d+)?|\.\d+)\s*[-–—]\s*(\d+(?:\.\d+)?|\.\d+)\s*(?:秒|s)\s*[：:]")
+
+#: 浮点比较容差：节拍是"人写的秒数"，0.3+0.3+0.4 这类累加噪声不该被判成不连续。
+_BEAT_EPS = 0.01
 
 
-def split_beats(visual: str) -> list[tuple[int, int, str]]:
+def beat_label(x) -> str:
+    """节拍端点的人读/机读写法：整数不带小数点（`2`），小数保留到百分位（`0.75`）。
+
+    提示词与门的报错文案都用它——用 `%d` 会把小数直接截成错的整数。
+    """
+    v = round(float(x), 2)
+    return "%g" % v
+
+
+def _beat_num(raw: str):
+    v = float(raw)
+    return int(v) if v.is_integer() else round(v, 2)
+
+
+def split_beats(visual: str) -> list[tuple[float, float, str]]:
     """解析画面描述里的镜内节拍：`0-2秒：…；2-4秒：…` → [(0,2,文本), (2,4,文本)]。
+
+    端点可以是小数（`0-0.5秒：`）。整数端点返回 int、小数返回 float。
 
     没有节拍标记（旧格式 / 标记不完整如缺冒号）返回空列表——安全降级为
     「无节拍镜」，原有路径原样消费。文本取标记之后到下一个标记（或结尾）。
@@ -87,7 +113,7 @@ def split_beats(visual: str) -> list[tuple[int, int, str]]:
     marks = list(_BEAT_RE.finditer(text))
     if not marks:
         return []
-    beats: list[tuple[int, int, str]] = []
+    beats: list[tuple[float, float, str]] = []
     for i, m in enumerate(marks):
         # 标记含尾部冒号，正文从其后开始
         body_start = m.end()
@@ -96,11 +122,11 @@ def split_beats(visual: str) -> list[tuple[int, int, str]]:
         if i + 1 < len(marks):
             body = body[:marks[i + 1].start() - body_start]
         body = body.strip("；;。 \n\t")
-        beats.append((int(m.group(1)), int(m.group(2)), body))
+        beats.append((_beat_num(m.group(1)), _beat_num(m.group(2)), body))
     return beats
 
 
-def beats_tiling_error(beats: list[tuple[int, int, str]], seconds: float) -> str:
+def beats_tiling_error(beats: list[tuple[float, float, str]], seconds: float) -> str:
     """校验节拍铺满整镜：从 0 起、首尾相接、终于时长列。返回错误描述（空=通过）。
 
     纯确定性判据：写不写节拍是自由，写了就必须自洽（时间轴是渲染层硬依赖，
@@ -108,18 +134,20 @@ def beats_tiling_error(beats: list[tuple[int, int, str]], seconds: float) -> str
     """
     if not beats:
         return ""
-    if beats[0][0] != 0:
-        return "第一节拍未从 0 秒开始（起点 %d 秒）" % beats[0][0]
+    if abs(float(beats[0][0])) > _BEAT_EPS:
+        return "第一节拍未从 0 秒开始（起点 %s 秒）" % beat_label(beats[0][0])
     for (a, b, _), (c, d, _) in zip(beats, beats[1:]):
-        if b != c:
-            return "节拍 %d-%d 秒与 %d-%d 秒之间不连续（应首尾相接）" % (a, b, c, d)
-        if d <= c:
-            return "节拍 %d-%d 秒时长为零或为负" % (c, d)
-    if beats[0][1] <= beats[0][0]:
-        return "首节拍 %d-%d 秒时长为零或为负" % beats[0][:2]
-    if abs(beats[-1][1] - seconds) > 0.5:
-        return ("节拍只覆盖到 %d 秒，本镜时长 %s 秒——节拍必须覆盖整镜"
-                % (beats[-1][1], seconds))
+        if abs(float(b) - float(c)) > _BEAT_EPS:
+            return ("节拍 %s-%s 秒与 %s-%s 秒之间不连续（应首尾相接）"
+                    % (beat_label(a), beat_label(b), beat_label(c), beat_label(d)))
+        if float(d) <= float(c):
+            return "节拍 %s-%s 秒时长为零或为负" % (beat_label(c), beat_label(d))
+    if float(beats[0][1]) <= float(beats[0][0]):
+        return ("首节拍 %s-%s 秒时长为零或为负"
+                % (beat_label(beats[0][0]), beat_label(beats[0][1])))
+    if abs(float(beats[-1][1]) - float(seconds)) > 0.5:
+        return ("节拍只覆盖到 %s 秒，本镜时长 %s 秒——节拍必须覆盖整镜"
+                % (beat_label(beats[-1][1]), seconds))
     return ""
 
 

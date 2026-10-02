@@ -3773,6 +3773,118 @@ class TestPackMode(unittest.TestCase):
         p2 = build_pack_prompt([dict(group[0], seconds=4)], [2], 2, style_block="")
         self.assertIn("0-1秒：@陈默抬手按住@画纸；1-2秒：右手把@画笔搁下", p2)
 
+    # ─── 快切（拍数多于分配秒数）与小数秒：两条 2026-10-02 修的路径 ───
+
+    def test_dense_beats_never_leave_their_shot_window(self):
+        """★ 病样本：6 镜 × 6 秒 × 每镜 6 拍，组内每镜被压到 4 秒。
+
+        旧实现 `nb = max(na+1, min(span, ...))` 里那个 `na+1` 地板压过了 `span`
+        天花板 ⇒ 时间戳一路溢出到下一镜：镜头 1 的正文出现「5-6秒」、镜头 2 的正文
+        也从「4-5秒」起 —— **两条镜头抢同一秒**，各演各的动作。
+        判据按真实交付物定：直接从 `build_pack_prompt` 的输出里正则抠时间戳，
+        不看中间变量。
+        """
+        import re
+
+        from v5.media import storyboard as _sb
+        from v5.media import video_plan
+        from v5.media.prompt import build_pack_prompt
+
+        def storyboard_beat_label(x):
+            return _sb.beat_label(x)
+
+        def _shot(i, sec, beats):
+            step = float(sec) / beats
+            marks = "；".join(
+                "%s-%s秒：动作%d" % (storyboard_beat_label(j * step),
+                                    storyboard_beat_label(min((j + 1) * step, sec)), j)
+                for j in range(beats))
+            return {"name": "LN%02d" % (i + 1), "scene": "后巷", "seconds": sec,
+                    "shot_type": "中景", "angle": "平视", "camera": "固定",
+                    "visual": marks, "dialogue": "", "sfx": "", "tail": ""}
+
+        shots = [_shot(i, 6, 6) for i in range(6)]
+        groups = video_plan.group_shots(shots)
+        self.assertEqual(len(groups), 2, "36 秒 / 单条 12 秒上限 ⇒ 恰好两组")
+        self.assertEqual([len(g) for g, _ in groups], [3, 3])
+        self.assertEqual([d for _, d in groups], [[4, 4, 4], [4, 4, 4]],
+                         "6 秒被等比压到 4 秒（压幅 33% < 40% 上限，合法）")
+
+        for gl, declared in groups:
+            total = sum(declared)
+            p = build_pack_prompt(gl, declared, total, style_block="")
+            # 逐镜块：【第 L-R 秒｜镜头 i/n｜…】 后面的节拍时间戳必须全落在 [L, R]
+            blocks = re.findall(r"【第 (\d+(?:\.\d+)?)-(\d+(?:\.\d+)?) 秒｜.*?】\n(.*?)(?=\n【|\Z)",
+                                p, re.S)
+            self.assertEqual(len(blocks), len(gl), "每镜都要有一个带时间戳的块")
+            claimed: dict[str, list[str]] = {}
+            for lo, hi, body in blocks:
+                lo, hi = float(lo), float(hi)
+                stamps = re.findall(r"(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)秒：", body)
+                self.assertTrue(stamps, "块里没时间戳：\n%s" % body)
+                for idx in range(6):          # 每镜作者写了 6 拍
+                    self.assertIn("动作%d" % idx, body,
+                                  "装不下的拍只能并进前一拍，不能丢内容")
+                for a, b in stamps:
+                    self.assertGreaterEqual(float(a), lo - 0.01,
+                                            "节拍起点越出本镜窗口左界：%s" % stamps)
+                    self.assertLessEqual(float(b), hi + 0.01,
+                                         "节拍终点溢出到下一镜：%s-%s 不在 %s-%s 内"
+                                         % (a, b, lo, hi))
+                    key = "%s-%s" % (a, b)
+                    claimed.setdefault(key, []).append(body)
+            dupes = {k: v for k, v in claimed.items() if len(v) > 1}
+            self.assertEqual(dupes, {}, "同一秒被两条镜头各自声明 = 模型两边打架")
+
+    def test_decimal_beat_marks_parse_in_order(self):
+        """★ 小数秒标记：旧正则只认整数，`0.5-1秒：` 会匹配成**起点 5、终点 1** 的倒挂拍。
+
+        后果不是"认不出、降级成散文"，而是**认成一个错的时间轴**：
+        `beats_tiling_error` 于是报「第一节拍未从 0 秒开始（起点 5 秒）」——
+        一条与作者意图无关的假理由把整张分镜表拦下。
+        """
+        from v5.media import storyboard
+
+        beats = storyboard.split_beats("0-0.5秒：甲抬手；0.5-1秒：乙侧身")
+        self.assertEqual(len(beats), 2, "两拍都要解析出来")
+        self.assertEqual([(a, b) for a, b, _ in beats], [(0, 0.5), (0.5, 1)])
+        self.assertEqual(beats[0][2], "甲抬手")
+        self.assertEqual(beats[1][2], "乙侧身")
+        self.assertEqual(storyboard.beats_tiling_error(beats, 1), "",
+                         "铺满整镜的小数节拍必须判自洽")
+        # 反向对照：真不连续的写法仍要拦（且报错文案不得把小数截成整数）
+        bad = storyboard.split_beats("0-0.5秒：甲抬手；0.6-1秒：乙侧身")
+        err = storyboard.beats_tiling_error(bad, 1)
+        self.assertIn("0.6", err, "报错文案要写出作者真写的数字，不能 %d 截断")
+
+    def test_decimal_beats_survive_global_remap(self):
+        """小数节拍进 pack 全局时间轴：平移后仍带小数、不越界、不被截成整数秒。"""
+        from v5.media.prompt import _remap_beats
+
+        self.assertEqual(_remap_beats("0-0.5秒：甲；0.5-1秒：乙", 4, 1),
+                         "4-4.5秒：甲；4.5-5秒：乙")
+        # 未压缩时整数写法逐字不变（老项目提示词不受影响）
+        self.assertEqual(_remap_beats("0-2秒：甲；2-6秒：乙", 0, 6),
+                         "0-2秒：甲；2-6秒：乙")
+
+    def test_unfittable_beats_merge_without_losing_text(self):
+        """挤不下的拍**并进前一拍**：内容一个字都不能丢，时间戳一个都不能越界。"""
+        import re
+
+        from v5.media.prompt import _remap_beats
+
+        v = "0-1秒：A；1-2秒：B；2-3秒：C；3-4秒：D；4-5秒：E；5-6秒：F"
+        out = _remap_beats(v, 0, 1)
+        for ch in "ABCDEF":
+            self.assertIn(ch, out, "压不进窗口的拍被静默丢弃：%s" % out)
+        stamps = [(float(a), float(b)) for a, b in
+                  re.findall(r"(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)秒：", out)]
+        self.assertTrue(stamps)
+        self.assertLessEqual(max(b for _, b in stamps), 1.0,
+                             "末拍时间戳越出本镜 1 秒窗口：%s" % out)
+        self.assertEqual(stamps[0][0], 0.0, "必须仍从 0 起")
+
+
     def test_pack_prompt_framing_clause_follows_aspect(self):
         """★ 2026-09-26（xianxia-vfx-action 建包撞上）：pack 档尾句的构图词必须跟画幅。
 

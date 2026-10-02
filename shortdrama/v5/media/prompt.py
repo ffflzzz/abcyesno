@@ -1224,7 +1224,7 @@ def build_tail_prompt(shot: dict, plan: dict | None = None,
     core = tail_content(shot)
     if not core:
         # 分镜没写落幅：退化成用本镜静帧描述（等价于"停在开场构图"）
-        # 2026-09-25：镜内节拍取最后一拍（收定状态，与尾帧语义一致）
+        # 取**第一拍**（与 `build_still_prompt` 同口径，2026-09-26 定：锚点在第一拍）
         core = content_line(shot, beat_pick="first")
     segs = [style_block_line(shot), camera_line(shot), style_line(shot),
             core, identity_line(shot)]
@@ -1407,16 +1407,30 @@ def _pack_fmt_dialogue(d: str) -> str:
     return d
 
 
-def _remap_beats(visual: str, offset: int, span: int) -> str:
+def _remap_beats(visual: str, offset: float, span: float) -> str:
     """镜内节拍时间戳 → pack 全局时间轴（2026-09-25）。
 
     为什么必须做：组级声明「<Picture i> 为第 X-Y 秒节拍」用的是**全局**时间轴，
     而镜内节拍（`0-2秒：…`）是镜本地 0 起的。组内第 2 镜不重映射会同时收到
     「第 4-8 秒」边界和「0-2秒」正文——模型两边打架。
-    `_pack_fit` 等比压缩过秒数时（如 7s 压到 5s），节拍按 span/节拍总长
-    等比重标（±1 秒弹性由组级声明兜底）。零长节拍（重标后挤成 0 秒）并入
-    前一拍的收尾，不产生 `3-3秒` 这类噪声标记。
-    无节拍的镜（旧格式）原样返回——零影响。
+    `_pack_fit` 等比压缩过秒数时（如 7s 压到 5s），节拍按 span/节拍总长等比重标。
+
+    ★ **重标后的时间戳不得越出本镜窗口**（2026-10-02 修）。旧实现是
+    `nb = max(na + 1, min(span, round(b * scale)))`——那个写死的 `+1 秒` 地板
+    （本意是防 `3-3秒` 零长噪声标记）**压过了 `span` 天花板**：只要**拍数多于分配秒数**
+    （快切的常态：6 拍的镜被压到 4 秒），时间戳就一路溢出到下一镜窗口里。
+    真跑复现（`6 镜 × 6 秒 × 每镜 6 拍` → 组内每镜分到 4 秒）：
+        【第 0-4 秒｜镜头 1/3】… 4-5秒：动作4；5-6秒：动作5   ← 越界 2 秒
+        【第 4-8 秒｜镜头 2/3】4-5秒：动作0；5-6秒：动作1 …   ← 同两秒两个动作
+    模型收到的是**两条镜头抢同一秒**。
+
+    现在的步长取 `min(作者粒度, 窗口/拍数)`：
+    · **未被压缩**时它就是作者写的粒度 ⇒ **老项目提示词逐字不变**（整数仍是整数）；
+    · 压缩后仍放不下作者粒度时，**降到恰好装得下的粒度**（6 拍压进 4 秒 = 每拍
+      0.67 秒），**拍数不缩水**——分镜师排的节奏是交付物的一部分，不能悄悄抹掉；
+    · 只有浮点噪声/窗口实在装完时，剩余的拍**并进前一拍的正文**兜底（内容不丢）。
+    小数标记（`0-0.5秒：`，2026-10-02 起 `split_beats` 认）因此能原样带上全局轴。
+    末拍一律收在窗口右界，不留半秒缝隙。无节拍的镜（旧格式）原样返回。
     """
     beats = storyboard.split_beats(visual or "")
     if not beats:
@@ -1424,18 +1438,32 @@ def _remap_beats(visual: str, offset: int, span: int) -> str:
     total = float(beats[-1][1])
     if total <= 0 or span <= 0:
         return visual or ""
-    scale = span / total
-    parts: list[str] = []
-    prev_end = None
-    for a, b, body in beats:
-        na = round(a * scale) if prev_end is None else prev_end
-        nb = max(na + 1, min(span, round(b * scale)))
-        if nb <= na:            # 并入前一拍（span 已满）
-            break
-        if body:
-            parts.append("%d-%d秒：%s" % (offset + na, offset + nb, body))
-        prev_end = nb
-    return "；".join(parts)
+    scale = float(span) / total
+    span_f = float(span)
+    # 作者的节奏粒度 = 相邻节拍端点的最小正间隔（全整数 → 1 秒；写了对半 → 0.5 秒）
+    edges = [float(a) for a, _b, _t in beats] + [total]
+    gaps = [y - x for x, y in zip(edges, edges[1:]) if y - x > 1e-9]
+    author_step = min(round(x, 2) for x in gaps) if gaps else 1.0
+    step = max(min(author_step, round(span_f / len(beats), 2)), 0.01)
+
+    segs: list[list] = []                      # [本地起点, 本地终点, 正文]
+    cursor = 0.0
+    for _a, b, body in beats:
+        nb = min(max(round(float(b) * scale, 2), round(cursor + step, 2)), span_f)
+        if nb - cursor < 1e-9:
+            # 窗口已经排满：这一拍的正文并进前一拍，不新增时间戳、不丢内容
+            if segs:
+                if body:
+                    segs[-1][2] = (segs[-1][2] + "；" + body) if segs[-1][2] else body
+                continue
+            nb = span_f                        # 首拍即放不下 → 整镜并为一段
+        segs.append([cursor, nb, body or ""])
+        cursor = nb
+    if segs:
+        segs[-1][1] = span_f                   # 末拍一定收到本镜右边界
+    lab = storyboard.beat_label
+    return "；".join("%s-%s秒：%s" % (lab(offset + a), lab(offset + b), t)
+                     for a, b, t in segs)
 
 
 #: 画幅构图词（2026-09-26，xianxia-vfx-action 建包时撞上）：pack 档尾句原先**硬编码**
