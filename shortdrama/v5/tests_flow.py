@@ -3885,6 +3885,41 @@ class TestPackMode(unittest.TestCase):
         self.assertEqual(stamps[0][0], 0.0, "必须仍从 0 起")
 
 
+    def test_anchors_written_before_the_first_beat_are_not_dropped(self):
+        """★ 病样本（`luanzhen-xue-1001` LN01 实测，2026-10-02 发现）。
+
+        分镜契约要求「第一拍写全角色锚点」，而作者很自然地把锚点写成**第一个时间戳
+        之前的一句总起**：
+
+            （闯入发难·凌厉）@周娘子身着绛紫绸衫、赤金簪与金耳坠，左侧两名随从剪影……
+            0-2s：@周娘子自画面左侧快步走入@绣坊·内堂
+
+        `split_beats` 按定义只取标记**之后**的文本 ⇒ 旧实现把整句锚点**静默丢掉**：
+        静帧提示词（取第一拍）与 pack 视频提示词（只回节拍）里，绛紫绸衫／赤金簪／
+        金耳坠／随从剪影**一个字都不在**，`stills.json` 可查，而日志全绿、门全过。
+        身份锚点是历次漂移的头号来源，丢在这里等于契约白写。
+        """
+        from v5.media.prompt import _remap_beats, build_pack_prompt, build_still_prompt
+
+        shot = {"name": "LN01", "scene": "绣坊·内堂", "seconds": 4, "shot_type": "中景",
+                "angle": "平视", "camera": "缓推", "dialogue": "", "sfx": "", "tail": "",
+                "visual": "（闯入发难·凌厉）@周娘子身着绛紫绸衫、赤金簪与金耳坠，"
+                          "左侧两名随从剪影紧随其后。0-2秒：@周娘子自画面左侧快步走入"
+                          "@绣坊·内堂；2-4秒：她停在绣屏侧前"}
+        still = build_still_prompt(shot)
+        self.assertIn("绛紫绸衫", still, "标记前的锚点句没进静帧提示词 = 又被丢了")
+        self.assertIn("快步走入", still, "第一拍本来就该在")
+        self.assertNotIn("停在绣屏侧前", still, "第二拍仍不该进静帧（多拍序列会分屏）")
+        self.assertIn("绛紫绸衫", build_pack_prompt([shot], [4], 4, style_block=""),
+                      "标记前的锚点句没进 pack 视频提示词 = 又被丢了")
+        # 反向对照：没写总起句的镜，输出逐字不变（不能给老项目添字符）
+        plain = "0-2秒：@甲抬手；2-4秒：@甲转身"
+        self.assertEqual(_remap_beats(plain, 0, 4), plain)
+        # 总起句不能被当成一拍（密度只数带时间戳的）
+        from v5.media import storyboard
+        self.assertEqual(len(storyboard.split_beats(shot["visual"])), 2)
+        self.assertTrue(storyboard.beat_prefix(shot["visual"]).startswith("（闯入发难"))
+
     def test_pack_prompt_framing_clause_follows_aspect(self):
         """★ 2026-09-26（xianxia-vfx-action 建包撞上）：pack 档尾句的构图词必须跟画幅。
 

@@ -126,6 +126,29 @@ def split_beats(visual: str) -> list[tuple[float, float, str]]:
     return beats
 
 
+def beat_prefix(visual: str) -> str:
+    """第一个节拍标记**之前**的那段正文（没有标记就是整段）。
+
+    ★ 为什么单独取它（2026-10-02 实测）：分镜契约要求「第一拍写全角色锚点」，
+    而作者很自然地把它写成标记前的一句总起。`luanzhen-xue-1001` LN01 的真实产物：
+
+        （闯入发难·凌厉）@周娘子身着绛紫绸衫，右手戴@周娘子的护甲，赤金簪与金耳坠，
+        左侧两名模糊随从剪影紧随其后　**0-2s：**@周娘子自画面左侧快步走入…
+
+    `split_beats` 按定义只取标记**之后**的文本 ⇒ 这一整句锚点（绛紫绸衫／赤金簪／
+    金耳坠／随从剪影）**既进不了静帧提示词**（`content_line(beat_pick="first")` 取
+    `_beats[0][2]`），**也进不了 pack 视频提示词**（`_remap_beats` 只回节拍）。
+    实测 LN01/LN02 的 `stills.json` 里这四个词**一个字都不在**，而日志全绿、
+    门全过 —— 身份锚点是历次漂移的头号来源（见记忆「定妆照成了新的单点故障」），
+    丢在这里等于契约白写。调用方负责把它带回去。
+    """
+    text = visual or ""
+    m = _BEAT_RE.search(text)
+    if not m:
+        return text.strip()
+    return text[:m.start()].strip(" ；;\n\t")
+
+
 def beats_tiling_error(beats: list[tuple[float, float, str]], seconds: float) -> str:
     """校验节拍铺满整镜：从 0 起、首尾相接、终于时长列。返回错误描述（空=通过）。
 

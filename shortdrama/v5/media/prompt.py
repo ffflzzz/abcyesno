@@ -977,7 +977,13 @@ def content_line(shot: dict, beat_pick: str | None = None) -> str:
     if beat_pick in ("first", "last"):
         _beats = storyboard.split_beats(v)
         if _beats:
-            v = _beats[0][2] if beat_pick == "first" else _beats[-1][2]
+            body = _beats[0][2] if beat_pick == "first" else _beats[-1][2]
+            # ★ 标记**之前**的总起句一起带上（2026-10-02 修）：分镜契约要「第一拍写全
+            #   角色锚点」，作者普遍把它写成 `0-2秒：` 前面的一句话，而 `split_beats`
+            #   按定义只取标记之后 ⇒ 锚点整句被丢掉（luanzhen-xue-1001 LN01 实测：
+            #   绛紫绸衫／赤金簪／金耳坠／随从剪影 在静帧提示词里一个字都不在）。
+            prefix = storyboard.beat_prefix(v) if beat_pick == "first" else ""
+            v = (prefix + "，" + body) if prefix and prefix != body else body
     # 去掉【镜N】标记
     v = re.sub(r"^【[^】]*】", "", v).strip()
     # 去掉风格前缀（已在 style_line 里单独给）
@@ -1462,8 +1468,13 @@ def _remap_beats(visual: str, offset: float, span: float) -> str:
     if segs:
         segs[-1][1] = span_f                   # 末拍一定收到本镜右边界
     lab = storyboard.beat_label
-    return "；".join("%s-%s秒：%s" % (lab(offset + a), lab(offset + b), t)
+    text = "；".join("%s-%s秒：%s" % (lab(offset + a), lab(offset + b), t)
                      for a, b, t in segs)
+    # ★ 标记**之前**的总起句要带上（2026-10-02 修，与 `content_line` 同一处病）：
+    #   分镜把角色锚点写成 `0-2秒：` 前面的一句话时，`split_beats` 拿不到它，
+    #   旧实现就整句丢弃 ⇒ 身份锚点从没进过视频请求（luanzhen-xue-1001 LN01 实测）。
+    prefix = storyboard.beat_prefix(visual or "")
+    return (prefix + "；" + text) if prefix else text
 
 
 #: 画幅构图词（2026-09-26，xianxia-vfx-action 建包时撞上）：pack 档尾句原先**硬编码**
