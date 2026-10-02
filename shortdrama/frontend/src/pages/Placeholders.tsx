@@ -333,6 +333,14 @@ export function Visuals() {
           className="btn btn--sm"
           value={pid}
           title="完整分镜按集单独取（列表接口只给轻量壳），所以选中哪一集才发那一条请求"
+          /* ★ 必须限宽：`<select>` 的默认宽度**按最宽的那条 option 算**，
+             而 `p.name` 是 `brief.topic` —— 真实项目里它经常是一整段话
+             （实测《天台狮馆》120+ 字），不限宽整页会被顶出 **2000+ 像素横向滚动**
+             （真浏览器量到 select 右边界 3718px）。全名放 `title` 里看。 */
+          style={{
+            maxWidth: 320, width: 320, overflow: 'hidden',
+            whiteSpace: 'nowrap', textOverflow: 'ellipsis',
+          }}
           onChange={(ev) => { setPid(ev.target.value); setEpNo(0); }}
         >
           <option value="">— 选择项目 —</option>
@@ -444,6 +452,13 @@ export function Visuals() {
               return (
                 <button key={p.id} type="button" className="btn btn--sm"
                   title={p.name}
+                  /* ★ 必须限宽：`p.name` 是 `brief.topic`，真实项目里它常常是
+                     **一整段话**（实测《天台狮馆》那条 120+ 字）—— 不限宽就会
+                     把这一排按钮撑出横向滚动条，整页跟着晃。全名在 `title` 里。 */
+                  style={{
+                    maxWidth: 260, whiteSpace: 'nowrap', overflow: 'hidden',
+                    textOverflow: 'ellipsis', display: 'inline-block',
+                  }}
                   onClick={() => { setPid(p.id); setEpNo(0); }}>
                   {p.name} · {n} 张定妆照
                 </button>
