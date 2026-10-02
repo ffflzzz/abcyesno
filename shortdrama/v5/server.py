@@ -688,7 +688,17 @@ def create_app(base: str | None = None, web_root: str | None = None):
         确认"时就白跑一遍 —— 每个角色都是真金白银的 LLM 调用 + 分钟级耗时。
 
         与「生成分镜脚本」一样先 `ensure_devserver`（项目目录是编译期绑定的）。
+
+        ⚠️ **`p` 必须在第一次读它之前就赋值**（2026-10-02 修的真实缺陷）：原先
+        `p = payload or {}` 写在 `ensure_devserver(...)` **之后**，而它的参数里就用了
+        `p.get("manual_steps")` —— 函数内任何一处赋值都会把 `p` 变成**局部变量**，
+        于是每次进来先 `UnboundLocalError`，再被下面的 `except Exception` 兜成 **502**。
+        后果是「生成剧本正文」这个按钮**点一次失败一次**（两段式向导的第一段整段断开），
+        而 `tests_server.test_gen_script_route_starts_script_kind` 一直是红的。
+        同一形状的坑在 `/episodes/batch/storyboard/generate` 里**没有**（那边 `p` 在最前面），
+        所以这条路由是漏改的那一个，不是有意为之。
         """
+        p = payload or {}
         pid, ep = _resolve_eid(eid)
         try:
             st = webchain.ensure_devserver(pid, log=print,
@@ -698,7 +708,6 @@ def create_app(base: str | None = None, web_root: str | None = None):
             raise _conflict(str(e)[:400])
         except Exception as e:                  # noqa: BLE001
             raise _server_error(str(e)[:400])
-        p = payload or {}
         try:
             rec = runner.start(pid, "script", ep=ep,
                                image_vendor=_vendor_of(p, "image"),
