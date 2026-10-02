@@ -4275,6 +4275,20 @@ class TestPackMode(unittest.TestCase):
             self.assertTrue((clip_dir / "out.mp4").exists())
 
 
+    def test_compose_default_is_hard_cut(self):
+        """★ 拼接默认**硬切**（2026-10-02 由 0.3 秒叠化改默认，实测两条理由）。
+
+        ① 换场那一刀上叠化把两个不同空间糊在同一帧（`leak-upstairs-1002`
+           楼道→卧室接缝抽帧见重影，对照图 `tmp/seam/CMP_seam_frames.jpg`）；
+        ② 四段拼一片被叠化 + 掐头去尾吃掉 2.0 秒（38.58s → 同素材硬切重拼 40.61s）。
+        电影语法上也更对：同一场戏的镜头之间本来就是硬切，淡入淡出留给时间流逝。
+        要淡入淡出：`SHORTDRAMA_COMPOSE_XFADE=0.3`（开关没删，只是不再是默认）。
+        """
+        from v5.media import compose
+
+        self.assertEqual(compose.XFADE, 0.0,
+                         "默认必须是硬切；要改回叠化请显式设 env，别改默认")
+
     def test_rate_limit_rotates_keys_within_the_same_group(self):
         """★ 撞 429 要在**同一组内换 key 重试**，不是一撞就放弃（2026-09-30 实测）。
 

@@ -10,7 +10,8 @@
 开关（env；TRIM/XFADE 填 0 = 关，FIT 填 off = 关）：
   SHORTDRAMA_COMPOSE_FIT    crop|pad|off   默认 crop（与 scripts/concat_robust.py 竖屏推荐一致）
   SHORTDRAMA_COMPOSE_TRIM   秒             默认 0.15（取小值：xfade 还会吃交界 0.3s，防切 dialogue-led 台词）
-  SHORTDRAMA_COMPOSE_XFADE  秒             默认 0.3
+  SHORTDRAMA_COMPOSE_XFADE  秒             **默认 0（硬切）**——2026-10-02 由 0.3 改默认，
+    理由见下方 XFADE 处的实测记录；要淡入淡出自己填秒数。
 
 兼容与兜底哲学：
   - concat() 签名不动（pipeline.py 调用点零改动）。
@@ -37,7 +38,16 @@ def _env_seconds(name: str, default: float) -> float:
 
 FIT = (os.environ.get("SHORTDRAMA_COMPOSE_FIT", "crop") or "crop").strip().lower()
 TRIM = _env_seconds("SHORTDRAMA_COMPOSE_TRIM", 0.15)
-XFADE = _env_seconds("SHORTDRAMA_COMPOSE_XFADE", 0.3)
+# ★ 默认 0 = **硬切**（2026-10-02 实测改，此前默认 0.3 秒叠化）。
+#   两条理由：
+#   ① 换场那一刀上，0.3 秒叠化把**两个不同空间糊在同一帧**里（`leak-upstairs-1002`
+#      楼道→卧室的接缝，抽帧看得见重影）——那不是转场，是鬼影。
+#      对照图：`tmp/seam/CMP_seam_frames.jpg`（叠化 vs 硬切，同一段素材重拼）。
+#   ② 它还在偷时长：四段拼一片，叠化 + 掐头去尾吃掉 2.0 秒（38.58s → 40.61s 重拼实测），
+#      快节奏片这个损耗占比不小。
+#   电影语法上这也更对：**同一场戏的镜头之间本来就是硬切**，淡入淡出留给"时间流逝"，
+#   而我们的组间叠化把两者都抹成了淡出。要恢复淡入淡出填秒数即可（env 不变）。
+XFADE = _env_seconds("SHORTDRAMA_COMPOSE_XFADE", 0.0)
 
 
 def concat(clip_dir: Path, out: Path) -> int:
