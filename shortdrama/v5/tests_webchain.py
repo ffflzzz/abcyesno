@@ -41,10 +41,22 @@ class _Base(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self._pp = mock.patch.object(config, "PROJECTS_DIR", self.root)
         self._pr = mock.patch.object(config, "PROJECT_ROOT", self.root)
-        self._pp.start(); self._pr.start()
+        # ★ **RUNTIME_ROOT 也必须打桩**（2026-10-02 修五条红）。
+        #   `config.RUNTIME_ROOT` 是 import 时算好的**快照**（`config.py:18`），
+        #   只打 `PROJECT_ROOT` 不会带着它一起走 ⇒ dev server 的状态文件
+        #   （`RUNTIME_ROOT / DEV_STATE`）、归档目录、日志目录全都落在**真实仓库**里：
+        #     · `TestDevServerAdoption` 读到真仓库里那条"端口 2024 上有个 pid 999 的服务"
+        #       的残留状态 ⇒ 判定"别人的进程、拒绝接管" ⇒ 红（而这**正是被测行为**，
+        #       夹具想看的是"端口上是我自己起的那个"）；
+        #     · `test_archive_moves_dir` / `test_log_handle_not_leaked` 同理在真实目录上找
+        #       它刚造出来的东西 ⇒ 找不到。
+        #   还有一层：跑测试会往真实 `.dev/` 与 `.langgraph_api/` 里写状态，
+        #   下次手工跑片时看到的就是假现场（本项目踩过的"假 0 进程数"同型）。
+        self._rt = mock.patch.object(config, "RUNTIME_ROOT", self.root)
+        self._pp.start(); self._pr.start(); self._rt.start()
 
     def tearDown(self):
-        self._pr.stop(); self._pp.stop()
+        self._rt.stop(); self._pr.stop(); self._pp.stop()
         self.tmp.cleanup()
 
 
