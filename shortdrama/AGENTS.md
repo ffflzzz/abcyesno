@@ -535,6 +535,34 @@ python -m v5.series <项目名> --rerender LN03 --from still   # 连静帧一起
 > **注意**：返工会**改变产物**——若开着审批门（`SHORTDRAMA_REQUIRE_APPROVAL=1`），
 > 上游一变批文即自动作废，需重新 `--approve`。
 
+### 改分镜的写路径契约（2026-10-02 补齐，`v5/webwrite.py` + `v5/media/renumber.py`）
+
+网页端（也含任何直接调 `/segments*` 的调用方）改分镜时，**代码负责三件事**，
+不要再指望人自己记得：
+
+1. **增删一镜之后素材按镜名重挂**（`renumber.remap_after_edit`）。镜名 `LNxx` 是
+   `storyboard.parse` 按**行序**编的，而静帧 / 片段 / 任务表 / QC 计数**全按镜名存**
+   ⇒ 在中间删一行会让后面每一镜的名字全体挪位、文件不动 ⇒ **每一镜挂上隔壁镜的画面**，
+   且日志全绿、成片能出（实测过）。重挂覆盖 `stills.json`（含条目里的绝对 `path`）、
+   `stills/*.jpg` + `.url` 边车、`tails.json`、`still_qc_seen.json`、
+   `still_requeue_tally.json`、`video_jobs.json` + `clips/*`。
+   ★ **打包档（`VIDEO_MODE=pack`）不猜组号**：组记录里的 `shots` 映射到新镜名后，
+   与改动后 `video_plan.group_shots` **重算的分组逐组对账** —— 成员一致才改名保住，
+   变了就 `clipqc.invalidate()` 暂存作废并计入 `invalidated_groups`。
+   ⚠️ 顺序必须是**先作废后改名**（反过来会把保住的成片当坏组暂存走，实测抓到）。
+2. **`ep` 必须一路传到底**。原先 `_load_shots(root)` / `_sb_path(root)` 都不带集号
+   （默认第 1 集）⇒ 在第 2 集页面上点保存实际**改的是第 1 集的分镜表**、
+   作废第 1 集的素材，而第 2 集一字未改、界面照样弹「已保存」。
+   回归测试：`tests_webwrite.TestShotRenumber.test_write_paths_honor_episode`。
+3. **前端点「新增镜头」加出来的镜自带合法时长与无声对白**
+   （`_NEW_SHOT_SECONDS=6` / `SILENT_DIALOGUE=「（无声，环境音）」`），
+   使 `validate.check_storyboard` 不再出「时长不是数字」「空对白」两条阻断项——
+   而**前端路径**跑在人工模式（门只报不拦），空镜会真的被送去生成 = 白烧配额。
+   画面描述仍是 `[[待补]]` 占位，返回体带 `needs_visual: true`，前端据此**禁止**对它生成。
+
+`GET /projects/{pid}/progress` 现在收 **`?ep=N`**（缺省 1，`ep<1` → 400）。
+不传就永远按第 1 集算 `v5.render` / `cover` / `flow` ⇒ 多集连载会串集。
+
 ## 硬性注意事项
 
 1. **LLM 429**：创作阶段撞 Agnes 限速会自动冷却重试——冷却循环属正常，勿中断进程

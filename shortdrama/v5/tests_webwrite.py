@@ -63,8 +63,13 @@ class _Base(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self._p = mock.patch.object(config, "PROJECTS_DIR", self.root)
         self._pr = mock.patch.object(config, "PROJECT_ROOT", self.root)
+        # ★ `RUNTIME_ROOT` 也必须打桩（与 `tests_server` 同一条修）：任务台账在它下面，
+        #   不打桩时 `list_runs` 会读到**真实仓库 `.tmp` 里历次跑片留下的记录**
+        #   （实测 `test_list_runs_filters_by_pid` 数到 30 条），且跑测试本身还在污染台账。
+        self._rt = mock.patch.object(config, "RUNTIME_ROOT", self.root)
         self._p.start()
         self._pr.start()
+        self._rt.start()
         self.pid = "demo-drama"
         self.proj = self.root / self.pid
         (self.proj / "scenedesigner").mkdir(parents=True)
@@ -83,6 +88,7 @@ class _Base(unittest.TestCase):
         (self.proj / "scenedesigner" / "scenedesigner.md").write_text(SB_MD, encoding="utf-8")
 
     def tearDown(self):
+        self._rt.stop()
         self._pr.stop()
         self._p.stop()
         self.tmp.cleanup()
@@ -675,6 +681,270 @@ class TestOutline(_Base):
         with self.assertRaises(webwrite.EditError) as c:
             webwrite.update_outline(self.proj, {"pack": "niulai-movie-style"})
         self.assertIn("不可编辑", str(c.exception))
+
+
+class TestShotRenumber(_Base):
+    """★★ 在中间增删一镜之后，**素材必须跟着镜名走**（2026-10-02）。
+
+    病根：`storyboard.parse` 的镜名 `LNxx` 按**行序**编，而静帧/片段/任务表都按镜名存。
+    删一行 ⇒ 后面每一镜的名字前移一位，文件却不动 ⇒ 从这以后**每一镜都挂着隔壁镜的画面**，
+    而且日志全绿、前端有图、成片能出（实测：删 LN02 后 `LN03` 指向原 `LN04` 的画面）。
+    前端的「删除镜头 / 新增镜头」两个按钮直接踩这条，所以重挂是代码的活。
+
+    夹具全部**断言解析出 N 镜**（本项目纪律：解析器按列名/长度会静默丢行，
+    0 条会让所有判据"全过"）。
+    """
+
+    #: 5 镜：LN01/LN02 同景 A（可并一组）、LN03 单镜 B、LN04/LN05 同景 C。
+    #: 每镜画面描述都带**独有字串**，便于按内容认出"这条名字现在指的是哪一镜"。
+    MD5 = """# 分镜：五镜
+
+| 镜头号 | 景别 | 角度 | 运镜 | 时长(秒) | 画面描述 | 对白 | 音效 | 场景 |
+|--------|------|------|------|---------|---------|------|------|------|
+| 1 | 全景 | 平视 | 固定 | 6 | 甲字样的空钱盒摆在柜台上，纸扎匠站在柜台后面看着它 | 纸扎匠：这单我接了。 | 环境音 | 铺面甲 |
+| 2 | 近景 | 俯视 | 缓推 | 6 | 乙字样的免提手机屏幕亮着，富人的声音从听筒里传出来 | 富人：钱给你十倍。 | 电流声 | 铺面甲 |
+| 3 | 特写 | 平视 | 固定 | 10 | 丙字样的门帘被风掀起一角，外面在下雨 | 纸扎匠：我回来了。 | 雨声 | 巷口乙 |
+| 4 | 中景 | 平视 | 跟 | 6 | 丁字样的湿台阶一直延伸到画面深处 | 纸扎匠：十年了。 | 雨声 | 台阶丙 |
+| 5 | 全景 | 仰视 | 固定 | 6 | 戊字样的老屋檐水滴成一线，落在积水中 | （无声，环境音） | 水滴声 | 台阶丙 |
+"""
+
+    def setUp(self):
+        super().setUp()
+        # 用**集级文件名**（`_sb_path` 新名优先），顺便验证 ep 通道
+        (self.proj / "scenedesigner" / "scenedesigner_ep1.md").write_text(
+            self.MD5, encoding="utf-8")
+        # 旧夹具那份旧名文件删掉，避免"新名不存在时回退到旧名"干扰断言
+        old = self.proj / "scenedesigner" / "scenedesigner.md"
+        if old.exists():
+            old.unlink()
+        from v5.media import storyboard
+        self.shots = storyboard.parse(self.MD5)
+        self.assertEqual(len(self.shots), 5, "夹具必须解析出 5 镜（0 条会让所有判据全过）")
+
+    # ── 造器材：给指定镜号装上"能被认出内容"的素材 ──
+    def seed(self, names, ep=1, clip=True):
+        sd = self.proj / "media" / ("ep%d" % ep) / "stills"
+        sd.mkdir(parents=True, exist_ok=True)
+        man = sd.parent / "stills.json"
+        data = json.loads(man.read_text(encoding="utf-8")) if man.exists() else {}
+        for n in names:
+            f = sd / (n + ".jpg")
+            f.write_bytes(("IMG-" + n).encode())          # 内容 = 名字，能认出谁挂给了谁
+            (sd / (n + ".jpg.url")).write_text("https://x/%s.jpg" % n, encoding="utf-8")
+            data[n] = {"path": str(f), "url": "https://x/%s.jpg" % n, "prompt": n}
+        man.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        if clip:
+            cd = self.proj / "media" / ("ep%d" % ep) / "clips"
+            cd.mkdir(parents=True, exist_ok=True)
+            jb = jobs_mod.load(sd.parent)
+            for n in names:
+                (cd / (n + ".mp4")).write_bytes(("CLIP-" + n).encode())
+                jobs_mod.mark(jb, n, "completed", local=str(cd / (n + ".mp4")))
+            jobs_mod.save(sd.parent, jb)
+
+    def read_still(self, name, ep=1):
+        f = self.proj / "media" / ("ep%d" % ep) / "stills" / (name + ".jpg")
+        return f.read_bytes().decode() if f.exists() else None
+
+    # ── 1. 删中间一镜：后面的素材必须跟着前移 ──
+    def test_delete_middle_shifts_stills_and_clips(self):
+        self.seed(["LN01", "LN02", "LN03"])
+        r = webwrite.delete_segment(self.proj, 1, "LN02")
+        self.assertEqual(r["remaining"], 4)
+        # 内容跟着名字走：原 LN03 的图现在是新的 LN02（新 LN02 = 原第三镜）
+        self.assertEqual(self.read_still("LN02"), "IMG-LN03")
+        self.assertEqual(self.read_still("LN03"), None, "洞必须清空，不许留旧图")
+        # 被删那镜的素材不能留下来冒充别人
+        data = json.loads((self.proj / "media" / "ep1" / "stills.json").read_text(encoding="utf-8"))
+        self.assertEqual(sorted(data), ["LN01", "LN02"], "实际 %s" % sorted(data))
+        for n, rec in data.items():
+            self.assertTrue(str(rec["path"]).endswith(n + ".jpg"),
+                            "条目里的绝对 path 必须跟着改名：%s → %s" % (n, rec["path"]))
+        cd = self.proj / "media" / "ep1" / "clips"
+        self.assertEqual((cd / "LN02.mp4").read_bytes().decode(), "CLIP-LN03")
+        jb = jobs_mod.load(self.proj / "media" / "ep1")
+        self.assertEqual(sorted(jb), ["LN01", "LN02"], "任务表也要跟着改名")
+
+    def test_delete_middle_shifts_qc_tallies(self):
+        """`still_qc_seen.json` / `still_requeue_tally.json` 也按镜名存 —— 漏了就会
+        让下一轮的"这镜我审过了、重绘过几次"记到别的镜头上。"""
+        self.seed(["LN02"])
+        e1 = self.proj / "media" / "ep1"
+        (e1 / "still_qc_seen.json").write_text(json.dumps(
+            {"LN01": {"mtime": 1.0, "clean": True}, "LN02": {"mtime": 2.0, "clean": False}},
+            ensure_ascii=False), encoding="utf-8")
+        (e1 / "still_requeue_tally.json").write_text(
+            json.dumps({"LN02": 2}, ensure_ascii=False), encoding="utf-8")
+        webwrite.delete_segment(self.proj, 1, "LN01")
+        seen = json.loads((e1 / "still_qc_seen.json").read_text(encoding="utf-8"))
+        self.assertEqual(seen.get("LN01"), {"mtime": 2.0, "clean": False},
+                         "原 LN02 的复核记录必须落到新 LN01 名下")
+        tally = json.loads((e1 / "still_requeue_tally.json").read_text(encoding="utf-8"))
+        self.assertEqual(tally, {"LN01": 2}, "重roll 计数同样跟着改名")
+
+    # ── 2. 表尾追加不该动任何东西 ──
+    def test_append_at_end_touches_nothing(self):
+        self.seed(["LN01", "LN02"])
+        r = webwrite.add_segment(self.proj, 1)
+        self.assertEqual(r["new_position"], 6)
+        self.assertEqual(self.read_still("LN01"), "IMG-LN01")
+        self.assertEqual(self.read_still("LN02"), "IMG-LN02")
+        self.assertEqual(r["remap"]["stills"]["stills_json"], 0)
+
+    # ── 3. 中间插一镜：后面的素材必须跟着后移 ──
+    def test_insert_middle_shifts_up(self):
+        self.seed(["LN02", "LN03"])
+        r = webwrite.add_segment(self.proj, 1, after="LN01")
+        self.assertEqual(r["new_position"], 2)
+        self.assertEqual(self.read_still("LN03"), "IMG-LN02", "原 LN02 应搬到 LN03")
+        self.assertEqual(self.read_still("LN04"), "IMG-LN03")
+        self.assertEqual(self.read_still("LN02"), None, "新插的镜自己没有任何素材")
+        data = json.loads((self.proj / "media" / "ep1" / "stills.json").read_text(encoding="utf-8"))
+        self.assertEqual(sorted(data), ["LN03", "LN04"], "实际 %s" % sorted(data))
+
+    # ── 4. 打包档：按内容对账，保住保得住的、作废保不住的 ──
+    def test_pack_mode_matches_groups_by_content(self):
+        """分组是 `video_plan.group_shots` 按「同场景相邻 + ≤12 秒」贪心算的 ⇒
+        组号也是位置性的。这里造 A:[1,2] / B:[3] / C:[4,5] 三组，删掉 B 的那一镜：
+        B 组内容没了 ⇒ 作废；C 组成员没变但**组号从 pack03 变成 pack02** ⇒ 必须改名保住成片。
+        """
+        out = self.proj / "media" / "ep1"
+        cd = out / "clips"
+        cd.mkdir(parents=True, exist_ok=True)
+        (cd / "pack01.mp4").write_bytes(b"A")
+        (cd / "pack02.mp4").write_bytes(b"B")
+        (cd / "pack03.mp4").write_bytes(b"C")
+        jb = {}
+        jobs_mod.mark(jb, "pack01", "completed", shots=["LN01", "LN02"],
+                      local=str(cd / "pack01.mp4"))
+        jobs_mod.mark(jb, "pack02", "completed", shots=["LN03"], local=str(cd / "pack02.mp4"))
+        jobs_mod.mark(jb, "pack03", "completed", shots=["LN04", "LN05"],
+                      local=str(cd / "pack03.mp4"))
+        jobs_mod.save(out, jb)
+
+        r = webwrite.delete_segment(self.proj, 1, "LN03")
+        got = jobs_mod.load(out)
+        self.assertEqual(r["remap"]["jobs"]["mode"], "pack")
+        self.assertIn("pack02", r["remap"]["jobs"]["invalidated_groups"],
+                      "整组被删 ⇒ 必须作废（且是暂存、不是删文件）")
+        self.assertEqual(sorted(got), ["pack01", "pack02"], "实际 %s" % sorted(got))
+        self.assertEqual((cd / "pack01.mp4").read_bytes().decode(), "A", "A 组保住")
+        # 原 pack03（C 组）改名成 pack02，成片字节必须还在；被删的 B 组字节进了暂存区
+        self.assertEqual((cd / "pack02.mp4").read_bytes().decode(), "C",
+                         "C 组的成片应改名到新组号，而不是被丢掉")
+        stashed = cd / ".clipqc_bad" / "pack02.mp4"
+        self.assertTrue(stashed.exists(), "作废的组必须**暂存**而不是删除（clipqc 的既有纪律）")
+        self.assertEqual(stashed.read_bytes().decode(), "B", "暂存的应当是被删那组自己那份")
+        self.assertEqual(got["pack02"]["shots"], ["LN03", "LN04"],
+                         "组记录里的成员要跟着改成**新镜名**")
+        self.assertTrue(str(got["pack02"]["local"]).endswith("pack02.mp4"))
+        self.assertFalse((cd / "pack03.mp4").exists(), "旧组号的文件不许留在盘上冒充未渲")
+
+    def test_pack_mode_without_shots_field_is_not_claimed(self):
+        """老记录没写 `shots` ⇒ 无法对账，宁可作废也不冒认（错挂比缺一镜更坏）。"""
+        out = self.proj / "media" / "ep1"
+        cd = out / "clips"
+        cd.mkdir(parents=True, exist_ok=True)
+        (cd / "pack01.mp4").write_bytes(b"A")
+        jb = {}
+        jobs_mod.mark(jb, "pack01", "completed", local=str(cd / "pack01.mp4"))
+        jobs_mod.save(out, jb)
+        r = webwrite.delete_segment(self.proj, 1, "LN05")   # 删末尾，与 pack01 无关
+        self.assertIn("pack01", r["remap"]["jobs"]["invalidated_groups"])
+
+    # ── 5. 有成片时必须说清"成片还是旧的那一版" ──
+    def test_stale_final_is_reported_not_hidden(self):
+        self.seed(["LN02"])
+        f = self.proj / "media" / "ep1" / "episode_final.mp4"
+        f.write_bytes(b"OLD")
+        r = webwrite.delete_segment(self.proj, 1, "LN02")
+        self.assertTrue(f.exists(), "不许自动重跑拼接（那要烧配额），只报不改")
+        notes = "；".join(r["remap"].get("notes") or [])
+        self.assertIn("改动前", notes, "必须说明成片仍是旧版：%s" % notes)
+
+    # ── 6. 写路径必须带集号（与 update_segment 那条串集缺陷同根）──
+    def test_write_paths_honor_episode(self):
+        """★★ 在第 2 集页面上编辑/增删，**不许动到第 1 集的文件**。
+
+        旧实现 `_load_shots(root)` / `_sb_path(root)` 都不带 `ep`（默认 1），
+        于是改第 2 集实际改的是第 1 集的分镜表、作废的是第 1 集的素材，
+        而第 2 集一字未改、前端照样弹「已保存」—— 串集 + 假报成功 + 毁另一集的钱。
+        """
+        (self.proj / "scenedesigner" / "scenedesigner_ep2.md").write_text(
+            self.MD5.replace("甲字样的空钱盒", "第二集开场是空钱盒"), encoding="utf-8")
+        before1 = (self.proj / "scenedesigner" / "scenedesigner_ep1.md").read_text(encoding="utf-8")
+
+        webwrite.update_segment(self.proj, 2, "LN01", {"dialogue": "第 2 集的台词。"})
+        md2 = (self.proj / "scenedesigner" / "scenedesigner_ep2.md").read_text(encoding="utf-8")
+        md1 = (self.proj / "scenedesigner" / "scenedesigner_ep1.md").read_text(encoding="utf-8")
+        self.assertIn("第 2 集的台词。", md2, "必须写进**第 2 集**的表")
+        self.assertEqual(md1, before1, "★ 第 1 集的文件必须一字未动")
+
+        webwrite.add_segment(self.proj, 2)
+        self.assertEqual(len((self.proj / "scenedesigner" / "scenedesigner_ep1.md")
+                             .read_text(encoding="utf-8").splitlines()),
+                         len(before1.splitlines()), "在第 2 集插镜不许给第 1 集加行")
+
+
+class TestNewShotPassesGate(_Base):
+    """★ 前端点「新增镜头」加出来的那一镜，**必须不能把整集的分镜契约门判死**。
+
+    病根（实测）：原先只填画面描述占位，时长与对白留空 ⇒
+    `validate.check_storyboard` 出「时长不是数字」「空对白」两条阻断项。
+    而**前端路径**跑在人工模式（`runner` 设 `SHORTDRAMA_HUMAN_IN_CHARGE=1`，
+    门只报不拦），于是这面空镜会被**真的送去生成** —— 在写着「[[待补]]」的画面上
+    烧掉一份静帧 + 一份视频的配额。
+    """
+
+    #: 两镜、每镜画面描述都 **≥15 字**（短于 15 字会被 `parse` 当占位**整行跳过** ——
+    #: 我第一版直接复用 `MD_OK`，它的第二镜描述恰好 14 字，夹具实际只解析出 1 镜，
+    #: 于是"加一镜变 3 镜"的断言红在夹具自己身上）。
+    MD2 = """# 分镜：两镜
+
+| 镜头号 | 景别 | 角度 | 运镜 | 时长(秒) | 画面描述 | 对白 | 音效 |
+|--------|------|------|------|---------|---------|------|------|
+| 1 | 全景 | 平视 | 固定 | 6 | 纸扎匠在逼仄的铺子里看着空钱盒，指尖刚触到盒沿又停住 | 纸扎匠：这单我接下来就去准备材料。 | 环境音 |
+| 2 | 近景 | 俯视 | 缓推 | 6 | 免提手机屏幕亮着，富人的声音从听筒里传出来 | 富人：钱给你十倍你先别声张。 | 电流声 |
+"""
+
+    def setUp(self):
+        super().setUp()
+        (self.proj / "scenedesigner" / "scenedesigner.md").write_text(self.MD2, encoding="utf-8")
+        b = json.loads((self.proj / "brief.json").read_text(encoding="utf-8"))
+        b["must_have"] = ["纸扎匠看着空钱盒"]
+        (self.proj / "brief.json").write_text(json.dumps(b, ensure_ascii=False), encoding="utf-8")
+
+    def _ok_brief(self):
+        return json.loads((self.proj / "brief.json").read_text(encoding="utf-8"))
+
+    def test_added_shot_keeps_storyboard_gate_clean(self):
+        from v5 import validate
+        from v5.media import storyboard
+        md = (self.proj / "scenedesigner" / "scenedesigner.md")
+        base_parsed = storyboard.parse(md.read_text(encoding="utf-8"))
+        self.assertEqual(len(base_parsed), 2, "夹具必须解析出 2 镜，实际 %d" % len(base_parsed))
+        base = validate.check_storyboard(md.read_text(encoding="utf-8"), self._ok_brief())
+        self.assertTrue(base["ok"], "改造前基线就该过分镜门，否则这条测试没有对照")
+
+        webwrite.add_segment(self.proj, 1)
+        after = md.read_text(encoding="utf-8")
+        parsed = storyboard.parse(after)
+        self.assertEqual(len(parsed), 3, "加完必须解析出 3 镜，实际 %d" % len(parsed))
+        r = validate.check_storyboard(after, self._ok_brief())
+        self.assertTrue(r["ok"], "加一镜之后仍必须过分镜门，实测阻断项：%s"
+                        % (r.get("row_violations") or r.get("missing_cols")))
+        new = parsed[-1]
+        self.assertGreaterEqual(int(float(new["seconds"] or 0)), 4,
+                                "新镜时长要落在供应商 4-12 秒区间内")
+        self.assertLessEqual(int(float(new["seconds"] or 0)), 12)
+        self.assertTrue(str(new["dialogue"]).strip(), "对白列不许空")
+
+    def test_added_shot_is_flagged_needs_visual(self):
+        r = webwrite.add_segment(self.proj, 1)
+        self.assertTrue(r["needs_visual"], "占位镜必须打上标记，前端据此禁止生成")
+        r2 = webwrite.add_segment(self.proj, 1,
+                                  fields={"visual": "补齐的一镜：雨里的台阶一直延伸到画面深处"})
+        self.assertFalse(r2["needs_visual"], "给了真描述就不该再要求补")
 
 
 class TestInvalidateAll(_Base):

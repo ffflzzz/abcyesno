@@ -21,7 +21,7 @@ import re
 from pathlib import Path
 
 from . import config
-from .media import assets, clipqc, jobs as jobs_mod, storyboard
+from .media import assets, clipqc, jobs as jobs_mod, renumber, storyboard
 
 #: 新增镜头时的占位画面描述。
 #:
@@ -30,6 +30,16 @@ from .media import assets, clipqc, jobs as jobs_mod, storyboard
 #:   **插进去等于没插** —— 分镜镜数不变、前端那个新镜根本不出现（实测被测试抓到）。
 #:   这里写成自解释的长占位：既能被解析出来（新人能看见它），又明确标着「待补」。
 PLACEHOLDER_VISUAL = "[[待补]] 本镜画面描述：请填写不少于 15 字的具体内容后再生成"
+
+#: 新增镜头的默认时长（秒）。取供应商硬约束 `seconds ∈ [4,12]` 的中间值。
+#: 为什么必须给一个**数字**而不是留空：`validate.check_storyboard` 把「时长不是数字」
+#: 列为阻断项，留空 = 新加的那一镜把整集的分镜契约门判死（实测 `ok=False`）。
+_NEW_SHOT_SECONDS = 6
+
+#: 新增镜头的默认对白。与 `roles.py` 给 scenedesigner 的契约写法**同一串**
+#: （silent / narration-led 的对白列都统一写「（无声，环境音）」）。
+#: 留空会触发「空对白」阻断项；写这串是**合法的无台词占位**，不是编造台词。
+SILENT_DIALOGUE = "（无声，环境音）"
 
 #: 可在前端编辑的分镜列 → 表头关键词（与 `storyboard.parse` 的识列口径**一致**）
 EDITABLE_COLS = {
@@ -354,14 +364,37 @@ def _find_header_line(lines: list, before: int) -> int | None:
     return None
 
 
+def _shot_pos(shots: list, shot: str) -> int:
+    """这一镜在表里的**位置**（1-based）。镜名 `LNxx` 就是按位置编的，
+    但这里按名字查而不信名字里的数字 —— 万一 `parse` 的编号口径以后变了，这里不跟着错。
+    """
+    s = str(shot or "").strip()
+    for i, x in enumerate(shots):
+        if x["name"] == s:
+            return i + 1
+    raise EditError("定位镜号位置失败：%s" % s)
+
+
+def _write_md(root: Path, ep: int, lines: list, md: str) -> Path:
+    p = _sb_path(root, ep)
+    p.write_text("\n".join(lines) + ("\n" if md.endswith("\n") else ""), encoding="utf-8")
+    return p
+
+
 def update_segment(root: Path, ep: int, shot: str, patch: dict) -> dict:
     """按**列名**改分镜表的一行。返回里写明**作废了什么**。
 
     ⚠️ v5 没有细粒度失效：改一镜的文字也会让该镜的静帧/成片**不再可信**
     （提示词里含画面描述与对白）→ 一律作废静帧 + 暂存 clip + job 置 pending，
     并在返回里如实列出。**绝不"改了却看起来没变"**。
+
+    ★ `ep` 必须一路传到底（2026-10-02 修的真实缺陷）：原先这里读的是
+    `_load_shots(root)`（**不带 ep**）而写的是 `_sb_path(root)`（同样不带 ep），
+    两者都默认第 1 集 ⇒ 在第 2 集页面上点「保存」实际**改的是第 1 集的分镜表**，
+    还顺手作废第 1 集那一镜的静帧与成片，而对第 2 集一字未改、前端照样弹「已保存」。
+    串集 + 假报成功 + 毁另一集的钱，三条一起中。
     """
-    md, shots = _load_shots(root)
+    md, shots = _load_shots(root, ep)
     s = _find_shot(shots, shot)
     lines = md.splitlines()
     idx = int(s["line"])
@@ -393,29 +426,42 @@ def update_segment(root: Path, ep: int, shot: str, patch: dict) -> dict:
         raise EditError("没有可应用的字段（被跳过：%s）" % "、".join(skipped) or "空 patch")
 
     lines[idx] = _join_row(cells)
-    _sb_path(root).write_text("\n".join(lines) + ("\n" if md.endswith("\n") else ""),
-                              encoding="utf-8")
+    _write_md(root, ep, lines, md)
 
     invalidated = _invalidate_shot(root, ep, shot)
-    return {"shot": shot, "applied": applied, "skipped": skipped,
-            "invalidated": invalidated,
-            "note": "分镜已改；该镜的静帧与成片已作废，需重新生成"}
+    out = {"shot": shot, "ep": int(ep), "applied": applied, "skipped": skipped,
+           "invalidated": invalidated,
+           "note": "分镜已改；该镜的静帧与成片已作废，需重新生成"}
+    if skipped:
+        # ⛔ 不许「部分成功」静默：未知键必须让人看见（前端把它列出来）
+        out["warning"] = "这些字段 v5 的分镜表里没有对应列，**未写入**：%s" % "、".join(
+            str(x) for x in skipped)
+    return out
 
 
 def delete_segment(root: Path, ep: int, shot: str) -> dict:
-    """删除分镜的一行，并作废该镜的产物。**暂存 clip 而非删除**（宁要有瑕疵但完整）。"""
-    md, shots = _load_shots(root)
+    """删除分镜的一行，并作废该镜的产物。**暂存 clip 而非删除**（宁要有瑕疵但完整）。
+
+    ★★ 删掉中间一镜会让**后面每一镜的名字全体前移一位**（镜名按行序编），
+    而静帧/片段/任务表都按镜名存 —— 不重挂的话，从这以后**每一镜都挂着隔壁镜的素材**，
+    而且不报错、日志全绿（实测过）。所以这里必须调 `renumber`。
+    判据与做法见 `v5/media/renumber.py` 的模块文档。
+    """
+    md, shots = _load_shots(root, ep)
     if len(shots) <= 1:
         raise EditError("至少保留一镜（拒绝删空分镜）")
     s = _find_shot(shots, shot)
+    pos = _shot_pos(shots, shot)
     lines = md.splitlines()
     idx = int(s["line"])
     lines.pop(idx)
-    _sb_path(root).write_text("\n".join(lines) + ("\n" if md.endswith("\n") else ""),
-                              encoding="utf-8")
-    invalidated = _invalidate_shot(root, ep, shot)
-    return {"removed": shot, "remaining": len(shots) - 1, "invalidated": invalidated,
-            "note": "分镜行已删除；成片已从 clips/ 暂存走，重新渲染可覆盖"}
+    _write_md(root, ep, lines, md)
+
+    remap = renumber.remap_after_edit(root, ep, "delete", pos, log=print)
+    return {"removed": shot, "ep": int(ep), "removed_position": pos,
+            "remaining": len(shots) - 1, "remap": remap,
+            "note": "分镜行已删除；后续每一镜的静帧/片段已**跟着改名重挂**，"
+                    "被删那镜的素材已作废（clip 暂存，不删）"}
 
 
 def add_segment(root: Path, ep: int, after: str = "", fields: dict | None = None) -> dict:
@@ -425,13 +471,25 @@ def add_segment(root: Path, ep: int, after: str = "", fields: dict | None = None
       ① **镜头号列必须有数字** —— `storyboard.parse` 的 `_ROW_RE` 要求首格是 `\\d+`
          或 `\\d+-\\d+`。第一版我把占位文本写进了镜头号列 → 整行被忽略。
       ② **画面描述必须 ≥15 字** —— `parse` 把更短的当占位跳过。
+
+    ★ 新行**必须自带合法时长与对白**（2026-10-02 修）：原先只填画面描述占位，
+    时长与对白留空 ⇒ `validate.check_storyboard` 判「时长不是数字」「空对白」两条
+    阻断项（实测 `ok=False`）。而**前端路径**跑在人工模式
+    （`runner` 设 `SHORTDRAMA_HUMAN_IN_CHARGE=1`，门只报不拦），于是这面空镜会
+    **真的被送去生成静帧与视频** —— 一面写着「[[待补]]」的画面上烧掉一份配额。
+    时长取 `_NEW_SHOT_SECONDS`（4-12 秒区间的中间值，供应商硬约束），
+    对白取 `SILENT_DIALOGUE`（与 brief `audio_mode=silent` 的既有写法同一串）——
+    两者都是**合法的占位**，不是编造内容：画面描述仍要人来补，前端也已按
+    `needs_visual` 拦住"占位镜不许生成"。
     """
-    md, shots = _load_shots(root)
+    md, shots = _load_shots(root, ep)
     lines = md.splitlines()
     if after:
         idx = int(_find_shot(shots, after)["line"])
+        new_pos = _shot_pos(shots, after) + 1
     else:
         idx = int(shots[-1]["line"])
+        new_pos = len(shots) + 1                     # 追加在表尾 ⇒ 后面的名字都不变
     n_cells = len(_split_row(lines[idx]))
     vals = [""] * n_cells
 
@@ -455,23 +513,45 @@ def add_segment(root: Path, ep: int, after: str = "", fields: dict | None = None
     f = dict(fields or {})
     # ② 画面描述：给了且够长就用，否则用占位
     vis = str(f.pop("visual", "") or "").strip()
-    put("visual", vis if len(vis) >= 15 else PLACEHOLDER_VISUAL)
-    # ③ 其余字段
+    needs_visual = len(vis) < 15
+    put("visual", vis if not needs_visual else PLACEHOLDER_VISUAL)
+    # ③ 合法占位：时长 + 对白（见上面 docstring 的 ★）
+    secs = f.pop("seconds", None)
+    put("seconds", _NEW_SHOT_SECONDS if secs in (None, "") else secs)
+    dlg = f.pop("dialogue", None)
+    put("dialogue", SILENT_DIALOGUE if dlg in (None, "") else dlg)
+    # ④ 其余字段
+    unknown = []
     for k, v in f.items():
-        put(k, v)
+        if not put(k, v):
+            unknown.append(k)
 
     newline = _join_row(vals)
     lines.insert(idx + 1, newline)
-    _sb_path(root).write_text("\n".join(lines) + ("\n" if md.endswith("\n") else ""),
-                              encoding="utf-8")
+    _write_md(root, ep, lines, md)
 
     from .media import storyboard as _sb
     n_after = len(_sb.parse(_sb_path(root, ep).read_text(encoding="utf-8")))
-    return {"inserted_after": after or shots[-1]["name"],
-            "new_shot_index": idx + 1, "shot_no": new_no,
-            "shots_before": len(shots), "shots_after": n_after,
-            "visible": n_after > len(shots),
-            "note": "已插入新镜（画面描述为占位）；**请补上 ≥15 字的画面描述后再生成**"}
+    # ★ 在**中间**插镜会让后面的镜名全体后移 ⇒ 同样必须重挂（表尾追加是空操作）
+    remap = renumber.remap_after_edit(root, ep, "insert", new_pos, log=print)
+
+    out = {"inserted_after": after or shots[-1]["name"], "ep": int(ep),
+           "new_shot_index": idx + 1, "new_position": new_pos, "shot_no": new_no,
+           "shots_before": len(shots), "shots_after": n_after,
+           "visible": n_after > len(shots), "needs_visual": needs_visual,
+           "remap": remap,
+           "note": "已插入新镜（时长 %ss、对白按无声处理）；"
+                   "**画面描述仍是占位，补齐 ≥15 字之前请勿送去生成**"
+                   % _NEW_SHOT_SECONDS}
+    if needs_visual:
+        out["warning"] = "这一镜的画面描述是占位串，前端应禁止对它生成静帧/视频（会白烧配额）"
+    if unknown:
+        out["skipped"] = unknown
+        out.setdefault("warning", "")
+        out["warning"] += "；这些列不存在、未写入：%s" % "、".join(unknown)
+    # 片长契约：加一镜会让本集总时长 +N 秒，可能触发门的「片长与 brief 不符」
+    out["duration_added_s"] = int(_NEW_SHOT_SECONDS)
+    return out
 
 
 # ─────────────────────────────────────────────────────────── 失效联动
@@ -525,8 +605,11 @@ def _invalidate_shot(root: Path, ep: int, shot: str) -> dict:
 
 
 def invalidate_all(root: Path, ep: int, reason: str) -> dict:
-    """整片作废（改剧本后用）：把该集所有 job 置 pending 并暂存全部 clip。"""
-    md, shots = _load_shots(root)
+    """整片作废（改剧本后用）：把该集所有 job 置 pending 并暂存全部 clip。
+
+    ★ `ep` 同样要传到底（与 `update_segment` 那条串集缺陷同根，见那里的说明）。
+    """
+    md, shots = _load_shots(root, ep)
     names = [s["name"] for s in shots]
     stashed = {}
     try:
