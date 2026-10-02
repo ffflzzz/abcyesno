@@ -358,7 +358,17 @@ class TestCreateChain(unittest.TestCase):
 
         self._p = mock.patch.object(config, "PROJECTS_DIR", self.root)
         self._pr = mock.patch.object(config, "PROJECT_ROOT", self.root)
-        self._p.start(); self._pr.start()
+        # ★ **RUNTIME_ROOT 也必须打桩**（2026-10-02 修三条红）：
+        #   `runner` 的任务台账（`RUNS_SUBDIR`）与「删除项目」的暂存区都落在
+        #   `config.RUNTIME_ROOT` 下，而它默认等于**真实仓库根**。不打桩的后果有两层：
+        #     ① `test_batch_delete_*` 里 `dest.relative_to(PROJECT_ROOT)` 拿到
+        #        「真实仓库的路径」对「临时目录」求相对 → ValueError → HTTP 500
+        #        （而目录**已经移走了** —— 半完成状态最难查）；
+        #     ② `test_runs_list_and_get` 断言"只有我刚起的那一条 run"，却读到
+        #        真仓库 `.tmp` 里**上一轮手工跑片留下的台账** → 红。
+        #   ②还意味着跑测试会往真实台账目录里写记录（污染排障现场）。
+        self._rt = mock.patch.object(config, "RUNTIME_ROOT", self.root)
+        self._p.start(); self._pr.start(); self._rt.start()
 
         class _P:
             def __init__(self, argv, **kw):
@@ -374,7 +384,7 @@ class TestCreateChain(unittest.TestCase):
     def tearDown(self):
         from v5 import webmap
         webmap.set_media_base("")
-        self._popen.stop(); self._pr.stop(); self._p.stop()
+        self._popen.stop(); self._rt.stop(); self._pr.stop(); self._p.stop()
         self.tmp.cleanup()
 
     def ok(self, r):
@@ -470,16 +480,26 @@ class TestCreateChain(unittest.TestCase):
 
     # ── 跑创作链 ──
     def test_generate_storyboard_starts_chain(self):
-        with mock.patch.object(self.wc, "ensure_devserver",
-                               lambda pid, log=None: {"reused": False, "pid": pid}), \
+        # ⚠️ 替身必须吃 `**kw`（2026-10-02 修）：这条路由会把请求体里的
+        #    `manual_steps` 转给 `ensure_devserver`（真实签名 `webchain.py:614` 有该形参），
+        #    原先写成 `lambda pid, log=None` ⇒ 替身自己 TypeError ⇒ 被兜成 502，
+        #    红的是**测试**而不是产品。顺手把它变成**转发断言**：漏传就该红。
+        seen = {}
+
+        def _ensure(pid, **kw):
+            seen.update(kw)
+            return {"reused": False, "pid": pid}
+
+        with mock.patch.object(self.wc, "ensure_devserver", _ensure), \
              mock.patch.object(self.wc, "devserver_status",
                                lambda: {"alive": True, "ok": True}):
             d = self.ok(self.c.post(
                 "/v1/pixa/short-drama/episodes/batch/storyboard/generate",
-                json={"episode_ids": ["%s-ep1" % self.pid]}))
+                json={"episode_ids": ["%s-ep1" % self.pid], "manual_steps": 1}))
         self.assertEqual(d["kind"], "chain")
         self.assertEqual(d["pid"], self.pid)
         self.assertEqual(d["shots"], [], "chain 不吃 shots")
+        self.assertEqual(seen.get("manual_steps"), 1, "manual_steps 必须转发给 dev server")
 
     def test_generate_storyboard_requires_ids(self):
         r = self.c.post("/v1/pixa/short-drama/episodes/batch/storyboard/generate", json={})
@@ -816,11 +836,15 @@ class TestWriteEndpoints(unittest.TestCase):
 
         self._p = mock.patch.object(config, "PROJECTS_DIR", self.root)
         self._pr = mock.patch.object(config, "PROJECT_ROOT", self.root)
+        # ★ RUNTIME_ROOT 同 TestCreateChain：任务台账与暂存区都在它下面，
+        #   不打桩就会读到/写进**真实仓库的 `.tmp`**（见那边的注释）。
+        self._rt = mock.patch.object(config, "RUNTIME_ROOT", self.root)
         self._popen = mock.patch.object(runner.subprocess, "Popen", _P)
         self._taskkill = mock.patch.object(
             runner.subprocess, "run",
             lambda *a, **k: mock.Mock(returncode=0, stdout="", stderr=""))
-        self._p.start(); self._pr.start(); self._popen.start(); self._taskkill.start()
+        self._p.start(); self._pr.start(); self._rt.start()
+        self._popen.start(); self._taskkill.start()
         self.c = _client(server.create_app(base="http://127.0.0.1:9999"))
 
     def tearDown(self):
@@ -828,7 +852,7 @@ class TestWriteEndpoints(unittest.TestCase):
         #   → 必须复位，否则污染后面断言相对路径的用例（实测被全量 discover 抓到）。
         from v5 import webmap
         webmap.set_media_base("")
-        self._taskkill.stop(); self._popen.stop(); self._pr.stop(); self._p.stop()
+        self._taskkill.stop(); self._popen.stop(); self._rt.stop(); self._pr.stop(); self._p.stop()
         self.tmp.cleanup()
 
     def ok(self, r):
