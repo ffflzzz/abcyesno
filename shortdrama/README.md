@@ -280,6 +280,7 @@ projects/<项目名>/
 | `SHORTDRAMA_NARRATION_VOICE` | zh-CN-YunxiNeural | 旁白音色（edge-tts 音色名，低沉男声）|
 | `SHORTDRAMA_NARRATION_RATE` | +0% | 旁白语速（edge-tts 语法，如 `+10%`）|
 | `SHORTDRAMA_VIDEO_PACK_MAX_GROUP` | 5 | `pack` 模式下单组最多吞几个镜（分组算法见 `media/video_plan.group_shots`；与旁路脚本 `scripts/pack_render.py --max-group` 同义） |
+| `SHORTDRAMA_LOOSE_STORYBOARD` | 0 | **分镜放开模式**（2026-10-02，为 A/B 而开）。`1` = 不再向 `scenedesigner` 注入任何系统级「硬性要求」与「出片容器事实」（状态锚点/片长与镜头数/景别列写法/多人站位/身份锚点/关键拍点多角度/开场钩子/容器事实/程序体检），节奏与切镜密度交回类型包 SKILL 与分镜自己。**保留**：供应商硬墙（一次生成 4–12 秒、一次最多 5 张参考图，本就在媒体层）、三道输入门与片长 85%–130%（交付底线，关掉两臂就没有共同口径）、以及"别把上游改坏"的搬运纪律（产物路径、台词照抄、音频模式）。对照实验见 `scripts/ab_loose_storyboard.py`；默认 `0` 行为逐字不变 |
 | `SHORTDRAMA_SHOTCHECK` | full | 渲前**分镜契约体检**档位（`v5/shotcheck.py`，跑在创作链派发分镜角色时）：`full` = 可数判据 + 裁判模型语义判据；`count` = 只跑可数判据（零文本调用）；`off` = 整条关掉。不合格的镜按**镜号 + 逐字原文**写成退回清单（`scenedesigner/shotcheck_ep{N}.json`）注入分镜角色，让它只改点名的那几镜 |
 | `SHORTDRAMA_VIDEO_SUBMIT_TIMEOUT` | 60 | 生视频**提交**的读超时（秒）。2026-09-26 实测：pack 档多参考图组（3–4 张 16:9 静帧）提交时服务端要先拉齐素材，60 秒谈不完 —— 同轮里单图组正常完成、多图组两次都恰好卡满 60s 报 `read operation timed out` 且 `attempts=0`（没拿到 `video_id`）。**多图组建议 180**；默认 60 = 历史行为不变 |
 | `SHORTDRAMA_PACK_BGM` | 1 | `pack` 档提交是否带「全程 BGM+环境音、禁止静音段」指令（官方同款模型实测可原生执行）；brief 明确禁 BGM 的项目设 0 关掉 |

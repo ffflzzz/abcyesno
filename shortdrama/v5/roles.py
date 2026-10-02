@@ -591,7 +591,12 @@ def role_input(role: str, root: Path, m: dict, reasons: list[str] | None = None)
     #     `packs/chinese-style-short-drama/scenedesigner/SKILL.md`、
     #     `packs/wool-felt-story-short/scenedesigner/SKILL.md`、`packs/craft/*`。
     #     平铺的 `packs/shortdrama/*.md` 与 `videospec/` **全是死文件**（改=空操作）。
-    if role == "scenedesigner":
+    # ★ `SHORTDRAMA_LOOSE_STORYBOARD=1`（2026-10-02 A/B）：下面这一整段系统级
+    #   「硬性要求 + 出片容器事实」**一律不注入**，节奏/镜长/景别/切镜密度交回
+    #   类型包 SKILL 与分镜自己。留下来的只有"别把上游改坏"的搬运纪律
+    #   （台词照抄、音频模式、产物路径、上游全文）——那些不是创作建议，
+    #   放开它们两臂就不是同一部戏了，比不出东西。
+    if role == "scenedesigner" and not config.LOOSE_STORYBOARD:
         # ★ 状态锚点每镜重复（2026-09-23，灯下棋验收定案）。
         #
         # 证据（dengxia-qi-0922 逐帧验收）：pack 打包按「同场景相邻 + ≤12s」切组，
@@ -728,7 +733,7 @@ def role_input(role: str, root: Path, m: dict, reasons: list[str] | None = None)
     #     · 有不合格 → 只列那几镜 + 逐字原文，并明令"没列出的不要动、改完就停"；
     #     · 全部合格 → 明令**不要重写**，直接结束本轮（这才是省下 2 小时的那一支）。
     if (role == "scenedesigner" and config.SHOTCHECK != "off"
-            and not config.FAST):
+            and not config.FAST and not config.LOOSE_STORYBOARD):
         _sb = root / out_path("scenedesigner", ep)
         try:
             from . import shotcheck

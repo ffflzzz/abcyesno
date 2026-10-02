@@ -625,6 +625,18 @@ FAST = os.environ.get("SHORTDRAMA_FAST", "0") != "0"
 #   off   关闭（回到"角色自己检查"的旧行为）
 SHOTCHECK = os.environ.get("SHORTDRAMA_SHOTCHECK", "full").strip().lower()
 
+# 分镜**放开模式**（2026-10-02，为 A/B 而开）。`1` = 不再向 `scenedesigner` 注入
+# 任何系统级的「硬性要求」与「出片容器事实」（状态锚点/片长与镜头数/景别列写法/
+# 多人站位/身份锚点/关键拍点多角度/开场钩子/容器事实/程序体检），只留产物路径与
+# 上游注入 —— 节奏、镜长、景别、切镜密度全部交回**类型包 SKILL 与分镜自己**。
+# 保留不动的两件事：① 供应商硬约束（一次生成 4–12 秒、一次最多 5 张参考图）在媒体
+# 层，本来就不靠提示词；② 三道输入门与片长 85%–130% 照旧拦（那是交付底线，
+# 不是创作建议；关掉它 A/B 两臂就没有共同口径，比不出东西）。
+# ⚠️ 默认 `0` = 现行行为逐字不变。这一档只为**量一次**：那些硬性要求里有多条是拿
+# 事故换来的（锚点断链、道具名漂移、图比人多会多画人），放开的代价要读数说话，
+# 不能靠"看起来更自由"就永久删掉。对照实验：`scripts/ab_loose_storyboard.py`。
+LOOSE_STORYBOARD = os.environ.get("SHORTDRAMA_LOOSE_STORYBOARD", "0") != "0"
+
 # 成片复核的重拍轮数。**FAST 时归零**（不再自动复核）。
 CLIP_QC_ROUNDS = 0 if FAST else int(os.environ.get("SHORTDRAMA_CLIP_QC_ROUNDS", "2"))
 # 队列满（503 video_queue_full）时的退避重试次数。队列满是瞬时的：

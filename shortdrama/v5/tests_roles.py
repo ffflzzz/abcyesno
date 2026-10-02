@@ -505,6 +505,52 @@ class TestStillBeatClaimMatchesPipeline(unittest.TestCase):
         self.assertNotIn("灰蓝旧运动外套", content_line(shot, beat_pick="last"))
 
 
+class TestLooseStoryboardSwitch(unittest.TestCase):
+    """★ `SHORTDRAMA_LOOSE_STORYBOARD=1`：只放**创作约束**，不放**搬运纪律**。
+
+    用户 1002 的要求是"除了 4-12 秒和 5 张图，其余全交回导演与分镜"。这个开关是
+    为 A/B 而开（`scripts/ab_loose_storyboard.py`），不是把契约永久删掉——那几条
+    硬性要求里有多条是拿事故换来的。两条边界由本测试钉住：
+    ① 创作类（节奏/镜长/景别/站位/钩子/容器事实）整段消失；
+    ② 搬运类（产物路径、上游全文、台词照抄、音频模式）**必须留下**——
+       放开它们，两臂就不是同一部戏，A/B 失去共同口径。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        (self.root / "brief.json").write_text(json.dumps(
+            {"topic": "测试片", "audio_mode": "dialogue-led",
+             "target_duration": "约 120 秒"}, ensure_ascii=False), encoding="utf-8")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _in(self, loose):
+        with mock.patch.object(config, "INLINE_UPSTREAM", False), \
+                mock.patch.object(config, "LOOSE_STORYBOARD", loose):
+            return role_input("scenedesigner", self.root, {"episode_index": 1})
+
+    def test_creative_directives_gone_plumbing_kept(self):
+        tight, loose = self._in(False), self._in(True)
+        for tag in ("状态锚点每镜重复", "片长与镜头数", "景别列写法", "多人镜的站位",
+                    "身份锚点每镜重复", "关键拍点多角度", "开场即钩子", "出片容器事实"):
+            self.assertIn(tag, tight, "现行档少了这条：%s" % tag)
+            self.assertNotIn(tag, loose, "放开档还留着创作约束：%s" % tag)
+        # 搬运纪律不受开关影响
+        for keep in ("本集产物路径", "台词长度", "音频模式"):
+            self.assertIn(keep, loose, "放开档把搬运纪律也删了：%s" % keep)
+        self.assertNotEqual(tight, loose)
+
+    def test_default_is_unchanged_and_other_roles_unaffected(self):
+        """默认（不设环境变量）行为逐字不变；别的角色读不到这个开关。"""
+        self.assertFalse(config.LOOSE_STORYBOARD, "默认必须是 0（放开是显式动作）")
+        with mock.patch.object(config, "LOOSE_STORYBOARD", True), \
+                mock.patch.object(config, "INLINE_UPSTREAM", False):
+            s = role_input("assetdesigner", self.root, {"episode_index": 1})
+        self.assertIn("道具形制逐字复制", s, "放开档不该动 assetdesigner 的纪律")
+
+
 class TestDirectorReceivesCraft(unittest.TestCase):
     """★ M4 缺口（2026-09-17 修）：supervisor（= director）**必须**收到叙事技法。
 
