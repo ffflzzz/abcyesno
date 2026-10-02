@@ -47,12 +47,52 @@ export interface Segment {
   id: string;
   order: number;
   title?: string;
+  summary?: string;
   duration_ms?: number;
   video_prompt?: string;
   keyframe?: string;
   video?: string;
+  /** 任务三色态（`pending` / `generating` / `completed` / `failed`）——只有 detail 端点给。 */
+  status?: string;
+  /** 本镜场景名（后端已剥掉 `@`；拿不到时是「未标注场景」）——只有 detail 端点给。 */
+  scene?: string;
+  /** v5 侧真实字段（`webmap.storyboard_detail` 的 `v5` 段）。镜名在这里，卡片标题用它。 */
+  v5?: {
+    shot_name?: string;
+    shot_type?: string;
+    angle?: string;
+    camera?: string;
+    dialogue?: string;
+    sfx?: string;
+    job_state?: string;
+    job_error?: string;
+    still_prompt?: string;
+  };
   /** 镜头分组的场景切片；`shots.length` 用来数"镜次"（见 `episodeStats`）。 */
   scenes?: { shots?: unknown[] }[];
+}
+
+/**
+ * `GET /episodes/{eid}/storyboard/detail` —— **唯一**带逐镜 `keyframe` / `video` 的端点。
+ *
+ * ★ 为什么必须单独声明它：项目列表 / `progress` / 分集列表里的
+ *   `episodes[].storyboard` 是后端**刻意给的轻量壳**（`v5/webmap.py` 的
+ *   `_episode_row()` 写死 `"segments": []`，注释原话是"列表接口不该变重"）。
+ *   ⇒ 任何"要真实逐镜产物"的页面都只能按需拉这一条；
+ *   去列表数据里数 `segments` 的写法**永远数到 0**
+ *   （`Works` / `Visuals` 旧实现正是这样，于是页面恒显"没有素材"，
+ *   而后端盘上素材齐全 —— 2026-10-02 契约审计查实）。
+ */
+export interface StoryboardDetail {
+  episode_id?: string;
+  episode_no?: number;
+  title?: string;
+  phase?: string;
+  ratio?: string;
+  segments?: Segment[];
+  /** 最近一次分镜契约门的判决；取不到 → `{}`（后端绝不假报"通过"）。 */
+  gates?: Record<string, unknown>;
+  [k: string]: unknown;
 }
 
 export interface AssetState {

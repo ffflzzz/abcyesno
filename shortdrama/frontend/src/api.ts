@@ -8,7 +8,8 @@
    ========================================================================== */
 
 import type {
-  ApiError, HitlState, HydrateResult, Project, RouteInfo, RunRecord, StylePack, Vendors,
+  ApiError, HitlState, HydrateResult, Project, RouteInfo, RunRecord,
+  StylePack, StoryboardDetail, Vendors,
 } from './types';
 import { qcPayload } from './lib/quality';
 import { chainModePayload } from './lib/chainMode';
@@ -51,6 +52,33 @@ export function setDriver(d: Driver): void {
 function epOfEid(eid: string | undefined): number {
   const m = /-ep(\d+)$/.exec(String(eid || ''));
   return m ? parseInt(m[1], 10) : 0;
+}
+
+/**
+ * ★★ 路由参数是字面串 `null`/`undefined` 时**不要发请求**（旧版实测）：
+ *   某处把它拼进 URL（`'...' + null` → `'...null'`）⇒ 后端稳定 404
+ *   「项目不存在：null」，而界面把它显示成"后端未连通"，**极难定位**。
+ *   只在路由模板确实要 `:pid`/`:eid` 时才拦 —— 列表路由本来就没有 pid。
+ *
+ *   （2026-10-02 从 `hydrate()` 里提到模块级：`Api.refreshStoryboard` 也要过同一道
+ *   判据 —— 判据只留一份。）
+ */
+function bogusParam(v: string | undefined): boolean {
+  return !v || v === 'null' || v === 'undefined';
+}
+
+/**
+ * 水合要写的 Store 通道（由 `App.tsx` 注入，**api.ts 不 import store**）。
+ *
+ * ★ 为什么是注入而不是直接引 `Store`：`store.ts` 本来就 `import { Api }`，
+ *   api.ts 反向引 Store 会成一个 import 环；而且水合器可测（传个假 sink 即可）。
+ */
+export interface HydrateStore {
+  upsertProject: (p: Project) => void;
+  upsertProjects: (list: Project[], replace: boolean) => void;
+  upsertStoryboard: (pid: string, eid: string, sb: unknown) => void;
+  setStyles: (s: StylePack[]) => void;
+  setVendors: (v: Vendors | null) => void;
 }
 
 /* ------------------------------------------------------------------ HTTP 驱动 */
@@ -135,8 +163,23 @@ export const Api = {
     );
   },
 
-  getProgress(pid: string): Promise<Project> {
-    return http<Project>('GET', '/v1/pixa/short-drama/projects/' + pid + '/progress?include_content=true');
+  /**
+   * 项目进度。`ep` = **按集**的那部分的集号（不传 = 后端按第 1 集算）。
+   *
+   * ★ 为什么这条参数值得加（2026-10-02 后端刚补上通道）：
+   *   `progress` 返回的 `v5.render`（静帧/片段完成数、逐镜任务状态）、`v5.media_loop`、
+   *   `v5.gates`、`cover` **全是按集算的**。多集项目在第 2 集页面上显示第 1 集的
+   *   渲染进度 = 本项目最忌的「串集」。
+   * ⚠️ **只有 `ep >= 1` 才拼 `?ep=`**：
+   *   · 后端 `ep < 1` 直接 400（`server.py` 那条路由的注释还专门警告过
+   *     "校验里不能用 `ep or 1`"），而 `epOfEid()` 认不出集号时返回的正是 **0**
+   *     —— 把 0 传上去会让一次正常水合成了一次报错。
+   *   · 不传 ⇒ 与改造前一字不变（老调用方不必跟着改）。
+   */
+  getProgress(pid: string, ep?: number): Promise<Project> {
+    const n = Number(ep) || 0;
+    return http<Project>('GET', '/v1/pixa/short-drama/projects/' + pid
+      + '/progress?include_content=true' + (n >= 1 ? '&ep=' + n : ''));
   },
 
   /** 线上三段式建项目的第三步：[剧本解析] → 创建项目并回填概要/拆资产 */
@@ -195,8 +238,17 @@ export const Api = {
     return http('GET', '/v1/pixa/short-drama/projects/' + pid + '/episodes/storyboard');
   },
 
-  getStoryboard(eid: string): Promise<unknown> {
-    return http('GET', '/v1/pixa/short-drama/episodes/' + eid + '/storyboard/detail');
+  /**
+   * 单集完整分镜（**唯一**带逐镜 `keyframe` / `video` 的端点）。
+   *
+   * ⚠️ 集号**不用另外传**：这条路由按 `eid`（`<pid>-ep<N>`）自己解析
+   * （`server.py` → `_resolve_eid`）。所以调用方给的 eid 必须是真 eid，
+   * 别手拼一个 `pid + "-ep1"` 去查第 2 集 —— 那正是 `epOfEid` 存在的理由。
+   * 返回类型从 `unknown` 收紧为 `StoryboardDetail`：消费方只有
+   * `Store.upsertStoryboard(…, sb: unknown)` 一处，收紧它不会牵动别人。
+   */
+  getStoryboard(eid: string): Promise<StoryboardDetail> {
+    return http<StoryboardDetail>('GET', '/v1/pixa/short-drama/episodes/' + eid + '/storyboard/detail');
   },
 
   createEpisode(pid: string, no: number, title: string): Promise<unknown> {
@@ -343,9 +395,27 @@ export const Api = {
     });
   },
 
-  /** 重新拉某一集的分镜写进 Store（生成完刷新界面用）。 */
-  async refreshStoryboard(): Promise<HydrateResult> {
-    return { hydrated: false, from: 'not-ported' };
+  /**
+   * 重新拉「项目进度 + 本集分镜」写进 Store（生成动作跑完后刷新界面用）。
+   *
+   * ★ 原来这里是 `return { hydrated: false, from: 'not-ported' }` 的**空壳** ——
+   *   调用方以为刷新了，Store 里还是旧分镜，界面自然不动。
+   *   现在与 `hydrate()` 的分镜分支共用同一个 `hydrateStoryboard()`：
+   *   判据只留一份（**必须先项目、再分镜**，理由见那里的 ★★）。
+   *
+   * ⚠️ 返回形状**一字未改**（`{ hydrated, from, … }`）—— 老调用方按 `from`
+   *   显示文案，形状一变就是静默崩。目标或 sink 拿不到时**如实**回报
+   *   （`no-target` / `no-store`），不去猜 pid/eid（猜出来的串集比不刷新更难查）。
+   */
+  async refreshStoryboard(
+    pid?: string,
+    eid?: string,
+    store?: Pick<HydrateStore, 'upsertProject' | 'upsertStoryboard'>,
+  ): Promise<HydrateResult> {
+    if (getDriver() !== 'http') return { hydrated: false, from: 'local' };
+    if (bogusParam(pid) || bogusParam(eid)) return { hydrated: false, from: 'no-target' };
+    if (!store) return { hydrated: false, from: 'no-store' };
+    return hydrateStoryboard(store, String(pid), String(eid));
   },
 
   /** 查项目最近的运行记录（前端可显示"后台还有任务在跑"）。 */
@@ -458,6 +528,49 @@ export interface WaitOpts {
 /* ---------------------------------------------------------------- 水合 */
 
 /**
+ * 分镜页的那一对请求：**先项目、再分镜**。
+ *
+ * ★★ **必须先拉项目，再拉分镜**（2026-09-19 修的是旧版的既有缺陷）。
+ *
+ * 旧版这一支**只**拉 `storyboard/detail`，而 `Store.upsertStoryboard` 要求
+ * 项目已在库中（它要往 `p.episodes` 里挂分镜）—— 于是：
+ *   · 直接打开 / 刷新分镜页 URL ⇒ 库里没有这个项目 ⇒ 分镜无处可挂
+ *   ⇒ 界面显示「剧集不存在」，而**后端一切正常**。
+ * 旧版的规避方式是"必须先点进列表页再点进去"，刷新一次就现原形 ——
+ * 这是很典型的"能跑但一刷新就坏"。这里补上项目水合，深链与刷新都正常。
+ *
+ * ★ 集号从 **eid** 推出来，配套传给 `progress`（2026-10-02 后端补了 `?ep=` 通道）：
+ *   `v5.render` / `cover` / `v5.gates` 都是按集算的，分镜页看第 2 集就该拿第 2 集那份。
+ *   `epOfEid()` 认不出集号时给 **0**，而 `getProgress` 对 0 **不拼** `?ep=`
+ *   ⇒ 老 eid（或形状变了的 eid）退化成"按第 1 集"，与改造前一字不变，
+ *     绝不会把 `?ep=0` 递到后端脸上换一次 400。
+ */
+async function hydrateStoryboard(
+  store: Pick<HydrateStore, 'upsertProject' | 'upsertStoryboard'>,
+  pid: string,
+  eid: string,
+): Promise<HydrateResult> {
+  const ep = epOfEid(eid);
+  const proj = await Api.getProgress(pid, ep);
+  store.upsertProject(proj);
+  const sb = await Api.getStoryboard(eid);
+  store.upsertStoryboard(pid, eid, sb);
+  return { hydrated: true, from: 'storyboard+progress', ep };
+}
+
+/**
+ * 需要「项目列表」的那批路由。
+ *
+ * ★★ 2026-10-02 补 `/visuals`、`/chat`、`/inspiration`：原先只有
+ *   `/playlet/list`、`/`、`/canvas` 三条 ⇒ **直接打开或刷新** `#/visuals`、`#/chat`
+ *   时 `store.projects` 是空数组，页面显示「还没有作品 / 还没有生成任何素材」，
+ *   而后端盘上几十个项目的素材齐全。
+ *   症状是"数据不存在"而不是"没取到"（水合没做 ⇒ `hydrated:false` 也不报错），
+ *   所以**最难往"取数漏了这条路由"的方向想** —— 加路由时记得回头对这张表。
+ */
+const PROJECT_LIST_PATHS = ['/playlet/list', '/', '/canvas', '/visuals', '/chat', '/inspiration'];
+
+/**
  * 按路由取数并写入 Store。
  *
  * 为什么要"水合"而不是让每个组件自己拉：视图有 30+ 处直接读 Store。
@@ -467,13 +580,7 @@ export interface WaitOpts {
  */
 export async function hydrate(
   route: RouteInfo,
-  store: {
-    upsertProject: (p: Project) => void;
-    upsertProjects: (list: Project[], replace: boolean) => void;
-    upsertStoryboard: (pid: string, eid: string, sb: unknown) => void;
-    setStyles: (s: StylePack[]) => void;
-    setVendors: (v: Vendors | null) => void;
-  },
+  store: HydrateStore,
 ): Promise<HydrateResult> {
   if (getDriver() !== 'http') return { hydrated: false, from: 'local' };
 
@@ -481,12 +588,8 @@ export async function hydrate(
   const path = route.path || '';
   const pattern = route.pattern || '';
 
-  // ★★ 路由参数是字面串 `null`/`undefined` 时**不要发请求**（旧版实测）：
-  //   某处把它拼进 URL（`'...' + null` → `'...null'`）⇒ 后端稳定 404
-  //   「项目不存在：null」，而界面把它显示成"后端未连通"，**极难定位**。
-  //   只在路由模板确实要 `:pid`/`:eid` 时才拦 —— 列表路由本来就没有 pid。
-  const bogus = (v: string | undefined): boolean => !v || v === 'null' || v === 'undefined';
-  if ((pattern.includes(':pid') && bogus(p.pid)) || (pattern.includes(':eid') && bogus(p.eid))) {
+  // 路由参数的字面串判据见 `bogusParam`（★ 判据只留一份）
+  if ((pattern.includes(':pid') && bogusParam(p.pid)) || (pattern.includes(':eid') && bogusParam(p.eid))) {
     console.warn('[api] 路由参数异常，跳过水合（不发明知会 404 的请求）：', pattern, p);
     return { hydrated: false, from: 'bad-route-params' };
   }
@@ -499,21 +602,8 @@ export async function hydrate(
       (v) => { store.setVendors(v); return ((v && v.items) || []).length; },
       () => 0,
     );
-    /**
-     * ★★ **必须先拉项目，再拉分镜**（2026-09-19 修的是旧版的既有缺陷）。
-     *
-     * 旧版这一支**只**拉 `storyboard/detail`，而 `Store.upsertStoryboard` 要求
-     * 项目已在库中（它要往 `p.episodes` 里挂分镜）—— 于是：
-     *   · 直接打开 / 刷新分镜页 URL ⇒ 库里没有这个项目 ⇒ 分镜无处可挂
-     *   ⇒ 界面显示「剧集不存在」，而**后端一切正常**。
-     * 旧版的规避方式是"必须先点进列表页再点进去"，刷新一次就现原形 ——
-     * 这是很典型的"能跑但一刷新就坏"。这里补上项目水合，深链与刷新都正常。
-     */
-    const proj = await Api.getProgress(p.pid);
-    store.upsertProject(proj);
-    const sb = await Api.getStoryboard(p.eid);
-    store.upsertStoryboard(p.pid, p.eid, sb);
-    return { hydrated: true, from: 'storyboard+progress', vendors: await vds };
+    const r = await hydrateStoryboard(store, p.pid, p.eid);
+    return Object.assign({}, r, { vendors: await vds });
   }
 
   if (p.pid) {
@@ -526,8 +616,10 @@ export async function hydrate(
     return { hydrated: true, from: 'progress', vendors: await vds };
   }
 
-  if (path === '/playlet/list' || path === '/' || path === '/canvas') {
-    // `/canvas` 走同一条：画布入口页就是"按项目/按集挑一集"，要的是同一份项目列表。
+  if (PROJECT_LIST_PATHS.includes(path)) {
+    // 这批路由要的是**同一份项目列表**（`/canvas`：按项目/按集挑一集；
+    // `/visuals`：挑项目挑集看产物；`/chat`（作品页）：列卡片）。
+    // 路由清单与漏加的后果见 `PROJECT_LIST_PATHS` 上的 ★★。
     // 风格库一起水合：http 驱动下必须以**后端真实类型包**为准，
     // 否则下拉里是线上站点的风格名、实际却跑 v5 的某一个包（静默偏差）。
     const styles = Api.getStyles().then(
