@@ -247,6 +247,47 @@ class TestServer(unittest.TestCase):
         d = self._ok("/v1/pixa/short-drama/projects")
         self.assertEqual([r["id"] for r in d["list"]], [self.pid])
 
+    def test_progress_honors_ep(self):
+        """★ `?ep=N` 必须真的换集（2026-10-02 补的通道）。
+
+        病根：这条路由原先**没有集号参数**，`webmap.progress(root)` 永远按第 1 集
+        算，而它返回的 `v5.render` / `cover` 都是按集的东西 ⇒ 多集项目在第 2 集
+        页面上显示第 1 集的渲染进度（本项目最忌的「串集」，与 M1/M2 同根）。
+
+        两集要造出**看得见**的差别：第 1 集 2 镜 + 有静帧，第 2 集 1 镜 + 没静帧。
+        改回旧实现（不传 ep）这两组读数会一模一样 ⇒ 断言当场红。
+        """
+        (self.proj / "media" / "ep1" / "stills.json").write_text(json.dumps({
+            "LN01": {"path": str(self.proj / "media" / "ep1" / "stills" / "LN01.jpg"),
+                     "url": "http://x/LN01.jpg"},
+        }, ensure_ascii=False), encoding="utf-8")
+        (self.proj / "scenedesigner" / "scenedesigner_ep2.md").write_text(
+            "# 分镜：第 2 集\n\n"
+            "| 镜头号 | 景别 | 角度 | 运镜 | 时长(秒) | 画面描述 | 对白 | 音效 |\n"
+            "|---|---|---|---|---|---|---|---|\n"
+            "| 1 | 全景 | 平视 | 固定 | 5 | 纸扎匠夜里回到空荡的铺子，@纸扎匠 的手停在门帘上没有掀开"
+            " | 纸扎匠：我回来了。 | 风过巷声 |\n",
+            encoding="utf-8")
+
+        d1 = self._ok("/v1/pixa/short-drama/projects/%s/progress?ep=1" % self.pid)
+        d2 = self._ok("/v1/pixa/short-drama/projects/%s/progress?ep=2" % self.pid)
+        self.assertEqual(d1["v5"]["render"]["expected_shots"], 2, "第 1 集该读到 2 镜")
+        self.assertEqual(d2["v5"]["render"]["expected_shots"], 1, "★ 第 2 集该读到它自己的 1 镜")
+        self.assertEqual(d2["v5"]["render"]["stills_ready"], 0)
+        self.assertTrue(d1["cover"], "第 1 集有那张 LN01.jpg ⇒ 有封面")
+        self.assertEqual(d2["cover"], "", "★ 不许拿第 1 集的封面顶上第 2 集")
+
+        # 非法集号要响亮拒绝（静默按 1 处理 = 又一次串集）
+        r = self.c.get("/v1/pixa/short-drama/projects/%s/progress?ep=0" % self.pid)
+        self.assertEqual(r.status_code, 400, r.text[:200])
+        self.assertIn("集号必须", r.json().get("message", ""))
+
+    def test_progress_default_ep_is_one(self):
+        """不传 `ep` 时行为与改造前一字不变（老调用方零风险）。"""
+        d0 = self._ok("/v1/pixa/short-drama/projects/%s/progress" % self.pid)
+        d1 = self._ok("/v1/pixa/short-drama/projects/%s/progress?ep=1" % self.pid)
+        self.assertEqual(d0, d1)
+
     # ── 该失败 ──
     def test_unknown_pid_404(self):
         r, b = self.get("/v1/pixa/short-drama/projects/nope/progress")

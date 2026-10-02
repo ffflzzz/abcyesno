@@ -385,9 +385,26 @@ def create_app(base: str | None = None, web_root: str | None = None):
                             "page": page, "page_size": size, "is_demo": want})
 
     @r.get("/v1/pixa/short-drama/projects/{pid}/progress")
-    def progress(pid: str, include_content: str = "true"):
+    def progress(pid: str, include_content: str = "true", ep: int = 1):
+        """项目进度。**`ep` 必须能传**（2026-10-02 补）：原先这条路由没有集号通道，
+        于是 `progress` 内部永远按**第 1 集**算 —— 而它给的恰恰是按集的东西：
+        `v5.render`（静帧/片段完成数、逐镜任务状态）、`v5.media_loop`、`v5.gates`、
+        `flow.current_step`、`cover`。多集项目在第 2 集页面上显示第 1 集的渲染进度
+        = 本项目最忌的「串集」（同 M1/M2 那批缺陷一个根）。
+
+        ⚠️ `include_content` 这个参数是**历史形状**（线上有、代码从不读）——
+        保留只为不破坏调用方，别误以为它控了什么。
+
+        缺省 `ep=1` ⇒ 老调用方行为一字不变。
+
+        ⚠️ 校验里**不能用 `ep or 1`**：`0 or 1` 得 1 ⇒ `?ep=0` 会被当成"没传"而静默
+        按第 1 集处理，正是本项目反复踩过的"字符串/数字真值"坑（本条测试抓到的）。
+        """
+        ep_n = int(ep)
+        if ep_n < 1:
+            raise _bad("集号必须 ≥ 1（收到 %r）" % ep)
         root = _resolve_pid(pid)
-        return wm.envelope(wm.progress(root))
+        return wm.envelope(wm.progress(root, ep=ep_n))
 
     @r.get("/v1/pixa/short-drama/projects/{pid}/asset-refs")
     def asset_refs(pid: str):

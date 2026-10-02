@@ -1017,5 +1017,78 @@ class TestHealth(_Base):
         self.assertEqual(h["aspect_ratio"], config.ASPECT_RATIO)
 
 
+class TestProgressPerEpisode(_Base):
+    """★ 进度必须**按集**给（2026-10-02，把「串集」那条旧病装回去）。
+
+    病根：`GET /projects/{pid}/progress` 原先没有集号通道，`progress(root)` 内部
+    永远按**第 1 集**算 —— 而它给的恰恰是按集的东西：`v5.render`（静帧数 / 片段数 /
+    逐镜任务状态 / 成片地址）、`v5.media_loop`、`v5.gates`、`flow.current_step`、
+    `cover`。多集项目在第 2 集页面上显示第 1 集的渲染进度，与 M1/M2 那批缺陷同根。
+
+    这一类断言的是**两集必须不同**（而不是"某集等于某个值"）—— 只断言 ep1 的话，
+    改回旧实现照样全绿（旧实现的 ep1 本来就是对的）。
+    """
+
+    SB_ONE_SHOT = """# 分镜：第 2 集
+
+| 镜头号 | 景别 | 角度 | 运镜 | 时长(秒) | 画面描述 | 对白 | 音效 |
+|--------|------|------|------|---------|---------|------|------|
+| 1 | 全景 | 平视 | 固定 | 5 | 纸扎匠夜里回到空荡的铺子，@纸扎匠 的手停在门帘上没有掀开 | 纸扎匠：我回来了。 | 风过巷声 |
+"""
+
+    def _two_episodes(self):
+        """ep1：2 镜 + 1 张静帧 + 已出片；ep2：1 镜、什么都没渲。"""
+        self.write_brief(episodes=2)
+        d = self.proj / "scenedesigner"
+        d.mkdir(exist_ok=True)
+        (d / "scenedesigner_ep1.md").write_text(SB_MD, encoding="utf-8")
+        (d / "scenedesigner_ep2.md").write_text(self.SB_ONE_SHOT, encoding="utf-8")
+        m1 = self.proj / "media" / "ep1"
+        (m1 / "stills").mkdir(parents=True, exist_ok=True)
+        (m1 / "episode_final.mp4").write_bytes(b"\x00")
+        (m1 / "stills" / "LN01.jpg").write_bytes(b"\x00")
+        (m1 / "stills.json").write_text(json.dumps({
+            "LN01": {"path": str(m1 / "stills" / "LN01.jpg"), "url": "http://x/LN01.jpg"},
+        }, ensure_ascii=False), encoding="utf-8")
+
+    def test_render_state_follows_ep(self):
+        self._two_episodes()
+        r1 = webmap.progress(self.proj, ep=1)["v5"]["render"]
+        r2 = webmap.progress(self.proj, ep=2)["v5"]["render"]
+        self.assertEqual((r1["expected_shots"], r1["stills_ready"], r1["final"]),
+                         (2, 1, True), "第 1 集：2 镜 / 1 张静帧 / 已出片")
+        self.assertEqual((r2["expected_shots"], r2["stills_ready"], r2["final"]),
+                         (1, 0, False), "★ 第 2 集读到的必须是它自己的")
+        self.assertNotEqual(r1, r2, "两集的渲染状态一模一样 = 串集（旧实现就是这样）")
+
+    def test_final_url_is_per_episode(self):
+        """成片地址必须指向**本集**目录；没有成片时给空串而不是假 URL。"""
+        self._two_episodes()
+        u1 = webmap.progress(self.proj, ep=1)["v5"]["render"]["final_url"]
+        u2 = webmap.progress(self.proj, ep=2)["v5"]["render"]["final_url"]
+        self.assertIn("/media/ep1/episode_final.mp4", u1.replace("\\", "/"))
+        self.assertEqual(u2, "", "第 2 集没出片 ⇒ 空串（`<video src=\"\">` 会显示成黑框）")
+
+    def test_flow_and_cover_follow_ep(self):
+        """`flow.current_step` 与封面同样要按集算。"""
+        self._two_episodes()
+        self.write_assets()
+        (self.proj / "plotdesigner").mkdir(exist_ok=True)
+        (self.proj / "plotdesigner" / "episodes.md").write_text("## 第 1 集：归\n", encoding="utf-8")
+        self.assertEqual(webmap.progress(self.proj, ep=1)["flow"]["current_step"], "render")
+        self.assertTrue(webmap.progress(self.proj, ep=1)["cover"], "第 1 集有静帧 ⇒ 有封面")
+
+        # 把第 2 集的分镜表撤掉 ⇒ 它必须停在 storyboard，而不是沿用第 1 集的 render；
+        # 封面同理必须空着（旧实现会从 ep1 的 stills 里拿一张顶上）。
+        (self.proj / "scenedesigner" / "scenedesigner_ep2.md").unlink()
+        self.assertEqual(webmap.progress(self.proj, ep=2)["flow"]["current_step"], "storyboard")
+        self.assertEqual(webmap.progress(self.proj, ep=2)["cover"], "")
+
+    def test_default_ep_keeps_old_behavior(self):
+        """不传 `ep` 时行为与改造前一字不变（老调用方零风险）。"""
+        self._two_episodes()
+        self.assertEqual(webmap.progress(self.proj), webmap.progress(self.proj, ep=1))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
