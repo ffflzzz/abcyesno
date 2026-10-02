@@ -820,7 +820,13 @@ def hitl_state(root: Path) -> dict:
 
 
 def progress(root: Path, ep: int = 1) -> dict:
-    """`GET /projects/{pid}/progress?include_content=true`。"""
+    """`GET /projects/{pid}/progress?include_content=true&ep=N`。
+
+    ★ `ep` 决定的是**按集算的那几块**：`cover` / `flow` / `v5.media_loop` /
+    `v5.render` / `v5.gates` / `v5.hitl`。调用方（`server.py` 那条路由）必须把
+    集号传进来 —— 不传就永远按第 1 集算，多集连载会串集（2026-10-02 补的通道）。
+    `episodes[]` 与 `assets` 与集号无关，每集都全量给。
+    """
     pid = root.name
     b = brief(root)
     n_ep = _episode_count(root)
@@ -1474,13 +1480,16 @@ def _pack_sample(pack: str) -> dict:
 
 
 def styles() -> list:
-    """`GET /styles` —— v5 的类型包（**只有 3 个**）。
+    """`GET /styles` —— v5 的类型包（**动态列 `v5/skills/packs/` 下的目录**，
+    当前 8 个；原先这里写死注释「只有 3 个」，是过期的说法，2026-10-02 改掉）。
 
     ⛔ **不要假装能映射 Pavo 的 20+ 风格**（spec §15-Q3 待你拍板）：
       Pavo 的 `STYLE_CATALOG` 是按 2D/3D/真人/自定义 分组的**中文风格名**，
-      而 v5 只有 3 个**类型包**。`realpeople_cinematic_style` 之类**不对应任何 v5 包**，
-      硬编一张映射表只会制造"选了 A 实际跑 B"的静默偏差。
+      而 v5 只有**自己盘上真有的那些包**。`realpeople_cinematic_style` 之类
+      **不对应任何 v5 包**，硬编一张映射表只会制造"选了 A 实际跑 B"的静默偏差。
     这里**只发 v5 真实拥有的**，并附上每条的能力说明，让前端如实展示。
+    ⚠️ 也正因如此，前端**不许写死包列表**（新增第 4 个包时后端硬编的列表
+    曾把它静默拒了）。
 
     `brief.pack` 是唯一真相源（`pack-conventions.md`）—— `brief.pack` 写错 = 静默退回朴素提示词。
     """
