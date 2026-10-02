@@ -385,6 +385,52 @@ def _craft_block(root: Path, role: str) -> str:
             + "\n\n".join(parts))
 
 
+def _container_facts(vp) -> str:
+    """给 scenedesigner 的**出片容器事实**（数字全部从代码读，见函数内注释）。
+
+    为什么写在这里而不是包 SKILL 里：这是系统事实（一次生成装得下多少、
+    送几张图），不是类型包审美。四个包的 SKILL 已经证明过这类话会漂
+    （"静帧取最后一拍"漂了 6 天）。
+    """
+    from .media import assets as _assets
+
+    req = vp.PACK_MAX_SECONDS
+    head = (
+        "【出片容器事实·数字由管线代码给出，不是你该猜的东西】\n"
+        "· 一条视频请求最长 %d 秒。" % req)
+    if (config.VIDEO_MODE or "reference").lower() == "pack":
+        mg = config.VIDEO_PACK_MAX_GROUP
+        body = (
+            "最多 %d 个镜头并进同一条，且只有**同一场景的相邻镜**会并进去"
+            "（跨场景必切）。每镜最短 %d 秒。\n"
+            "· 一组声明秒数之和超过 %d 秒时，媒体层会把每镜秒数**等比压进 %d 秒**"
+            "（台词镜不低于把台词读完的秒数、单镜压幅不超过 40%%，否则该镜不并组、"
+            "独立成一条）。你写的 `0-2秒：` 节拍会跟着按比例重标，**拍数不丢**，"
+            "但别指望声明的秒数原样落地。\n"
+            "· 一条请求最多 %d 张参考图，槽位是**固定优先级**："
+            "人物定妆照（最多 %d 张 ⇒ 三个人同镜时**第三个人没有定妆照**）→ "
+            "场景空镜（只有 全景/远景/大全景/空镜 才绑得到，中近景与特写一张都没有）→ "
+            "本组**第一镜**的静帧 → 上一组的结尾帧 → 道具图补剩下的空位（经常剩 0 张）。\n"
+            "  ⚠️ **不是每镜一张静帧**（2026-09-28 撤：静帧画错的脸会被视频模型忠实继承）。"
+            % (mg, vp.PACK_MIN_SHOT_SECONDS, req, req,
+               vp.REF_SLOTS, vp.PACK_REF_MAX_CHARS))
+    else:
+        body = (
+            "当前视频档（`%s`）是**一个镜头一条请求**，一条最多 %d 秒。\n"
+            "· 一条请求最多 %d 张参考图：本镜静帧 + 人物定妆照——"
+            "镜里 1 个人物时封顶 %d 张、%d 个人物及以上封顶 %d 张（先满足人脸），"
+            "剩下的位置给场景空镜（只有 全景/远景/大全景/空镜 才绑得到）与道具。\n"
+            "· 镜头与镜头**互不知情**（每条独立生成）。"
+            % (config.VIDEO_MODE, req, vp.REF_SLOTS,
+               _assets.REF_CAP_SOLO, _assets.REF_CAP_MULTI, _assets.REF_CAP_MULTI))
+    return head + body + (
+        "\n· ⇒ 所以：跨镜的长相、服装、道具位置、场景地貌**没有图兜底**，"
+        "只能靠你把字写在每一镜上；多人镜要逐人写站位与朝向。\n"
+        "· 节拍写法：`0-2秒：…；2-4秒：…` 从 0 起、首尾相接、终于本镜时长"
+        "（不自洽 = 分镜契约门拦下），端点可用小数（`0-0.5秒：`）。"
+        "**静帧取第一拍** ⇒ 身份锚点与身体朝向写在第一拍。")
+
+
 def role_input(role: str, root: Path, m: dict, reasons: list[str] | None = None) -> str:
     """喂给角色的**输入**。两种模式，见 `config.INLINE_UPSTREAM`：
 
@@ -598,6 +644,17 @@ def role_input(role: str, root: Path, m: dict, reasons: list[str] | None = None)
                     "请按这个更长的单镜节奏排片（单镜仍**不得超过 12 秒**），"
                     "用**更长的镜头承载内容**，不要排出会被截断的镜数。"
                     % (round(tgt), int(round(fast)), cap, cap, tgt / cap))
+        # ★ 【出片容器事实】（2026-10-02 新增）
+        #
+        # 为什么必须注入、且必须由代码给数：分镜师此前**不知道自己的表会被怎么装**。
+        # 今天对账时逐条查证才发现，SKILL 里关于"一次生成能装多少、传几张图"的说法
+        # 与代码已经各说各话（四个包的 scenedesigner 还在教"静帧取最后一拍"，
+        # 代码 2026-09-26 起取第一拍 —— 见 `TestStillBeatClaimMatchesPipeline`）。
+        # 「一条请求 ≤12 秒」「5 张参考图的槽位优先级」这类是**系统事实**，
+        # 不是类型包的审美，按本文件既有的教训（per-pack 的 SKILL 承载系统级规则
+        # 一定会漂）改由这里注入，且数字**从代码里读**，不许在文案里再抄一份。
+        from .media import video_plan as _vp
+        lines.append(_container_facts(_vp))
         # 「景别」列会被 `qc.review_shot_type` **原样**送进构图校验提示词
         # （`景别：{shot_type}`）→ 括注会把判据冲淡。shortdrama 契约里本来就规定了
         # 词表（远景/全景/中景/近景/特写），但同样的"per-pack 才有的规则"问题

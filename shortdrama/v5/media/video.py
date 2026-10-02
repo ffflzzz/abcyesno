@@ -579,13 +579,13 @@ def pack_ref_images(project_root: Path, group: list[dict], own: dict[str, str],
     roles: list[tuple[str, str]] = []
 
     def add(u: str | None, kind: str, label: str) -> None:
-        if u and len(urls) < 5 and u not in urls:
+        if u and len(urls) < video_plan.REF_SLOTS and u not in urls:
             urls.append(u)
             roles.append((kind, label))
 
-    for u, nm in chars[:2]:
+    for u, nm in chars[:video_plan.PACK_REF_MAX_CHARS]:
         add(u, "character", "角色「%s」的人物设定表" % nm)
-    for u, nm in locs[:1]:
+    for u, nm in locs[:video_plan.PACK_REF_MAX_LOCS]:
         add(u, "location", "场景「%s」的空镜" % nm)
     add(own.get(group[0]["name"]), "shot",
         "本片段**第一拍的画面实现**（只取它的场景地貌、光线与人物站位）")

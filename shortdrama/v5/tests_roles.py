@@ -261,6 +261,88 @@ class TestDurationDirectiveInjected(unittest.TestCase):
         self.assertNotIn("景别列写法", s)
 
 
+class TestContainerFactsInjected(unittest.TestCase):
+    """★ 2026-10-02：分镜师必须被告知**自己的表会被怎么装**（出片容器事实）。
+
+    为什么是真实故障而不是补充说明：今天逐条对账才发现，"一次生成能装多少秒、
+    送哪几张图"这些事实**只存在于媒体层代码里**，创作链一侧一个字都没提。
+    后果是可复现的：`luanzhen-xue-1001` 12 镜**零宽景** ⇒ 六组一张场景空镜都没进过
+    请求；三人同镜时第三人没有定妆照（`chars[:2]` 硬卡）；分镜师按"每镜一张静帧"
+    的旧假设排承接，而 2026-09-28 起一段里只有**第一镜**有图。
+    这些他不知道，就只能靠"每镜重复写锚点"这条老规矩硬扛——而老规矩没告诉他为什么。
+
+    ★ 数字**一律从代码常量读**（`video_plan.PACK_MAX_SECONDS` / `REF_SLOTS` /
+    `PACK_REF_MAX_CHARS`、`assets.REF_CAP_SOLO`/`MULTI`）⇒ 最后一条测试改常量、
+    不改文案，文案必须跟着变。这是本测试的存在意义：**不许在提示词里再抄一份数字**
+    （同一批文档里"静帧取最后一拍"就是这么漂了 6 天的）。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        (self.root / "brief.json").write_text(
+            json.dumps({"topic": "测试片"}, ensure_ascii=False), encoding="utf-8")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _input(self):
+        with mock.patch.object(config, "INLINE_UPSTREAM", False):
+            return role_input("scenedesigner", self.root, {"episode_index": 1})
+
+    def test_pack_mode_states_seconds_grouping_and_slots(self):
+        from v5.media import video_plan as vp
+
+        with mock.patch.object(config, "VIDEO_MODE", "pack"), \
+                mock.patch.object(config, "VIDEO_PACK_MAX_GROUP", 5):
+            s = self._input()
+        self.assertIn("出片容器事实", s)
+        self.assertIn("最长 %d 秒" % vp.PACK_MAX_SECONDS, s)
+        self.assertIn("最多 5 个镜头并进同一条", s)
+        self.assertIn("同一场景的相邻镜", s, "跨场景必切这件事必须说明——它决定分组形状")
+        self.assertIn("最多 %d 张参考图" % vp.REF_SLOTS, s)
+        self.assertIn("第三个人没有定妆照", s)
+        self.assertIn("不是每镜一张静帧", s)
+        self.assertIn("等比压进", s, "秒数会被压缩必须预告，否则分镜师以为声明会原样落地")
+        self.assertIn("静帧取第一拍", s)
+
+    def test_reference_mode_does_not_claim_packing(self):
+        """非 pack 档没有"并组"这件事 ⇒ 不许照抄 pack 的说法。"""
+        from v5.media import assets as A
+        from v5.media import video_plan as vp
+
+        with mock.patch.object(config, "VIDEO_MODE", "reference"):
+            s = self._input()
+        self.assertIn("出片容器事实", s)
+        self.assertIn("一个镜头一条请求", s)
+        self.assertNotIn("并进同一条", s, "reference 档说并组 = 对模型撒谎")
+        self.assertIn("最长 %d 秒" % vp.PACK_MAX_SECONDS, s)
+        self.assertIn("封顶 %d 张" % A.REF_CAP_SOLO, s)
+        self.assertIn("封顶 %d 张" % A.REF_CAP_MULTI, s)
+
+    def test_numbers_come_from_code_not_from_prose(self):
+        """★ 反向锁：只改常量、不改文案 ⇒ 文案必须跟着变。
+
+        写死的数字与代码漂开是本类测试要防的原病（不是新病）。
+        """
+        from v5.media import video_plan as vp
+
+        with mock.patch.object(config, "VIDEO_MODE", "pack"), \
+                mock.patch.object(vp, "REF_SLOTS", 4), \
+                mock.patch.object(vp, "PACK_REF_MAX_CHARS", 1):
+            s = self._input()
+        self.assertIn("最多 4 张参考图", s, "REF_SLOTS 改了文案没跟着改 = 数字写死了")
+        self.assertIn("最多 1 张 ⇒ 三个人同镜时", s,
+                      "PACK_REF_MAX_CHARS 改了文案没跟着改 = 数字写死了")
+
+    def test_other_roles_are_not_given_the_media_contract(self):
+        """容器事实只给分镜师——编剧/对白看到"参考图槽位"只会分心。"""
+        with mock.patch.object(config, "VIDEO_MODE", "pack"):
+            for role in ("scriptwriter", "dialogue", "reviewer"):
+                s = role_input(role, self.root, {"episode_index": 1})
+                self.assertNotIn("出片容器事实", s, "%s 不该看到媒体层槽位" % role)
+
+
 class TestPackSkillEpisodePathConsistency(unittest.TestCase):
     """类型包 SKILL 里**不得再写死集级产物路径**（M1，2026-09-16）。
 

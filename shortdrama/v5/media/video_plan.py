@@ -47,6 +47,20 @@ PACK_MIN_KEEP_RATIO = 0.6  # 压缩后每镜至少保留原声明的 60%
 #   由 group_shots 的「单镜成组补到 4s」兜底。
 PACK_MIN_SHOT_SECONDS = 2
 
+# ─── 一次请求能带几张图、按什么优先级带（**单一真相源**）─────────────────────
+#   为什么做成常量而不是散在 `video.pack_ref_images` 的字面量里：
+#   这些数字 2026-10-02 起还要交给**创作链的分镜师看**（`roles._container_facts`
+#   把它写进"出片容器事实"注入）。写在文案里再抄一份 = 必然漂移
+#   ——同一批文档里"静帧取最后一拍"就是这么漂了 6 天的（见
+#   `tests_roles.TestStillBeatClaimMatchesPipeline`）。
+#: 供应商 `images` 数组上限：**一条请求最多 5 张参考图**（官方硬约束）。
+REF_SLOTS = 5
+#: pack 档槽位优先级里「人物定妆照」的张数上限 ⇒ **三人同镜时第三人没有表**
+#: （`video.pack_ref_images`；这是实测值，不是审美偏好）。
+PACK_REF_MAX_CHARS = 2
+#: pack 档「场景空镜」的张数上限（多绑会互相拉扯地貌）。
+PACK_REF_MAX_LOCS = 1
+
 
 def pack_clamp_sec(s: dict) -> int:
     """分镜声明时长：解析失败按 4s 兜底，硬区间 2-12（组内可到 2s）。"""

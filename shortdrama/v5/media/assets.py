@@ -458,6 +458,14 @@ def episode_defaults(reg: dict, shots: list, root=None, ep=None, log=None) -> di
 #: 所以这里放宽**不会多绑图**。
 MAX_CAST_PER_SHOT = 5
 
+#: 参考图**绑定**张数上限（实测值，不是审美偏好）——与 `video_plan.REF_SLOTS`
+#: （供应商 images 上限 5）是两件事：这里管"该绑几张"，那里管"装得下几张"。
+#: 2026-09-09 A/B：1 人物镜喂 3 张会多画一个人 ⇒ 单人封顶 2（脸 + 道具）；
+#: ≥2 人物封顶 3 且先满足人脸。2026-10-02 起这两个数还要经 `roles._container_facts`
+#: 交给分镜师看（"出片容器事实"），所以做成常量，不许在文案里再抄一份。
+REF_CAP_SOLO = 2
+REF_CAP_MULTI = 3
+
 
 def _asset_name_spans(text: str, reg: dict) -> list:
     """**已注册的 location / prop 名**在文本里占的区间（用于排除"名字被包含"）。
@@ -1178,9 +1186,9 @@ def bind(root: Path, shots: list[dict], max_n: int = 5,
         if not chars:
             cap = max_n
         elif n_char == 1:
-            cap = min(max_n, 2)
+            cap = min(max_n, REF_CAP_SOLO)
         else:
-            cap = min(max_n, 3)
+            cap = min(max_n, REF_CAP_MULTI)
         # ★ 2026-09-23：场景图**按景别选择性绑定**（用户要求三类资产出图锚定；
         #   但 2026-09-09/09-14 的实测教训仍在——场景空镜自带机位会污染构图）。
         #   折中：**全景/远景/大全景/空镜**绑场景图（构图本来就是 Wide，不打架，
