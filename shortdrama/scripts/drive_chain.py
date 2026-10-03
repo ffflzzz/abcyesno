@@ -210,6 +210,34 @@ def reroll_plan(dec: dict, until: str = "", redo_left: int = 0) -> tuple:
     return "reroll", tgt, note
 
 
+def thrash_stop(rewrites: dict, rounds_without_new: int,
+                max_rewrites: int = 3, max_stall: int = 2) -> str:
+    """工头自己乒乓重派的停机判据（**纯函数**，可单测）。返回停因，空串 = 继续跑。
+
+    ★ 为什么必须有它（2026-10-03 实测 `yoga-affair-1003f`）：驱动器原先只对
+      **自己发起的**打回计数（`SHORTDRAMA_MAX_REVISIONS`，默认 2），
+      而 supervisor 这个 LLM 在**一轮 run 内部**反复重派同一个角色，完全不计入那份预算。
+      探针日志（`projects/.tmp/role_fs_root.txt`）实测：16:09→18:21 之间
+      分镜被重派 **9 次**、审稿 3 次，2.5 小时零出片，最后停在"缺审稿产物"。
+      打回的理由还全是机械事（运镜写成"全程静止"、8 秒镜只写 2 段、自报镜数与表不符）
+      —— 模型改不动格式，两个角色就互相打回，而没人喊停。
+
+    判据只看**磁盘事实**（本项目一贯的验收口径）：
+      · `rewrites[角色]` = 该产物在本轮 run 里 mtime 变化过的次数（= 被重写次数）；
+      · `rounds_without_new` = 连续多少轮轮询没有任何新产物出现。
+    上限沿用门那一份预算，不新造数字：`max_rewrites = MAX_REVISIONS + 1`。
+    """
+    hot = sorted(r for r, n in (rewrites or {}).items() if n > max_rewrites)
+    if hot:
+        return ("同一份产物被重写超过 %d 次：%s（各 %d 次）"
+                % (max_rewrites, "、".join(hot),
+                   max((rewrites or {}).get(r, 0) for r in hot)))
+    if rounds_without_new >= max_stall:
+        return ("连续 %d 轮没有任何新产物出现（工头在原地重派，不往前推进）"
+                % rounds_without_new)
+    return ""
+
+
 def redo_message(tgt: str, note: str) -> str:
     """把「打回」翻成一条发给导演的消息（**纯函数**，便于单测）。
 
@@ -447,8 +475,27 @@ async def main() -> int:
                   % (type(e).__name__, str(e)[:100]), flush=True)
             return None, None
 
+    # ★★ 反空转闸的状态（判据与理由见 `thrash_stop` 的文档字符串）。
+    #    `rewrites` 按 mtime 变化数"这份产物被重写了几次"——只有轮询能看见，
+    #    因为一轮 run 内部的重派在轮与轮之间是不可见的。
+    _MAX_RW = max(2, int(getattr(config, "MAX_REVISIONS_PER_PHASE", 2) or 2)) + 1
+    _stamps: dict = {}
+    _rewrites: dict = {}
+    _seen_roles: set = set()
+    _stall = 0
+
     while time.time() - t0 < timeout:
         got = done_roles(t0)
+        # 轮次层面的空转判据：这一轮开始时比上一轮**有没有新角色落地**。
+        # 连续 2 轮零新增 = 工头在原地重派同样的角色（1003f 实测 r3/r4/r5 就是这样
+        # 各烧了 70/13/7 分钟）。
+        _stall = 0 if (set(got) - _seen_roles) else _stall + 1
+        _seen_roles |= set(got)
+        if _stall >= 2:
+            print("[drive] ⛔ 反空转闸触发：连续 %d 轮没有任何新产物（已有 %s）"
+                  "⇒ 工头在原地重派、不往前推进，收工交给渲染门"
+                  % (_stall, got), flush=True)
+            break
         if reached(got, until):
             # ★ 产物齐了先问一句**评审过没过**（见上方 `review_state` 的事故记录）。
             #   `--until` 是前端两段式的"跑到某角色为止"，那条路径上没有评审，
@@ -515,6 +562,33 @@ async def main() -> int:
             _now = done_roles(t0)
             print("[%5ds] r%d run=%-12s 产物=%s"
                   % (time.time() - t0, round_no, status, _now), flush=True)
+            # —— 反空转采样：数"这份产物被重写了几次" ——
+            #    ⚠️ 只数重写，**不在这里判"多久没新产物"**：一个角色正常就要跑
+            #    十几分钟（几十次轮询都不落新文件），按轮询判空转会在 40 秒误触发。
+            #    空转那条判据放在**外层轮次**上（每轮开始处比一次）。
+            for _r in _now:
+                _p = root / out_path(_r, ep)
+                try:
+                    _st = _p.stat().st_mtime if _p.exists() else 0.0
+                except OSError:
+                    _st = 0.0
+                if _st and _stamps.get(_r) != _st:
+                    _rewrites[_r] = _rewrites.get(_r, 0) + 1
+                    _stamps[_r] = _st
+            _why = thrash_stop(_rewrites, 0, max_rewrites=_MAX_RW)
+            if _why:
+                print("[drive] ⛔ 反空转闸触发：%s" % _why, flush=True)
+                print("[drive]    这是**调度器在原地乒乓重派**（不是限流、不是模型写不出来）。"
+                      "已取消当前 run 并收工，交给渲染门按次数决定 —— "
+                      "继续等下去只会再烧几小时额度（实测 1003f：2.5 小时、分镜重派 9 次、零出片）。",
+                      flush=True)
+                try:
+                    await c.runs.cancel(tid, rid)
+                except Exception as e:      # noqa: BLE001
+                    print("[drive] ⚠️ 取消 run 失败（%s: %s）—— 它可能还在后台烧调用，"
+                          "请查 dev 日志 / Studio" % (type(e).__name__, str(e)[:120]),
+                          flush=True)
+                break
             # ★ 2026-09-19：`--until` 已达成 ⇒ **不等这一轮 run 结束**
             #   （它可能还在往下游派发）。取消它 + 撤掉已挂起的待批，然后收工。
             #   ⛔ 取消失败必须**响亮**：否则人会以为链停了，而它还在后台烧调用。

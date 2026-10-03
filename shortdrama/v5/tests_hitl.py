@@ -530,6 +530,45 @@ class TestRedoFlow(unittest.TestCase):
                          "director 不是被派发的角色 —— 不许让导演去 task(\"director\")")
 
 
+class TestThrashStop(unittest.TestCase):
+    """反空转闸（2026-10-03 实测 `yoga-affair-1003f`：2.5 小时、分镜被重派 9 次、零出片）。
+
+    驱动器原先只对**自己发起的**打回计数（`SHORTDRAMA_MAX_REVISIONS`），
+    而 supervisor 这个 LLM 在一轮 run **内部**反复重派同一个角色，完全不计入那份预算
+    —— 探针日志（`projects/.tmp/role_fs_root.txt`）数到分镜 9 次、审稿 3 次，
+    打回理由还全是机械事（运镜"全程静止"、8 秒镜只写 2 段、自报镜数与表不符）。
+    这里锁住两条判据的边界，**并锁住"不许误伤正常长跑"**。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import importlib.util
+        drv = Path(__file__).resolve().parents[1] / "scripts" / "drive_chain.py"
+        spec = importlib.util.spec_from_file_location("_drive_chain_thrash", drv)
+        cls.mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.mod)
+
+    def test_rewrite_budget_is_the_gates_number_plus_one(self):
+        """>3 次重写才停：门的重试上限是 2，加一次首写 ⇒ 沿用同一份预算，不新造数字。"""
+        f = self.mod.thrash_stop
+        self.assertEqual(f({"scenedesigner": 1}, 0, max_rewrites=3), "", "首写必须放行")
+        self.assertEqual(f({"scenedesigner": 3}, 0, max_rewrites=3), "", "打回两次必须放行")
+        stop = f({"scenedesigner": 4}, 0, max_rewrites=3)
+        self.assertIn("scenedesigner", stop)
+        self.assertIn("4 次", stop, "要报得出实际次数，不能只说「超了」")
+
+    def test_two_rounds_without_new_artifact_stops(self):
+        stop = self.mod.thrash_stop({}, 2, max_rewrites=3)
+        self.assertIn("连续 2 轮", stop)
+        self.assertEqual(self.mod.thrash_stop({}, 1, max_rewrites=3), "",
+                         "只空一轮不许停（一个角色正常就要跑十几分钟）")
+
+    def test_normal_progress_never_trips_the_gate(self):
+        """正向臂：七个角色各写一次、每轮都有新增 ⇒ 必须一路放行。"""
+        self.assertEqual(self.mod.thrash_stop(
+            {"worldbuilder": 1, "scenedesigner": 2, "reviewer": 1}, 0, max_rewrites=3), "")
+
+
 class TestDriveChainUntil(unittest.TestCase):
     """`--until` 的达成判据（2026-09-19 前端两段式的骨架）。
 
