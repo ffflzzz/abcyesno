@@ -2069,8 +2069,15 @@ class TestModelProfileIsolation(unittest.TestCase):
     甚至变成**有害代码**——例如"按语言主体清中文"，对能读中文的模型就是破坏。
 
     本组测试锁两件事：
-      ① 默认档（agnes 2.5）行为与历史完全一致 —— 不许回退；
+      ① **精确命中/同族命中**时默认档行为与历史完全一致 —— 不许回退；
       ② 传一个"乖模型"档案时，所有补偿都能被真正关掉。
+
+    ⚠️ **2026-10-04 方向掉头**（原`test_unknown_model_falls_back_by_kind_not_capable`
+    写的是"未知模型**不能**掉到 CAPABLE"，理由"零补偿会让烧字/分屏直接回归"）。
+    该理由只看了坏结果的一侧：
+        打错补丁 ⇒ 天花板被静默压住，**没有任何检查会发现**；
+        该打没打 ⇒ 烧字/分屏回来，**看得见**的硬伤，质检本来就抓。
+    可见性不对称 ⇒ 选响亮的那个。**未知/新版本一律落 CAPABLE + 告警。**
     """
 
     def test_resolve_by_exact_name(self):
@@ -2079,22 +2086,65 @@ class TestModelProfileIsolation(unittest.TestCase):
         self.assertIs(mp.resolve("agnes-video-2.5-flash", kind="video"), mp.AGNES_VIDEO_25)
         self.assertIs(mp.resolve("agnes-image-2.5-flash", kind="image"), mp.AGNES_IMAGE_25)
 
-    def test_resolve_prefix_fallback_for_future_versions(self):
-        """版本号变化时按前缀兜底，不至于掉到默认档。"""
+    def test_resolve_same_family_suffix_still_inherits(self):
+        """同族变体（2.5 加了后缀）**零风险**继承，不该惊动告警。"""
         from v5.media import model_profile as mp
 
-        self.assertIs(mp.resolve("agnes-image-9.9-future", kind="image"),
+        self.assertIs(mp.resolve("agnes-image-2.5-flash-v2", kind="image"),
                       mp.AGNES_IMAGE_25)
-        self.assertIs(mp.resolve("agnes-video-9.9-future", kind="video"),
+        self.assertIs(mp.resolve("agnes-video-2.5", kind="video"),
                       mp.AGNES_VIDEO_25)
 
-    def test_unknown_model_falls_back_by_kind_not_capable(self):
-        """未知模型**不能**掉到 CAPABLE——零补偿会让烧字/分屏直接回归。"""
+    def test_resolve_new_version_falls_to_capable_and_warns(self):
+        """**最可能的升级路径**：同一家出 3.0。版本号变了就不许继承 2.5 的补丁。
+
+        旧实现（2026-09-10）按前缀无脑继承，注释写"版本号变了也别掉档"——
+        恰恰相反：版本号变了意味着**补丁的前提可能已失效**。
+        """
         from v5.media import model_profile as mp
 
-        self.assertIs(mp.resolve("totally-unknown", kind="video"), mp.AGNES_VIDEO_25)
-        self.assertIs(mp.resolve("totally-unknown", kind="image"), mp.AGNES_IMAGE_25)
-        self.assertIs(mp.resolve("", kind="image"), mp.AGNES_IMAGE_25)
+        lines = []
+        prof = mp.resolve("agnes-image-3.0-flash", kind="image", log=lines.append)
+        self.assertIs(prof, mp.CAPABLE, "版本号变了不得继承 2.5 的补丁")
+        self.assertTrue(any(mp.WARN_PREFIX in l for l in lines),
+                        "必须在开跑前响亮告警，不能静默降级")
+        self.assertTrue(any("3.0" in l for l in lines), "告警要指名模型名")
+
+    def test_resolve_unknown_model_falls_to_capable_and_warns(self):
+        """未知模型 → CAPABLE + 告警（原 2026-09-10 的方向已掉头，见类文档）。"""
+        from v5.media import model_profile as mp
+
+        lines = []
+        for name, kind in (("totally-unknown", "video"),
+                           ("totally-unknown", "image"),
+                           ("", "image")):
+            mp._WARNED.discard(name or "(空模型名, kind=image)")
+            self.assertIs(mp.resolve(name, kind=kind, log=lines.append), mp.CAPABLE)
+        hits = [l for l in lines if mp.WARN_PREFIX in l]
+        self.assertEqual(len(hits), 3 * mp.WARN_LINES, "三次 resolve = 三次告警")
+
+    def test_warning_dedupes_per_model(self):
+        """同一进程里同一个模型只吵一次——不能每镜刷屏。"""
+        from v5.media import model_profile as mp
+
+        mp._WARNED.clear()
+        lines = []
+        for _ in range(5):
+            mp.resolve("agnes-image-9.9-future", kind="image", log=lines.append)
+        hits = [l for l in lines if mp.WARN_PREFIX in l]
+        self.assertEqual(len(hits), mp.WARN_LINES, "5 次 resolve 只吵1 次")
+
+    def test_verified_models_never_warn(self):
+        """精确命中/同族命中必须**零告警**——否则每次跑都在喊狼来了。"""
+        from v5.media import model_profile as mp
+
+        mp._WARNED.clear()
+        lines = []
+        for name, kind in (("agnes-image-2.5-flash", "image"),
+                           ("agnes-video-2.5-flash", "video"),
+                           ("agnes-image-2.5-flash-v2", "image")):
+            mp.resolve(name, kind=kind, log=lines.append)
+        self.assertEqual([l for l in lines if mp.WARN_PREFIX in l], [])
 
     def test_capable_profile_disables_every_compensation(self):
         """CAPABLE 下 sanitize_text 必须退化成恒等变换（零补偿）。"""

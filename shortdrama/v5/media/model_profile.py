@@ -11,6 +11,15 @@
         对一个能正确读中文的模型就是纯粹的破坏。
     本模块把这些规则从核心组装器里挪出来，按模型归档，并用开关控制启用。
 
+**兜底方向（2026-10-04 掉头，勿回退）**：
+    未知/新版本模型**一律落 `CAPABLE`（零补偿）+ 响亮告警**，不再"保守按有怪癖处理"。
+    理由是坏结果的**可见性不对称**：
+      · 打了不该打的补丁 ⇒ 提示词被改坏，片子达不到新模型的上限，而**没有任何
+        一道检查会发现**（所有检查都在核对"产物合不合我们的规矩"，而规矩本身
+        就是被补丁改过的）⇒ 只会得出"新模型也就这样"，天花板被静默压住；
+      · 该打没打的补丁 ⇒ 烧字/分屏回来了，这是**看得见**的硬伤，静帧质检本来就抓。
+    ⇒ **选响亮的那个。** 告警必须在**开跑前**响（`WARN_PREFIX`），不是跑完在日志里。
+
 **用法**：组装器只认 `ModelProfile` 的开关，不认具体模型名。
     prof = resolve(config.MODELS["video"], kind="video")
     if prof.burns_text: ...
@@ -200,19 +209,61 @@ CAPABLE = ModelProfile(
     reads_chinese=True,
 )
 
-# 未知模型的默认档：保守地按"有怪癖"处理，与历史行为一致，
-# 避免"换了个模型忘了配档案"导致烧字/分屏回归。
 _PROFILES: dict[str, ModelProfile] = {
     AGNES_IMAGE_25.key: AGNES_IMAGE_25,
     AGNES_VIDEO_25.key: AGNES_VIDEO_25,
     CAPABLE.key: CAPABLE,
 }
 
-# 按模型名前缀兜底匹配（版本号变化时不至于掉到默认档）。
+# 前缀兜底 = **同族**才继承，不是"不管什么版本号都当2.5"。
+# 三元组(前缀, 该族基准版本, 档案)：
+#   · 前缀对上 **且** 版本号与基准一致（或没有版本号）→ 继承该族档案（零风险）
+#   · 前缀对上但**版本号变了**（最可能的升级路径：2.5 → 3.0）→ 落CAPABLE + 响亮告警
+#     理由：补丁是为 2.5 的怪癖写的，套到 3.0 上既可能白费，也**可能有害**
+#     （`strip_cjk` 会删中文、`_apply_cjk_glossary` 会改词）。
+#     宁可让坏处立刻暴露，也不要静默压住天花板。
 _PREFIX_FALLBACK = (
-    ("agnes-image", AGNES_IMAGE_25),
-    ("agnes-video", AGNES_VIDEO_25),
+    ("agnes-image", "2.5", AGNES_IMAGE_25),
+    ("agnes-video", "2.5", AGNES_VIDEO_25),
 )
+
+#: 已经被告警过的模型名（同一进程只吵一次，避免每镜刷屏）。
+_WARNED: set[str] = set()
+
+#: 告警文案（供测试与前端"运行前检查"读取，不只是打给 stdout 看）。
+WARN_PREFIX = "MODEL-PROFILE-UNVERIFIED"
+
+#: 一次告警输出几行（测试按这个把行数换算成事件数）。
+WARN_LINES = 3
+
+
+def _version_of(name: str) -> str:
+    """从模型名里取版本段：`agnes-image-3.0-flash` → `3.0`。取不到返回 ""。"""
+    m = re.search(r"(?<!\d)(\d+\.\d+)(?!\d)", name)
+    return m.group(1) if m else ""
+
+
+def _warn_unverified(name: str, log=print) -> None:
+    """**在开始生成之前**响亮告警：新模型/新版本没有配套档案。
+
+    为什么必须"响亮"而不是静默降级（2026-10-04 方向掉头）：
+        打错补丁 ⇒ 提示词被改坏，片子达不到新模型的上限，而**没有任何一道
+        检查会发现**——所有检查都在核对"产物合不合我们的规矩"，而规矩本身
+        就是被补丁改过的。结果只会得出"新模型也就这样"。
+        该打没打 ⇒ 烧字/分屏回来了，这是**看得见**的硬伤，静帧质检本来就抓。
+        坏结果的可见性不对称 ⇒ **选响亮的那个**。
+    另见MEMORY：`SHORTDRAMA_STILL_QC` 前端默认关，告警不是"跑完能查"的东西，
+    它必须在开跑前就把人喊住。
+    """
+    if not name or name in _WARNED:
+        return
+    _WARNED.add(name)
+    log(f"[{WARN_PREFIX}] {name!r} 没有配套模型档案 —— "
+        f"本次按**零补偿**发送提示词（原样，不做任何怪癖补偿）。")
+    log(f"[{WARN_PREFIX}] 若该模型确实仍有烧字/分屏/中文污染等毛病，"
+        f"请在 model_profile.PROFILES 补一条档案（见register()），否则成片会带回硬伤。")
+    log(f"[{WARN_PREFIX}] 若它是已知档的新版本（例：{name} ≈ 2.5 之后的升级），"
+        f"请同时确认旧补偿是否已失效 —— 套用旧补丁会压低新模型的上限。")
 
 
 def register(profile: ModelProfile) -> ModelProfile:
@@ -221,19 +272,34 @@ def register(profile: ModelProfile) -> ModelProfile:
     return profile
 
 
-def resolve(model_name: str = "", kind: str = "image") -> ModelProfile:
-    """按模型名取档案。未知模型 → 按前缀兜底 → 再不行用 kind 对应的 agnes 档。
+def resolve(model_name: str = "", kind: str = "image",
+            log=print) -> ModelProfile:
+    """按模型名取档案，**版本感知**：
 
-    兜底为什么不用 CAPABLE：CAPABLE 是"零补偿"，用错在未知模型上会直接
-    烧字/分屏回归；宁可多做一些无害的正向改写，也不要质量回退。
+    | 情况 | 落点 |
+    |---|---|
+    | 精确命中 `_PROFILES` | 该档案（零告警） |
+    | 前缀同族**且版本一致/无版本** | 该族档案（零告警） |
+    | 前缀对上但**版本变了**（如 3.0） | `CAPABLE` + `WARN_PREFIX` 告警 |
+    | 完全不认识 / 模型名为空 | `CAPABLE` + `WARN_PREFIX` 告警 |
+
+    2026-10-04 起，**未知一律落 CAPABLE 而不是 agnes 2.5 档**（方向掉头，理由见
+    `_warn_unverified`）。此前"保守按有怪癖处理"的论证是错的：本模块的补偿
+    **并非全是无害的正向改写**（`strip_cjk` 删中文、`_apply_cjk_glossary` 改词），
+    对能读中文的模型是主动破坏。
     """
     name = (model_name or "").strip().lower()
     if name in _PROFILES:
         return _PROFILES[name]
-    for prefix, prof in _PREFIX_FALLBACK:
-        if name.startswith(prefix):
-            return prof
-    return AGNES_VIDEO_25 if kind == "video" else AGNES_IMAGE_25
+    for prefix, base_ver, prof in _PREFIX_FALLBACK:
+        if not name.startswith(prefix):
+            continue
+        ver = _version_of(name)
+        if not ver or ver == base_ver:
+            return prof          # 同族（含无版本号的裸名）→ 安全继承
+        break                     # 版本变了 → 落下面的 CAPABLE + 告警
+    _warn_unverified(name or f"(空模型名, kind={kind})", log=log)
+    return CAPABLE
 
 
 def describe() -> str:
