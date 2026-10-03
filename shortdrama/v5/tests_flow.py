@@ -4378,3 +4378,94 @@ class TestPackMode(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestJudgementKinds(unittest.TestCase):
+    """判据**分类**（2026-10-04）——「随模型发展水涨船高」的关键接口。
+
+    背景：抽帧看5 部成片 30 帧，**10 条 P0 硬伤一条没触发**，肉眼逮到 6 个问题，
+    全部属"契约类"（地面画成麻将桌 / 扳手在旋转 / 水磨石变瓷砖 / 凭空剪影…）。
+    ⇒ 光靠加判据补不齐，且**加了不该删的**会随模型升版变成误伤源。
+    ⇒ 换模型时必须能"只删能力类、不动契约类" ⇒ 先要把分类记清楚。
+    """
+
+    def test_kinds_partition_is_complete_and_disjoint(self):
+        from v5.media import qc
+
+        allk = set(qc.JUDGEMENT_KINDS)
+        cap, con = set(qc.CAPABILITY_KINDS), set(qc.CONTRACT_KINDS)
+        self.assertTrue(cap & con == set(), "两类不得重叠")
+        self.assertEqual(cap | con, allk, "JUDGEMENT_KINDS 必须被两类完全划分")
+        self.assertEqual(len(cap) + len(con), len(allk))
+
+    def test_values_are_only_two_known_labels(self):
+        from v5.media import qc
+
+        self.assertTrue(set(qc.JUDGEMENT_KINDS.values()) <= {"CAPABILITY", "CONTRACT"})
+
+    def test_burn_text_and_split_are_capability(self):
+        """烧字/分屏是"模型现在做不到"——模型修好后该判据就该失效。"""
+        from v5.media import qc
+
+        for k in ("text", "split"):
+            self.assertEqual(qc.JUDGEMENT_KINDS[k], "CAPABILITY",
+                             "%s 属能力类，误分类会让换模型时删错" % k)
+
+    def test_contract_ones_never_deleted(self):
+        """契约类判的是"画面照没照做分镜"——模型再强也做不到，永不删。"""
+        from v5.media import qc
+
+        for k in ("count", "prop_form", "dupe", "drift", "empty_shot"):
+            self.assertEqual(qc.JUDGEMENT_KINDS[k], "CONTRACT", k)
+
+    def test_prop_form_criterion_is_in_prompt(self):
+        """新增的「场景元素形制跑偏」必须真在PROMPT 里（否则分类是空账）。"""
+        from v5.media import qc
+
+        self.assertIn("形制跑偏", qc.PROMPT)
+        self.assertIn("水磨石", qc.PROMPT, "要给出可照抄的材质名比对样例")
+        self.assertIn("麻将桌", qc.PROMPT, "要给出实证里真实跑偏的反例")
+
+    def test_prop_form_has_no_false_positive_guard(self):
+        """必须写明反误报：分镜没写材质时不得判跑偏（否则大面积误伤）。"""
+        from v5.media import qc
+
+        i = qc.PROMPT.find("形制跑偏")
+        self.assertGreater(i, 0)
+        tail = qc.PROMPT[i:i + 900]
+        self.assertIn("不判", tail, "必须带'分镜没写材质就不判'的边界")
+        self.assertIn("分镜", tail, "判据必须以分镜原文为准")
+
+    def test_describe_lists_both_labels(self):
+        from v5.media import qc
+
+        d = qc.describe_judgements()
+        self.assertIn("capability", d)
+        self.assertIn("contract", d)
+        self.assertIn("prop_form", d)
+
+    def test_classification_does_not_filter_prompt(self):
+        """**分类只做记账，不删条目**——自动删判据缺实测触发率数据，现在删是闭眼砍。"""
+        from v5.media import qc
+
+        # 能力类对应的判据必须**仍在 PROMPT 里**（一条都没被筛掉）。
+        # 注意第 1 条（烧字）在 PROMPT 里是占位符 @@TEXT_RULE@@，运行时才由
+        # text_rule() 拼入真实两档判据 ⇒ 这里只能验其余各条。
+        self.assertIn("@@TEXT_RULE@@", qc.PROMPT, "烧字判据的占位符不能消失")
+        for kw in ("分屏", "五官", "纯黑"):
+            self.assertIn(kw, qc.PROMPT,
+                          "分类机制不得动 PROMPT 实际内容：%s 不见了" % kw)
+        # 判据条数也必须一条不少（10 条 P0 + 2 条 P1，共 13 条编号连续）
+        import re as _re
+        nums = [int(m) for m in _re.findall(r"(?m)^(\d+)\.\s+\S", qc.PROMPT)]
+        self.assertEqual(nums, list(range(1, 14)),
+                         "判据编号必须 1..13 连续无缺（漏号=有条目被筛掉）")
+
+    def test_p1_numbering_shifted_without_breaking_crossrefs(self):
+        """新增第 11 条后 P1 顺延12/13，且交叉引用必须同步改过。"""
+        from v5.media import qc
+
+        self.assertIn("12. **人物服装", qc.PROMPT)
+        self.assertIn("13. **明暗/色调", qc.PROMPT)
+        self.assertNotIn("11. **人物服装", qc.PROMPT, "旧编号没顺延 = 出现两条11")
+        self.assertIn("按第 12/13 条报", qc.PROMPT, "交叉引用必须指向新编号")
