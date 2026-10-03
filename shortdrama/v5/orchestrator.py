@@ -72,7 +72,15 @@ _EP: int = boot_episode(_root)
 # （产物只到 scenedesigner，reviewer 永远缺失，媒体链被 media_gate 拦住）。
 # 这正是"多角色链路的预算要按最大读写的那个角色定"——所以默认取 150，
 # 可用 SHORTDRAMA_ROLE_RECURSION_LIMIT 覆盖（长分镜项目可调更大）。
-ROLE_RECURSION_LIMIT = int(os.environ.get("SHORTDRAMA_ROLE_RECURSION_LIMIT", "150"))
+#
+# ★★ 2026-10-03 二次抬到 260（实测 `yoga-affair-1003b` 26 镜）：分镜角色被旧措辞
+#   「只改列出的那几镜」引导成**逐镜 edit_file + 每改一镜读回整表**，从 checkpointer
+#   取出的终态序列是一轮 **111 次工具调用**（read_file 49 / edit_file 54 / write_file 8）。
+#   每次调用 = model + tool 两步 ⇒ ≈222 步 > 150 ⇒ `GraphRecursionError` ⇒ 父 run
+#   `status=error` ⇒ drive_chain rc=3 ⇒ **整条链零出片**（45 分钟白烧，媒体链没启动）。
+#   措辞已在 `roles.role_input` 改死为"一次 write_file 交整表"（那是真病根）；
+#   这里抬到 260 只是**兜底**：宁可慢一轮，也不要"没出口"。
+ROLE_RECURSION_LIMIT = int(os.environ.get("SHORTDRAMA_ROLE_RECURSION_LIMIT", "260"))
 
 # ── 依赖序（supervisor 的 todolist 纪律引用）────────────────────────────────
 PREREQ: dict[str, list[str]] = {

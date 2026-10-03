@@ -281,7 +281,7 @@ projects/<项目名>/
 | `SHORTDRAMA_NARRATION_RATE` | +0% | 旁白语速（edge-tts 语法，如 `+10%`）|
 | `SHORTDRAMA_VIDEO_PACK_MAX_GROUP` | 5 | `pack` 模式下单组最多吞几个镜（分组算法见 `media/video_plan.group_shots`；与旁路脚本 `scripts/pack_render.py --max-group` 同义） |
 | `SHORTDRAMA_LOOSE_STORYBOARD` | 0 | **分镜放开模式**（2026-10-02，为 A/B 而开）。`1` = 不再向 `scenedesigner` 注入任何系统级「硬性要求」与「出片容器事实」（状态锚点/片长与镜头数/景别列写法/多人站位/身份锚点/关键拍点多角度/开场钩子/容器事实/程序体检），节奏与切镜密度交回类型包 SKILL 与分镜自己。**保留**：供应商硬墙（一次生成 4–12 秒、一次最多 5 张参考图，本就在媒体层）、三道输入门与片长 85%–130%（交付底线，关掉两臂就没有共同口径）、以及"别把上游改坏"的搬运纪律（产物路径、台词照抄、音频模式）。对照实验见 `scripts/ab_loose_storyboard.py`；默认 `0` 行为逐字不变 |
-| `SHORTDRAMA_SHOTCHECK` | full | 渲前**分镜契约体检**档位（`v5/shotcheck.py`，跑在创作链派发分镜角色时）：`full` = 可数判据 + 裁判模型语义判据；`count` = 只跑可数判据（零文本调用）；`off` = 整条关掉。不合格的镜按**镜号 + 逐字原文**写成退回清单（`scenedesigner/shotcheck_ep{N}.json`）注入分镜角色，让它只改点名的那几镜 |
+| `SHORTDRAMA_SHOTCHECK` | full | 渲前**分镜契约体检**档位（`v5/shotcheck.py`，跑在创作链派发分镜角色时）：`full` = 可数判据 + 裁判模型语义判据；`count` = 只跑可数判据（零文本调用）；`off` = 整条关掉。不合格的镜按**镜号 + 逐字原文**写成退回清单（`scenedesigner/shotcheck_ep{N}.json`）注入分镜角色；**改的范围**只限清单点名的条目，但**落盘方式定死为一次 `write_file` 交整表**（2026-10-03 实测：让模型"只改那几镜"而不规定怎么交，它会逐镜 `edit_file` + 反复读整表，111 次工具调用撞穿角色递归上限、整条链零出片） |
 | `SHORTDRAMA_VIDEO_SUBMIT_TIMEOUT` | 60 | 生视频**提交**的读超时（秒）。2026-09-26 实测：pack 档多参考图组（3–4 张 16:9 静帧）提交时服务端要先拉齐素材，60 秒谈不完 —— 同轮里单图组正常完成、多图组两次都恰好卡满 60s 报 `read operation timed out` 且 `attempts=0`（没拿到 `video_id`）。**多图组建议 180**；默认 60 = 历史行为不变 |
 | `SHORTDRAMA_PACK_BGM` | 1 | `pack` 档提交是否带「全程 BGM+环境音、禁止静音段」指令（官方同款模型实测可原生执行）；brief 明确禁 BGM 的项目设 0 关掉 |
 | `SHORTDRAMA_IMAGE_VENDOR` | agnes | 生图厂商（`v5/vendors.py` 注册表）。未注册的名字**响亮报错**，不静默回退 |
@@ -310,7 +310,7 @@ projects/<项目名>/
 | `SHORTDRAMA_IMAGE_SIZE` | （空） | 生图尺寸覆盖；空 = 不传该参数，用供应商默认 |
 | `SHORTDRAMA_QC_WORKERS` | 3 | 静帧 QC / clipqc 并发 worker 数。**调高会撞供应商限速** |
 | `SHORTDRAMA_RECURSION_LIMIT` | 600 | `drive_chain.py` 全链递归上限 |
-| `SHORTDRAMA_ROLE_RECURSION_LIMIT` | 150 | supervisor 下各角色图的递归上限（长分镜项目可调大） |
+| `SHORTDRAMA_ROLE_RECURSION_LIMIT` | 260 | supervisor 下各角色图的递归上限（长分镜项目可调大）。**150 → 260 的实测依据**（2026-10-03，26 镜项目）：分镜角色按旧措辞「只改列出的那几镜」逐镜 `edit_file` + 每改一镜读回整表，一轮 **111 次工具调用**（read 49 / edit 54 / write 8），每次算两步 ⇒ ≈222 步撞穿 150 → `GraphRecursionError` → 整条链 `rc=3`、零出片。真病根在 `roles.role_input` 的措辞（现定为**一次 `write_file` 交整表**），这个数只是兜底 |
 | `SHORTDRAMA_RUNTIME` | （空） | 运行时根目录覆盖（`v5/config.py` 的 `RUNTIME_ROOT`；空 = 项目根） |
 | `SHORTDRAMA_SOURCE_SHEET` | auto | 四宫格设定表：`auto` = 有源照片即走 / `0` 强制关（源照片直绑）/ `1` 强制开 |
 | `SHORTDRAMA_SUBAGENTS` | sync | supervisor 派发子代理模式；`async` 回退旧异步路径 |

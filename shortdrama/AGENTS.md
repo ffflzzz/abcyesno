@@ -517,6 +517,15 @@ pack 档**跳过**逐镜 clipqc（组产物多镜
 判 fail 就 `reset_from()` 清本集该角色及下游 + 旧产物进 `.rerun_backup/` → 用
 `redo_message()` 只重派那一段。**重试上限沿用门那一份** `SHORTDRAMA_MAX_REVISIONS`，
 不新造数字；用完仍不过 ⇒ 照旧交给门 `force_passed`。判不出回退目标时**不动盘**。
+★ **2026-10-03：打回重跑时「改哪些」由清单定，「怎么交」由代码定死**。
+分镜重跑的输入带程序体检的退回清单（`shotcheck_ep{N}.json`），旧措辞是「只改列出的那几镜」——
+模型**照做**就变成了逐镜 `edit_file` + 每改一镜读回整表：实测一轮 **111 次工具调用**
+（read 49 / edit 54 / write 8，全打在同一份 `scenedesigner_ep1.md` 上），每次调用在 LangGraph 里
+算两步 ⇒ ≈222 步 > 角色递归上限 ⇒ `GraphRecursionError` → 父 run `status=error` →
+`drive_chain rc=3` → **45 分钟白烧、媒体链根本没启动、零出片**。
+现在契约改成「**一次 `write_file` 交整表**、⛔ 不要逐镜 `edit_file`、不要反复 `read_file` 读回自己刚写的表」，
+改动**范围**仍只限清单点名的条目；角色上限 `ROLE_RECURSION_LIMIT` 同时 150 → 260 兜底
+（宁可慢一轮，不要"没出口"）。回归测试：`tests_shotcheck.TestWiring.test_rerun_gets_punch_list`。
 
 **旧项目（旧产物名 / 一维 manifest）**：老项目的集级产物是 `dialogue.md` /
 `scenedesigner.md` / `review.md`。读取走 `guards.resolve_path()`（新名优先、旧名回退）。

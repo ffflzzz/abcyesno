@@ -782,11 +782,25 @@ def role_input(role: str, root: Path, m: dict, reasons: list[str] | None = None)
                         "同型问题不要再写出来。" % len(_pl))
                     lines.extend("- " + x for x in _pl[:24])
             if _pl and _sb.exists():
+                # ★★ 2026-10-03 实测事故（`yoga-affair-1003b`，26 镜）：原来这里写的是
+                #   「只改列出的那几镜、没列出的一律不要动」。模型**照做了**——于是它用
+                #   `edit_file` 逐镜外科式改、每改一镜再 `read_file` 整表确认。从 checkpointer
+                #   取出的终态序列实测：**一轮 111 次工具调用**（read_file 49、edit_file 54、
+                #   write_file 8，全打在同一个 `scenedesigner_ep1.md` 上）。
+                #   每次调用在 LangGraph 里算两步（model + tool）⇒ ≈222 步 > 角色的
+                #   `ROLE_RECURSION_LIMIT`(150) ⇒ `GraphRecursionError` ⇒ 父 run `status=error`
+                #   ⇒ drive_chain rc=3、**整条链零出片**（45 分钟白跑）。
+                #   ⇒ 09-29 那条判据防的是"逐镜自查"这件事**由模型来做**，但它没规定**怎么落盘**，
+                #     结果把成本从 token 换成了步数，换了一个更致命的死法。
+                #     现在把落盘方式也定死：**一次 write_file 交整表**，改完即停。
                 lines.append(
-                    "\n【⚠️ 盘上已有第 %d 集分镜表，程序体检发现 %d 处不合格 —— "
-                    "**只改列出的那几镜**】\n"
-                    "检查由程序做，改完它会再跑一遍确认。**不要逐镜自查整张表**"
-                    "（那件事已经由程序承担）；**没列出的镜头一律不要动**。"
+                    "\n【⚠️ 盘上已有第 %d 集分镜表，程序体检发现 %d 处不合格】\n"
+                    "**把改好的整张表用一次 `write_file` 交出去**，然后直接结束本轮。\n"
+                    "⛔ 不要 `edit_file` 逐镜改、不要反复 `read_file` 读回自己刚写的表自查 —— "
+                    "体检由程序做，改完它会再跑一遍确认，你**没有**通过体检会被告知。"
+                    "本角色的步数上限是按「一次读完 + 一次写完」设计的，逐镜改会把整条链撞死"
+                    "（实测 111 次工具调用 ⇒ 递归上限 ⇒ 零出片）。\n"
+                    "改的**范围**仍然只限下面列出的这些条目，没列出的镜头内容原样保留。"
                     % (ep, len(_pl)))
                 lines.extend("- " + x for x in _pl[:24])
         except Exception as e:  # noqa: BLE001 -- 体检失败不能伪装成"合格"

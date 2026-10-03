@@ -217,8 +217,12 @@ class TestWiring(unittest.TestCase):
         root = self._root(_row("LN01", "两人隔着三身位对峙，谁都没有先出手"))
         with mock.patch.object(config, "SHOTCHECK", "count"):
             txt = roles.role_input("scenedesigner", root, {"episode_index": 1})
-        self.assertIn("只改列出的那几镜", txt)
-        self.assertIn("不要逐镜自查整张表", txt)
+        self.assertIn("用一次 `write_file` 交出去", txt)
+        self.assertIn("不要 `edit_file` 逐镜改", txt)
+        self.assertIn("不要反复 `read_file`", txt)
+        self.assertNotIn("只改列出的那几镜", txt,
+                         "旧措辞会把模型逼成逐镜 edit_file + 反复读整表："
+                         "实测 111 次工具调用撞穿 ROLE_RECURSION_LIMIT ⇒ 整条链零出片")
         self.assertIn("位移动词", txt, "该镜的具体判据要能看见")
 
     def test_clean_table_says_do_not_rewrite(self):
@@ -246,7 +250,7 @@ class TestWiring(unittest.TestCase):
                                       encoding="utf-8")
         with mock.patch.object(config, "SHOTCHECK", "count"):
             txt = roles.role_input("scenedesigner", d, {"episode_index": 1})
-        self.assertNotIn("只改列出的那几镜", txt)
+        self.assertNotIn("用一次 `write_file` 交出去", txt)
 
     def test_punch_survives_the_rerun_moving_the_table_away(self):
         """★ 打回重做会**先把旧表移进 `.rerun_backup/`** ⇒ 清单必须落在文件里。
@@ -256,7 +260,7 @@ class TestWiring(unittest.TestCase):
         root = self._root(_row("LN01", "两人隔着三身位对峙，谁都没有先出手"))
         with mock.patch.object(config, "SHOTCHECK", "count"):
             txt1 = roles.role_input("scenedesigner", root, {"episode_index": 1})
-        self.assertIn("只改列出的那几镜", txt1)
+        self.assertIn("用一次 `write_file` 交出去", txt1)
         pf = root / "scenedesigner" / "shotcheck_ep1.json"
         self.assertTrue(pf.exists(), "体检结果必须钉在盘上")
         # 模拟打回：表被移走，清单要还在
