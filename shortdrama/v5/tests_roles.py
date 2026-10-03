@@ -203,44 +203,44 @@ class TestDurationDirectiveInjected(unittest.TestCase):
             json.dumps({"topic": "测试片", "target_duration": target},
                        ensure_ascii=False), encoding="utf-8")
 
-    def test_target_injected_with_shot_count_and_floor(self):
-        """180 秒 → 必须同时给出「÷4 基线 ≈45 镜」「镜长由内容决定」与「85% 下限」。
+    def test_target_injects_bounds_not_a_division_baseline(self):
+        """180 秒 → 注入的是**边界**（每镜 4-12 秒 + 总时长 85% 下限），⛔ 不再注入除法基线。
 
-        ★ 2026-09-17：除数 7 → **4**（用户定档「4 秒一镜、快切优先」）。
-        ⚠️ 本测试的 brief **刻意不写镜数** —— 最初写的「共 26 镜左右」会随
-        brief 一起注入分镜师的输入，让 `assertIn("26")` 从 **brief 自己**那里
-        「假通过」（断言被测试数据污染 = 等于没测）。
+        ★ 2026-10-03：用户废弃「镜数 = 目标秒数 ÷ 4」（它把两分钟自动变成 30 镜 × 4 秒，
+        实测一段段硬分、割裂感重），镜数与镜长归分镜师。本测试因此**反向**断言旧措辞
+        不许回来 —— 否则哪天有人顺手把基线加回去，这里会静默通过。
         """
         self._brief("约 180 秒（3 分钟）")
         with mock.patch.object(config, "INLINE_UPSTREAM", True):
             s = role_input("scenedesigner", self.root, {"episode_index": 1})
-        self.assertIn("片长与镜头数", s)
+        self.assertIn("片长", s)
         self.assertIn("180", s, "目标秒数要写出来")
-        self.assertIn("45", s, "180 ÷ 4 ≈ 45 镜")
-        self.assertIn("4 秒", s, "快切基线（默认 4 秒）要写出来")
-        self.assertIn("镜长由内容决定", s, "镜长不能被写死成固定值")
         self.assertIn("85", s, "必须给出会被门拦下的下限")
         self.assertIn("加一遍", s, "要要求它自己把时长列加一遍")
+        self.assertIn("4–12 秒", s, "供应商硬区间要写出来")
+        self.assertIn("用满 12 秒", s, "同一场景并成一镜的口径要写出来")
+        self.assertIn("镜内时间轴", s, "≥8 秒的镜必须写时间轴（程序会查）")
+        self.assertIn("台词字数 ÷ 4", s, "口播物理保留 —— 它不是镜数机制")
+        # ⛔ 被废弃的除法权威不许从任何地方爬回来
+        for gone in ("镜数基线", "快切优先", "÷ 4（约", "默认 4 秒", "做不到 4 秒快切"):
+            self.assertNotIn(gone, s, "「%s」已随除法基线废弃" % gone)
 
-    def test_quota_cap_warns_when_fast_cut_impossible(self):
-        """目标秒数 ÷ 4 超过配额上限 → 必须**显式预告**本片做不到 4 秒快切。
-
-        物理约束：4 秒/镜 × `AGNES_VIDEO_MAX_SHOTS` ⇒ 支持快切的最长片有上限。
-        超了若不预告，模型会排出**会被静默截断**的镜数（虽是半成品，却已烧完创作链）。
-        """
+    def test_quota_cap_states_the_truncation_risk(self):
+        """配额上限必须说清「超了会被静默截断」，但**不替分镜师决定镜数**。"""
         long_sec = (config.VIDEO_MAX_SHOTS + 1) * 4
         self._brief("约 %d 秒" % long_sec)
         with mock.patch.object(config, "INLINE_UPSTREAM", True):
             s = role_input("scenedesigner", self.root, {"episode_index": 1})
         self.assertIn("配额上限", s)
-        self.assertIn("做不到 4 秒快切", s)
+        self.assertIn("只渲前", s, "要讲清截断后果")
+        self.assertNotIn("做不到 4 秒快切", s, "旧预告假定 4 秒基线，已废弃")
 
     def test_brief_without_target_still_ok(self):
         """brief 没写 target_duration → 不炸；景别那条仍要注入。"""
         self._brief("")
         with mock.patch.object(config, "INLINE_UPSTREAM", False):
             s = role_input("scenedesigner", self.root, {"episode_index": 1})
-        self.assertNotIn("片长与镜头数", s)
+        self.assertNotIn("【硬性要求·片长】", s)
         self.assertIn("景别列写法", s, "景别写法与片长无关，必须始终注入")
 
     def test_genre_rule_and_shot_type_rule_present(self):
@@ -257,7 +257,7 @@ class TestDurationDirectiveInjected(unittest.TestCase):
         self._brief("约 180 秒")
         with mock.patch.object(config, "INLINE_UPSTREAM", False):
             s = role_input("dialogue", self.root, {"episode_index": 1})
-        self.assertNotIn("片长与镜头数", s)
+        self.assertNotIn("【硬性要求·片长】", s)
         self.assertNotIn("景别列写法", s)
 
 
@@ -533,7 +533,7 @@ class TestLooseStoryboardSwitch(unittest.TestCase):
 
     def test_creative_directives_gone_plumbing_kept(self):
         tight, loose = self._in(False), self._in(True)
-        for tag in ("状态锚点每镜重复", "片长与镜头数", "景别列写法", "多人镜的站位",
+        for tag in ("状态锚点每镜重复", "片长", "景别列写法", "多人镜的站位",
                     "身份锚点每镜重复", "关键拍点多角度", "开场即钩子", "出片容器事实"):
             self.assertIn(tag, tight, "现行档少了这条：%s" % tag)
             self.assertNotIn(tag, loose, "放开档还留着创作约束：%s" % tag)

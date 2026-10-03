@@ -141,11 +141,13 @@ def countable(shots: list[dict], target_seconds: int = 0,
             out.append({"name": "、".join(names[:24]), "check": check, "detail": detail})
 
     # —— 结构类（逐镜可数，零歧义）——
-    # ★ 镜内时间轴该不该有，**由 brief 声明的单镜秒数决定**，不是一刀切"恰好一拍"。
-    #   0929 那条「每镜恰好一拍」是给 4-6 秒短镜（仙侠打戏官方范例一镜到底）收的律。
-    #   1003 实测反例：brief 要「11 镜 × 12 秒」时，一拍 = 把 12 秒的事件排布整个交给模型，
-    #   成片就是"整段拖、节点太少"（11 镜里 7 镜末段明显安静，人眼看就是拖沓）。
-    #   ⇒ 长镜方案反过来**强制**镜内时间轴；短镜方案保持原样，行为与历史一字不变。
+    # ★ 镜内时间轴按**该镜自己的秒数**判，不看 brief 声明了几镜。
+    #   2026-10-03 废弃「镜数 = 目标秒数 ÷ 4」之后，镜长归分镜师、brief 通常**不再**写镜数，
+    #   旧写法"由 brief 推导单镜秒数"会整条失灵 ⇒ 长镜反而没人管了。
+    #   ≥8 秒必须写满时间轴：一拍写完 12 秒 = 把事件排布整个交给模型，实测成片
+    #   "节点太少、整段拖"（1003c：11 镜里 7 镜末段明显安静）。
+    #   <8 秒**不判拍数** —— 0929 那条「每镜恰好一拍」随除法基线一起废弃；
+    #   仙侠包要它，写在该包自己的契约里（已确认 scenedesigner 与 reviewer 两份都写着）。
     _mid = ((target_shots[0] + target_shots[1]) / 2.0) if target_shots else 0.0
     _exp = (target_seconds / _mid) if (target_seconds and _mid) else 0.0
     # ⚠️ `秒` 与 `：` 之间可能带一个短括注（模型真实写法：`9-12秒（结束态）：…`）。
@@ -153,19 +155,14 @@ def countable(shots: list[dict], target_seconds: int = 0,
     #   ——1003d 实测 11 镜**全部**因此被点名（退回清单让模型重写整张表）。
     _BEATS = (r"\d+(?:\.\d+)?\s*-\s*\d+(?:\.\d+)?\s*秒(?:（[^）]{0,10}）)?\s*[:：]"
               r"|\d+(?:\.\d+)?\s*秒(?:（[^）]{0,10}）)?\s*[:：]")
-    if _exp >= 8:
-        want = max(3, int(_exp // 3))          # 12 秒 ⇒ 至少 4 段
-        few = [s["name"] for s in shots
-               if len(re.findall(_BEATS, s.get("visual") or "")) < want]
-        need(not few,
-             "每镜要按 %.0f 秒写满**镜内时间轴**（≥%d 段 `0-2秒：` 式分段，每段一个新事件："
-             "位移／易手／进出画／机位变化，不许两段写同一件事）" % (_exp, want),
-             "命中 %d 镜 —— 分段必须从 0 起、首尾相接、终于本镜秒数" % len(few), names=few)
-    else:
-        multi_beat = [s["name"] for s in shots
-                      if len(re.findall(_BEATS, s.get("visual") or "")) > 1]
-        need(not multi_beat, "每镜恰好一拍（出现第二个 `N-M秒：` 即不合格）",
-             "命中 %d 镜" % len(multi_beat), names=multi_beat)
+    thin = [s["name"] for s in shots
+            if int(s.get("seconds") or 0) >= 8
+            and len(re.findall(_BEATS, s.get("visual") or ""))
+            < max(3, int(s.get("seconds") or 0) // 3)]
+    need(not thin,
+         "≥8 秒的镜必须写满**镜内时间轴**（12 秒 ⇒ ≥4 段 `0-3秒：` 式分段，每段换一个事件："
+         "位移／易手／进出画／机位变化，不许两段写同一件事）",
+         "命中 %d 镜 —— 分段要从 0 起、首尾相接、终于本镜秒数" % len(thin), names=thin)
     # ★ 判的是**同一个角色**在一镜里被 @ 了两次以上（AGENTS 那条实测病：后续拍重复
     #   `@名（衣装）` ⇒ 多画一个人）。旧实现数的是"这一镜里 `@名（` 一共几次"，
     #   于是两类**正常写法**一起被误判：① 道具也带括注（`@豆绿色瑜伽垫（180 厘米…）`）；
@@ -243,10 +240,14 @@ def countable(shots: list[dict], target_seconds: int = 0,
              "偏离 %d 镜 —— 例：把该镜「时长(秒)」改成区间内的数，或按同一步长重排全表"
              % len(off), names=off)
     else:
-        over5 = [x for x in secs if x > 5]
-        need(sum(1 for x in secs if x > 8) == 0 and len(over5) <= 2,
-             "单镜时长（≤5s 常态，6-8s 至多 2 镜）",
-             "最长 %ds，>5s 的 %d 镜" % (max(secs or [0]), len(over5)))
+        # brief 没声明镜数 ⇒ **不再拿"≤5s 常态"当规范**（那是 ÷4 时代的节奏口径，
+        # 2026-10-03 随除法基线一起废弃）。只守供应商硬区间：越界会被媒体层改写
+        # （>12 秒等比压缩、<4 秒直接拒），这一条与"镜长归谁定"无关，是硬事实。
+        out_of_band = [s["name"] for s, x in zip(shots, secs) if not (4 <= x <= 12)]
+        need(not out_of_band,
+             "每镜秒数必须在供应商硬区间 **4–12 秒**内（区间内怎么排由你定）",
+             "越界 %d 镜 —— 超过 12 秒会被媒体层等比压缩，低于 4 秒会被接口拒"
+             % len(out_of_band), names=out_of_band)
     # ★ 本包 10b：**非宽景不许两个角色同时 @ 同框**（实测那样会多画一个人）。
     #   这条完全数得出来 —— 不必等审稿角色绕一轮重派（2026-09-29 实测：它抓到了，
     #   但代价是一整轮分镜重派 + 20 分钟起）。

@@ -115,7 +115,9 @@ class TestCountable(unittest.TestCase):
             _shot("LN04", "@裴烛 劈向崖壁，崖壁崩落", join_note=""),   # 无承接 + 砍环境
         ]
         checks = {h["check"] for h in shotcheck.countable(shots, 120)}
-        self.assertTrue(any("恰好一拍" in c for c in checks), checks)
+        self.assertTrue(any("4–12 秒" in c for c in checks), checks)   # LN01 写了 3 秒 = 越界
+        self.assertNotIn("恰好一拍", "".join(checks),
+                         "「每镜恰好一拍」已随 ÷4 除法基线一起废弃（2026-10-03）")
         self.assertTrue(any("同一角色" in c for c in checks), checks)
         self.assertTrue(any("位移动词" in c for c in checks), checks)
         self.assertTrue(any("承接" in c for c in checks), checks)
@@ -145,9 +147,13 @@ class TestCountable(unittest.TestCase):
         hits = [h for h in shotcheck.countable(plan, 132, target_shots=(11, 11))
                 if "单镜时长" in h["check"]]
         self.assertEqual(hits, [], hits)
-        # 反向对照 1：brief 没声明镜数 ⇒ 回落旧规范，这条必须照样判（否则等于没装守卫）
-        legacy = [h for h in shotcheck.countable(plan, 132) if "单镜时长" in h["check"]]
-        self.assertTrue(legacy, "无 target_shots 时应回落旧规范")
+        # 反向对照 1：brief 没声明镜数 ⇒ **不再拿"≤5s 常态"当规范**（那是 ÷4 时代的节奏），
+        # 只守供应商硬区间 4–12 秒：12 秒放行，3 秒点名。
+        self.assertEqual([h for h in shotcheck.countable([_long(1)], 12)
+                          if "4–12 秒" in h["check"]], [], "12 秒在硬区间内，不该被点名")
+        band = [h for h in shotcheck.countable([_long(1), _long(2) | {"seconds": 3}], 15)
+                if "4–12 秒" in h["check"]]
+        self.assertTrue(band and "LN02" in band[0]["name"], band)
         # 反向对照 2：brief 要 12 秒、表里混进 4 秒的镜 ⇒ 点名那一镜
         mixed = [_long(1), _long(2) | {"seconds": 4}]
         off = [h for h in shotcheck.countable(mixed, 24, target_shots=(2, 2))
@@ -173,9 +179,11 @@ class TestCountable(unittest.TestCase):
         self.assertEqual([h for h in shotcheck.countable(fixed, 132, target_shots=(11, 11))
                           if "镜内时间轴" in h["check"]], [])
         # 反向对照：短镜方案（brief 没声明镜数）仍守"恰好一拍"，长镜的放宽不许漏到这里
+        # 反向对照：4 秒短镜写两段**不再被判** —— 「每镜恰好一拍」随除法基线一起废弃，
+        # 时间轴只强制到 ≥8 秒的镜（仙侠包若要一拍一镜，写在该包自己的契约里）。
         short = [_shot("LN01", "0-2秒：@裴烛 蹬地前冲；2-4秒：对方侧身避开后横移", seconds=4)]
-        self.assertTrue(any("恰好一拍" in h["check"]
-                            for h in shotcheck.countable(short, 60)), short)
+        self.assertEqual([h for h in shotcheck.countable(short, 60)
+                          if "镜内时间轴" in h["check"] or "恰好一拍" in h["check"]], [], short)
 
     def test_10b_two_at_mentions_in_non_wide_shot(self):
         """★ 审稿 10b 该由程序先抓（2026-09-29：它抓到了，代价是一轮分镜重派 + 20 分钟）。
