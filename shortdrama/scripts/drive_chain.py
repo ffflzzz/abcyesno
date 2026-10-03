@@ -31,7 +31,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from v5 import config
 from v5.guards import (PREREQ, artifact_fresh, load_manifest, out_path,  # noqa: E402
-                       reset_from, resolve_path, save_manifest)
+                       record_review_block, reset_from, resolve_path,
+                       restore_stashed, save_manifest)
 
 # ★ 完成判据必须用**被派发的 7 个角色**（`PREREQ` 的键），**不含 `director`**。
 # 2026-09-12 实测教训：原判据写死 8 个（含 director），而 supervisor 架构里
@@ -483,6 +484,41 @@ async def main() -> int:
     _rewrites: dict = {}
     _seen_roles: set = set()
     _stall = 0
+    _last_moved: list = []       # 最近一次打回挪走了哪些角色（闸触发时要回捞，见下方）
+    thrashed = ""                # 非空 = 反空转闸的停因（触发即整条收工，不再起新轮）
+
+    def heal_after_stop(why: str) -> None:
+        """反空转闸收工前，把**被上一次打回挪走、却还没重做出来**的产物捞回盘上。
+
+        ★ 为什么这是必须的一步而不是"多此一举"（2026-10-03 实测 `yoga-affair-1003g`）：
+          打回的动作是"先把旧产物挪进 `.rerun_backup/`，再起一轮重派"。闸掐掉那轮重派时，
+          盘上正处于**两头空**：新的没写出来，旧的在归档里。于是驱动器报
+          「缺 scenedesigner、reviewer → 不进媒体链」⇒ 46 分钟、零出片，
+          而我装这把闸的本意恰恰是"别再白烧时间"——它把唯一剩下的那条路也堵了。
+          捞回来之后交给门：门看到评审仍未通过，但台账已超上限 ⇒ `force_passed` 放行出片，
+          缺陷照旧响亮列出（口径见 [[stop-bad-runs-save-quota]]：无出口时人选择放行）。
+        """
+        miss = [r for r in _last_moved
+                if r in ROLES and not resolve_path(root, r, ep).exists()]
+        print("[drive] ⛔ 反空转闸收工：%s" % why, flush=True)
+        # ★ 乒乓本身也记一次**门台账**：这一轮没能往前推进，是评审与分镜**又没收敛**。
+        #   不记的话出口还是堵着 —— 实测 1003g 驱动器只打了 1 次回（台账 1），
+        #   而工头自己内部重派 5 次台账一字未动 ⇒ 门最多被问到第 2 次，仍不到上限，
+        #   照样零出片。**上限与判决仍然只在门那一处**，这里只是把真实发生的拦截记账。
+        _mm = load_manifest(root)
+        _nb2 = record_review_block(root, _mm, ep)
+        print("[drive]    本次乒乓计入评审台账（累计 %d 次）；上限 %d 次，"
+              "超出门会记 force_passed 并列出未消化条目。"
+              % (_nb2, config.MAX_REVISIONS_PER_PHASE), flush=True)
+        if not miss:
+            print("[drive]    盘上产物未缺（%s）→ 交给渲染门按次数决定。"
+                  % sorted(done_roles(t0)), flush=True)
+            return
+        back = restore_stashed(root, miss, ep)
+        print("[drive]    这些角色刚被打回挪走、重派又被闸掐了 ⇒ 从 .rerun_backup/ "
+              "**回捞上一版**：%s（带着未消化的评审条目交给渲染门，门会 force_passed）"
+              % ("、".join(back) or "（回捞失败，请人工查 .rerun_backup/）"), flush=True)
+
 
     while time.time() - t0 < timeout:
         got = done_roles(t0)
@@ -492,15 +528,36 @@ async def main() -> int:
         _stall = 0 if (set(got) - _seen_roles) else _stall + 1
         _seen_roles |= set(got)
         if _stall >= 2:
-            print("[drive] ⛔ 反空转闸触发：连续 %d 轮没有任何新产物（已有 %s）"
-                  "⇒ 工头在原地重派、不往前推进，收工交给渲染门"
-                  % (_stall, got), flush=True)
+            thrashed = ("连续 %d 轮没有任何新产物（已有 %s）⇒ 工头在原地重派、"
+                        "不往前推进" % (_stall, got))
+            heal_after_stop(thrashed)
             break
         if reached(got, until):
             # ★ 产物齐了先问一句**评审过没过**（见上方 `review_state` 的事故记录）。
             #   `--until` 是前端两段式的"跑到某角色为止"，那条路径上没有评审，
             #   所以只在跑完整链时才据此打回。
             _, _dec = review_state() if not until else (None, None)
+            # ★★ 评审的**总时长类**阻断理由先拿盘上事实核一遍（1003g 实测：它以
+            #   「总时长 88s 不合格」打回，而那张表实际加总 120 秒、正好在带内 ——
+            #   88 是它只加了长镜漏掉短镜的结果。可数的东西不该由模型的算术定生死）。
+            if _dec and not until:
+                try:
+                    from v5 import shotcheck as _sc
+                    _kept, _dropped = _sc.filter_contradicted_blocks(
+                        root, ep, _dec.get("reasons") or [])
+                    if _dropped:
+                        for _x in _dropped:
+                            print("[drive] ⚖️ 评审这条阻断**与盘上事实矛盾**，已驳回（不据此打回）："
+                                  "\n         %s" % _x, flush=True)
+                        _dec = dict(_dec)
+                        _dec["reasons"] = _kept
+                        if not _kept:
+                            print("[drive] ✅ 评审的阻断理由**全部**被程序读数驳回 ⇒ 本轮不打回，"
+                                  "按通过处理并进入渲染（其余主观条目：无）。", flush=True)
+                            _dec["pass"] = True
+                except Exception as e:  # noqa: BLE001 -- 核不动就照旧打回，绝不静默放行
+                    print("[drive] ⚠️ 总时长读数核对失败（%s: %s）→ 照评审原判处理"
+                          % (type(e).__name__, str(e)[:100]), flush=True)
             act, tgt, note = reroll_plan(_dec or {}, until, redo_left)
             if act == "no-target":
                 print("[drive] !! 评审判 fail，但**回退目标判不出来**（rerun=%s）"
@@ -515,10 +572,17 @@ async def main() -> int:
                 redo_left -= 1
                 _m = load_manifest(root)
                 _moved = reset_from(tgt, _m, root, ep)
+                # ★ 评审拦下来的这一次**当场落进门那一份台账**（不等到有人来问门）。
+                #   否则台账一直是 0：驱动器把两轮预算花完了，门却还以为"第 1/2 次"，
+                #   同一份不合格产物要人被叫三次才放行 —— 1003g 就是这么零出片收的工。
+                _nb = record_review_block(root, _m, ep)
+                _last_moved = list(_moved or [])
                 save_manifest(root, _m)
                 print("[drive] ⏪ 产物齐全但**评审判 fail** → 打回 `%s` 及其下游重做"
-                      "（剩余重试 %d 次）。旧产物已移入 .rerun_backup/：%s"
-                      % (tgt, redo_left, "、".join(_moved) or "—"), flush=True)
+                      "（剩余重试 %d 次；门台账累计 %d 次，超 %d 次门会记 force_passed "
+                      "直接放行渲染）。旧产物已移入 .rerun_backup/：%s"
+                      % (tgt, redo_left, _nb, config.MAX_REVISIONS_PER_PHASE,
+                         "、".join(_moved) or "—"), flush=True)
                 print("[drive]    评审原因：%s" % (note or "（评审没写）"), flush=True)
                 GOAL = ("本项目当前要产出的是**第 %d 集**。\n%s%s"
                         % (ep, _DISPATCH, redo_message(tgt, note)))
@@ -550,6 +614,10 @@ async def main() -> int:
         status = "?"
         poll_err = 0          # 连续轮询失败次数
         dead = False
+        # ★ 重写次数**按单轮数**（1003g 实测的假阳性）：驱动器自己发起的打回必然让
+        #   同一份产物再多一次 mtime 变化 ⇒ 跨轮累计的话，打回后的那一轮一开局就超限，
+        #   于是合法重做被当成乒乓掐掉。跨轮的预算另有那份：`redo_left` / 门台账。
+        _stamps, _rewrites = {}, {}
         while time.time() - t0 < timeout:
             await asyncio.sleep(20)
             try:
@@ -577,6 +645,7 @@ async def main() -> int:
                     _stamps[_r] = _st
             _why = thrash_stop(_rewrites, 0, max_rewrites=_MAX_RW)
             if _why:
+                thrashed = _why
                 print("[drive] ⛔ 反空转闸触发：%s" % _why, flush=True)
                 print("[drive]    这是**调度器在原地乒乓重派**（不是限流、不是模型写不出来）。"
                       "已取消当前 run 并收工，交给渲染门按次数决定 —— "
@@ -588,6 +657,7 @@ async def main() -> int:
                     print("[drive] ⚠️ 取消 run 失败（%s: %s）—— 它可能还在后台烧调用，"
                           "请查 dev 日志 / Studio" % (type(e).__name__, str(e)[:120]),
                           flush=True)
+                heal_after_stop(_why)
                 break
             # ★ 2026-09-19：`--until` 已达成 ⇒ **不等这一轮 run 结束**
             #   （它可能还在往下游派发）。取消它 + 撤掉已挂起的待批，然后收工。
@@ -619,6 +689,8 @@ async def main() -> int:
             if poll_err >= 6:
                 dead = True
                 break
+        if thrashed:
+            break
         if dead:
             print("[drive] !! 连续 %d 次轮询失败（%s）—— dev server 很可能已退出，"
                   "提前终止，不把 %ds 超时白等掉。"

@@ -427,6 +427,71 @@ def stash_artifacts(root: Path, roles: list[str], ep: int = 1) -> list[str]:
     return moved
 
 
+def restore_stashed(root: Path, roles: list[str], ep: int = 1) -> list[str]:
+    """把 `stash_artifacts` 刚挪走的产物**放回原位**，返回被放回的相对路径。
+
+    ★ 为什么需要它（2026-10-03 实测 `yoga-affair-1003g`，我自己引入的死路）：
+      驱动器**先** `reset_from()` 把分镜与审稿挪进 `.rerun_backup/`，**再**起新一轮重派；
+      若这一轮被反空转闸当场掐掉（计数器是跨轮累计的，被打回后必然超限），
+      盘上就**一份产物都不剩** ⇒ `run_new_project` 报「缺 scenedesigner、reviewer →
+      不进媒体链」⇒ 46 分钟、零出片。挪走产物却没有东西补回来，等于把出口一起搬走。
+
+    两条硬边界（都是"不许弄丢工作"）：
+      · **只在盘上当前没有该角色产物时**放回 —— 已经有新版本就绝不覆盖；
+      · **只回捞最新一个** `.rerun_backup/<ts>/`（那是本次打回挪走的那一份），
+        更早的历史版本留在原处供人工回捞。
+    """
+    import shutil
+    base = root / ".rerun_backup"
+    if not roles or not base.is_dir():
+        return []
+    dirs = sorted([d for d in base.iterdir() if d.is_dir()], reverse=True)
+    if not dirs:
+        return []
+    newest = dirs[0]
+    restored: list[str] = []
+    for role in roles:
+        rel = out_path(role, ep)
+        if not rel:
+            continue
+        live = resolve_path(root, role, ep)
+        if live.exists():
+            continue                                    # 有新版本，绝不覆盖
+        cand_dir = newest / Path(rel).parent
+        cands = sorted(cand_dir.glob("*.md"), key=lambda p: p.stat().st_mtime) \
+            if cand_dir.is_dir() else []
+        if not cands:
+            continue
+        src = cands[-1]
+        dest = root / rel
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(src), str(dest))
+            restored.append(rel)
+        except Exception:  # noqa: BLE001 -- 回捞失败要看得见，但不炸链
+            continue
+    return restored
+
+
+def record_review_block(root: Path, m: dict, ep: int = 1) -> int:
+    """把「评审拦下一次」记进**门那一份**台账，返回累计次数。
+
+    ★ 为什么由驱动器也要记（2026-10-03）：`media_gate` 的 `review_blocks` 只在
+      **有人来问门**时才 +1。而自动打回发生在创作链里、门一次都没被问到 ⇒
+      台账永远是 0 ⇒ 门第一次被问就判「第 1/2 次拦截、还差两次」⇒
+      同一份不合格产物要人被叫三次才放行（实测：闸触发后 rc=1，门根本没跑到）。
+      驱动器执行的那次打回**就是**评审拦下的一次，由它落账，判据仍只有一份数字
+      （`config.MAX_REVISIONS_PER_PHASE`），读台账的一侧（`reroll_budget`）不用改。
+    """
+    rb = m.setdefault("review_blocks", {})
+    n = int(rb.get(str(int(ep))) or 0) + 1
+    rb[str(int(ep))] = n
+    if root is not None:
+        save_manifest(Path(root), m)
+    return n
+
+
+
 # ─── 0. 分镜契约门的**报告落盘**（2026-09-19，人工模式配套）────────────────────
 #
 # 为什么需要（这是"门降级为警告"能不能成立的关键）：

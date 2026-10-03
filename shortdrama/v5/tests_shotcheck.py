@@ -465,5 +465,91 @@ class TestCameraLightContract(unittest.TestCase):
         self.assertFalse(any("运镜" in x for x in off), off)
 
 
+from tempfile import TemporaryDirectory
+
+
+class TestDurationBlocksContradicted(unittest.TestCase):
+    """评审的**总时长**阻断理由要拿盘上事实核一遍（2026-10-03 `yoga-affair-1003g`）。
+
+    那条链的燃料就是一句假理由：审稿写「总时长 88s < brief 硬边界 110–150s」，
+    而那张 16 镜表的「时长(秒)」列**实际加总 120 秒、正落在带内** ——
+    88 = 它只加了 8 镜×8 秒 + 2 镜×12 秒，把 2×4 秒与 4×6 秒整个漏掉。
+    驱动器照这条打回 ⇒ 分镜被重派 5 次、46 分钟零出片。
+
+    ⛔ 但驳回必须**窄**：只驳"断言总时长不合格、而程序数出来在带内、且它引用的秒数
+    与程序读数不是同一个数"这一类；同一条判决里的别的理由一律原样留下，
+    表真的不够长时更要原样留下（反向对照在下面）。
+    """
+
+    _HDR = ("| 镜头号 | 景别 | 角度 | 运镜 | 时长(秒) | 场景 | 视觉风格 |"
+            " 画面描述 | 落幅 | 对白 | 音效 | 文字镜 | 承接 |")
+
+    def _mk(self, root: Path, secs, target: str = "约 130 秒") -> None:
+        (root / "scenedesigner").mkdir(parents=True, exist_ok=True)
+        (root / "brief.json").write_text(
+            json.dumps({"topic": "核时长", "pack": "shortdrama",
+                        "target_duration": target}, ensure_ascii=False),
+            encoding="utf-8")
+        rows = [self._HDR, "|---|" * 13]
+        for i, s in enumerate(secs, 1):
+            rows.append("| 1-%d | 中景 | 平视 | 机位固定 | %d | 瑜伽私教室 | 暖橙斜射光 |"
+                        " 0-3秒：@苏晚（白色运动上衣）侧对镜头；3-%d秒：@周彦（藏青衬衫）"
+                        "手抬到肩 | 落幅 | （无声，环境音） | 环境音 | 否 | — |"
+                        % (i, s, max(4, s)))
+        (root / "scenedesigner" / "scenedesigner_ep1.md").write_text(
+            "\n".join(rows) + "\n", encoding="utf-8")
+
+    _BOGUS = ("总时长 88s < brief 硬边界 110–150s：需并镜/扩长补到 110–150s，"
+              "勿只加短镜凑数")
+    _REAL = "LN07：关键接触「从背后压上肩」未独占整镜（违反分镜硬要求⑮）"
+
+    def test_program_reads_the_table_and_band(self):
+        """夹具必须**真的**被解析出 N 镜（否则所有判据都在 0 条上"全过"）。"""
+        from v5.media import storyboard as sb
+        with TemporaryDirectory() as d:
+            root = Path(d)
+            self._mk(root, [12] * 10)
+            shots = sb.parse((root / "scenedesigner" / "scenedesigner_ep1.md")
+                             .read_text(encoding="utf-8"))
+            self.assertEqual(len(shots), 10, "夹具解析出 %d 镜" % len(shots))
+            band = shotcheck.duration_band(root, 1)
+            self.assertEqual(band["total"], 120, band)
+            self.assertTrue(band["ok"], band)
+
+    def test_false_duration_block_is_dropped_but_the_real_one_survives(self):
+        with TemporaryDirectory() as d:
+            root = Path(d)
+            self._mk(root, [12] * 8 + [6] * 4)          # 8×12 + 4×6 = 120 秒，带内
+            kept, dropped = shotcheck.filter_contradicted_blocks(
+                root, 1, [self._BOGUS, self._REAL])
+            self.assertEqual(kept, [self._REAL], "把真理由一起驳了 = 评审彻底失效：" + str(kept))
+            self.assertEqual(len(dropped), 1, dropped)
+            self.assertIn("程序读数", dropped[0], "驳回必须留下可复核的读数：" + dropped[0])
+            self.assertIn("120", dropped[0])
+
+    def test_true_shortfall_is_never_dropped(self):
+        """★ 反向对照：表**真的**只有 60 秒时，同一句理由必须原样留下。"""
+        with TemporaryDirectory() as d:
+            root = Path(d)
+            self._mk(root, [6] * 10)                    # 60 秒 < 下限 110
+            kept, dropped = shotcheck.filter_contradicted_blocks(
+                root, 1, [self._BOGUS, self._REAL])
+            self.assertEqual(dropped, [], "表不够长却驳回了 = 把保护拆掉")
+            self.assertEqual(len(kept), 2, kept)
+
+    def test_unreadable_table_keeps_everything(self):
+        """读不出表 / brief 没写目标秒数 ⇒ 一律"未知"，绝不据此放行。"""
+        with TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "brief.json").write_text(
+                json.dumps({"topic": "没目标", "pack": "shortdrama"},
+                           ensure_ascii=False), encoding="utf-8")
+            self.assertIsNone(shotcheck.duration_band(root, 1))
+            kept, dropped = shotcheck.filter_contradicted_blocks(
+                root, 1, [self._BOGUS, self._REAL])
+            self.assertEqual(dropped, [])
+            self.assertEqual(len(kept), 2, kept)
+
+
 if __name__ == "__main__":
     unittest.main()

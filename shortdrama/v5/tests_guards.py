@@ -747,5 +747,91 @@ class TestReviewParseWarningNamesTheEpisode(unittest.TestCase):
         self.assertNotIn("review_ep1.md", out, "告警点名了别的集的文件 ⇒ 会把人引去查错的地方")
 
 
+class TestExitAfterThrash(unittest.TestCase):
+    """★ 反空转闸不能把出口一起掐掉（2026-10-03 `yoga-affair-1003g` 实测）。
+
+    那条链的过程：评审以「总时长 88 秒不合格」打回（**程序自己一加是 120 秒、在带内**）
+    → 驱动器 `reset_from()` 把分镜与审稿挪进 `.rerun_backup/` → 起第 4 轮重派
+    → 重写计数器是**跨轮累计**的，一开局就超限 ⇒ 闸把第 4 轮当场取消
+    → 盘上"新的没写、旧的在归档"，`run_new_project` 报「缺 2 个角色 → 不进媒体链」
+    → 46 分钟、零出片。**装闸是为了省时间，结果它把唯一剩下的那条路也堵了。**
+
+    两条修判据（都在盘上可验）：
+      · 被打回挪走、又没重做出来的产物 ⇒ 收工前从最新一份归档**回捞**；
+      · 评审驱动的打回**当场记进门台账** ⇒ 门第一次被问就能按上限 `force_passed`
+        放行出片，而不是"第 1/2 次拦截、还差两次"。
+    """
+
+    def _manifest(self, ep: int = 1) -> dict:
+        m = {"episode_index": ep, "phases": {}, "revision_counts": {},
+             "media_loop": {},
+             "review": {"passed": False, "rerun": ["scenedesigner"],
+                        "reasons": ["LN07：关键接触没有独占整镜"]}}
+        for r in guards.GATE_ROLES:
+            guards.set_phase(m, r, "complete", ep=ep)
+        return m
+
+    def test_recorded_blocks_give_the_gate_a_one_call_exit(self):
+        """驱动器打的两次回**要算进门那份台账**：门第一次被问就该放行，不是还差两次。"""
+        from tempfile import TemporaryDirectory
+        cap = int(config.MAX_REVISIONS_PER_PHASE)
+        with TemporaryDirectory() as d:
+            root = Path(d)
+            m = self._manifest()
+            for _ in range(cap):                      # = 驱动器执行了 cap 次评审打回
+                n = guards.record_review_block(root, m, ep=1)
+            self.assertEqual(n, cap)
+            m2 = guards.load_manifest(root)           # 模拟"另起进程问门"
+            ok, why = guards.media_gate("render", m2, ep=1, root=root)
+            self.assertTrue(ok, "台账已满时门必须放行，实际说：%s" % why)
+            self.assertTrue(m2["review"].get("force_passed"),
+                            "放行要留下 force_passed 的痕迹")
+
+    def test_record_review_block_is_per_episode_and_on_disk(self):
+        """计数落盘 + 按集独立：第 2 集不能被第 1 集的失败拖放行。"""
+        from tempfile import TemporaryDirectory
+        with TemporaryDirectory() as d:
+            root = Path(d)
+            m = self._manifest()
+            guards.record_review_block(root, m, ep=1)
+            guards.record_review_block(root, m, ep=1)
+            guards.record_review_block(root, m, ep=2)
+            back = (guards.load_manifest(root).get("review_blocks") or {})
+            self.assertEqual(int(back.get("1") or 0), 2, back)
+            self.assertEqual(int(back.get("2") or 0), 1, "两集混成一格 = 连载时第 2 集白跑")
+
+    def test_restore_stashed_puts_the_artifact_back(self):
+        """打回挪走、重派又失败 ⇒ 回捞最新归档那一份，盘上重新有产物可交给门。"""
+        from tempfile import TemporaryDirectory
+        import time
+        with TemporaryDirectory() as d:
+            root = Path(d)
+            rel = guards.out_path("scenedesigner", 1)
+            (root / "scenedesigner").mkdir(parents=True)
+            (root / rel).write_text("| 镜头号 | 时长(秒) |\n|---|---|\n| 1-1 | 12 |\n",
+                                    encoding="utf-8")
+            moved = guards.stash_artifacts(root, ["scenedesigner"], 1)
+            self.assertTrue(moved and not (root / rel).exists(), "没挪走 = 测不到回捞")
+            time.sleep(1.1)                           # 归档目录名是秒级时间戳
+            (root / "scenedesigner" / "x.md").write_text("新写的", encoding="utf-8")
+            back = guards.restore_stashed(root, ["scenedesigner"], 1)
+            self.assertEqual(back, [rel], "没把归档那份放回盘上：%s" % back)
+            self.assertIn("1-1", (root / rel).read_text(encoding="utf-8"))
+
+    def test_restore_never_overwrites_a_newer_live_copy(self):
+        """盘上已经有新版产物就**绝不**回捞覆盖 —— 那会吃掉刚做完的工作。"""
+        from tempfile import TemporaryDirectory
+        with TemporaryDirectory() as d:
+            root = Path(d)
+            rel = guards.out_path("scenedesigner", 1)
+            (root / "scenedesigner").mkdir(parents=True)
+            (root / rel).write_text("旧版 1-1", encoding="utf-8")
+            guards.stash_artifacts(root, ["scenedesigner"], 1)
+            (root / rel).write_text("新版 9-9", encoding="utf-8")
+            back = guards.restore_stashed(root, ["scenedesigner"], 1)
+            self.assertEqual(back, [], "盘上有新版还回捞 = 覆盖刚做的工作")
+            self.assertIn("9-9", (root / rel).read_text(encoding="utf-8"))
+
+
 if __name__ == "__main__":
     unittest.main()

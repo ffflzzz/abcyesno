@@ -505,3 +505,75 @@ def check(shots: list[dict], *, target_seconds: int = 0, use_judge: bool = True,
            len(hard), len(sem), len(unver), len(errs)))
     return {"countable": hard, "semantic": sem, "unverifiable": unver,
             "errors": errs, "blocking": blocking}
+
+
+def duration_band(root, ep: int = 1) -> dict | None:
+    """程序自己对**本集分镜表总时长**的确定性读数：`{shots, total, target, lo, hi, ok}`。
+
+    读不出（无表 / brief 没写目标秒数 / 表里没有可数的秒数列）⇒ 返回 `None`，
+    调用方**必须**当成"未知"，不许据此放行任何东西。
+
+    ★ 为什么要把它单独露出来（2026-10-03 实测 `yoga-affair-1003g`）：
+      评审以「总时长 88s < brief 硬边界 110–150s」为理由**阻断整张表**，
+      而那张表 16 镜的「时长(秒)」列实际加总是 **120 秒、正好落在带内** ——
+      88 = 8 镜×8 秒 + 2 镜×12 秒，它只加了长镜，把 2×4 秒与 4×6 秒整个漏掉。
+      驱动器照这条假理由打回，分镜被重派 5 次、46 分钟零出片。
+      「总时长」是**可数的**，代码自己就能数 ⇒ 它不该由模型的算术来定生死
+      （见 [[feedback-code-over-contract]]、[[feedback-judge-model-with-quote-gate]]）。
+    """
+    try:
+        from . import guards, validate
+        from .media import storyboard as sb
+        brief = guards.load_brief(Path(root))
+        target = int(validate.parse_target_seconds(brief.get("target_duration")) or 0)
+        if target <= 0:
+            return None
+        p = guards.resolve_path(Path(root), "scenedesigner", ep)
+        if not p.exists():
+            return None
+        shots = sb.parse(p.read_text(encoding="utf-8"))
+        secs = [int(s.get("seconds") or 0) for s in shots]
+        if not secs or sum(secs) <= 0:
+            return None
+        lo = int(target * validate.TARGET_TOL_LOW)
+        hi = int(target * validate.TARGET_TOL_HIGH)
+        total = sum(secs)
+        return {"shots": len(secs), "total": total, "target": target,
+                "lo": lo, "hi": hi, "ok": lo <= total <= hi}
+    except Exception:  # noqa: BLE001 -- 读数失败一律"未知"，绝不据此放行
+        return None
+
+
+#: 评审理由里"断言总时长不合格"的写法（可数的东西，按字面认，别扩）
+_DUR_CLAIM_RE = r"(?:总时长|全片时长|片长|时长合计|合计时长)"
+
+
+def filter_contradicted_blocks(root, ep: int = 1,
+                               reasons=None) -> tuple[list, list]:
+    """拿盘上事实核评审的**总时长类**阻断理由 → `(留下的, 被驳回的)`。
+
+    只驳回**同时满足三条**的那一条理由（其余一律原样留下）：
+      ① 它在说总时长不合格（含"不足/低于/＜/偏短/不够/未达/超/太长"之类判词）；
+      ② 程序自己数出来的加总**在带内**（`duration_band().ok`）；
+      ③ 它引用的秒数与程序读数**不是同一个数**（同数说明它看的是别的东西，不驳）。
+
+    ⛔ 这不是"劝退评审"：驳回只针对这一类可数事实，且**逐条**处理——
+      同一份判决里的其他理由照常打回。被驳回的条目会连程序读数一起打出来，
+      人可以复核（见 [[feedback-judge-model-with-quote-gate]] 的"劝退措辞"教训）。
+    """
+    band = duration_band(root, ep)
+    kept: list = []
+    dropped: list = []
+    if not band or not band.get("ok"):
+        return list(reasons or []), dropped
+    for r in (reasons or []):
+        s = str(r)
+        claim = re.search(_DUR_CLAIM_RE, s) and re.search(
+            r"(不足|低于|＜|<|偏短|不够|未达|超过|超出|太长|>|硬边界)", s)
+        nums = [int(x) for x in re.findall(r"(\d{2,3})\s*(?:秒|s\b)", s, re.I)]
+        if claim and nums and band["total"] not in nums:
+            dropped.append("%s ⇒ 程序读数：%d 镜 / %d 秒，在 %d–%d 秒带内"
+                           % (s[:160], band["shots"], band["total"], band["lo"], band["hi"]))
+        else:
+            kept.append(r)
+    return kept, dropped
