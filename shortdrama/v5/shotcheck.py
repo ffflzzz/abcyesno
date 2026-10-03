@@ -195,10 +195,27 @@ def countable(shots: list[dict], target_seconds: int = 0,
                   and not any(w in (s.get("dialogue") or "") for w in SILENT_MARK)]
         need(len(spoken) >= n * 0.5, "台词镜 ≥50%", "%d/%d = %.0f%%" % (len(spoken), n,
                                                                         100.0 * len(spoken) / n))
-    over5 = [x for x in secs if x > 5]
-    need(sum(1 for x in secs if x > 8) == 0 and len(over5) <= 2,
-         "单镜时长（≤5s 常态，6-8s 至多 2 镜）",
-         "最长 %ds，>5s 的 %d 镜" % (max(secs or [0]), len(over5)))
+    # —— 单镜时长：规范**从 brief 推导**，不写死 ——
+    # 旧实现把 0929 那批短镜项目的节奏当成了硬判据（≤5s 常态、6-8s 至多 2 镜）。
+    # 1003 实测反例：brief 明写「11 镜 × 每镜 12 秒」的长镜方案时，这条让 11 镜**全部**不合格
+    # ⇒ 退回清单会逼着模型把每一镜改短，**判据反过来扼杀 brief 要的东西**。
+    # 现在：brief 同时给了总时长与镜数 ⇒ 期望单镜秒数 = 总时长 ÷ 镜数，按 −50%/+34% 收
+    #   （上限再被供应商硬约束 12 秒截住）；brief 没声明镜数时才回落旧规范。
+    mid_shots = ((target_shots[0] + target_shots[1]) / 2.0) if target_shots else 0.0
+    if target_seconds and mid_shots:
+        exp = target_seconds / mid_shots
+        lo, hi = exp * 0.5, min(12.0, exp * 1.34)
+        off = [s["name"] for s, x in zip(shots, secs) if not (lo <= x <= hi)]
+        need(not off,
+             "单镜时长要贴近 brief 声明的 %.0f 秒（合格区间 %.0f-%.0f 秒；12 秒是供应商硬上限）"
+             % (exp, lo, hi),
+             "偏离 %d 镜 —— 例：把该镜「时长(秒)」改成区间内的数，或按同一步长重排全表"
+             % len(off), names=off)
+    else:
+        over5 = [x for x in secs if x > 5]
+        need(sum(1 for x in secs if x > 8) == 0 and len(over5) <= 2,
+             "单镜时长（≤5s 常态，6-8s 至多 2 镜）",
+             "最长 %ds，>5s 的 %d 镜" % (max(secs or [0]), len(over5)))
     # ★ 本包 10b：**非宽景不许两个角色同时 @ 同框**（实测那样会多画一个人）。
     #   这条完全数得出来 —— 不必等审稿角色绕一轮重派（2026-09-29 实测：它抓到了，
     #   但代价是一整轮分镜重派 + 20 分钟起）。

@@ -883,11 +883,17 @@ def check_storyboard(md: str, brief: dict | None = None,
                    and not row_violations and not beat_violations)}
 
 
-_SHOT_RANGE_RE = re.compile(r"(\d+)\s*[-–~至]\s*(\d+)\s*个?镜|共\s*(\d+)\s*个?镜")
+_SHOT_RANGE_RE = re.compile(r"(\d+)\s*[-–~至]\s*(\d+)\s*个?镜|共\s*(\d+)\s*个?镜"
+                            r"|(\d+)\s*个?镜")
 
 
 def parse_shot_range(text: str | None) -> tuple[int, int] | None:
     """从 brief 的 `target_duration` 里读「共 15-18 镜」这种区间。
+
+    ⚠️ 单值写法同样要读得出来（2026-10-03 实测）：上一版 brief 写的是「全片 26 镜」，
+      而旧正则只认「共 N 镜」与「N-M 镜」⇒ **静默返回 None** ⇒ 链内体检与量表拿不到
+      镜数、退回"目标秒 ÷ 8"的派生公式。这与 0929 那次「brief 明写 15-18 镜却读不出」
+      是同一种失效：判据读不到 brief 自己写的数，却装作读到了。
 
     为什么需要（2026-09-29 实测）：量表与链内体检的镜数下限写的是"目标秒 ÷ 8"，
     而 brief 自己明写 15-18 镜 —— 结果一条链交出 **12 镜 / 54 秒** 却"镜数合格"。
@@ -898,7 +904,7 @@ def parse_shot_range(text: str | None) -> tuple[int, int] | None:
     m = _SHOT_RANGE_RE.search(str(text))
     if not m:
         return None
-    if m.group(3):
-        n = int(m.group(3))
+    if m.group(3) or m.group(4):
+        n = int(m.group(3) or m.group(4))
         return (n, n)
     return (int(m.group(1)), int(m.group(2)))

@@ -130,6 +130,30 @@ class TestCountable(unittest.TestCase):
         hard = shotcheck.countable(shots, 120)
         self.assertEqual([h["check"] for h in hard], [], hard)
 
+    def test_long_shot_plan_follows_brief_not_the_old_5s_norm(self):
+        """★ 11 镜 × 12 秒的长镜方案不许被"≤5s 常态"整批判死（2026-10-03 实错）。
+
+        旧实现把 0929 那批短镜项目的节奏写成了硬判据 ⇒ 长镜 brief 一交进来，
+        退回清单会逼模型把每一镜改短 —— **判据反过来扼杀 brief 要的东西**。
+        现在期望单镜秒数从 brief 推（132 秒 ÷ 11 镜 = 12 秒）。
+        """
+        def _long(i):
+            return _shot("LN%02d" % i,
+                         "@裴烛 蹬地前冲劈出板状剑罡，对方侧身避开后横移反手格开",
+                         seconds=12)
+        plan = [_long(i) for i in range(1, 12)]
+        hits = [h for h in shotcheck.countable(plan, 132, target_shots=(11, 11))
+                if "单镜时长" in h["check"]]
+        self.assertEqual(hits, [], hits)
+        # 反向对照 1：brief 没声明镜数 ⇒ 回落旧规范，这条必须照样判（否则等于没装守卫）
+        legacy = [h for h in shotcheck.countable(plan, 132) if "单镜时长" in h["check"]]
+        self.assertTrue(legacy, "无 target_shots 时应回落旧规范")
+        # 反向对照 2：brief 要 12 秒、表里混进 4 秒的镜 ⇒ 点名那一镜
+        mixed = [_long(1), _long(2) | {"seconds": 4}]
+        off = [h for h in shotcheck.countable(mixed, 24, target_shots=(2, 2))
+               if "单镜时长" in h["check"]]
+        self.assertTrue(off and "LN02" in off[0]["name"], off)
+
     def test_10b_two_at_mentions_in_non_wide_shot(self):
         """★ 审稿 10b 该由程序先抓（2026-09-29：它抓到了，代价是一轮分镜重派 + 20 分钟）。"""
         both = _shot("LN02", "@沈砚 蹬地前冲三步劈下，@阮青 侧身避开后横移反手格开")

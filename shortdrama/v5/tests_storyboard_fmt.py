@@ -56,6 +56,11 @@ class TestShotCountWindow(unittest.TestCase):
         from v5 import validate
         self.assertEqual(validate.parse_shot_range("约 60 秒，共 15-18 镜，快切"), (15, 18))
         self.assertEqual(validate.parse_shot_range("共 32 镜"), (32, 32))
+        # ★ 单值写法（1003 实测：上一版 brief 写「全片 26 镜」被旧正则静默读成 None，
+        #   于是镜数判据退回派生公式 —— 与 0929「明写 15-18 镜却读不出」同型失效）
+        self.assertEqual(validate.parse_shot_range("约 132 秒，全片 11 镜 / 每镜 12 秒"), (11, 11))
+        self.assertEqual(validate.parse_shot_range("26 镜 / 约 130 秒"), (26, 26))
+        self.assertEqual(validate.parse_shot_range("全片 12-16 个镜头"), (12, 16))
         self.assertIsNone(validate.parse_shot_range("约 60 秒，镜数按目标秒推"))
         self.assertIsNone(validate.parse_shot_range(""))
 
