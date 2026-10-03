@@ -145,6 +145,12 @@ SHORTDRAMA_V5_PROJECT=<项目名> .venv/Scripts/langgraph.exe dev \
 `SHORTDRAMA_SLICE_SOFT=1` 降级为注入全文）。⇒ `plotdesigner` 的产物必须按
 「`## 第 N 卷` + `### 第 M 集`」结构写，且**集条目自包含**（禁"同上/见前文"，切片后会悬空）。
 
+⚠️ **单集项目（`brief.episodes == 1`）不切片**：只有一集时整份目录就是本集，没有"本集 ±1"可切，
+plotdesigner 自然也写不出「### 第 M 集」结构 ⇒ 旧实现会 `RuntimeError` 把整条链判死
+（2026-10-03 实测 `yoga-affair-1003e`：9155 字的单集目录 → `rc=3`、8 分钟零出片）。
+现在直接注入全文并打一行说明；**多集**项目仍走原路径，失败照样响亮终止。
+回归测试：`tests_roles` 的 `test_single_episode_catalog_is_never_a_hard_stop`。
+
 ### ★ 多项目并行（2026-09-29 起支持，两条事实）
 
 ```bash

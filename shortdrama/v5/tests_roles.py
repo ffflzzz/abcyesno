@@ -677,10 +677,44 @@ class TestCatalogSlicing(unittest.TestCase):
             self.assertNotIn("按集切片", blk, "低于阈值的目录必须照旧全文")
             self.assertIn("很短。", blk)
 
+    def test_single_episode_catalog_is_never_a_hard_stop(self):
+        """★ 单集项目超阈值 ⇒ 注入全文，⛔ 不许把整条链判死。
+
+        实错（2026-10-03 `yoga-affair-1003e`）：brief.episodes=1，plotdesigner 给这一集
+        写了 9155 字的目录，里面**自然**没有「### 第 M 集」条目 ⇒ 切片失败 ⇒
+        RuntimeError ⇒ 创作链 rc=3，8 分钟白跑、零出片。
+        切片是为多集连载省上下文的；只有一集时整份目录就是本集，没有"本集 ±1"可切。
+        """
+        from v5.roles import SLICE_SOFT_ENV, SLICE_THRESHOLD, _upstream_block
+        import os
+        big = "这一集的详细剧情走向，按段落写，不带集编号。" * 400
+        self.assertGreater(len(big), SLICE_THRESHOLD)
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "brief.json").write_text('{"topic":"t","episodes":1}', encoding="utf-8")
+            p = root / guards.out_path("plotdesigner", 1)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(big, encoding="utf-8")
+            blk = _upstream_block(root, "plotdesigner", 1)
+            self.assertIn("单集项目·不切片", blk)
+            self.assertIn("不带集编号", blk, "必须真的把全文注进去，不能给空")
+            # 反向对照：同样这份目录放在**多集**项目里仍然响亮终止（守卫没被顺手关掉）
+            (root / "brief.json").write_text('{"topic":"t","episodes":3}', encoding="utf-8")
+            old = os.environ.pop(SLICE_SOFT_ENV, None)
+            try:
+                with self.assertRaises(RuntimeError):
+                    _upstream_block(root, "plotdesigner", 2)
+            finally:
+                if old is not None:
+                    os.environ[SLICE_SOFT_ENV] = old
+
     def test_long_catalog_is_sliced(self):
         from v5.roles import SLICE_THRESHOLD, _upstream_block
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
+            # ⚠️ 必须声明多集：切片只对多集连载存在（单集项目现在直接注入全文，
+            #   见 test_single_episode_catalog_is_never_a_hard_stop）
+            (root / "brief.json").write_text('{"topic":"t","episodes":4}', encoding="utf-8")
             p = root / guards.out_path("plotdesigner", 1)
             p.parent.mkdir(parents=True, exist_ok=True)
             big = self.CAT + ("### 第 5 集：填充\n" + "这句话用来把目录撑过阈值。" * 400 + "\n")
@@ -709,6 +743,7 @@ class TestCatalogSlicing(unittest.TestCase):
         from v5.roles import SLICE_SOFT_ENV, SLICE_THRESHOLD, _upstream_block
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
+            (root / "brief.json").write_text('{"topic":"t","episodes":4}', encoding="utf-8")
             p = root / guards.out_path("plotdesigner", 1)
             p.parent.mkdir(parents=True, exist_ok=True)
             # 超阈值，但**没有**「第 N 集」结构 → 切不出来

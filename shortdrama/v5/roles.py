@@ -137,6 +137,15 @@ SLICE_THRESHOLD = 4000
 SLICE_THRESHOLD_ENV = "SHORTDRAMA_SLICE_THRESHOLD"
 
 
+def _brief_episodes(root: Path) -> int:
+    """brief 声明的集数（读不到按 1 算 —— 切片这件事只对多集连载有意义）。"""
+    try:
+        return int(json.loads((root / "brief.json").read_text(encoding="utf-8"))
+                   .get("episodes", 1) or 1)
+    except Exception:  # noqa: BLE001 -- brief 读不动时另有门会响亮拦，这里不重复报
+        return 1
+
+
 def slice_threshold() -> int:
     """本次运行生效的切片阈值（见 `SLICE_THRESHOLD_ENV`）。"""
     import os
@@ -289,6 +298,17 @@ def _upstream_block(root: Path, role: str, ep: int) -> str:
         return "### %s\n%s" % (rel, body)
 
     # —— 到了这里：全剧级产物且超阈值 ⇒ **必须**切片 ——
+    # ★ 但**单集项目没得切**（2026-10-03 实测 `yoga-affair-1003e`：brief.episodes=1，
+    #   plotdesigner 给这一集写了 9155 字的目录，里面**自然**没有「### 第 M 集」条目
+    #   ⇒ 切片失败 ⇒ RuntimeError ⇒ 创作链 rc=3，8 分钟白跑、零出片）。
+    #   切片存在的理由是**多集连载**省上下文（只注本集 ±1）；只有一集时整份目录
+    #   就是本集，注入全文语义无损 —— 不该要求模型为了过切片器去编一套集编号结构。
+    if _brief_episodes(root) <= 1:
+        print("[slice] %s：%d 字符 > %d 阈值，但本项目 brief.episodes=1 ⇒ **不切片、注入全文**"
+              "（单集没有「本集 ±1」可切；旧实现在这里硬终止，把整条链判死）"
+              % (rel, len(body), _thr))
+        return "### %s（**单集项目·不切片**）\n%s" % (rel, body)
+
     r = slice_catalog(body, ep)
     if r["ok"]:
         print("[slice] %s：%d 字符 > %d 阈值 → 按集切片（本集 ±1 + 本卷摘要，"
@@ -304,11 +324,7 @@ def _upstream_block(root: Path, role: str, ep: int) -> str:
     #   跳过重生成（多集硬契约 2）→ 目录里**永远**没有 2..N 集条目，切片必然失败。
     #   这是包契约与切片契约的结构性冲突，模型再听话也做不出来；且本集剧情来源
     #   （brief 分集大纲）注入方本就有 → 降级为注入全文，语义无损。
-    try:
-        _episodes_total = int(json.loads((root / "brief.json").read_text(
-            encoding="utf-8")).get("episodes", 1))
-    except Exception:
-        _episodes_total = 1
+    _episodes_total = _brief_episodes(root)
     if _episodes_total > 1 and r["why"].startswith("目录里没有第"):
         print(msg + "\n  → brief episodes=%d 但目录只有 %d 集条目（包契约=单集产物、"
               "后续集被跳过重生成）⇒ **自动降级为注入全文**（不再硬终止；"
