@@ -116,7 +116,7 @@ class TestCountable(unittest.TestCase):
         ]
         checks = {h["check"] for h in shotcheck.countable(shots, 120)}
         self.assertTrue(any("恰好一拍" in c for c in checks), checks)
-        self.assertTrue(any("@名（" in c for c in checks), checks)
+        self.assertTrue(any("同一角色" in c for c in checks), checks)
         self.assertTrue(any("位移动词" in c for c in checks), checks)
         self.assertTrue(any("承接" in c for c in checks), checks)
         self.assertTrue(any("片长" in c for c in checks), checks)
@@ -178,18 +178,29 @@ class TestCountable(unittest.TestCase):
                             for h in shotcheck.countable(short, 60)), short)
 
     def test_10b_two_at_mentions_in_non_wide_shot(self):
-        """★ 审稿 10b 该由程序先抓（2026-09-29：它抓到了，代价是一轮分镜重派 + 20 分钟）。"""
+        """★ 审稿 10b 该由程序先抓（2026-09-29：它抓到了，代价是一轮分镜重派 + 20 分钟）。
+
+        ⚠️ 2026-10-03 收窄：这条是 `xianxia-vfx-action` 的**包内**律（0927 升为阻断），
+        当通则用在都市情感剧上时，"双人近景各 @ 一次"这种正确写法全被误伤
+        （`yoga-affair-1003d`：评审据此判停，48 分钟零出片）⇒ 只有声明了它的包才判。
+        """
         both = _shot("LN02", "@沈砚 蹬地前冲三步劈下，@阮青 侧身避开后横移反手格开")
         wide = dict(both, name="LN01", shot_type="全景")
-        checks = {h["check"] for h in shotcheck.countable([both], 60, ["沈砚", "阮青"])}
+        checks = {h["check"] for h in shotcheck.countable(
+            [both], 60, ["沈砚", "阮青"], single_at_law=True)}
         self.assertTrue(any("非宽景" in c for c in checks), checks)
         # 反向对照：同样的双 @ 写在**宽景**里必须放行（宽景就该两人同框）
-        clean = [h for h in shotcheck.countable([wide], 60, ["沈砚", "阮青"])
+        clean = [h for h in shotcheck.countable([wide], 60, ["沈砚", "阮青"],
+                                               single_at_law=True)
                  if "非宽景" in h["check"]]
         self.assertEqual(clean, [])
         # 不传角色名 ⇒ 不判这条（不拿硬编码人名瞎判）
-        self.assertEqual([h for h in shotcheck.countable([both], 60)
+        self.assertEqual([h for h in shotcheck.countable([both], 60, single_at_law=True)
                           if "非宽景" in h["check"]], [])
+        # ★ 包没写这条律 ⇒ 整条不判（这才是 shortdrama 这类项目的正确行为）
+        self.assertEqual([h for h in shotcheck.countable([both], 60, ["沈砚", "阮青"])
+                          if "非宽景" in h["check"]], [],
+                         "10b 是包内律，没声明就不许判")
 
     def test_shot_floor_follows_target_not_a_hardcoded_25(self):
         """60 秒 / 17 镜的片子不许被"写死 25 镜"误判（2026-09-29 实错）。"""
@@ -240,9 +251,26 @@ class TestCountable(unittest.TestCase):
         # 拿到名字之后，10b 才真的判得动
         shots = [_shot("LN02", "@沈砚 蹬地前冲劈下，@阮青 横剑格开")]
         hits = [h for h in shotcheck.countable(shots, 60,
-                                               shotcheck.character_names(root))
+                                               shotcheck.character_names(root),
+                                               single_at_law=True)
                 if "非宽景" in h["check"]]
         self.assertEqual(len(hits), 1, hits)
+
+    def test_anchor_repeat_counts_people_not_props(self):
+        """★「同一角色被 @ 两次」才是病；「不同角色各 @ 一次」和「道具带括注」都不是。
+
+        1003d 实错：旧实现数的是"一镜里 `@名（` 出现几次"，于是
+        `@苏晚（…）` + `@豆绿色瑜伽垫（180 厘米…）` 这种**一人一道具**的正确写法
+        也被判成"会多画人"，评审据此把一条链判停。
+        """
+        people = ["苏晚", "周彦", "何芷"]
+        ok = _shot("LN02", "@苏晚（奶白上衣）跪在@豆绿色瑜伽垫（180厘米长）上，"
+                          "@周彦（藏青衬衫）伸手，@何芷（豆沙色卫衣）站在门口")
+        bad = _shot("LN03", "@苏晚（奶白上衣）跪在垫上；@苏晚（奶白上衣）后仰；@周彦（藏青衬衫）按住她肩")
+        hits_ok = [h for h in shotcheck.countable([ok], 60, people) if "同一角色" in h["check"]]
+        hits_bad = [h for h in shotcheck.countable([bad], 60, people) if "同一角色" in h["check"]]
+        self.assertEqual(hits_ok, [], "三人各 @ 一次 + 一个道具，不该判")
+        self.assertEqual(len(hits_bad), 1, hits_bad)
 
 
 class TestWiring(unittest.TestCase):

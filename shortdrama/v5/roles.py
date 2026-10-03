@@ -759,6 +759,9 @@ def role_input(role: str, root: Path, m: dict, reasons: list[str] | None = None)
                                            #   （反质量包要的是僵硬锁定机位，判了就是误报）
                                            camera_light=("camera-light-physics"
                                                          in _craft_refs(root)),
+                                           # ★ 10b「非宽景只能 @ 一个角色」是**包内**律，
+                                           #   谁写进自己的分镜契约才对谁判（1003d 误伤实测）
+                                           single_at_law=shotcheck.pack_requires_single_at(root),
                                            audio_mode=validate.audio_mode_of(_brief),
                                            log=lambda *a: None)
                 if _pl:

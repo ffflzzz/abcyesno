@@ -120,7 +120,8 @@ def countable(shots: list[dict], target_seconds: int = 0,
               chars: list[str] | None = None,
               target_shots: tuple[int, int] | None = None,
               audio_mode: str = "dialogue-led",
-              camera_light: bool = False) -> list[dict]:
+              camera_light: bool = False,
+              single_at_law: bool = False) -> list[dict]:
     """能数的判据。返回 `[{name, check, detail}]`，空列表 = 全过。
 
     ★ 这一层的存在意义（2026-09-29）：**凡程序能确定的，就别写进提示词让模型自觉**。
@@ -147,8 +148,11 @@ def countable(shots: list[dict], target_seconds: int = 0,
     #   ⇒ 长镜方案反过来**强制**镜内时间轴；短镜方案保持原样，行为与历史一字不变。
     _mid = ((target_shots[0] + target_shots[1]) / 2.0) if target_shots else 0.0
     _exp = (target_seconds / _mid) if (target_seconds and _mid) else 0.0
-    _BEATS = (r"\d+(?:\.\d+)?\s*-\s*\d+(?:\.\d+)?\s*秒[:：]"
-              r"|\d+(?:\.\d+)?\s*秒[:：]")
+    # ⚠️ `秒` 与 `：` 之间可能带一个短括注（模型真实写法：`9-12秒（结束态）：…`）。
+    #   只认紧挨着的 `秒：` 会把这一整段漏掉 ⇒ 12 秒镜数出 3 段、被判"没写满时间轴"
+    #   ——1003d 实测 11 镜**全部**因此被点名（退回清单让模型重写整张表）。
+    _BEATS = (r"\d+(?:\.\d+)?\s*-\s*\d+(?:\.\d+)?\s*秒(?:（[^）]{0,10}）)?\s*[:：]"
+              r"|\d+(?:\.\d+)?\s*秒(?:（[^）]{0,10}）)?\s*[:：]")
     if _exp >= 8:
         want = max(3, int(_exp // 3))          # 12 秒 ⇒ 至少 4 段
         few = [s["name"] for s in shots
@@ -162,10 +166,21 @@ def countable(shots: list[dict], target_seconds: int = 0,
                       if len(re.findall(_BEATS, s.get("visual") or "")) > 1]
         need(not multi_beat, "每镜恰好一拍（出现第二个 `N-M秒：` 即不合格）",
              "命中 %d 镜" % len(multi_beat), names=multi_beat)
-    anchor_rep = [s["name"] for s in shots
-                  if len(re.findall(r"@[\u4e00-\u9fa5A-Za-z0-9_]+（", s.get("visual") or "")) > 1]
-    need(not anchor_rep, "整镜 `@名（` 至多一次（重复会多画一个人）",
-         "命中 %d 镜" % len(anchor_rep), names=anchor_rep)
+    # ★ 判的是**同一个角色**在一镜里被 @ 了两次以上（AGENTS 那条实测病：后续拍重复
+    #   `@名（衣装）` ⇒ 多画一个人）。旧实现数的是"这一镜里 `@名（` 一共几次"，
+    #   于是两类**正常写法**一起被误判：① 道具也带括注（`@豆绿色瑜伽垫（180 厘米…）`）；
+    #   ② 双人/三人同框**每个角色各 @ 一次**——那恰恰是"别把对手写成背景"要的写法。
+    #   1003d 实测：4 镜因"三个角色各 @ 一次"被点名，评审顺着它判 fail、48 分钟零出片。
+    #   ⇒ 改成数"**同一个名字**被 @ 了两次以上"：有角色名表时只数人（道具重复不算），
+    #     没有名表时退化成"同一个 @名 重复"——两种情况下都不会再误伤"不同角色各 @ 一次"。
+    rep = []
+    for s in shots:
+        got = re.findall(r"@([\u4e00-\u9fa5A-Za-z0-9_]{1,8})（", s.get("visual") or "")
+        if sorted({x for x in got if got.count(x) > 1 and (not chars or x in chars)}):
+            rep.append(s["name"])
+    need(not rep, "同一角色在一镜里被 @ 了两次以上（重复会多画一个人）",
+         "命中 %d 镜 —— 只在**首段**写 `@名（衣装）`，后面各段用「她／他／对方」"
+         % len(rep), names=rep)
     low_move = [s["name"] for s in shots
                 if sum(1 for w in MOVE_VERBS if w in (s.get("visual") or "")) < 2]
     need(not low_move, "每镜位移动词 ≥2",
@@ -235,7 +250,12 @@ def countable(shots: list[dict], target_seconds: int = 0,
     # ★ 本包 10b：**非宽景不许两个角色同时 @ 同框**（实测那样会多画一个人）。
     #   这条完全数得出来 —— 不必等审稿角色绕一轮重派（2026-09-29 实测：它抓到了，
     #   但代价是一整轮分镜重派 + 20 分钟起）。
-    if chars:
+    # ⚠️ 2026-10-03 收窄成**按包生效**：这条是 `xianxia-vfx-action` 在 0927 由 advisory
+    #   升为阻断的**包内**律（写在该包的 scenedesigner/reviewer SKILL 里），不是跨包通则。
+    #   无条件用在都市情感剧上时，"双人近景各 @ 一次"这种**本来就该两个 @** 的镜
+    #   全被点名为"会多画人"，评审据此把 `yoga-affair-1003d` 判停（48 分钟零出片）。
+    #   ⇒ 谁写了这条律才对谁判（判据 = 该包分镜契约里有没有那句话）。
+    if chars and single_at_law:
         both_at = [s["name"] for s in shots
                    if not any(w in (s.get("shot_type") or "") for w in WIDE_WORDS)
                    and len({n for n in chars if ("@" + n) in (s.get("visual") or "")}) >= 2]
@@ -322,14 +342,15 @@ def punch_list(shots: list[dict], *, target_seconds: int = 0, use_judge: bool = 
                workers: int = 8, log=print, chars: list[str] | None = None,
                target_shots: tuple[int, int] | None = None,
                audio_mode: str = "dialogue-led",
-               camera_light: bool = False) -> list[str]:
+               camera_light: bool = False,
+               single_at_law: bool = False) -> list[str]:
     """给角色看的**退回清单**（一镜一行，带镜号与逐字原文）。
 
     为什么要有这个形状：分镜角色拿到的如果是"你自己检查一遍"，它会逐镜重读整张表
     （实测 2 小时）；拿到"这 5 镜、这几条、原文在此"，它只需要改那 5 镜。
     """
     hard = countable(shots, target_seconds, chars, target_shots, audio_mode,
-                     camera_light=camera_light)
+                     camera_light=camera_light, single_at_law=single_at_law)
     out = []
     for h in hard:
         out.append("【%s】%s（%s）" % (h["check"], h["name"] or "全表", h["detail"]))
@@ -389,6 +410,26 @@ def judge_shot(shot: dict, llm=None) -> dict:
     return {"name": shot["name"], "violations": ok, "unverifiable": bad}
 
 
+def pack_requires_single_at(root) -> bool:
+    """该包的**分镜契约**里有没有「非宽景只能 @ 一个角色」这条律（10b）。
+
+    为什么要有这个探测：`shotcheck` 是跨包共用的程序体检，而 10b 是
+    `xianxia-vfx-action` 在 0927 由 advisory **升为该包阻断**的包内判据
+    （原文在 `packs/xianxia-vfx-action/{scenedesigner,reviewer}/SKILL.md`）。
+    把它当通则用，就会误伤"双人近景各 @ 一次"这种本来正确的写法
+    ——1003d 实测：评审据此判停，48 分钟零出片。
+    ⇒ 谁写了这条律才对谁判。不新增 `pack.json` 字段（后端不消费新字段，
+      加了也是死配置），直接读该包契约里的这句话。
+    """
+    try:
+        from .media.style import pack_of
+        from .roles import _role_skill          # 懒加载：roles 反过来 import 本模块
+        txt = _role_skill(pack_of(Path(root)), "scenedesigner") or ""
+        return "只能 @ 一个角色" in txt
+    except Exception:  # noqa: BLE001 -- 读不到契约就不判这条，绝不瞎判
+        return False
+
+
 def character_names(root) -> list[str]:
     """本片角色名（10b 那条判据要区分"@ 的是人"还是"@ 的是场景/道具"）。
 
@@ -423,7 +464,8 @@ def check(shots: list[dict], *, target_seconds: int = 0, use_judge: bool = True,
           chars: list[str] | None = None,
           target_shots: tuple[int, int] | None = None,
           audio_mode: str = "dialogue-led",
-          camera_light: bool = False) -> dict:
+          camera_light: bool = False,
+          single_at_law: bool = False) -> dict:
     """两层体检的总入口。返回 `{countable, semantic, unverifiable, errors, blocking}`。
 
     `llm` 可注入（离线单测用）—— 缺省才去建真实客户端。
@@ -431,7 +473,7 @@ def check(shots: list[dict], *, target_seconds: int = 0, use_judge: bool = True,
     `media.style.script_craft_of(root)` 判），关掉时摄影/光学两条**一条不判**。
     """
     hard = countable(shots, target_seconds, chars, target_shots, audio_mode,
-                     camera_light=camera_light)
+                     camera_light=camera_light, single_at_law=single_at_law)
     for h in hard:
         log("[shotcheck] ❌ %s —— %s%s"
             % (h["check"], h["detail"], ("（%s）" % h["name"]) if h["name"] else ""))
