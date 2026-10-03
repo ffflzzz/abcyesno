@@ -154,6 +154,29 @@ class TestCountable(unittest.TestCase):
                if "单镜时长" in h["check"]]
         self.assertTrue(off and "LN02" in off[0]["name"], off)
 
+    def test_long_shot_must_carry_an_internal_timeline(self):
+        """★ 12 秒镜只写一拍 = 把节奏整个交给模型 ⇒ 成片"拖、节点少"（1003c 人眼判定）。
+
+        判据要跟着 brief 的单镜秒数走：长镜**强制**镜内时间轴（≥4 段），
+        短镜仍守 0929 那条"恰好一拍"。两半都要测到，否则等于没装守卫。
+        """
+        four = ("0-3秒：@裴烛 蹬地前冲三步劈下，对方侧身避开；3-6秒：他横移半步反手格开，"
+                "剑罡擦着柱身炸开；6-9秒：@裴烛 借势退到石台边，左手按住崖壁稳住身形；"
+                "9-12秒：他抬手把断剑插进沙里，镜头停在他手背上")
+        one = "@裴烛 蹬地前冲三步劈下，对方侧身避开后横移反手格开，剑罡擦着柱身炸开"
+        long_plan = [_shot("LN%02d" % i, one, seconds=12) for i in range(1, 12)]
+        hits = [h for h in shotcheck.countable(long_plan, 132, target_shots=(11, 11))
+                if "镜内时间轴" in h["check"]]
+        self.assertTrue(hits and "11 镜" in hits[0]["detail"], hits)
+        # 正向：同样这批镜改成 4 段覆盖满 12 秒 ⇒ 这条不再判（其余判据不受影响）
+        fixed = [_shot("LN%02d" % i, four, seconds=12) for i in range(1, 12)]
+        self.assertEqual([h for h in shotcheck.countable(fixed, 132, target_shots=(11, 11))
+                          if "镜内时间轴" in h["check"]], [])
+        # 反向对照：短镜方案（brief 没声明镜数）仍守"恰好一拍"，长镜的放宽不许漏到这里
+        short = [_shot("LN01", "0-2秒：@裴烛 蹬地前冲；2-4秒：对方侧身避开后横移", seconds=4)]
+        self.assertTrue(any("恰好一拍" in h["check"]
+                            for h in shotcheck.countable(short, 60)), short)
+
     def test_10b_two_at_mentions_in_non_wide_shot(self):
         """★ 审稿 10b 该由程序先抓（2026-09-29：它抓到了，代价是一轮分镜重派 + 20 分钟）。"""
         both = _shot("LN02", "@沈砚 蹬地前冲三步劈下，@阮青 侧身避开后横移反手格开")

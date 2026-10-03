@@ -140,11 +140,28 @@ def countable(shots: list[dict], target_seconds: int = 0,
             out.append({"name": "、".join(names[:24]), "check": check, "detail": detail})
 
     # —— 结构类（逐镜可数，零歧义）——
-    multi_beat = [s["name"] for s in shots
-                  if len(re.findall(r"\d+\s*-\s*\d+\s*秒[:：]|\d+\s*秒[:：]",
-                                    s.get("visual") or "")) > 1]
-    need(not multi_beat, "每镜恰好一拍（出现第二个 `N-M秒：` 即不合格）",
-         "命中 %d 镜" % len(multi_beat), names=multi_beat)
+    # ★ 镜内时间轴该不该有，**由 brief 声明的单镜秒数决定**，不是一刀切"恰好一拍"。
+    #   0929 那条「每镜恰好一拍」是给 4-6 秒短镜（仙侠打戏官方范例一镜到底）收的律。
+    #   1003 实测反例：brief 要「11 镜 × 12 秒」时，一拍 = 把 12 秒的事件排布整个交给模型，
+    #   成片就是"整段拖、节点太少"（11 镜里 7 镜末段明显安静，人眼看就是拖沓）。
+    #   ⇒ 长镜方案反过来**强制**镜内时间轴；短镜方案保持原样，行为与历史一字不变。
+    _mid = ((target_shots[0] + target_shots[1]) / 2.0) if target_shots else 0.0
+    _exp = (target_seconds / _mid) if (target_seconds and _mid) else 0.0
+    _BEATS = (r"\d+(?:\.\d+)?\s*-\s*\d+(?:\.\d+)?\s*秒[:：]"
+              r"|\d+(?:\.\d+)?\s*秒[:：]")
+    if _exp >= 8:
+        want = max(3, int(_exp // 3))          # 12 秒 ⇒ 至少 4 段
+        few = [s["name"] for s in shots
+               if len(re.findall(_BEATS, s.get("visual") or "")) < want]
+        need(not few,
+             "每镜要按 %.0f 秒写满**镜内时间轴**（≥%d 段 `0-2秒：` 式分段，每段一个新事件："
+             "位移／易手／进出画／机位变化，不许两段写同一件事）" % (_exp, want),
+             "命中 %d 镜 —— 分段必须从 0 起、首尾相接、终于本镜秒数" % len(few), names=few)
+    else:
+        multi_beat = [s["name"] for s in shots
+                      if len(re.findall(_BEATS, s.get("visual") or "")) > 1]
+        need(not multi_beat, "每镜恰好一拍（出现第二个 `N-M秒：` 即不合格）",
+             "命中 %d 镜" % len(multi_beat), names=multi_beat)
     anchor_rep = [s["name"] for s in shots
                   if len(re.findall(r"@[\u4e00-\u9fa5A-Za-z0-9_]+（", s.get("visual") or "")) > 1]
     need(not anchor_rep, "整镜 `@名（` 至多一次（重复会多画一个人）",
@@ -201,9 +218,8 @@ def countable(shots: list[dict], target_seconds: int = 0,
     # ⇒ 退回清单会逼着模型把每一镜改短，**判据反过来扼杀 brief 要的东西**。
     # 现在：brief 同时给了总时长与镜数 ⇒ 期望单镜秒数 = 总时长 ÷ 镜数，按 −50%/+34% 收
     #   （上限再被供应商硬约束 12 秒截住）；brief 没声明镜数时才回落旧规范。
-    mid_shots = ((target_shots[0] + target_shots[1]) / 2.0) if target_shots else 0.0
-    if target_seconds and mid_shots:
-        exp = target_seconds / mid_shots
+    if _exp:
+        exp = _exp
         lo, hi = exp * 0.5, min(12.0, exp * 1.34)
         off = [s["name"] for s, x in zip(shots, secs) if not (lo <= x <= hi)]
         need(not off,
