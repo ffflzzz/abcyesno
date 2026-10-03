@@ -4469,3 +4469,147 @@ class TestJudgementKinds(unittest.TestCase):
         self.assertIn("13. **明暗/色调", qc.PROMPT)
         self.assertNotIn("11. **人物服装", qc.PROMPT, "旧编号没顺延 = 出现两条11")
         self.assertIn("按第 12/13 条报", qc.PROMPT, "交叉引用必须指向新编号")
+
+
+class TestCompensationLedger(unittest.TestCase):
+    """补偿触发记账（2026-04）——「随模型发展水涨船高」的数据前置。
+
+    **它解决什么**：`qc.JUDGEMENT_KINDS` 把判据分成能力类/契约类之后，
+    还差最后一步：**能不能说出"每条补偿在真实跑批里还触发吗"**。
+    答不出来 ⇒ 清理只能靠记忆 ⇒ 补丁只增不减 ⇒ 天花板被静默压住。
+    本模块只回答这一个问题，**不做任何自动删除**。
+
+    **不是 AB 实验**：记账不改变任何输出，加它前后产物逐字节相同。
+    """
+
+    RAW = ("【招牌】挂在门边。画面里有模糊英文与数字水印。随后他慢慢走开。\n"
+           "DO NOT clear facial features. Asset reuse: same mask model.\n"
+           "Ratio: 16:9")
+
+    def test_ledger_off_by_default_does_not_change_output(self):
+        """★默认关闭，且关闭时输出**逐字节一致**——这是全篇最重要的性质。"""
+        from v5.media import prompt
+        from v5.media.compensation_ledger import Ledger
+
+        base = prompt.sanitize_text(self.RAW)
+        led = Ledger()
+        with prompt.ledger_scope(led, "LN01"):
+            on = prompt.sanitize_text(self.RAW)
+        self.assertEqual(base, on, "打开记账不得改变任何提示词内容")
+        self.assertTrue(led.counts, "打开后必须有记录（否则埋点根本没接上）")
+
+    def test_scope_closes_on_exception(self):
+        """异常路径也必须关掉记账，否则污染后续跑批。"""
+        from v5.media import prompt
+        from v5.media.compensation_ledger import Ledger
+
+        try:
+            with prompt.ledger_scope(Ledger(), "LN01"):
+                raise RuntimeError("boom")
+        except RuntimeError:
+            pass
+        self.assertEqual(prompt._LEDGER, [], "异常退出后必须回到零影响状态")
+
+    def test_scope_nests_and_restores(self):
+        """嵌套作用域要恢复外层状态（防止内层把外层的记账吞掉）。"""
+        from v5.media import prompt
+        from v5.media.compensation_ledger import Ledger
+
+        outer = Ledger()
+        with prompt.ledger_scope(outer, "OUT"):
+            with prompt.ledger_scope(Ledger(), "IN"):
+                pass
+            prompt.sanitize_text(self.RAW)
+        self.assertTrue(outer.counts, "内层退出后外层必须仍然可用")
+
+    def test_records_trigger_not_switch(self):
+        """★记的是"**真改了文字**"，不是"开关为 True"。
+
+        开关开着但这镜没有触发词 ⇒ 不记。否则数出来的"启用次数"是废数据，
+        判"这条补偿还有用吗"就无从下手。
+        ★ 只断言"没记触发"，**不猜输出内容**——`splits_frames` 会加 NOSPLIT
+        前缀（既有行为，与记账无关），断言输出等于原文会误报。
+        """
+        from v5.media import prompt
+        from v5.media.compensation_ledger import Ledger
+
+        clean = "一个男人站在巷口，手里握着钥匙，身后是砖墙"
+        led = Ledger()
+        with prompt.ledger_scope(led, "LN09"):
+            prompt.sanitize_text(clean)
+        self.assertEqual(led.shots, {}, "无触发词 ⇒ 不得记为触发")
+        self.assertEqual(led.counts, {})
+
+    def test_per_shot_dedup(self):
+        """同镜多次调用只记一个镜号（`shots` 是**去重集合**，判断用这个）。"""
+        from v5.media import prompt
+        from v5.media.compensation_ledger import Ledger
+
+        led = Ledger()
+        with prompt.ledger_scope(led, "LN01"):
+            for _ in range(5):
+                prompt.sanitize_text(self.RAW)
+        self.assertEqual(led.shots["burns_text"], ["LN01"], "不得重复记同一镜")
+        self.assertGreater(led.counts["burns_text"], 1, "次数另存（参考用）")
+
+    def test_save_is_idempotent_merge(self):
+        """同集重跑/断点续跑必须**并集合并**，不得覆盖已有记录。"""
+        import tempfile
+        from pathlib import Path
+        from v5.media import prompt
+        from v5.media import compensation_ledger as cl
+
+        d = Path(tempfile.mkdtemp())
+        a = cl.Ledger()
+        a.shots["burns_text"] = ["LN01"]
+        a.shots["splits_frames"] = ["LN01"]
+        a.save(d, 1)
+        b = cl.Ledger()
+        b.shots["burns_text"] = ["LN09"]          # 断点续跑，补了别的镜
+        b.save(d, 1)
+        got = cl.load(d, 1)["shots"]
+        self.assertEqual(got["burns_text"], ["LN01", "LN09"], "须按镜号并集")
+        self.assertEqual(got["splits_frames"], ["LN01"], "旧记录不得丢")
+
+    def test_report_names_untriggered_capability_first(self):
+        """`report()` 必须把"**没触发的能力类**"单列——那是最该复查的清单。"""
+        import tempfile
+        from pathlib import Path
+        from v5.media import compensation_ledger as cl
+
+        d = Path(tempfile.mkdtemp())
+        led = cl.Ledger()
+        led.hit("burns_text", "LN01")
+        led.hit("cjk_pollution", "LN02")
+        led.hit_qc("text", "LN03")
+        led.save(d, 1)
+        r = cl.report(d, 1)
+        self.assertIn("CAPABILITY", r)
+        self.assertIn("CONTRACT", r)
+        self.assertIn("burns_text:1镜", r)
+        self.assertIn("未触发", r)
+        self.assertNotIn("splits_frames:0镜", r, "未触发的不该显示 0 镜")
+        self.assertIn("QC实报", r)
+
+    def test_kinds_cover_both_labels(self):
+        from v5.media.compensation_ledger import LEDGER_KINDS, CAPABILITY, CONTRACT
+
+        vals = set(LEDGER_KINDS.values())
+        self.assertEqual(vals, {CAPABILITY, CONTRACT})
+        # burns_text / cjk 是能力类；aspect_declaration / punctuation_tidy 是契约类
+        for k in ("burns_text", "splits_frames", "negative_induces", "cjk_pollution"):
+            self.assertEqual(LEDGER_KINDS[k], CAPABILITY, k)
+        for k in ("aspect_declaration", "punctuation_tidy"):
+            self.assertEqual(LEDGER_KINDS[k], CONTRACT, k)
+
+    def test_ledger_file_is_accounting_only(self):
+        """落盘文件必须自带"只做记账"的声明——防止后人当成权威配置改。"""
+        import tempfile
+        from pathlib import Path
+        from v5.media import compensation_ledger as cl
+
+        d = Path(tempfile.mkdtemp())
+        p = cl.Ledger().save(d, 1)
+        txt = p.read_text(encoding="utf-8")
+        self.assertIn("只做记账", txt)
+        self.assertIn("不影响任何产出", txt)

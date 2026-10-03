@@ -389,7 +389,7 @@ v5/
 ├── guards.py               # 记账 / 物化对账 / TokenBreaker / media_gate
 ├── validate.py             # brief 智能截断 / brief 完备性 / 产物忠实度 / 分镜契约
 ├── config.py  llm.py       # 配置与 LLM 供应商
-├── media/                  # 静态画面先行管线（26 个模块，不含 __init__）
+├── media/                  # 静态画面先行管线（27 个模块，不含 __init__）
 │   ├── pipeline.py         #   **媒体链唯一入口**（media_gate + 审批门 + 记账都收在这里）
 │   ├── jobs.py             #   video_jobs 显式状态机
 │   ├── storyboard.py       #   分镜解析

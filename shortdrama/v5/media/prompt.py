@@ -270,6 +270,66 @@ def _empty_scene_for(shot: dict) -> str:
 # 并让"文字/字符/字形"这些词在提示词里彻底消失。
 _SIGN_WORDS = _IMG_PROFILE.sign_replacements   # 兼容别名（数据在 model_profile）
 
+# ── 补偿触发记账（2026-10-04）★ 只记数、不改行为 ────────────────────────────
+# 「这套系统能否随模型发展水涨船高」取决于：**能不能分清哪些补偿该扔**。
+# 而分清的前提是能回答"每条补偿在真实跑批里还触发吗"——答不出来就只能靠记忆
+# ⇒ 补丁只增不减 ⇒ 天花板被静默压住（详见 `compensation_ledger` 模块文档）。
+#
+# ★ **默认关闭**，用 `use_ledger()` 临时打开（`ledger_scope()` 上下文管理器）。
+#   关闭时上面那些 `if led is not None` 全是假分支 ⇒ **行为与改造前逐字节一致**。
+#   不做成 env 全局开关：记账对象必须由调用方持有并在跑批结束时落盘，
+#   全局单例会跨集串味（MEMORY：per-key 轮转就是靠"不设全局第二份真相"才治好的）。
+_LEDGER: list = []      # [Ledger | None] —— 用 list 包裹以便 rebind（闭包捕获陷阱）
+_SHOT: list = [""]      # ["LN01"] 当前镜号
+
+
+def use_ledger(led=None, shot: str = ""):
+    """打开补偿记账，返回 ledger（便于 `led = use_ledger()`）。
+
+    ★ 必须在**跑批全程**保持打开，否则漏记。推荐用 `ledger_scope`：
+
+        with ledger_scope(Ledger()) as led:
+            build_still_prompt(...)
+        led.save(project_root, ep)
+    """
+    from .compensation_ledger import Ledger
+    if led is None:
+        led = Ledger()
+    _LEDGER[:] = [led]
+    _SHOT[:] = [shot or ""]
+    return led
+
+
+def stop_ledger() -> None:
+    """关掉记账（回到零行为影响状态）。"""
+    _LEDGER.clear()
+    _SHOT[:] = [""]
+
+
+class ledger_scope:
+    """记账作用域（上下文管理器）：`with ledger_scope(led) as l: ...`
+
+    退出时**自动关闭** ⇒ 漏关也不会污染后续跑批（异常路径也安全）。
+    嵌套时保存并恢复外层状态。
+    """
+
+    def __init__(self, led=None, shot: str = ""):
+        self._led = led
+        self._shot = shot
+        self._prev = None
+
+    def __enter__(self):
+        self._prev = (list(_LEDGER), list(_SHOT))
+        return use_ledger(self._led, self._shot)
+
+    def __exit__(self, *exc):
+        if self._prev is None:
+            stop_ledger()
+        else:
+            _LEDGER[:], _SHOT[:] = self._prev[0], self._prev[1]
+        return False
+
+
 # 文字概念词：出现即删掉所在**分句**（不是整句——整句会误伤风格块与尾缀）
 # 实测（2026-09-09 nightshift-45 LN02）：分镜写「边缘有模糊英文与数字水印不可读」，
 # 模型照着在墙上烧出乱码英文水印——**负面/中性提法都会诱发烧字**，只要概念出现
@@ -894,31 +954,58 @@ def sanitize_text(prompt: str, allow_text: bool = False,
     """
     prof = profile or _IMG_PROFILE
     t = prompt
+    # ── 补偿触发记账（2026-10-04，零行为影响）──────────────────────────
+    # 只在**真的改了文字**时才记（`_ledger()` 为空即完全不启用）。
+    # 记"触发"不记"启用"：`burns_text=True` 但这镜没"招牌"字样 ⇒ 没触发。
+    # 判"这条补偿还有用吗"只能靠触发数，开关值是恒定的、不带信息。
+    led = _LEDGER[0] if _LEDGER else None
+    _t0 = t
     if prof.burns_text:
         for a, b in (prof.sign_replacements or _SIGN_REPL):
             t = t.replace(a, b)
+        if led is not None and t != _t0:
+            led.hit("burns_text", _SHOT[0] if _SHOT else "")
+        _t0 = t
     if prof.splits_frames:
         for a, b in (prof.time_replacements or _TIME_REPL):
             t = t.replace(a, b)
         # 英文时间词（大小写不敏感）：类型包分镜可能是英文整段，中文表够不到。
         for a, b in (prof.time_replacements_en or _TIME_REPL_EN):
             t = re.sub(re.escape(a), b, t, flags=re.IGNORECASE)
+        if led is not None and t != _t0:
+            led.hit("splits_frames", _SHOT[0] if _SHOT else "")
+        _t0 = t
     # 分镜正文自带的画幅声明（`Ratio: 16:9` / `Aspect: 9:16`）必须清掉。
     # 理由：真实画幅由 config.STILL_RATIO / ASPECT_RATIO 决定并以 API 参数下发，
     # 正文里写死一个**与之不符**的比例会让模型自相矛盾——它可能用"画两格、
     # 每格一个比例"来同时满足（maskparade 实测 18 镜 14 镜上下两格）。
+    _t_aspect = t
     t = re.sub(r"(?i)\b(?:ratio|aspect(?:_ratio)?)\s*[:：]\s*\d+\s*[:：]\s*\d+\s*[。;；]?",
                " ", t)
+    if led is not None and t != _t_aspect:
+        led.hit("aspect_declaration", _SHOT[0] if _SHOT else "")
     # 负面禁令整段删除（第三次撞上同一条规律，见 _DO_NOT_RE 的事故记录）。
     # 放在 _drop_text_clauses 之前：先砍掉禁令，剩下才是"要画什么"的正向描述。
+    _t_neg = t
     t = _drop_negative_clauses(t, prof)
+    if led is not None and t != _t_neg:
+        led.hit("negative_induces", _SHOT[0] if _SHOT else "")
     # 资产复用记账整段删除（`same asset as S5` → 模型把它画成字面 "$5"）。
+    _t_ledger = t
     t = drop_asset_bookkeeping(t, prof)
+    if led is not None and t != _t_ledger:
+        led.hit("leaks_asset", _SHOT[0] if _SHOT else "")
     if not allow_text:
+        _t_txt = t
         t = _drop_text_clauses(t, prof)
+        if led is not None and t != _t_txt:
+            led.hit("text_clauses", _SHOT[0] if _SHOT else "")
+    _t_punct = t
     t = re.sub(r"。{2,}", "。", t)
     t = re.sub(r"，\s*，", "，", t)
     t = t.strip("。 ，")
+    if led is not None and t != _t_punct:
+        led.hit("punctuation_tidy", _SHOT[0] if _SHOT else "")
     if not t:
         return t
     # NOSPLIT 是"反分屏"正向声明 —— 只有会分屏的模型才需要它。
