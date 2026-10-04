@@ -120,6 +120,17 @@ def _chat_endpoint_of() -> tuple[str, str]:
         base = AGNES_KEY_BASE.get(k)
         if base:
             return base, k
+    # ★ 无带专属地址的 key ⇒ 回落国际入口 `AGNES_BASE` + 池第一条 `AGNES_API_KEY`
+    #   （上面注释承诺的"旧行为零变化"，但代码一直没兑现）。
+    #   2026-10-04 修：旧实现这里返回 ("","") —— 打包版只能注入 `AGNES_API_KEY`
+    #   （`electron/backend/shortdrama-runner.js` 的白名单不含 `AGNES_API_KEYS`，
+    #   传不进 `key@地址` 写法），于是文本通道拿到空 key，`v5.orchestrator`
+    #   **import 期**构造 `ChatOpenAI(api_key="")` 直接抛 `OpenAIError`
+    #   ⇒ langgraph dev 起 3 秒退出 ⇒ 创作链白等 180 秒报「dev server 未就绪」
+    #   （cixi-secret-1004 实测：`CHAT_KEY_EFFECTIVE len=0` 而 `AGNES_API_KEY len=51`）。
+    #   仅当池里连一条 key 都没有时才返回 ("","")，保持"无 key 就该响亮崩"的语义。
+    if AGNES_API_KEY:
+        return AGNES_BASE, AGNES_API_KEY
     return "", ""
 
 

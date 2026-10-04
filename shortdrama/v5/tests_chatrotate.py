@@ -52,6 +52,42 @@ class PoolTests(unittest.TestCase):
             self.assertEqual(config.chat_key_pool(), [("a", "")])
 
 
+class EndpointFallbackTests(unittest.TestCase):
+    """`_chat_endpoint_of()` 在"只有一条不带地址的 key"时必须给出**可用端点**。
+
+    为什么单独有这一组（2026-10-04 打包版事故）：`shortdrama-runner.js` 只注入
+    `AGNES_API_KEY`，传不进 `key@地址` 写法 ⇒ 池里没有带地址的 key ⇒ 旧实现返回
+    空端点，文本通道拿到空 key，`v5.orchestrator` import 期就崩、dev server 起 3 秒退出。
+    工作区跑不出来，因为仓库根 `.env` 用的是 `key@地址` 的完整写法。
+    """
+
+    def test_single_key_without_own_base_still_has_endpoint(self):
+        """不带地址的单 key ⇒ 回落到全局入口，且 key 就是那条主 key。"""
+        with mock.patch.object(config, "AGNES_API_KEYS", ["k-solo"]), \
+                mock.patch.object(config, "AGNES_KEY_BASE", {}), \
+                mock.patch.object(config, "AGNES_API_KEY", "k-solo"), \
+                mock.patch.object(config, "AGNES_BASE", "https://hub.example"):
+            self.assertEqual(config._chat_endpoint_of(),
+                             ("https://hub.example", "k-solo"))
+
+    def test_key_with_own_base_still_wins(self):
+        """回落不许盖掉既有选择：带专属地址的 key 优先（国内入口，2026-09-23 的决定）。"""
+        with mock.patch.object(config, "AGNES_API_KEYS", ["k-solo", "k-cn"]), \
+                mock.patch.object(config, "AGNES_KEY_BASE", {"k-cn": "https://cn.example"}), \
+                mock.patch.object(config, "AGNES_API_KEY", "k-solo"), \
+                mock.patch.object(config, "AGNES_BASE", "https://hub.example"):
+            self.assertEqual(config._chat_endpoint_of(),
+                             ("https://cn.example", "k-cn"))
+
+    def test_no_key_at_all_returns_empty_and_fails_loud(self):
+        """一条 key 都没有 ⇒ 保持空端点，让"没配钥匙"在 import 期响亮地崩。"""
+        with mock.patch.object(config, "AGNES_API_KEYS", []), \
+                mock.patch.object(config, "AGNES_KEY_BASE", {}), \
+                mock.patch.object(config, "AGNES_API_KEY", ""), \
+                mock.patch.object(config, "AGNES_BASE", "https://hub.example"):
+            self.assertEqual(config._chat_endpoint_of(), ("", ""))
+
+
 class RotationTests(unittest.TestCase):
     def setUp(self):
         self.model = llm.RotatingChatOpenAI(
