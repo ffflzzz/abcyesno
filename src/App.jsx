@@ -1576,10 +1576,11 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
         });
       },
     },
-    // AI 热点 — opens the aihot.virxact.com AI-news aggregator in the
+    // AI 热点 — opens the aihot.news AI-news aggregator in the
     // built-in browser tab (Electron <webview> via BrowserPanel), mirroring
     // the Excalidraw pattern. Icon is the site's own cyan radar mark on a
     // dark navy squircle (see src/assets/aihot.png).
+    // 2026-10-04: 站点搬到 aihot.news，旧域 aihot.virxact.com 于 2026-10-31 停用。
     // (Anatomy Atelier 已于 2026-09-05 移出启动台：上游项目停止维护。图标
     // 资源 src/assets/anatomy.png 保留在仓库里，恢复维护时可直接接回。)
     {
@@ -1592,7 +1593,7 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
           type: "browser",
           title: "AI 热点",
           iconSrc: aihotIcon,
-          browserUrl: "https://aihot.virxact.com/",
+          browserUrl: "https://aihot.news/",
         });
       },
     },
