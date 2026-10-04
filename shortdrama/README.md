@@ -242,8 +242,8 @@ projects/<项目名>/
 |---|---|---|
 | `AGNES_API_KEY` | — | **必需**（生图 / 生视频 / LLM）。语义 = key 池中**第一条**。key 文件 `.env` 允许两处：`shortdrama/.env` 优先，找不到再读仓库根 `.env`（读到即停，勿两处并存——防轮换漂移） |
 | `AGNES_API_KEYS` | — | 可选：多条 key（逗号/分号/换行分隔，去重有序）。**每条可带自己的地址与限速**：`key@base#video_rpm[:image_rpm]`（如 `cpk-xxx@https://api.agnes-ai.cn/v1#5:80` = 国内入口：视频 5rpm、图片 80rpm；尾部 /v1 自动剥）。标了 image_rpm 的 key 会被静帧/资产图自动优先使用（`config.image_pool_keys()` 组成生图专用池，闸门 `60/rpm` 按 key 独立计时；不占视频配额）。未标的走全局 `AGNES_BASE` 与全局闸门。配合 `SHORTDRAMA_VIDEO_KEY_ROTATE` 使用；未设则退回单条 `AGNES_API_KEY` |
-| `AGNES_VIDEO_MAX_SHOTS` | 20 | **超过 20 镜的项目必须调大**，否则静默截断 |
-| `AGNES_VIDEO_MAX_SECONDS` | 12 | 单镜秒数**上限**（供应商硬约束 `seconds ∈ [4,12]`；下限 4 固定）。★ **别调小**——设小于 12 会让超长的镜被**静默压短**（与分镜契约「单镜 4-12 秒」也不一致）|
+| `AGNES_VIDEO_MAX_SHOTS` | 20 | **超过 20 镜的项目必须调大**。截断**会响亮告警**（打印原始镜数 + 砍掉的秒数，`media/pipeline.py`）——但后半片仍然没渲 |
+| `AGNES_VIDEO_MAX_SECONDS` | 12 | 单镜秒数**上限**（供应商硬约束 `seconds ∈ [4,12]`）。★ **别调小**——设小于 12 会让超长的镜被**静默压短**（2026-09-16 事故：默认曾为 10，全项目 620 镜中 9 镜被静默渲短）。⚠️ 那是**提交给供应商**的区间；内部打包规划另用 `media/video_plan.PACK_MIN_SHOT_SECONDS = 2`，别拿它当"2 秒镜能提交" |
 | `SHORTDRAMA_OPEN_CHAIN` | 0 | **人用开关**：设 `1` 开放全链路（`--resume-media` 放行，输入过三道门） |
 | `SHORTDRAMA_ALLOW_RESUME` | 0 | **人用开关**：设 `1` 放行 `--resume-media`（单次内部恢复） |
 | `SHORTDRAMA_REQUIRE_APPROVAL` | 0 | 设 `1` 启用三道审批门（storyboard / stills / media） |
@@ -387,7 +387,7 @@ v5/
 ├── langgraph.json          # 图注册（9 图：supervisor + role_* ×7 + media_rerender）
 ├── decision.py             # reviewer 结构化判定解析 / 回退目标路由
 ├── guards.py               # 记账 / 物化对账 / TokenBreaker / media_gate
-├── validate.py             # brief 智能截断 / brief 完备性 / 产物忠实度 / 分镜契约
+├── validate.py             # brief 完备性 / 产物忠实度 / 分镜契约（另有 pack_brief 工具函数，**生产路径未调用**）
 ├── config.py  llm.py       # 配置与 LLM 供应商
 ├── media/                  # 静态画面先行管线（27 个模块，不含 __init__）
 │   ├── pipeline.py         #   **媒体链唯一入口**（media_gate + 审批门 + 记账都收在这里）
