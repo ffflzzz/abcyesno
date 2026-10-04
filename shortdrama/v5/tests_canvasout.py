@@ -196,5 +196,71 @@ class TestFingerprint(_Case):
                             "多集连载下每集指纹必须不同，否则第 2 集能被第 1 集的画布冒充")
 
 
+class TestNodeSources(_Case):
+    """入口读数 `node_sources()` —— 必须和真摆出来的画布逐字对得上。
+
+    它存在的理由：画布入口原先按 `shots`（分镜表镜数）放行，而画布的格子来自
+    静帧登记表 / 渲染任务表 / 定妆照 / 成片，两者可以完全无关。
+    """
+
+    BASE = "http://127.0.0.1:8791/"
+
+    def _pair(self, root):
+        return (canvasout.node_sources(root, 1),
+                canvasout.build(root, 1, base=self.BASE))
+
+    def test_counts_and_reasons_match_build_for_every_shape(self):
+        # 每种形状各用**一个新目录**：复用同一份盘会让"没有成片"的用例
+        # 读到上一个用例留下的 mp4，测的还是相等、但测的不是它声称的那件事。
+        shapes = [
+            dict(),                                            # 四类齐全
+            dict(packs=()),                                    # 只跑了静帧
+            dict(with_final=False),                            # 没出片
+            dict(with_assets=False),                           # 没有定妆照
+            dict(shots=(), packs=(), with_final=False, with_assets=False),   # 什么都没有
+            dict(shots=(1, 2), packs=((3, 4),)),               # 组点名的镜全不在静帧表里
+        ]
+        for i, kw in enumerate(shapes):
+            with tempfile.TemporaryDirectory() as td:
+                r = Path(td) / "demo-canvas"
+                r.mkdir()
+                _mk(r, **kw)
+                s, c = self._pair(r)
+                self.assertEqual(s["nodes"], len(c["nodes"]),
+                                 "第 %d 种形状格数对不上（%s）：读数 %d ≠ 真节点 %d"
+                                 % (i, kw, s["nodes"], len(c["nodes"])))
+                self.assertEqual(s["warnings"], c["warnings"],
+                                 "第 %d 种形状的理由对不上（%s）" % (i, kw))
+
+    def test_storyboard_only_episode_reads_zero_nodes(self):
+        """★ 真实事故形状：分镜表 13 镜、盘上一格产物都没有。
+
+        安装包数据目录里那颗唯一可点的按钮就是这个形状（`paste-0920-1949`）：
+        点进去只能看到画布应用报「接口返回里没有节点」并停在列表页。
+        读数必须自己说 0，入口才有依据拦下来。
+        """
+        _mk(self.root, shots=(), packs=(), with_final=False, with_assets=False)
+        s = canvasout.node_sources(self.root, 1)
+        self.assertEqual(s["nodes"], 0, "盘上什么都没有 ⇒ 必须读成 0 格")
+        self.assertEqual(len(s["warnings"]), 3,
+                         "缺哪三类就要说三条，不许合并成一句「没有内容」：%s" % s["warnings"])
+        self.assertTrue(any("stills.json" in w for w in s["warnings"]),
+                        "静帧缺失要指名道姓：%s" % s["warnings"])
+
+    def test_group_of_only_missing_shots_adds_no_node(self):
+        """组点名的镜全不在静帧表里 ⇒ 不摆组节点，读数也不许把它算进格数。
+
+        ⚠️ 这条防的是"拿 `len(video_jobs)` 当组数"（`build()` 的 `stats.packs`
+        就是这个口径，它会多算）—— 多算出来的那一格会让入口显示"有内容"，
+        而点进去少一格。
+        """
+        _mk(self.root, shots=(1, 2), packs=((3, 4), (1, 2)))
+        s, c = self._pair(self.root)
+        self.assertEqual(s["packs"], 1, "只有 pack02 的镜真在静帧表里")
+        self.assertEqual(c["stats"]["packs"], 2, "stats 仍按任务表条数报（本用例的前提）")
+        self.assertEqual(s["nodes"], len(c["nodes"]))
+        self.assertEqual(s["warnings"], c["warnings"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

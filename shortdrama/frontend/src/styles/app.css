@@ -208,6 +208,10 @@ a { color: inherit; text-decoration: none; }
   align-self: flex-start;
 }
 .project-card:hover { background: var(--bg-hover); transform: translateY(-2px); box-shadow: var(--shadow-hover); }
+/* 画布页上"这一集还没有内容"的卡：整张卡点不动，就不许留着可点的手型和抬升动效
+   —— 假的可点提示正是上一版"点了没反应"的来源（.project-card 默认 cursor:pointer）。 */
+.project-card--static,
+.project-card--static:hover { cursor: default; background: var(--bg-subtle); transform: none; box-shadow: none; }
 .project-cover {
   position: relative; width: 100%; aspect-ratio: 235.2 / 132.3;
   border-radius: var(--r-md); overflow: hidden; background: var(--bg-white);

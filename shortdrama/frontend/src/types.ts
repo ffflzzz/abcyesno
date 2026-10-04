@@ -68,6 +68,13 @@ export interface Episode {
   storyboard?: { ratio?: string; segments?: Segment[] };
   /** 后端便利字段：分镜表的镜数（`len(shots(root,ep))`），**不是**已生成的静帧数。 */
   shots?: number;
+  /** ★ 后端便利字段：这一集的**画布会有几格**（`canvasout.node_sources().nodes`）。
+   *  0 = 盘上没有静帧/片段组/定妆照/成片，点进去只会是一张空画布 ⇒ 入口不该放行。
+   *  ⛔ 别拿 `shots` 代替它：镜数是"分镜表写了几镜"，与"媒体链跑出了什么"完全两回事
+   *  （实测安装包那颗唯一可点的按钮 13 镜、画布 0 格）。 */
+  canvas_nodes?: number;
+  /** 后端便利字段：格数为 0（或少于预期）时的**理由原文**，与画布自己报的 warnings 同一份。 */
+  canvas_warnings?: string[];
   /** 后端便利字段：`media/ep{N}/episode_final.mp4` 在不在盘上。 */
   has_final?: boolean;
   duration_s?: number;

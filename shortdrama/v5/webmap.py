@@ -39,7 +39,7 @@ import json
 import re
 from pathlib import Path
 
-from . import config
+from . import canvasout, config
 from .media import assets, cast, jobs as jobs_mod, prompt, relations, stills, storyboard, style, video_plan
 # ⚠️ 模块另起别名：本文件里 `vendors()` 是**对外的映射函数**（对应 `GET /vendors`），
 #    与模块同名会把模块名遮住 ⇒ 函数体里就取不到 `vendors.names()` 了。
@@ -515,6 +515,24 @@ def _episode_title(root: Path, ep: int, b: dict) -> str:
     return "第 %d 集" % ep
 
 
+def _canvas_readout(root: Path, ep: int) -> tuple[int, list]:
+    """这一集**画布会有几格** + 格数为 0 时的理由。
+
+    ★ 为什么放在列表行里：画布入口原先按 `shots`（分镜表镜数）放行，而画布的格子
+      来自静帧登记表 / 渲染任务表 / 定妆照 / 成片 —— 两者可以完全无关。
+      实测打包应用里唯一那颗可点的按钮（13 镜）指向一张零格画布，
+      点进去只能看到「接口返回里没有节点」。
+    ⚠️ 读盘异常**只压住这一格**：列表端点一次要为几十个项目各读一遍，
+      一份坏掉的 `stills.json` 不该把整页打成 500 —— 但异常原文必须进理由，
+      不许静默成「这一集没内容」（那是把尺子的问题说成没有效果）。
+    """
+    try:
+        s = canvasout.node_sources(root, ep)
+    except Exception as exc:                            # noqa: BLE001
+        return 0, ["画布读数取不到：%s" % str(exc)[:200]]
+    return int(s.get("nodes") or 0), list(s.get("warnings") or [])
+
+
 def _episode_row(root: Path, ep: int, b: dict) -> dict:
     """单集（**超集**：local 的 `no`/`script` 与线上的 `episode_no`/`content` 都给）。"""
     pid = root.name
@@ -523,6 +541,7 @@ def _episode_row(root: Path, ep: int, b: dict) -> dict:
     md = media_dir(root, ep)
     sb = md / "episode_final.mp4"
     sh = shots(root, ep)
+    canvas_nodes, canvas_warns = _canvas_readout(root, ep)
     return {
         # local 形状
         "id": eid,
@@ -552,6 +571,10 @@ def _episode_row(root: Path, ep: int, b: dict) -> dict:
         "duration_s": _estimated_seconds(root, ep),
         "has_final": sb.exists(),
         "shots": len(sh),
+        # ★ 画布入口的**真读数**：这一集的画布会有几格（0 = 点进去是空的）。
+        #   `shots` 是"分镜表有几镜"，**不能**拿来当"能不能进画布"—— 见 `_canvas_readout`。
+        "canvas_nodes": canvas_nodes,
+        "canvas_warnings": canvas_warns,
     }
 
 

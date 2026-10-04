@@ -75,6 +75,81 @@ def _node(nid: str, ntype: str, title: str, x: int, y: int, size: tuple[int, int
             "metadata": meta}
 
 
+#: 「这一类没数据」的三条说法。**只在这里写一遍** —— `build()` 与 `node_sources()`
+#: 共用，否则列表页给的理由会和真打开画布时看到的不一致。
+_WARN_NO_STILLS = "第 %d 集没有静帧登记表（stills.json）⇒ 画布里没有逐镜格"
+_WARN_NO_JOBS = "第 %d 集没有渲染任务表（video_jobs.json）⇒ 画布里只有静帧，没有片段组"
+_WARN_NO_FINAL = "第 %d 集还没有 episode_final.mp4 ⇒ 画布右侧无收尾节点"
+_WARN_NO_ASSET_IMG = "资产「%s」的定妆照不在盘上（%s）"
+_WARN_GROUP_SHOT = "组 %s 点名了 %s，但静帧登记表里没有它"
+
+
+def _read_inputs(root: Path, ep: int) -> tuple[Path, dict, dict, list]:
+    """读这一集画布的**四类输入**（缺文件给空，不报错；解析失败才响亮终止）。"""
+    ep_dir = root / "media" / ("ep%d" % ep)
+    stills = _read_json(ep_dir / "stills.json") or {}
+    jobs = _read_json(ep_dir / "video_jobs.json") or {}
+    assets = (_read_json(root / "assets.json") or {}).get("assets") or []
+    return ep_dir, stills, jobs, assets
+
+
+def _assets_on_disk(assets: list, img_dir: Path, warns: list[str]) -> list[tuple[str, dict, Path]]:
+    """资产 → **定妆照真在盘上**的那些（画布左栏一格 = 这里一条）。
+
+    ⛔ 不看 `assets.json` 里登记了几条：名字为空、或 `ref_image` 指不到真文件的
+    都不会变成节点（`build()` 就是按这个条件跳过的）。缺文件的进 `warns`。
+    """
+    out: list[tuple[str, dict, Path]] = []
+    for a in assets:
+        name = (a.get("name") or "").strip()
+        if not name:
+            continue
+        f = img_dir / (a.get("ref_image") or "")
+        if not f.is_file():
+            warns.append(_WARN_NO_ASSET_IMG % (name, a.get("ref_image") or "ref_image 为空"))
+            continue
+        out.append((name, a, f))
+    return out
+
+
+def node_sources(root: Path, ep: int = 1) -> dict[str, Any]:
+    """这一集的画布**会有几格** —— 给列表端点决定「这个入口能不能点」。
+
+    ★ 为什么要单独出这个读数：入口原先按**分镜表镜数**（`shots`）放行，而画布的格子
+      来自静帧登记表 / 渲染任务表 / 定妆照 / 成片 —— 两者可以完全无关。
+      实测打包应用里唯一那颗可点的按钮（13 镜）指向一张**零格**画布，
+      画布应用只能报「接口返回里没有节点」并停在列表页。
+    ★ 判据必须与 `build()` 同源（共用 `_read_inputs` / `_bands_of` / `_assets_on_disk`）：
+      数出来的格数、以及**理由的原文与顺序**，都要和真打开画布时看到的逐字一致 ——
+      否则列表页说"这一集没静帧"、点进去却报另一件事，又是一种"看着正常其实没通"。
+      回归测试 `tests_canvasout.TestNodeSources` 逐种形状对账这两者。
+    """
+    ep_dir, stills, jobs, assets = _read_inputs(root, ep)
+    warns: list[str] = []
+    if not stills:
+        warns.append(_WARN_NO_STILLS % ep)
+    if not jobs:
+        warns.append(_WARN_NO_JOBS % ep)
+    # 走一遍带（与 build() 同序）：一条带尾挂一个组节点，`pk=None` 的散镜带没有
+    bands = _bands_of(sorted(stills), jobs)
+    packs = 0
+    for _, pk in bands:
+        if not pk:
+            continue
+        packs += 1
+        for s in (jobs[pk].get("shots") or []):
+            if s not in stills:
+                warns.append(_WARN_GROUP_SHOT % (pk, s))
+    placed = _assets_on_disk(assets, root / "images", warns)
+    final = (ep_dir / "episode_final.mp4").is_file()
+    if not final:
+        warns.append(_WARN_NO_FINAL % ep)
+    n_stills, n_assets = len(stills), len(placed)
+    return {"stills": n_stills, "packs": packs, "assets": n_assets, "final": final,
+            "nodes": n_stills + packs + n_assets + (1 if final else 0),
+            "warnings": warns}
+
+
 def fingerprint(root: Path, ep: int) -> str:
     """**输入指纹**：产物内容 + 集号 + 会改变画布形态的生成参数。
 
@@ -126,18 +201,15 @@ def build(root: Path, ep: int = 1, base: str = "") -> dict[str, Any]:
     缺文件**不静默**：哪一类没数据就进 `warnings`，让人看得见"这集没出静帧"。
     """
     pid = root.name
-    ep_dir = root / "media" / ("ep%d" % ep)
+    ep_dir, stills, jobs, assets = _read_inputs(root, ep)
     nodes: list[dict[str, Any]] = []
     edges: list[dict[str, Any]] = []
     warns: list[str] = []
 
-    stills = _read_json(ep_dir / "stills.json") or {}
-    jobs = _read_json(ep_dir / "video_jobs.json") or {}
-    assets = (_read_json(root / "assets.json") or {}).get("assets") or []
     if not stills:
-        warns.append("第 %d 集没有静帧登记表（stills.json）⇒ 画布里没有逐镜格" % ep)
+        warns.append(_WARN_NO_STILLS % ep)
     if not jobs:
-        warns.append("第 %d 集没有渲染任务表（video_jobs.json）⇒ 画布里只有静帧，没有片段组" % ep)
+        warns.append(_WARN_NO_JOBS % ep)
 
     order = sorted(stills)
     bands = _bands_of(order, jobs)
@@ -169,21 +241,14 @@ def build(root: Path, ep: int = 1, base: str = "") -> dict[str, Any]:
             edges.append({"id": "s:%s>p:%s" % (s, pk), "fromNodeId": "s:%s" % s, "toNodeId": "p:%s" % pk})
         for s in (jobs[pk].get("shots") or []):
             if s not in stills:
-                warns.append("组 %s 点名了 %s，但静帧登记表里没有它" % (pk, s))
+                warns.append(_WARN_GROUP_SHOT % (pk, s))
 
     # ── 左栏：资产定妆照排成一条图例，按「首次出场的那条带」排序 ──
     # 为什么不是"放在它平均出现的高度"：13 条带时那样会把所有资产挤到中下部，
     # 且同一场戏的资产 y 完全相同 ⇒ 互相盖住（实测两个都在 y=3373）。
-    img_dir = root / "images"
+    # 「哪些资产真能变成一格」在 `_assets_on_disk()` 里定，与 `node_sources()` 同一份。
     rows: list[tuple[int, str, dict[str, Any]]] = []
-    for a in assets:
-        name = (a.get("name") or "").strip()
-        if not name:
-            continue
-        f = img_dir / (a.get("ref_image") or "")
-        if not f.is_file():
-            warns.append("资产「%s」的定妆照不在盘上（%s）" % (name, a.get("ref_image") or "ref_image 为空"))
-            continue
+    for name, a, f in _assets_on_disk(assets, root / "images", warns):
         # 资产 → 本镜：提示词里**原样出现**资产名才算（保守匹配，宁可少连不可连错）
         hits = [s for s in order if name in ((stills[s] or {}).get("prompt") or "")]
         first = min([shot_y[s] for s in hits if s in shot_y], default=10 ** 9)
@@ -218,7 +283,7 @@ def build(root: Path, ep: int = 1, base: str = "") -> dict[str, Any]:
             if any(p == pk for _, p in bands):
                 edges.append({"id": "p:%s>f:final" % pk, "fromNodeId": "p:%s" % pk, "toNodeId": "f:final"})
     else:
-        warns.append("第 %d 集还没有 episode_final.mp4 ⇒ 画布右侧无收尾节点" % ep)
+        warns.append(_WARN_NO_FINAL % ep)
 
     xs = [n["position"]["x"] + n["width"] for n in nodes] or [0]
     ys_all = [n["position"]["y"] + n["height"] for n in nodes] or [0]

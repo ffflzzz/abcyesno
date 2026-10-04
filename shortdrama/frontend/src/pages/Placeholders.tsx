@@ -10,7 +10,7 @@ import { Api } from '../api';
 import { Store, fmtDuration, useStore } from '../store';
 import type { ApiError, AssetItem, Episode, Project, Segment } from '../types';
 import { Icon } from '../components/Icons';
-import { canvasOpenUrl } from '../lib/canvasApp';
+import { openCanvasApp } from '../lib/canvasApp';
 
 function Page({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -102,63 +102,109 @@ export function Inspiration() {
  * 画布 —— 把某一集**已跑完的产物**摆成无限画布。
  *
  * 画布是独立应用（Infinite Atelier），不在本 SPA 的路由里 ⇒ 跳转是整页导航，
- * 不能用 Router.go。地址收在 `lib/canvasApp.ts` 一处。
+ * 不能用 Router.go。地址与"怎么开"都收在 `lib/canvasApp.ts` 一处。
  * 内容全由后端按盘上事实生成（资产定妆照 → 逐镜静帧 → 片段组 → 成片），
  * 不调模型、不烧配额。
  *
- * 卡片上的"N镜"是**分镜表的镜数**（后端 `shots`），不是已生成的静帧数 ——
- * 两者可以差很多（只跑了创作链的项目有镜数、没静帧）。
+ * ★ 按钮上的数字是**这一集真能摆出来的格数**（`canvas_nodes`），不是分镜表镜数。
+ *   上一版按 `shots` 放行入口 —— 而 `shots` 只说明"分镜写了几镜"，与媒体链跑出了
+ *   什么无关：实测安装包那颗唯一可点的按钮写着 13 镜，点进去是一张 **0 格**画布，
+ *   画布应用只能回一句「接口返回里没有节点」就把人停在列表页（2026-10-04 的"进不去"）。
+ *   没格的集照样列出来，但按钮是灰的、理由直接写在卡片上（不靠 hover 才看得见）。
  */
 export function Canvas() {
   const { projects } = useStore();
-  const withBoard = projects.filter((p) => (p.episodes || []).some((e) => (e.shots || 0) > 0));
+  /** 有画布内容**或**至少写了分镜的项目才占一张卡（两者都没有的，卡上什么也点不动）。 */
+  const listed = projects.filter((p) => (p.episodes || [])
+    .some((e) => canvasNodes(e) > 0 || (e.shots || 0) > 0));
   return (
     <Page title="画布">
       <div className="small mt16">
         每集的画布由后端按盘上已有产物生成：资产定妆照 → 逐镜静帧 → 片段组 → 成片。
-        不调用模型、不消耗配额；点开的是独立应用，节点里可直接播放片段。
+        不调用模型、不消耗配额；按钮上的数字是这一集真能摆出来的格数，不是分镜表镜数。
       </div>
-      {withBoard.length ? (
+      {listed.length ? (
         <div className="project-grid mt24">
-          {withBoard.map((p) => (
-            <div className="project-card" key={p.id}>
-              <div className="project-cover">
-                {p.cover ? <img src={p.cover} alt="" loading="lazy" /> : null}
-              </div>
-              <div className="project-meta">
-                <div className="flex1">
-                  <h3>{p.name}</h3>
-                  <p className="project-sub">
-                    {p.episodes.length}集<span className="divider" />{p.created_at}
-                  </p>
+          {listed.map((p) => {
+            const eps = p.episodes || [];
+            const first = eps.find((e) => canvasNodes(e) > 0) || null;
+            return (
+              <div key={p.id}
+                className={'project-card' + (first ? '' : ' project-card--static')}
+                title={first
+                  ? `打开「${p.name} · 第${first.no}集」的画布（${canvasNodes(first)} 格）`
+                  : '这些集都还没有画布内容，理由写在按钮下面'}
+                onClick={() => { if (first) openCanvasApp(p.id, first.no); }}>
+                <div className="project-cover">
+                  {p.cover
+                    ? <img src={p.cover} alt="" loading="lazy" />
+                    : <span className="muted small">还没有静帧可当封面</span>}
                 </div>
+                <div className="project-meta">
+                  <div className="flex1">
+                    <h3>{p.name}</h3>
+                    <p className="project-sub">
+                      {eps.length}集<span className="divider" />{p.created_at}
+                    </p>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 10 }}>
+                  {eps.map((e) => {
+                    const n = canvasNodes(e);
+                    return (
+                      <button key={e.id} type="button" className="btn btn--sm" disabled={!n}
+                        title={n
+                          ? `画布 ${n} 格 · 分镜表 ${e.shots || 0} 镜${e.has_final ? ' · 已出片' : ' · 未出片'}`
+                          : canvasReason(e)}
+                        onClick={(ev) => { ev.stopPropagation(); openCanvasApp(p.id, e.no); }}>
+                        第{e.no} 集{n ? ` · ${n}格` : ' · 空'}
+                      </button>
+                    );
+                  })}
+                </div>
+                {first ? null : (
+                  <div className="muted small" style={{ marginTop: 8 }}>
+                    点不开：{canvasReason(eps[0])}
+                  </div>
+                )}
               </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 10 }}>
-                {(p.episodes || []).map((e) => {
-                  const n = e.shots || 0;
-                  return (
-                    <button key={e.id} type="button" className="btn btn--sm" disabled={!n}
-                      title={n ? `${n} 镜${e.has_final ? ' · 已出片' : ' · 未出片'}` : '这一集还没有分镜表'}
-                      onClick={() => window.open(canvasOpenUrl(p.id, e.no), '_blank', 'noopener')}>
-                      第{e.no} 集{n ? ` · ${n}镜` : ''}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       ) : (
         <div className="empty mt32">
           {Icon.empty(48)}
-          <div>还没有可画的项目 —— 至少需要一集有分镜表</div>
-          <div className="small">分镜出来后，这里会按集列出入口。</div>
+          <div>还没有可画的集 —— 后端返回的项目里没有一集写了分镜表</div>
+          <div className="small">画布的格子来自盘上已有产物（逐镜静帧 / 片段组 / 资产定妆照 / 成片）。</div>
           <button type="button" className="btn btn--primary btn--sm mt16"
             onClick={() => Router.go('/playlet/list')}>去短剧工作台</button>
         </div>
       )}
     </Page>
   );
+}
+
+/**
+ * 这一集的画布**有几格**（后端 `canvasout.node_sources()` 按盘上事实数出来的）。
+ *
+ * 读数缺失一律按 0 算 —— ⛔ 不猜成"有"：
+ * "看着能点、点进去是空的"就是这一版要修掉的那个形状。
+ */
+function canvasNodes(e: Episode): number {
+  return e.canvas_nodes || 0;
+}
+
+/**
+ * 灰按钮的理由：优先用后端 `canvas_warnings` 的**原文**，
+ * 让列表页上写的和真打开画布时看到的是同一句话（两份措辞迟早对不上）。
+ */
+function canvasReason(e: Episode): string {
+  const w = (e && e.canvas_warnings || []).filter(Boolean);
+  if (w.length) return w.join('；');
+  const sh = (e && e.shots) || 0;
+  return sh
+    ? `写了 ${sh} 镜分镜，但盘上没有静帧 / 片段组 / 定妆照 / 成片 ⇒ 画布是空的（去工作台对这一集出片）`
+    : '这一集还没有分镜表';
 }
 
 /**

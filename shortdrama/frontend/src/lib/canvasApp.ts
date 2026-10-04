@@ -34,3 +34,20 @@ export function canvasApiUrl(pid: string, ep: number): string {
 export function canvasOpenUrl(pid: string, ep: number): string {
   return `${canvasAppBase()}/canvas?from=${encodeURIComponent(canvasApiUrl(pid, ep))}`;
 }
+
+/**
+ * 打开某一集的画布。**新标签被拦下时回落到当前标签内导航。**
+ *
+ * ★ 为什么必须有这条回落：本工作台在 Abcyesno 桌面应用里是嵌在 `<webview>` 里跑的，
+ *   宿主对 guest 的 `window.open` 一律 `deny`（`electron/main.js` 的
+ *   `setWindowOpenHandler` —— 它的处置是"转交系统浏览器"，成不成、以及人就此离开
+ *   本应用，两条都不在这个页面能控制的范围内）。被拦时 `window.open` 返回 null。
+ *   ⇒ 拿不到新标签就自己导航：**宁可换页，不要"点了没反应"**。
+ *   实测（2026-10-04）桌面应用里点画布入口没任何反应，就是这个通道没通过。
+ */
+export function openCanvasApp(pid: string, ep: number): void {
+  const url = canvasOpenUrl(pid, ep);
+  let w: Window | null = null;
+  try { w = window.open(url, '_blank', 'noopener'); } catch { w = null; }
+  if (!w || w.closed) location.href = url;
+}
