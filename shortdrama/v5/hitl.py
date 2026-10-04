@@ -105,7 +105,7 @@ def redo_targets_of(root: Path, done_roles) -> list[str]:
     return out
 
 
-def prev_role_of(done_roles) -> str:
+def prev_role_of(done_roles, roles=None) -> str:
     """"用户刚看到的那个产物"属于哪个角色 = 已完成角色里**按依赖序最靠后**的那个。
 
     ★ 2026-09-19：**一个都没完成时返回 `director`** —— 链路的第一停就发生在这个
@@ -117,10 +117,17 @@ def prev_role_of(done_roles) -> str:
     也**不能**用 `guards.ROLES`（**8 个**、`director` 排第一）—— 两者顺序不同，
     混用会算错"上一步是谁" ⇒ 打回打错人，而**下游角色无权改上游文件**
     ⇒ 那一轮整轮白跑（本项目已有实测：误填下游白烧 13 分钟）。
+
+    ★ 2026-10-04（剧本直出模式）：`roles` = 本模式名单（from_script 下 5 个）。
+      ⚠️ **为什么要按模式**：若仍按 7 个排序，而 `done_roles` 里出现了
+      `scriptwriter`（预置产物落盘后 `done_roles` 会认它），
+      `prev_role_of` 可能返回 `scriptwriter` —— 而**它这一轮根本不会被派发**，
+      人点「打回它」会让驱动器去重跑一个不在名单里的角色 ⇒ 派发失败一轮空转。
+      默认 `None` ⇒ 用模块级 `PREREQ`（7 个），**既有调用方与测试行为零变化**。
     """
     done = {str(x) for x in (done_roles or [])}
     last = ""
-    for r in PREREQ:                      # = v5.guards.PREREQ（依赖序，7 个）
+    for r in (roles if roles is not None else PREREQ):   # 依赖序，不含 director
         if r in done:
             last = r
     return last or DIRECTOR
@@ -148,7 +155,8 @@ def _read_json(p: Path) -> dict | None:
 
 
 def record_pending(root: Path, *, thread_id: str, run_id: str,
-                   done_roles: list | None = None, note: str = "") -> Path:
+                   done_roles: list | None = None, note: str = "",
+                   roles=None) -> Path:
     """链路侧：图已挂起 → 写下待批准信息（含**下一个待派发的角色**与**上一个角色**）。
 
     两个 2026-09-18 新增的字段：
@@ -159,16 +167,24 @@ def record_pending(root: Path, *, thread_id: str, run_id: str,
       一个残留的 `decision.json`（上次等待超时 / 进程被杀留下）会在**下一次挂起时
       被立刻消费** ⇒ **静默跳过一次人工审核**，而日志上看不出来。
       这是本项目最贵的一类 bug；宁可让用户重新点一次，也不能静默放行。
+
+    ★ 2026-10-04（剧本直出模式）：`roles` = 本模式名单。
+      ⚠️ **这处比 `prev_role_of` 更要紧**：`next` 报给前端的「下一个待派发角色」
+      若仍按 7 个算，from_script 下会报出 `plotdesigner`/`scriptwriter` ——
+      而它们**这一轮根本不会被派发**。人看到「下一个：scriptwriter」却等不到它，
+      会以为链卡住了（实测这类"看着像卡住"的误导最难排查）。
+      默认 `None` ⇒ 用模块级 `PREREQ`（7 个），**既有调用方与测试行为零变化**。
     """
+    _roles = list(roles) if roles is not None else list(PREREQ)
     done = [str(x) for x in (done_roles or [])]
-    nxt = next((r for r in PREREQ if r not in done), "")
+    nxt = next((r for r in _roles if r not in done), "")
     data = {
         "state": "pending",
         "stamp": uuid.uuid4().hex[:8],
         "thread_id": thread_id,
         "run_id": run_id,
         "done_roles": done,
-        "prev_role": prev_role_of(done),
+        "prev_role": prev_role_of(done, _roles),
         # ★ 2026-09-19：**允许打回的目标随挂起一起落盘**（含 director）。
         #   为什么写进文件、而不是让 `decide` 与前端各自算一遍：
         #   "谁能被打回"是一条判据，写两处必然漂移（本项目最忌的一类）。

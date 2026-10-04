@@ -13,7 +13,15 @@ from pathlib import Path
 import re
 
 from . import config, guards, validate
+from . import mode as chain_mode          # ⚠️ 必须带别名！
 from .guards import PREREQ, out_path
+# ⚠️ 为什么带别名：本模块的 `role_input` 里**早就有**一个局部变量叫 `mode`
+# （第 521 行 `mode = validate.audio_mode_of(...)`，指**音频模式**）。
+# Python 的作用域在**编译期**决定 —— 只要函数体内出现过 `mode = ...`，
+# 整个函数里的 `mode` 都是局部的 ⇒ 直接 `import mode` 会在注入点报
+# `UnboundLocalError`（实测 18 个测试当场红）。
+# 两义同名不是巧合，是真会踩的坑，所以别名取得**自解释**：`chain_mode`（链的模式）
+# vs 局部 `mode`（音频模式）。
 
 
 # 角色节点可用的文件工具（deepagents 的 FilesystemMiddleware 提供）。
@@ -343,6 +351,20 @@ def _upstream_block(root: Path, role: str, ep: int) -> str:
         "② 设 %s=1 降级为注入全文。" % (rel, r["why"], SLICE_SOFT_ENV))
 
 
+def resolve_ok(root: Path, role: str, ep: int) -> bool:
+    """该角色的产物**此刻是否在盘且非空**（读走 `resolve_path`，含旧名回退）。
+
+    为什么需要它：剧本直出模式下**预置产物要作为「只读上游」注入**，
+    但它**在不在盘取决于预置有没有成功**（`mode.write_preseed` 可能因
+    只读目录失败）⇒ 判据必须查盘，**不能**假设它在。
+    """
+    try:
+        p = guards.resolve_path(root, role, ep)
+        return p.exists() and p.stat().st_size > 0
+    except Exception:  # noqa: BLE001 —— 查不到就当没有，不让注入这一步炸掉
+        return False
+
+
 def _craft_refs(root: Path) -> list:
     """本项目声明的叙事技法（**默认空 = 不注入**，见 `style.script_craft_of`）。"""
     try:
@@ -460,6 +482,9 @@ def role_input(role: str, root: Path, m: dict, reasons: list[str] | None = None)
     （媒体链与守卫都以磁盘为准）。
     """
     ep = int(m.get("episode_index", 1) or 1)
+    # ★ 剧本直出模式（2026-10-04）：依赖序**按项目 brief 取**，而不是用模块常量。
+    # 默认模式返回值与 `guards.PREREQ` 逐字节相等 ⇒ 既有行为一字不变。
+    _prereq = guards.prereq_for(root, ep)
     lines = [
         # 首行必须跟着模式变 —— 否则模式间文案自相矛盾（写成"用 read_file 读取"
         # 再附全文，模型仍会去 read，方案 B 的收益被抵消）。
@@ -467,7 +492,7 @@ def role_input(role: str, root: Path, m: dict, reasons: list[str] | None = None)
          if config.INLINE_UPSTREAM else
          "【开工前必读】用 read_file 自己读取下列文件，不要凭空创作："),        "- /brief.json —— 本片需求（主题 / 四幕 must_have / 关键道具 / 禁忌 / 结局）",
     ]
-    for r in PREREQ.get(role, []):
+    for r in _prereq.get(role, []):
         lines.append("- /%s —— 上游 %s 的产物" % (out_path(r, ep), r))
     # ★★ M3（2026-09-17）：**本集产物路径 = 运行期的唯一权威**。
     #
@@ -495,8 +520,38 @@ def role_input(role: str, root: Path, m: dict, reasons: list[str] | None = None)
                      "（标注了「按集切片」的那些是**目录摘录**，不是全文；"
                      "若你确实需要别集的内容，用 read_file 读原文件）")
         lines.append(_inline_file(root, "brief.json"))
-        for r in PREREQ.get(role, []):
+        for r in _prereq.get(role, []):
             lines.append(_upstream_block(root, r, ep))
+    # ★★ 剧本直出模式（2026-10-04）：两条**只在 from_script 下出现**的注入。
+    #
+    # 为什么必须在这里注入、而不是只写进包 SKILL：
+    #   `_role_skill` 对**自带该角色 SKILL 的包**不回退（`3d-animation` 自带
+    #   scriptwriter/dialogue）⇒ 只改一个包，别的包收不到。
+    #   与本文件既有的「音频模式」「片长/镜数」「台词长度」三条硬指令**同一个理由、
+    #   同一个位置**（那条教训见 `role_input` 台词长度注释里的事故记录）。
+    #
+    # ⚠️ 放在 `INLINE_UPSTREAM` **之外** —— 这两条不是"上游产物全文"，
+    # 是**本模式的契约**，与是否全文注入上游无关。
+    _mode_name = chain_mode.mode_of(guards.load_brief(root))
+    if _mode_name == "from_script":
+        # ⚠️ ★ 2026-10-04 实测补上的**真缺口**：`prereq_for` 把 `scriptwriter`
+        #   从「要派发的角色」里删掉了，于是**剧本不再出现在任何角色的上游清单里**。
+        #   实测：分镜师的开工契约里 `/scriptwriter/scriptwriter_ep1.md` **不见了**
+        #   —— 而它要靠剧本逐字照抄台词、按时间码排节拍。
+        #   ⇒ **预置产物必须仍然作为「只读上游」注入**。
+        #   为什么不能用 `PREREQ` 原样注：那会把 `plotdesigner` 也带回来，
+        #   而它在本模式下**根本没有产物**（`_upstream_block` 只能返回「读不到」）。
+        #   所以这里单独判：预置产物**在盘**才注入。
+        for _r in chain_mode.PRESEEDED:
+            if _r not in _prereq.get(role, []) and resolve_ok(root, _r, ep):
+                lines.insert(1, "- /%s —— **剧本原文（系统预置，只读）**"
+                                    "：本片剧情以此为唯一真相源，`%s` 不再被派发"
+                             % (out_path(_r, ep), _r))
+                lines.append(_upstream_block(root, _r, ep))
+        if role == "worldbuilder":
+            lines.append(chain_mode.EXTRACT_ONLY_HINT)
+        if role == "scenedesigner":
+            lines.append(chain_mode.BARE_INT_HINT)
     # 音频模式硬指令：brief 的 audio_mode 此前无人消费，导致「写 dialogue-led、
     # 交全片（无声）」反复发生。这里在**开工前**把要求写进输入，而不是事后才发现。
     mode = validate.audio_mode_of(guards.load_brief(root))

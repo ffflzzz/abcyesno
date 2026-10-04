@@ -446,6 +446,72 @@ def _interrupt_on() -> dict | None:
     return {"task": True} if config.APPROVE_EACH_ROLE else None
 
 
+# ── 剧本直出模式的**派工名单**（2026-10-04）───────────────────────────────
+#
+# `ORCHESTRATOR_DISCIPLINE` 里那段「第 1 步 worldbuilder → 第 2 步 … → 第 6 步
+# reviewer」是**给模型看的硬编码顺序**。from_script 模式下其中三步不该跑，
+# 而这段文字**必须改** —— 否则模型照纪律派发，被省掉的角色照样烧两次 LLM 调用
+# （实测每个角色 3–5 分钟），模式等于没生效。
+#
+# ⚠️ 为什么**不改 ORCHESTRATOR_DISCIPLINE 本体**：它是全文 prompt 契约，
+#   `tests_roles` / `tests_graph` 都在断言它的关键句。改成"顺序占位符 + 运行期
+#   填"会让那两处测试看到占位符 ⇒ 要连带改测试 ⇒ **默认路径的可观测行为变了**。
+#   现在改成**追加一段覆盖说明**：原文一字不动，from_script 下再叠一句
+#   「本次以这一段为准」，冲突由覆盖声明解决（模型对**最后**一段指令的服从度最高，
+#   且这里两段不矛盾、只是把顺序取子集）。
+#
+# ⚠️ **子代理注册表不跟着改**（`make_sync_subagents` 仍按 7 个注册）：
+#   注册了不派发 = 无副作用。若从注册表里删，被省角色的 `role_*` 图会缺失，
+#   `tests_roles.py:80`「7 个角色一个都不能少」立刻红，且前端会缺图。
+_PLAN_FULL = """【本片派工名单 · **7 个角色，按此顺序逐个 `task` 派发**】
+第 1 步 worldbuilder → 第 2 步 assetdesigner ∥ plotdesigner（第 3 步 scriptwriter
+→ 第 4 步 dialogue → 第 5 步 scenedesigner → 第 6 步 reviewer）。
+**以上是默认顺序，本片照它执行。**"""
+
+_PLAN_FROM_SCRIPT = """【★★★ 本片派工名单 · **剧本直出模式，以这一段为准（覆盖上面那段默认顺序）★★★】
+`brief.mode = from_script` —— 完整剧本已在 `/brief.json` 的 `script` 字段里。
+
+**本次只派发这 5 个角色，按此顺序（前面的顺序说明在这一点上不适用）：**
+第 1 步 **worldbuilder** → 第 2 步 **assetdesigner** → 第 3 步 **dialogue**
+→ 第 4 步 **scenedesigner** → 第 5 步 **reviewer**。
+
+**绝对不要派发 `plotdesigner` 和 `scriptwriter`**：
+- `plotdesigner`（分幕/分集目录）—— 剧本已定稿，没有可规划的剧情结构；
+- `scriptwriter`（执笔写剧本）—— 剧本就是剧本，**再写一遍就是把它改掉**。
+  ⛔ 它们的产物位置已由系统按剧本正文**预置落盘**（`/scriptwriter/scriptwriter_ep{N}.md`），
+  **你不要动那个文件、也不要重新写它**。
+- ⛔ 更不要「顺手」用 `write_file` 替你没派发的角色补产物 ——
+  那会造出与剧本对不上的假产物，而产物齐全会让下游门全部放行。
+
+⚠️ `worldbuilder` 这次的工作是**从剧本里抽取**人物卡与场景卡，不是创作世界观
+（它的开工指令里有完整的抽取格式契约，务必照做）。
+⚠️ `dialogue` 只做**逐字提取**：台词一个字都不能改（逐字门会查）。
+⚠️ `reviewer` 照常最后派发，它返回 `pass: true` 才算创作链完成。"""
+
+
+def _plan_block(root: Path) -> str:
+    """按本项目模式给出**派工名单**（默认模式 = 那段 7 步原文，不改行为）。"""
+    from . import guards as _guards
+    from . import mode as _mode
+    try:
+        brief = _guards.load_brief(root)
+    except Exception:  # noqa: BLE001 —— 读不到 brief 就按默认名单走，不让起服失败
+        return ""
+    w = _mode.warn_unknown(brief)
+    if w:
+        print(w, flush=True)
+    if _mode.mode_of(brief) == "from_script":
+        if not _mode.has_script(brief):
+            print("[mode] ⚠️ brief.mode=from_script 但 `script` 字段为空/读不到 → "
+                  "**按 full（7 环全量）处理**。原因：没有剧本可抽，"
+                  "worldbuilder 的抽取契约会把卡抠成空的（记忆里的同类形态："
+                  "角色卡格式漂移 → 解析出 0 个角色 → 全片按无人物处理）。",
+                  flush=True)
+            return ""
+        return _PLAN_FROM_SCRIPT
+    return _PLAN_FULL
+
+
 def supervisor_system_prompt(pack: str = _PACK, ep: int = _EP,
                              root: Path | None = None) -> str:
     """supervisor 的 system prompt = director 契约 + **叙事技法** + 调度纪律。
@@ -462,7 +528,8 @@ def supervisor_system_prompt(pack: str = _PACK, ep: int = _EP,
         _craft = _craft_block(root, "director")
     except Exception as e:  # noqa: BLE001 —— 注入失败不该让起服失败，但**必须可见**
         print("[craft] ⚠️ director 的技法注入失败：%s" % str(e)[:160])
-    return director_system_prompt(pack, ep) + _craft + ORCHESTRATOR_DISCIPLINE
+    return (director_system_prompt(pack, ep) + _craft
+            + _plan_block(root) + ORCHESTRATOR_DISCIPLINE)
 
 
 def build_supervisor():

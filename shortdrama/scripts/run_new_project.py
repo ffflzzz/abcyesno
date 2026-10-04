@@ -311,8 +311,26 @@ def run_one_episode(project: str, proj: Path, run_log: Path, ep: int,
     顺带规避当前最大的运维坑（"一项目一起服、沙箱内杀不掉持口进程"，
     见 git 历史）。
     """
-    # 3) 创作链（supervisor 7 角色）
+    # 3) 创作链（supervisor 角色；from_script 模式少派两个）
     log(run_log, "创作链开始")
+    # ★ 剧本直出模式（2026-10-04）：**预置产物必须先落盘**，否则
+    #   `scriptwriter/scriptwriter_ep{N}.md` 不存在 → 物化守卫判 failed →
+    #   media_gate 报「缺 scriptwriter」→ 整条链白跑。
+    #   为什么放在创作链**之前**：角色的 `role_input` 会把上游产物**全文注入**，
+    #   dialogue/scenedesigner 必须读得到它。
+    try:
+        import sys as _sys2
+        if str(ROOT) not in _sys2.path:
+            _sys2.path.insert(0, str(ROOT))
+        from v5 import mode as _mode
+        _written = _mode.write_preseed(proj, ep)
+        if _written:
+            log(run_log, "剧本直出模式：已预置 %s 的产物（逐字取自 brief.script）"
+                % "、".join(_written))
+    except Exception as e:  # noqa: BLE001 -- 预置失败必须拦住，不能带着缺口跑
+        log(run_log, "!! 预置产物失败：%s: %s → 终止（否则媒体门会报「缺 scriptwriter」，"
+                     "而那时已烧了几十分钟）" % (type(e).__name__, str(e)[:200]))
+        return 1
     # ★ 超时 5400 → 9000（2026-09-16 实测 ep4）：
     #   评审判 fail 时 supervisor 会**在同一个 run 内**重派上游（plotdesigner → dialogue
     #   → scenedesigner → reviewer 再评），这条恢复链比一次顺跑长得多。
@@ -347,8 +365,10 @@ def run_one_episode(project: str, proj: Path, run_log: Path, ep: int,
 
     # ★ M2：必须查**本集**的产物路径（`glob("*.md")` 在第 2 集会被第 1 集的
     #   `scriptwriter_ep1.md` 满足 → 第 2 集缺产物也报"齐全" → 白跑一轮媒体链）。
-    missing = [r for r in ROLES
-               if not (proj / out_path(r, ep)).exists()]
+    # ★ 名单按模式取（from_script 少两个）；默认模式与 ROLES 逐字节相同。
+    from v5 import guards as _g
+    _need = list(_g.gate_roles_for(proj, ep))
+    missing = [r for r in _need if not (proj / out_path(r, ep)).exists()]
     if missing:
         log(run_log, "!! 缺第 %d 集角色产物：%s → 不启动媒体链（会被门拦下空转）"
             % (ep, missing))
@@ -357,7 +377,7 @@ def run_one_episode(project: str, proj: Path, run_log: Path, ep: int,
                      "OpenAIRateLimitError(429)（**账号级限流**，常见于**并行任务抢同一账号额度**）→ "
                      "OpenAITimeoutError（请求超时）")
         return 1
-    log(run_log, "第 %d 集创作链产物齐全：%s" % (ep, "、".join(ROLES)))
+    log(run_log, "第 %d 集创作链产物齐全：%s" % (ep, "、".join(_need)))
 
     # ★ **产物齐全 ≠ 链合格**（2026-09-16 实测 ep4）：reviewer 可能判 fail 并要求重派，
     #   此时 7 个文件都在盘上，旧实现照样报"齐全"→ 进媒体链 → 被 media_gate 挡下

@@ -522,7 +522,13 @@ def _run_chain(root: Path, ep: int, shots: list, log, until: str = "") -> dict:
     #    用 ROLES 判据会**永远报告缺 director**（本项目已因此白跑两轮的既有事故）。
     # 2026-09-19：`--until` 时只核对**到目标角色为止**（否则会把"下游还没跑"
     # 误报成"缺角色" ⇒ 一次正常的阶段产出被判 failed）。
-    _check = list(guards.GATE_ROLES)
+    #
+    # ★ 2026-10-04（剧本直出模式）：名单**按项目 brief 取**（`gate_roles_for`）。
+    #   默认模式返回 `GATE_ROLES` 本身（7 个，行为一字不变，测试 webchain:736
+    #   的 `len == 7` 断言不需要改）；from_script 下 6 个 ——
+    #   ⚠️ **不能省这一步**：漏了会让前端把「本模式根本不派的那两个」报成缺角色，
+    #   用户看到的是"创作链失败"，而盘上产物其实齐了（最难排查的一类假失败）。
+    _check = list(guards.gate_roles_for(root, ep))
     if until and until in _check:
         _check = _check[:_check.index(until) + 1]
     missing = []

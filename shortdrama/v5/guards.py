@@ -53,6 +53,53 @@ ROLES = tuple(OUTPUTS)
 GATE_ROLES: tuple[str, ...] = tuple(PREREQ)
 
 
+# ─── 按模式取名单（剧本直出模式，2026-10-04）──────────────────────────────
+#
+# ⚠️ **上面那个常量一个字都没改**，它仍是默认（`full`）模式的唯一真相源。
+# 本节只加**按项目 brief 取名单**的入口 —— 判据仍在 `v5/mode.py` 一份。
+#
+# 为什么必须按项目取而不是全局 env 开关：多项目并行（2026-09-29 起支持）是本项目
+# 的既定能力，而模式是**项目属性**。全局开关会让两条链互相污染
+# （A 带剧本、B 没带，B 的门被 A 的名单判）。
+#
+# ⚠️ **`reconcile_manifest` 必须走模式化名单**：from_script 下 `scriptwriter`
+# 的产物由 `mode.preseed` 落盘，若这里仍按 7 个查、而预置产物又被
+# `post_validate` 判成没问题，那没事；但若**预置失败**（剧本为空），
+# 对账必须把它**记成 failed** 而不是静默跳过 —— 否则门会放行一个缺台词的片。
+
+
+def gate_roles_for(root: Path, ep: int | None = None) -> tuple[str, ...]:
+    """本项目媒体门要查的角色（默认模式 = `GATE_ROLES`，7 个）。
+
+    读 `brief.json` 的 `mode` 字段决定；**读不到 / 不认识一律按 full**
+    （回落由 `mode.warn_unknown` 响亮告警，不静默）。
+    """
+    from . import mode as _mode          # 局部导入：mode 会 import guards（循环）
+    brief = load_brief(root)
+    w = _mode.warn_unknown(brief)
+    if w:
+        print(w, flush=True)
+    if _mode.mode_of(brief) == "full":
+        return GATE_ROLES
+    return _mode.gate_roles_of(brief)
+
+
+def prereq_for(root: Path, ep: int | None = None) -> dict[str, list[str]]:
+    """本项目的依赖序（默认模式 = `PREREQ`，逐字节相同）。
+
+    ⚠️ from_script 下**不删边、只删点**：被省掉的角色（plotdesigner /
+    scriptwriter）从「要派发的键」里消失，于是它们作为**前置**的那些边
+    （`scriptwriter: [plotdesigner, worldbuilder]`）自然不再被读到。
+    """
+    from . import mode as _mode
+    brief = load_brief(root)
+    if _mode.mode_of(brief) == "full":
+        return PREREQ
+    keep = set(_mode.roles_of(brief))
+    return {r: [d for d in deps if d in keep] for r, deps in PREREQ.items()
+            if r in keep}
+
+
 def reconcile_manifest(root: Path, m: dict | None = None,
                        ep: int | None = None) -> dict:
     """**物化对账**：按磁盘事实补齐 `phases`，返回更新后的 manifest。
@@ -78,7 +125,7 @@ def reconcile_manifest(root: Path, m: dict | None = None,
     m = load_manifest(root) if m is None else m
     if ep is None:
         ep = int(m.get("episode_index", 1) or 1)
-    for role in GATE_ROLES:
+    for role in gate_roles_for(root, ep):
         ok, _why, _p = post_validate(role, m, root, ep=ep)
         if ok:
             set_phase(m, role, "complete", ep)
@@ -574,7 +621,11 @@ def media_gate(action: str, m: dict, ep: int | None = None,
     if action in ("render", "render_episode"):
         # 8 个角色全绿才允许进媒体链。旧版只查 scenedesigner，
         # 于是"只跑了 2/8 就渲染"也能过闸——那是编排完整性事故的直接原因。
-        missing = [r for r in GATE_ROLES if phase_of(m, r, ep) != "complete"]
+        # ⚠️ 名单**按项目模式取**（`gate_roles_for`）：默认模式恒等于 `GATE_ROLES`
+        # （7 个，行为一字不变）；from_script 下 6 个（多的那个由预置产物满足）。
+        # `root` 不传时回落常量 —— 既有调用方（部分测试）零改动。
+        _gr = gate_roles_for(root, ep) if root is not None else GATE_ROLES
+        missing = [r for r in _gr if phase_of(m, r, ep) != "complete"]
         if missing:
             return False, ("第 %d 集创作链未完成（缺 %s），不能渲染" % (ep, "、".join(missing))
                            if ep > 1 else

@@ -34,26 +34,38 @@ from v5.guards import (PREREQ, artifact_fresh, load_manifest, out_path,  # noqa:
                        record_review_block, reset_from, resolve_path,
                        restore_stashed, save_manifest)
 
-# ★ 完成判据必须用**被派发的 7 个角色**（`PREREQ` 的键），**不含 `director`**。
+# ★ 完成判据必须用**被派发的角色**（默认模式下 = `guards.PREREQ` 的键，
+#   **不含 `director`**）。
 # 2026-09-12 实测教训：原判据写死 8 个（含 director），而 supervisor 架构里
 # `director` 就是 supervisor 自己、不产出角色产物 → 判据**永远不成立**
 # → 白多跑了两轮（每轮 20+ 分钟）。口径必须与 `guards.GATE_ROLES` 一致。
-ROLES = list(PREREQ)
+#
+# ★ 2026-10-04 剧本直出模式：这里**不再用模块常量**，改为按项目 brief 取
+#   （`mode.roles_of`）。⚠️ `reached()` 是**纯函数**（测试直接调），所以
+#   模式由调用方算好后传进来 —— 别在函数里读盘，那会让它既不纯又难测。
+ROLES: list[str] = list(PREREQ)
 
 
-def reached(got, until: str = "") -> bool:
-    """`until` 之前的角色（含它自己）是否都已产出；`until` 空 = 全部 7 个。
+def reached(got, until: str = "", roles: list[str] | None = None) -> bool:
+    """`until` 之前的角色（含它自己）是否都已产出；`until` 空 = 全部。
 
     ★ 2026-09-19（前端**两段式**）：`--until scriptwriter` = "只要剧本正文"。
       判据是**该角色**及**它之前的全部角色**都在盘上 —— 只判"until 在不在"的话，
       上游缺失也会算达成（下游产物会基于不存在的上游写出来，等于假产物）。
+
+    ★ 2026-10-04：`roles` 给的是**本模式**的名单（from_script 下 5 个）。
+      默认 `None` ⇒ 用模块级 `ROLES`（7 个），**既有调用方与测试行为零变化**。
+      ⚠️ 被省掉的角色（plotdesigner）不在名单里 ⇒ 它**不在表上就不算缺** ——
+      这正是模式的全部意义；而 scriptwriter 的产物由 `mode.write_preseed` 落盘，
+      它**仍在**门名单里，所以「产物被人删了」照样被拦。
     """
+    rs = list(roles) if roles is not None else ROLES
     have = {str(x) for x in (got or [])}
     if not until:
-        return all(r in have for r in ROLES)
-    if until not in ROLES:
+        return all(r in have for r in rs)
+    if until not in rs:
         return False                     # 调用方应已校验；这里不猜
-    return all(r in have for r in ROLES[:ROLES.index(until) + 1])
+    return all(r in have for r in rs[:rs.index(until) + 1])
 
 
 def _arg(flag: str, default):
@@ -99,7 +111,7 @@ async def _pending_actions(c, tid: str) -> list:
 
 async def _wait_decision(root: Path, project: str, tid: str, rid: str,
                          got: list, hitl_timeout: float,
-                         interval: float = 5.0) -> dict | None:
+                         interval: float = 5.0, roles=None) -> dict | None:
     """图已 `interrupt` 挂起 → 记录待批准并轮询等外部决定。
 
     返回**决定字典**（`hitl.read_decision` 的形态：`decision` / `target` / `by` /
@@ -120,7 +132,11 @@ async def _wait_decision(root: Path, project: str, tid: str, rid: str,
     """
     from v5 import hitl
 
-    hitl.record_pending(root, thread_id=tid, run_id=rid, done_roles=got)
+    # ★ 2026-10-04：`roles` 传本模式名单 —— 否则 pending.json 报给前端的
+    #   「下一个待派发角色」会是本轮**根本不会派**的那个（from_script 下
+    #   scriptwriter / plotdesigner），人看着像卡住了（实测这类误导最难排查）。
+    hitl.record_pending(root, thread_id=tid, run_id=rid, done_roles=got,
+                        roles=roles)
     _pd = hitl.read_pending(root) or {}
     stamp = str(_pd.get("stamp") or "")     # 本次挂起的唯一标识
     print("[drive] ⏸ 已挂起等待人工确认：%s" % hitl.status(root), flush=True)
@@ -178,7 +194,8 @@ def reroll_budget(cap: int, blocked: int) -> int:
     return max(0, int(cap) - int(blocked or 0))
 
 
-def reroll_plan(dec: dict, until: str = "", redo_left: int = 0) -> tuple:
+def reroll_plan(dec: dict, until: str = "", redo_left: int = 0,
+                roles: list[str] | None = None) -> tuple:
     """评审判决 → 该不该自动打回、打回谁。返回 `(action, target, note)`。
 
     `action` 三种：`"reroll"`（照 target 打回重做）/ `"exhausted"`（重试用完，交给门）
@@ -187,7 +204,13 @@ def reroll_plan(dec: dict, until: str = "", redo_left: int = 0) -> tuple:
 
     判据为什么抽成纯函数：副作用（清 phases、挪产物、发新 run）留在驱动器循环里，
     这些分支才能被单测钉住 —— 否则"要不要打回"只能等真跑一小时才知道。
+
+    ★ 2026-10-04：`roles` = 本模式的名单。⚠️ **必须传**（默认 `None` 走 7 个常量，
+    只为让既有测试零改动）。from_script 下若评审点名 `plotdesigner`，
+    它不在名单里 ⇒ 必须判 `"no-target"`（不动盘）——
+    否则会「把一个从不存在的角色的产物挪走」，而它压根没有产物。
     """
+    rs = list(roles) if roles is not None else ROLES
     if until or not isinstance(dec, dict) or not dec:
         return "", "", ""
     try:
@@ -204,7 +227,7 @@ def reroll_plan(dec: dict, until: str = "", redo_left: int = 0) -> tuple:
     except Exception:  # noqa: BLE001
         tgt = ""
     tgt = tgt or str((dec.get("rerun") or [""])[0])
-    if tgt not in ROLES:
+    if tgt not in rs:
         return "no-target", "", note
     if redo_left <= 0:
         return "exhausted", tgt, note
@@ -290,9 +313,6 @@ async def main() -> int:
     #   而生成正文只需要链的前半段（worldbuilder → assetdesigner∥plotdesigner → scriptwriter）。
     #   不传 = 跑完整条链（原行为，逐字节不变）。
     until = str(_arg("--until", "") or "").strip()
-    if until and until not in ROLES:
-        print("[drive] --until 只能是 %s 之一（收到 %r）" % ("、".join(ROLES), until))
-        return 1
     # ★ 等待**人工确认**的独立预算（秒）。0 = **无限等**（默认）。
     #   只与步级 HITL 有关；没开那个开关时这一行完全不参与（`_wait_decision` 不被调用）。
     hitl_timeout = float(_arg("--hitl-timeout", "0"))
@@ -301,6 +321,26 @@ async def main() -> int:
     # SHORTDRAMA_PROJECTS pointing elsewhere, so a literal would split one
     # project across two roots and the HITL channel would never meet the shim.
     root = config.PROJECTS_DIR / project
+
+    # ★★ 剧本直出模式（2026-10-04）：**本轮派工名单按项目 brief 定**。
+    #   全函数共用这一份 `chain_roles`（下面每处判据都用它）——
+    #   分成两处就会漂，而「完成判据」与「派工判据」不一致 = 死等一个不会落盘的产物。
+    #
+    #   ⚠️ **不改模块级 `ROLES`**（`ROLES[:] = ...` 原地改全局会让并行的第二个
+    #   项目读到别人的名单）。`ROLES` 只作为**默认模式**的常量与测试入口保留。
+    from v5 import mode as _mode
+    from v5.guards import load_brief as _lb
+    _brief = _lb(root)
+    _warn = _mode.warn_unknown(_brief)
+    if _warn:
+        print(_warn, flush=True)
+    chain_roles: list[str] = list(_mode.roles_of(_brief))
+    print("[drive] 本片模式=%s → 派工名单：%s"
+          % (_mode.mode_of(_brief), "、".join(chain_roles)), flush=True)
+    if until and until not in chain_roles:
+        print("[drive] --until 只能是 %s 之一（收到 %r）"
+              % ("、".join(chain_roles), until))
+        return 1
 
     # 新链一律从"没有待批"开始。默认（自动模式）下 `record_pending` 永不被调用，
     # 上一次逐步确认留下的 `pending.json` 就**没有任何机会被覆盖**，前端会永远挂着
@@ -337,7 +377,7 @@ async def main() -> int:
         算完成是设计（见下面 M5 那段），不许要求它们被本轮改写。
         """
         got = []
-        for r in ROLES:
+        for r in chain_roles:
             p = resolve_path(root, r, ep)
             if not (p.exists() and p.stat().st_size > 0):
                 continue
@@ -375,7 +415,30 @@ async def main() -> int:
     # 本轮**根本不跑**的那三个 —— 也正是 `done_roles(since=...)` 唯一豁免新鲜度
     # 判据的角色（它们的产物本来就该是旧的）。
     skipped_whole = WHOLE_DRAMA if (ep > 1 and _have_whole) else ()
-    if ep > 1 and _have_whole:
+    if _mode.mode_of(_brief) == "from_script":
+        # ★ 剧本直出模式（2026-10-04）：派工单必须**逐字点名要派哪几个**，
+        # 且**明令禁止派被省掉的那两个**。
+        #   ⚠️ 为什么不能只靠 `orchestrator._PLAN_FROM_SCRIPT`（system prompt 里那段）：
+        #     那段是**每条 run 都注入**的，而目标是**本轮**的意图。两者都要写 ——
+        #     目标提示是这一轮的**具体指令**（模型对最后一段服从度最高），
+        #     system prompt 是常驻契约。实测教训（2026-09-17 血案）：
+        #     纪律写「之后才是…」时模型**一个 task 都没派发、自己把产物全写了**。
+        _gone = [r for r in ROLES if r not in chain_roles]
+        _plan = ("本片是**剧本直出模式**（`brief.mode = from_script`），"
+                 "完整剧本已在 `/brief.json` 的 `script` 字段。\n"
+                 "**用 `task` 依次派发这 %d 个角色**：%s。\n"
+                 "⛔ **绝对不要派发 %s**：剧本已定稿，%s。\n"
+                 "  ⛔ 它们的产物位置已由系统按剧本正文**预置落盘**，"
+                 "**不要重新写、也不要动那些文件**。\n"
+                 "  ⛔ 更不要用 `write_file` 替没派发的角色补产物 —— "
+                 "产物齐全会让下游门全部放行，而假产物要到成片才暴露。"
+                 % (len(chain_roles), " → ".join(chain_roles),
+                    "、".join(_gone),
+                    "、".join("`%s`（剧本就是剧本，再写一遍就是改掉它）" % r
+                             for r in _gone)))
+        print("[drive] 剧本直出模式 → 目标提示只点 %d 个角色，省掉 %s"
+              % (len(chain_roles), "、".join(_gone)), flush=True)
+    elif ep > 1 and _have_whole:
         _plan = ("本集**用 `task` 依次派发**这 4 个角色："
                  "scriptwriter → dialogue → scenedesigner → reviewer。"
                  "上游的全剧级产物直接读盘上的现成文件。")
@@ -499,7 +562,7 @@ async def main() -> int:
           缺陷照旧响亮列出（口径见 [[stop-bad-runs-save-quota]]：无出口时人选择放行）。
         """
         miss = [r for r in _last_moved
-                if r in ROLES and not resolve_path(root, r, ep).exists()]
+                if r in chain_roles and not resolve_path(root, r, ep).exists()]
         print("[drive] ⛔ 反空转闸收工：%s" % why, flush=True)
         # ★ 乒乓本身也记一次**门台账**：这一轮没能往前推进，是评审与分镜**又没收敛**。
         #   不记的话出口还是堵着 —— 实测 1003g 驱动器只打了 1 次回（台账 1），
@@ -532,7 +595,7 @@ async def main() -> int:
                         "不往前推进" % (_stall, got))
             heal_after_stop(thrashed)
             break
-        if reached(got, until):
+        if reached(got, until, chain_roles):
             # ★ 产物齐了先问一句**评审过没过**（见上方 `review_state` 的事故记录）。
             #   `--until` 是前端两段式的"跑到某角色为止"，那条路径上没有评审，
             #   所以只在跑完整链时才据此打回。
@@ -558,7 +621,7 @@ async def main() -> int:
                 except Exception as e:  # noqa: BLE001 -- 核不动就照旧打回，绝不静默放行
                     print("[drive] ⚠️ 总时长读数核对失败（%s: %s）→ 照评审原判处理"
                           % (type(e).__name__, str(e)[:100]), flush=True)
-            act, tgt, note = reroll_plan(_dec or {}, until, redo_left)
+            act, tgt, note = reroll_plan(_dec or {}, until, redo_left, chain_roles)
             if act == "no-target":
                 print("[drive] !! 评审判 fail，但**回退目标判不出来**（rerun=%s）"
                       "→ 不动盘，交给渲染门处理。评审原因：%s"
@@ -662,7 +725,7 @@ async def main() -> int:
             # ★ 2026-09-19：`--until` 已达成 ⇒ **不等这一轮 run 结束**
             #   （它可能还在往下游派发）。取消它 + 撤掉已挂起的待批，然后收工。
             #   ⛔ 取消失败必须**响亮**：否则人会以为链停了，而它还在后台烧调用。
-            if until and reached(_now, until):
+            if until and reached(_now, until, chain_roles):
                 print("[drive] ✅ 已达成 --until %s ⇒ 取消当前 run 并收工"
                       "（免得它继续往下游派发）" % until, flush=True)
                 try:
@@ -724,7 +787,8 @@ async def main() -> int:
             # 新 run）—— 那样会**丢掉挂起的 thread 状态**、从头重跑一遍。
             _wait_t0 = time.time()
             dec = await _wait_decision(root, project, tid, rid,
-                                       done_roles(t0), hitl_timeout)
+                                       done_roles(t0), hitl_timeout,
+                                       roles=chain_roles)
             # ★ **等人不算链的时间**（2026-09-18）：把这段补回 `t0`。
             #   不补的话，人思考 10 分钟就等于从链的 90 分钟预算里扣掉 10 分钟
             #   —— 全手动模式下这是**必然**发生的误判，不是边缘情况。
@@ -816,7 +880,7 @@ async def main() -> int:
               "        重跑必须加 `--fresh`：盘上多半是半程态或**代写产物**。", flush=True)
         return 3
 
-    if reached(_got, until) and _diag_lines() <= _diag0:   # `--until` 时=达成到该角色
+    if reached(_got, until, chain_roles) and _diag_lines() <= _diag0:   # `--until` 时=达成到该角色
         # 产物齐全但探针没多出行 —— 见上面 `_diag` 的说明。
         #
         # ★★ 2026-09-18：**加交叉验证**（血案：当天 rc=3 误报，把正常链判死）。
@@ -829,7 +893,7 @@ async def main() -> int:
         #   交叉验证手段：**产物时间跨度** —— 7 个角色逐个跑出来至少要十几分钟，
         #   supervisor 代写则会在极短时间内批量落盘。
         _ts = []
-        for _r in ROLES:
+        for _r in chain_roles:
             _p = config.PROJECTS_DIR / project / out_path(_r, ep)
             if _p.exists():
                 _ts.append(_p.stat().st_mtime)
