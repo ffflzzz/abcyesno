@@ -32,6 +32,10 @@ BASE_ENV=(PYTHONUTF8=1
   AGNES_VIDEO_MAX_SHOTS=60
   AGNES_VIDEO_MAX_SECONDS=12
   SHORTDRAMA_VIDEO_BGM=0
+  # ★ 打包档的配乐是**另一个开关**（config.PACK_BGM，默认 1）。只关 VIDEO_BGM 的话
+  #   reference/mixed 说「NO background music」而 pack 说「保留全程背景音乐、禁止静音段」
+  #   ⇒ 听感差别会被记到档位头上。brief 的禁忌写了「无背景音乐」，三臂一律关掉两个开关。
+  SHORTDRAMA_PACK_BGM=0
   SHORTDRAMA_VIDEO_KEY_ROTATE=1
   SHORTDRAMA_QC_WORKERS=8
   SHORTDRAMA_OPEN_CHAIN=1
