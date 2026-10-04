@@ -97,7 +97,26 @@ LIGHT_ADDED = {
              "颈部投下硬阴影；睡裙下摆受光面泛暖、背光的褶皱内侧偏蓝灰"),
 }
 
-ARMS = ("BASE", "REPEAT", "CAM", "LIGHT", "BOTH")
+#: 空间几何（1002 深夜追加，用户点名单测这一条）。
+#: ★ 全部按 `assets.json` 里「楼顶天台」登记的描述**追加尺寸与层次**，不改它已有的
+#:   陈设（水泥地面／一侧锈旧水塔／上方一条晾衣绳／远处地平线城市灯带）——
+#:   同一处空间写两个互相矛盾的源，是本项目记过的病（光源打架那次整段漂成暖光室内）。
+#: ⚠️ 架构位置另议：这些是**场景级**属性，长期该进 location 资产描述（`scene_line`
+#:   逐镜注入），而不是每镜的「视觉风格」列。探针先借这一列做单变量。
+GEOM_CELLS = {
+    "LN12": ("两人脚下是一片完全空的水泥地，从前景一直铺到女儿墙，进深约八米；"
+             "齐胸高的女儿墙沿画面横向贯穿，墙顶有一条平直的亮边；"
+             "锈旧水塔在左后方约六米、塔身压住画面左上；远处楼群天际线在墙头上排成三层高低；"
+             "地平线以上整片是空旷的夜空"),
+    "LN13": ("头顶上方约两米四有一条晾衣绳横拉贯穿画面，绳上夹子每隔约四十厘米一个；"
+             "她身后约三米就是那道女儿墙，墙外只有夜空与远处灯带"),
+    "LN14": ("水泥地面由一格一格的分缝铺开，缝与缝间隔约一米二，缝里积着灰；"
+             "鞋底与地面贴合处压出一圈窄阴影，四周地面空到墙根"),
+    "LN15": ("她仰头之后，画面上半部整片是空的夜空，只有晾衣绳的一条细黑线横穿；"
+             "水塔的轮廓在右上方远处，比她小得多，衬出天台的开阔"),
+}
+
+ARMS = ("BASE", "REPEAT", "CAM", "LIGHT", "BOTH", "GEOM", "GEOM2")
 
 
 def build_cells(group: list[dict], arm: str) -> list[dict]:
@@ -117,6 +136,12 @@ def build_cells(group: list[dict], arm: str) -> list[dict]:
                                  % (arm, n))
             old = (s.get("visual_style") or "").strip()
             s2["visual_style"] = ((old.rstrip("。") + "。") if old else "") + LIGHT_ADDED[n]
+        if arm in ("GEOM", "GEOM2"):
+            if n not in GEOM_CELLS:
+                raise SystemExit("[%s] 缺 %s 的「空间几何」增强稿——补齐 GEOM_CELLS 再跑"
+                                 % (arm, n))
+            old = (s.get("visual_style") or "").strip()
+            s2["visual_style"] = ((old.rstrip("。") + "。") if old else "") + GEOM_CELLS[n]
         out.append(s2)
     return out
 
@@ -448,6 +473,126 @@ def run_light(arms: list[str], project: str, out: Path) -> int:
     return 0
 
 
+def geom_metrics(clip: Path, fdir: Path, arm: str, step: float = 0.5) -> dict:
+    """**空间几何的机械读数**（不靠模型）：沿竖直方向的亮度剖面。
+
+    量什么（对应 GEOM 臂声明的三件事）：
+    · `hedges` —— **横贯画面的长直边**有几条。判据用"整行平均亮度的跳变"：
+      一条从左边拉到右边的墙头／绳／天际线，会让那一行的均值整体抬或塌。
+      （第一版用的是"一行里 55% 像素梯度>18"，缩到 120 宽之后**一条都触发不了**
+      ——所有臂全读 0，那是量法设错，不是画面没边。改成行均值跳变后先要在
+      已有臂上确认有分辨力才用。）
+    · `top_std` —— 画面上三分之一的行均值**波动**。声明"地平线以上整片是空旷夜空"
+      ⇒ 这个数应该小。
+    · `bot_std` —— 下三分之一同样的波动（近处水泥地的分缝、腿、鞋会带来起伏）。
+      声明了前景铺到墙根 ⇒ 这个数与 `top_std` 的差应该拉开。
+    ⚠️ 代理指标，只看相对带宽外的差异。
+    """
+    import subprocess
+
+    from PIL import Image
+
+    fdir.mkdir(parents=True, exist_ok=True)
+    dur = float(subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "default=nk=1:nw=1", str(clip)],
+        capture_output=True, text=True).stdout.strip() or 0) or 0.0
+    W, H = 120, 213
+    per_frame = []
+    t = 0.0
+    while t <= dur - 1e-6:
+        p = fdir / ("g%05.2f.png" % t)
+        if not p.exists():
+            subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", "%.2f" % t, "-i", str(clip),
+                            "-frames:v", "1", "-vf", "scale=%d:%d" % (W, H), "-q:v", "3",
+                            str(p)], capture_output=True)
+        if p.exists():
+            px = list(Image.open(p).convert("L").getdata())
+            rowmean = [sum(px[y * W:(y + 1) * W]) / W for y in range(H)]
+            jumps = [abs(rowmean[y + 1] - rowmean[y]) for y in range(H - 1)]
+            med = sorted(jumps)[len(jumps) // 2]
+            cut = max(2.0, med * 3.0)          # 至少 2 个灰阶的整行跳变才算"边"
+            edges, run = 0, False
+            for j in jumps:
+                if j >= cut and not run:
+                    edges += 1
+                    run = True
+                elif j < cut:
+                    run = False
+            third = H // 3
+            top = rowmean[:third]
+            bot = rowmean[-third:]
+
+            def sd(v):
+                m = sum(v) / len(v)
+                return (sum((x - m) ** 2 for x in v) / len(v)) ** 0.5
+            per_frame.append((round(t, 2), edges, round(sd(top), 2), round(sd(bot), 2)))
+        t = round(t + step, 2)
+
+    def w(lo: float, hi: float, idx: int) -> float:
+        vals = [r[idx] for r in per_frame if lo <= r[0] <= hi]
+        return round(sum(vals) / len(vals), 2) if vals else 0.0
+
+    return {"arm": arm, "nframes": len(per_frame),
+            "edges_0_3": w(0.5, 2.5, 1), "topstd_0_3": w(0.5, 2.5, 2),
+            "edges_8_12": w(8.5, 11.5, 1), "topstd_8_12": w(8.5, 11.5, 2),
+            "botstd_all": w(0.5, 11.5, 3), "frames": per_frame}
+
+
+def run_geom(arms: list[str], project: str, out: Path) -> int:
+    rows = []
+    for arm in arms:
+        clip = out / ("PD_%s_%s.mp4" % (project, arm))
+        if not clip.exists():
+            print("[pd] !! 缺成片 %s（先下单这一臂）" % clip.name)
+            continue
+        r = geom_metrics(clip, out / "PD_geom2" / arm, arm)
+        rows.append(r)
+        print("[pd] %-7s 帧%d  全景段 横边=%4.2f 条/帧 上半波动=%5.2f   "
+              "仰拍段 横边=%4.2f 条/帧 上半波动=%5.2f   下半波动=%5.2f"
+              % (arm, r["nframes"], r["edges_0_3"], r["topstd_0_3"],
+                 r["edges_8_12"], r["topstd_8_12"], r["botstd_all"]), flush=True)
+    spread = [max((r[k] for r in rows), default=0) - min((r[k] for r in rows), default=0)
+              for k in ("edges_0_3", "topstd_0_3", "edges_8_12", "topstd_8_12")]
+    print("\n分辨力自检：各指标在 %d 条臂之间的**极差** %s"
+          % (len(rows), ["%.2f" % x for x in spread]))
+
+    def val(arm, key):
+        return next((r[key] for r in rows if r["arm"] == arm), None)
+
+    # 两样本比较：**各自文本内部的带宽**都要摆出来，才知道差值是信号还是抖。
+    # （实测教训：`横边条数` 在 BASE 与 REPEAT 这两个**同一份文本**的成片之间
+    #   就能差到 7.6 条/帧，比任何臂间差都大 ⇒ 这个指标在本组上不可用。）
+    old_band = [("BASE", "REPEAT"), ("CAM",), ("LIGHT",), ("BOTH",)]
+    print("\n同一份文本两次的带宽（真噪声）：BASE %.2f vs REPEAT %.2f ｜ "
+          "GEOM %.2f vs GEOM2 %.2f"
+          % (val("BASE", "edges_0_3") or 0, val("REPEAT", "edges_0_3") or 0,
+             val("GEOM", "edges_0_3") or 0, val("GEOM2", "edges_0_3") or 0))
+    for key, label in (("edges_0_3", "全景段 横边条数"),
+                       ("topstd_0_3", "全景段 上半亮度波动"),
+                       ("edges_8_12", "仰拍段 横边条数"),
+                       ("topstd_8_12", "仰拍段 上半亮度波动"),
+                       ("botstd_all", "全片 下半亮度波动")):
+        b, r_ = val("BASE", key), val("REPEAT", key)
+        g, g2 = val("GEOM", key), val("GEOM2", key)
+        if None in (b, r_) or (g is None and g2 is None):
+            continue
+        gs = [x for x in (g, g2) if x is not None]
+        gm = sum(gs) / len(gs)
+        old_w = abs(b - r_)
+        new_w = abs(gs[0] - gs[1]) if len(gs) > 1 else old_w
+        band = max(old_w, new_w)
+        diff = gm - (b + r_) / 2.0
+        print("  %s：旧文本 %.2f,%.2f（带 %.2f）｜新文本 %s（带 %.2f）｜差 %+0.2f ⇒ %s"
+              % (label, b, r_, old_w,
+                 "，".join("%.2f" % x for x in gs), new_w, diff,
+                 "超出带宽 = 有读数" if abs(diff) > band
+                 else "落在带宽内 = **这把尺子测不出**（带宽 %.2f ≥ 差值 %.2f）"
+                      % (band, abs(diff))))
+    print("RESULT: 空间几何读数完成（%d 臂）" % len(rows))
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--project", default="leak-upstairs-1002")
@@ -462,6 +607,8 @@ def main() -> int:
                     help="只算帧间差曲线（不调模型、不吃额度）")
     ap.add_argument("--light", action="store_true",
                     help="只算画面明暗分布（不调模型、不吃额度）")
+    ap.add_argument("--geom", action="store_true",
+                    help="只算空间几何代理数：长水平边条数 + 上半部有内容占比")
     ap.add_argument("--rounds", type=int, default=2)
     a = ap.parse_args()
 
@@ -474,6 +621,8 @@ def main() -> int:
         return run_motion(want, a.project, ROOT / "tmp")
     if a.light:
         return run_light(want, a.project, ROOT / "tmp")
+    if a.geom:
+        return run_geom(want, a.project, ROOT / "tmp")
 
     md = (root / "scenedesigner" / ("scenedesigner_ep%d.md" % a.ep)).read_text(encoding="utf-8")
     by = {s["name"]: s for s in storyboard.parse(md)}

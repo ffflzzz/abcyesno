@@ -1,6 +1,6 @@
 ---
 name: director
-description: 把剧本改编为标准化 7 列镜头表（Shot ID/Continuity Handoff/Reference Anchors 四子字段/Hook Type/Per-Second Directives 六要素/Audio Track/Audio Mode）+ 每镜时长**按剧情节拍灵活分配（4-12s 内）**：特写反应/悬念凝视可短至 4-6s，情绪铺垫/动作完整拍可到 10-12s——**避免全程等长**（等长=节奏平铺，是分镜偷懒的标志）。
+description: 把剧本改编为标准化 7 列镜头表（Shot ID/Continuity Handoff/Reference Anchors 四子字段/Hook Type/Per-Second Directives 六要素/Audio Track/Audio Mode）+ 每镜时长在 4-12s 内取值：**同场景的连续戏并进一条 12 秒的镜（下游验收水位：全片至少 6 成镜满 12 秒）**；特写反应/悬念凝视可短至 4-6s，情绪铺垫/动作完整拍可到 10-12s。⛔「避免全程等长」仅指**每镜时长全都一样**（如 16 镜全是 7 秒）——那才是节奏平铺；「都 12 秒 + 镜内分段不等距」是快慢起伏，**不算等长、不要用它把镜长压回 6-8 秒**（2026-10-04 AB 实测：软措辞对镜长无效，可计数指标才有效）。
 
 音频模式分布配比自查。
 ---
