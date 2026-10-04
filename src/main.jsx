@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import App from './App.jsx';
 import DetachedApp from './DetachedApp.jsx';
 import Onboarding, { isOnboardingDone } from './components/Onboarding.jsx';
+import UpdatePopup from './components/UpdatePopup.jsx';
 import { TtsProvider } from './hooks/useTts.jsx';
 import bachAvatar from './assets/bach-avatar.png';
 import './styles/index.css';
@@ -25,6 +26,7 @@ function isDetachedPanel() {
 // Boot mode router — main.jsx is the entry point for two surfaces:
 //   1. main   : primary window (`index.html`)
 //   2. result : detached result panel (`index.html?panel=result`)
+//   3. update : 更新提醒卡 (`index.html?panel=update`)
 // (The "studio" standalone-window mode was removed — 漫剧go now opens as a
 // normal in-app tab, not a separate Electron window. Keeping dispatch here
 // lets the detached result window avoid loading the heavy App bootstrap.)
@@ -34,6 +36,9 @@ function parseBootMode() {
     const panel = p.get('panel');
     if (panel === 'result') {
       return { mode: 'result', workflowId: '' };
+    }
+    if (panel === 'update') {
+      return { mode: 'update' };
     }
     if (panel === 'tab') {
       // Torn-off tab window. Phase 1: browser. Phase 2: studio (carries
@@ -195,16 +200,26 @@ function Bootstrap() {
 // Standalone windows — the detached result panel has its own Bootstrap in
 // DetachedApp.jsx (it waits for the main window's backend to come up).
 const boot = parseBootMode();
-const Root =
-  boot.mode === 'result'
-    ? <DetachedApp mode="result" />
-    : boot.mode === 'tab'
-      ? <DetachedApp mode="tab" type={boot.type} browserUrl={boot.browserUrl} workflowId={boot.workflowId} assistantId={boot.assistantId} />
-      : <Bootstrap />;
-ReactDOM.createRoot(document.getElementById('root')).render(
-  <React.StrictMode>
-    <TtsProvider>
-      {Root}
-    </TtsProvider>
-  </React.StrictMode>
-);
+
+if (boot.mode === 'update') {
+  // 更新提醒卡：纯静态一张卡，不等后端、不挂 TtsProvider。
+  ReactDOM.createRoot(document.getElementById('root')).render(
+    <React.StrictMode>
+      <UpdatePopup />
+    </React.StrictMode>
+  );
+} else {
+  const Root =
+    boot.mode === 'result'
+      ? <DetachedApp mode="result" />
+      : boot.mode === 'tab'
+        ? <DetachedApp mode="tab" type={boot.type} browserUrl={boot.browserUrl} workflowId={boot.workflowId} assistantId={boot.assistantId} />
+        : <Bootstrap />;
+  ReactDOM.createRoot(document.getElementById('root')).render(
+    <React.StrictMode>
+      <TtsProvider>
+        {Root}
+      </TtsProvider>
+    </React.StrictMode>
+  );
+}

@@ -9555,3 +9555,159 @@ body[--resizing="1"] .result-panel-resize-handle::before {
   max-height: 4.5em;
   overflow: hidden;
 }
+
+/* ── 更新提醒卡（无边框置顶小窗 index.html?panel=update）────────────────────
+   主进程在新版下载安装完成时弹这一张卡。窗口 380×246、frame:false，所以
+   顶部条必须是 drag 区（否则用户挪不动它），按钮要逐个标 no-drag。
+   配色只用现有 token：深色下 --accent 是浅字色做按钮底，浅色下自动翻成深色。 */
+.up-card {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.up-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  flex-shrink: 0;
+  padding: 0 4px 0 10px;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+.up-logo {
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-pill);
+  -webkit-app-region: no-drag;
+}
+
+.up-app {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.up-close {
+  -webkit-app-region: no-drag;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.up-close:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.up-body {
+  flex: 1;
+  min-height: 0;
+  padding: 14px 16px 0;
+}
+
+.up-title {
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+}
+
+.up-versions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.up-chip {
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.up-chip.is-new {
+  border-color: var(--accent-2);
+  background: var(--surface-3);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.up-arrow {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.up-hint {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.up-foot {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+  padding: 12px 16px 14px;
+}
+
+.up-details {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 4px 2px;
+  cursor: pointer;
+}
+
+.up-details:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+.up-install {
+  flex: 1;
+  height: 34px;
+  border: none;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  color: var(--bg);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.up-install:hover {
+  filter: brightness(1.08);
+}
+
+.up-install:disabled {
+  opacity: 0.55;
+  cursor: default;
+}

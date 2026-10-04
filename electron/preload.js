@@ -51,6 +51,8 @@ contextBridge.exposeInMainWorld('hermes', {
   installUpdate: () => ipcRenderer.invoke('updater-install'),
   onUpdaterState: (cb) => on('updater-state', cb),
   offUpdaterState: (cb) => off('updater-state', cb),
+  // 更新提醒卡（独立无边框小窗）的三个动作：install / details / later
+  updaterPopupAction: (action) => ipcRenderer.invoke('updater-popup-action', action),
 
   // Static platform string so the renderer can branch mac/win chrome.
   platform: process.platform,
