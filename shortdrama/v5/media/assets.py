@@ -233,9 +233,84 @@ def cast_numeral(text: str) -> int:
     return best
 
 
+def name_tails(name: str, min_len: int = 3) -> list:
+    """全名的**尾词**候选（`死者眼球放大片` → `眼放大片`…`放大片`），短到 min_len 为止。"""
+    nm = (name or "").strip()
+    return [nm[i:] for i in range(max(0, len(nm) - 6), min(len(nm) - min_len + 1, len(nm)))
+            if len(nm[i:]) >= min_len and nm[i:] != nm]
+
+
+def _unambiguous_tails(reg: dict) -> dict:
+    """尾词 → 资产名，**只保留全注册表里唯一对应那一个名字的尾词**。
+
+    有歧义就丢掉：`红色外套` 与 `蓝色外套` 共有尾词 `色外套` —— 用它去匹配等于
+    让两件道具抢同一格参考图，绑错的代价（把别人的物件画进画面）比"少绑一张"大。
+    """
+    seen: dict = {}
+    dead: set = set()
+    for a in reg.get("assets", []):
+        nm = str(a.get("name") or "").strip()
+        for t in name_tails(nm):
+            if t in seen and seen[t] != nm:
+                dead.add(t)
+            seen.setdefault(t, nm)
+    return {t: n for t, n in seen.items() if t not in dead}
+
+
+def unbound_mentions(reg: dict, shots: list, names_out: dict | None = None,
+                     min_hits: int = 2) -> list:
+    """列出「正文提到 ≥`min_hits` 镜、却一次都没被绑上参考图」的资产。
+
+    返回 `[(资产名, 提到的镜数), …]`，按次数从多到少。
+
+    ★ 为什么必须有它（2026-10-05 实测 `madfate-abc-1005` 第 1 集）：
+      绑定失败是**静默**的——旧实现里没有任何一处会问"这件登记过的资产去哪了"。
+      那次「死者眼球放大片」在正文出现 13 镜、绑定 0 镜，日志全绿、成片能出，
+      直到人眼看片才发现道具忽大忽小。⇒ 这种"该出现却没出现"的事实
+      必须由程序自己算一遍并喊出来，不能指望观众替我们做质检。
+      （同型旧账：0930 那次「两集 60 镜、38 镜提到道具、绑上图的 = 0，且日志全绿」。）
+    """
+    tails = _unambiguous_tails(reg)
+    bound = {x for v in (names_out or {}).values() for x in (v or [])}
+    out = []
+    for a in reg.get("assets", []):
+        nm = str(a.get("name") or "").strip()
+        if not nm or nm in bound:
+            continue
+        kws = [str(k) for k in (a.get("keywords") or []) if k]
+        ts = [t for t in name_tails(nm) if tails.get(t) == nm]
+        n = sum(1 for s in shots
+                if any(k in _shot_text(s) for k in kws)
+                or any(t in _shot_text(s) for t in ts))
+        if n >= min_hits:
+            out.append((nm, n))
+    return sorted(out, key=lambda kv: -kv[1])
+
+
 def hits_for_text(reg: dict, text: str, max_n: int = 5) -> list:
+    """按镜正文挑参考图：先 `keywords` 整串命中，再退一步用**全名尾词**兜底。
+
+    ★ 尾词这一层为什么必须有（2026-10-05 实测 `madfate-abc-1005` 第 1 集）：
+      资产卡的「关键词」栏有两个失效面——① `madfate-grim` / `half-narrated` 两个包的
+      契约**根本没要求写这一栏**，`cast` 于是兜底成 `keywords=[全名]`；
+      ② 分镜写道具**一律用简称**（「放大片」），而简称是全名的**尾巴**，
+      `k in text` 这种"关键词整串出现在正文里"的方向永远为假。
+      两条叠起来的实测结果：「死者眼球放大片」全名出现 **0** 次、简称出现 **13** 镜、
+      **绑定 0 镜**，且日志全绿。道具没有外观锚 ⇒ 模型拿同一场里唯一绑上的
+      「旧机械表」那张**怀表**图去顶 ⇒ 道具忽大忽小、两件长成一件，观众当场跳戏。
+    """
     hits = [a for a in reg.get("assets", [])
             if a.get("keywords") and any(k in text for k in a["keywords"])]
+    if len(hits) < max_n:
+        got = {id(a) for a in hits}
+        tails = _unambiguous_tails(reg)
+        for a in reg.get("assets", []):
+            if id(a) in got:
+                continue
+            nm = str(a.get("name") or "").strip()
+            if nm and any(t in text for t in name_tails(nm)
+                          if tails.get(t) == nm):
+                hits.append(a)
     # 角色优先于道具（同优先级时）
     hits.sort(key=lambda a: (0 if a.get("type") == "character" else 1,
                              -int(a.get("priority", 8))))
@@ -618,16 +693,20 @@ def hits_for_shot(reg: dict, shot: dict, max_n: int = 5, defaults=None) -> tuple
     return hits[:max_n], leftover
 
 
-def validate_assets(root: Path, shots: list, refs_by_shot: dict) -> list:
-    """**cast 之后的资产完整性校验**（2026-09-12 新增），返回问题清单（空=全有着落）。
+def validate_assets(root: Path, shots: list, refs_by_shot: dict,
+                    names_out: dict | None = None) -> list:
+    """**cast 之后的资产完整性校验**（2026-10-05 扩到五件事），返回问题清单（空=全有着落）。
 
     为什么必须放在 cast **之后**：资产契约门（`series._assets_gate`）跑在 cast
     **之前**，读到的是空注册表 → 只会误报/漏报；而**全流程没有任何一步**检查
     "分镜点名的资产是否真的拿到了图"。于是"资产卡写了、图没生成"会静默降级成
     文字身份锚点，问题到成片才暴露（返工最贵）。
 
-    检查四件事：① 分镜 @ 了但注册表没有该资产；② 注册表有条目但图不在盘；
-    ③ 该镜 @ 了**可绑**资产却一张参考图都没绑上；④ location 类豁免（见下）。
+    检查五件事：① 分镜 @ 了但注册表没有该资产；② 注册表有条目但图不在盘；
+    ③ 该镜 @ 了**可绑**资产却一张参考图都没绑上；④ location 类豁免（见下）；
+    ⑤ ★（2026-10-05 新增）**资产登记了、正文也反复提到，却一次都没进过任何一次请求**
+      —— ①–③ 都要求"分镜写了 `@全名`"才看得见，而实测分镜写道具**一律用简称、不加 @**
+      （「放大片」13 镜、全名 0 次），于是那种漏绑一条都不报、日志全绿。见 `unbound_mentions`。
     """
     reg = auto_sync(root)
     by_name = {str(a.get("name") or ""): a for a in reg.get("assets", [])}
@@ -655,6 +734,11 @@ def validate_assets(root: Path, shots: list, refs_by_shot: dict) -> list:
     if unbound:
         problems.append("以下镜 @ 引用了可绑资产却没绑到任何参考图：%s"
                         % "、".join(unbound[:8]))
+    if names_out is not None:
+        for an, n in unbound_mentions(reg, shots, names_out):
+            problems.append("「%s」在分镜正文出现 %d 镜，却**一次都没进过任何一次请求**"
+                            "（参考图白出了）——多半是卡里没写简称别名，"
+                            "或分镜用的是全名的简称而匹配词只有全名" % (an, n))
     return problems
 
 

@@ -803,7 +803,8 @@ def _run_impl(project_root: Path, ep: int = 1, log=print, max_regen: int = 2,
             # 只会误报；而全流程**没有任何一步**检查"分镜点名的资产是否真有图"。
             # 现在按磁盘事实查：分镜 @ 引用的资产，注册表要有条目 **且** 图要在盘。
             # 默认只强告警；`SHORTDRAMA_ASSET_GATE=1` 时硬拦。
-            _probs = assets.validate_assets(project_root, shots, refs_by_shot)
+            _probs = assets.validate_assets(project_root, shots, refs_by_shot,
+                                            names_out=ref_names)
             if _probs:
                 log("[assets] ⚠️ 资产完整性 %d 项问题：" % len(_probs))
                 for _p in _probs[:8]:

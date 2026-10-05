@@ -838,5 +838,73 @@ class PropKeywordAlwaysMergedTests(unittest.TestCase):
 
 
 
+class TestPropAliasTailBinding(unittest.TestCase):
+    """★ 简称也要绑得上参考图（2026-10-05 实测 `madfate-abc-1005` 第 1 集）。
+
+    那件核心反转道具「死者眼球放大片」：卡里 `keywords` 只有全名（该包的资产契约
+    根本没要求写关键词栏），而分镜 13 镜写的都是简称「放大片」⇒ `k in text` 永远为假
+    ⇒ **参考图一次都没进过请求，日志全绿**。道具没有外观锚，模型就拿同一场里
+    唯一绑上的「旧机械表」那张怀表图去顶 ⇒ 道具忽大忽小、两件长成一件，观众跳戏。
+    """
+
+    REG = {"assets": [
+        {"name": "死者眼球放大片", "type": "prop", "priority": 8,
+         "keywords": ["死者眼球放大片"]},
+        {"name": "旧机械表", "type": "prop", "priority": 8,
+         "keywords": ["旧机械表"]},
+    ]}
+
+    def test_short_form_binds_by_name_tail(self):
+        hits = assets.hits_for_text(self.REG, "她右手拈起圆形放大片，悬在死者眼球上方")
+        self.assertEqual([h["name"] for h in hits], ["死者眼球放大片"],
+                         "简称「放大片」是全名的尾巴 ⇒ 尾词兜底要把它绑上")
+
+    def test_reverse_control_absent_prop_stays_out(self):
+        """反向对照：正文没提这件道具 ⇒ 不许凭空调进来（兜底不是无条件绑）。"""
+        self.assertEqual(assets.hits_for_text(self.REG, "脏绿旧日光灯管频闪，台面空着"), [])
+
+    def test_ambiguous_tail_is_dropped(self):
+        """两件道具共有同一个尾词 ⇒ 谁都不绑，别拿"少绑"去换"绑错"。"""
+        reg = {"assets": [
+            {"name": "红色外套", "type": "prop", "priority": 8, "keywords": ["红色外套"]},
+            {"name": "蓝色外套", "type": "prop", "priority": 8, "keywords": ["蓝色外套"]},
+        ]}
+        self.assertEqual(assets.hits_for_text(reg, "那件色外套挂在门后钉子上"), [],
+                         "「色外套」同时属于两件 ⇒ 有歧义，不许猜")
+        self.assertEqual([h["name"] for h in assets.hits_for_text(reg, "红色外套挂在钉子上")],
+                         ["红色外套"], "写得清的时候照旧绑")
+
+    def test_unbound_mentions_reports_the_silent_case(self):
+        """「提到 N 镜却零绑定」必须被算出来（这就是那次没人报的那一条）。"""
+        shots = [{"name": "LN01", "visual": "她把放大片举到右眼前", "dialogue": ""},
+                 {"name": "LN02", "visual": "放大片玻璃面反出脏绿光", "dialogue": ""},
+                 {"name": "LN03", "visual": "天台水塔，无人", "dialogue": ""}]
+        self.assertEqual(assets.unbound_mentions(self.REG, shots, {}),
+                         [("死者眼球放大片", 2)])
+        self.assertEqual(assets.unbound_mentions(self.REG, shots,
+                                                 {"LN01": ["死者眼球放大片"]}), [],
+                         "只要进过一次真实请求就不该再报")
+
+    def test_validate_assets_carries_the_new_problem_line(self):
+        """接线：新判据要走 `validate_assets` 这**同一道**检查，不另起一处报告。"""
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "assetdesigner").mkdir()
+            (root / "assetdesigner" / "assets.md").write_text(
+                "## 资产卡：死者眼球放大片\n"
+                "- 类型：prop\n- 关键词：死者眼球放大片\n"
+                "- 用途：一片圆形玻璃放大片，边缘磨花\n- 参考图：images/死者眼球放大片.png\n",
+                encoding="utf-8")
+            (root / "images").mkdir()
+            (root / "images" / "死者眼球放大片.png").write_bytes(b"\x89PNG fake")
+            shots = [{"name": "LN01", "visual": "她把放大片举到右眼前", "dialogue": ""},
+                     {"name": "LN02", "visual": "放大片贴着死者眼球", "dialogue": ""}]
+            probs = assets.validate_assets(root, shots, {}, names_out={})
+            self.assertTrue(any("一次都没进过任何一次请求" in p for p in probs), probs)
+            probs2 = assets.validate_assets(root, shots, {},
+                                            names_out={"LN01": ["死者眼球放大片"]})
+            self.assertFalse(any("一次都没进过任何一次请求" in p for p in probs2), probs2)
+
+
 if __name__ == "__main__":
     unittest.main()
