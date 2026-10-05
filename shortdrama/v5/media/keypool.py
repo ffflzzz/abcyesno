@@ -238,3 +238,20 @@ class KeyPool:
             now = self._monotonic()
             return max(0.0, min(self._last[i] + self._intervals[i] - now
                                 for i in range(len(self._keys))))
+
+    def claim_earliest(self) -> tuple[int, str] | None:
+        """**无视冷却**，强制领「最早到期」的那条 key（并记账）。
+
+        为什么需要（2026-10-04 `madfate-madness-1004` 实测）：多 key 独立时，
+        一条真触顶「用量上限」会让整条链以为全挂了；并发下另两条其实只撞了
+        间隔闸门，却被按同一条错误文案**重罚 5 小时**⇒ 三条全冷却、零出片。
+        实测证据：事后逐条探（1token / 14000 字符两种体积）⇒ 只有 k1 真触顶，
+        k2/k3 都是 HTTP 200。所以「短冷却 ⇒ 其实是误罚」时，应该提前唤醒再试。
+
+        ⚠️ 边界：冷却是「真用量上限」时（几小时）**不要**调它 —— 那会拿死 key
+        再撞一次。判据在调用方（`llm._next` 看 `earliest_free_s()` 是否够短）。
+        """
+        with self._cv:
+            idx = min(range(len(self._keys)),
+                      key=lambda i: self._last[i] + self._intervals[i])
+            return self._reserve_locked(idx)

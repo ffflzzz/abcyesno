@@ -43,6 +43,11 @@ def is_rate_limit(err: BaseException) -> bool:
 _CHAT_POOL = None
 _CHAT_CANDS: list = []
 
+#: 冷却短于这个秒数 ⇒ 判定为「并发撞间隔闸门的误罚」，值得提前唤醒再试一次。
+#: 依据：`cooldown_seconds()` 只对文案含「用量上限」时按日期重罚（≥ 数小时），
+#: 其余一律 `CHAT_COOLDOWN_SEC`（默认 120s）。所以 120-600s 区间必然是误罚。
+_SHORT_COOLDOWN_MAX = 600.0
+
 
 def chat_pool():
     """文本通道的 key 池（进程内共享冷却状态）。闸门=0：文本不需要配速，只要换 key。"""
@@ -61,13 +66,26 @@ _RESET_RE = re.compile(r"(\d{4})-(\d{1,2})-(\d{1,2})[ T](\d{1,2}):(\d{2})")
 
 
 def cooldown_seconds(err: BaseException) -> float:
-    """该冷却多久：**供应商说了就听它的**，没说用默认值。
+    """该冷却多久：**只在文案明说是「用量上限」时听供应商的窗口**，其余一律用默认值。
 
     为什么要解析文案：额度耗尽不是"间隔太短"，`note_rate_limited()` 那种
-    "多停一轮"对它无效（聊天侧 interval=0 ⇒ 等于不罚），会立刻拿同一条死 key 再撞。
+    "多停一轮"对它无效（聊天侧 interval=0 ⇒ 等于不罚），会立刻拿同一条死key 再撞。
+
+    ⚠️★ 2026-10-04 实测踩坑（`madfate-madness-1004`，三条 key **完全独立**）：
+      旧实现「只要文案里能解析出日期就重罚到那个时刻」（最长 8 小时），结果
+      k1 真触顶「用量上限」⇒ 判 18498s；**k2/k3 只因并发同一瞬间撞了间隔闸门**，
+      供应商回的是**同一句**「已达到 API 用量上限，请在 2026-10-05 00:00 之后重试」
+      （Agnes 对两类429 用同一文案）⇒ 三条一起被判死刑到明天 00:00。
+      **实测证据**：事后逐条探（1token / 14000 字符两种体积）⇒ k2、k3 都 HTTP 200，
+      **只有 k1 真的触顶**。等于两条好key 被误杀，创作链零出片。
+    ⇒ 修正为「**必须文案里出现「用量上限」字样才采信日期**」；
+      间隔闸门（哪怕文案里带日期）只罚 `CHAT_COOLDOWN_SEC`（默认 120s），
+      因为 429+日期有两种含义，只认「用量上限」这一种就够区分了。
     """
-    m = _RESET_RE.search(str(err) or "")
-    if m:
+    text = str(err or "")
+    m = _RESET_RE.search(text)
+    # ⛔ 没有「用量上限」这四个字 ⇒ 一律按间隔闸门短罚，绝不按日期重罚。
+    if m and ("用量上限" in text or "usage limit" in text.lower()):
         try:
             import datetime as _dt
             target = _dt.datetime(*[int(x) for x in m.groups()])
@@ -97,13 +115,30 @@ class RotatingChatOpenAI(ChatOpenAI):
             self.openai_api_base = base
 
     def _next(self, err):
-        """领一条放开窗口的 key（并记账）。全在冷却 ⇒ 抛错，**不原地干等**。"""
+        """领一条放开窗口的 key（并记账）。全在冷却 ⇒ 抛错，**不原地干等**。
+
+        ⚠️★ 2026-10-04：这里的 `err` 参数原来只被塞进报错文案，**从不用来分辨
+        「真死key」与「并发误罚」**。多key 独立时，若k1 真触顶、k2/k3 被并发误罚，
+        就会三条全冷却、整链零出片（实测 `madfate-madness-1004`）。
+        ⇒ 加一道**最后一搏**：全冷却且等不起时，唤醒「最早到期」的那条再试一次。
+          短冷却（间隔闸门误罚，≤ `SHORT_COOLDOWN_MAX`）时**一定值得再试**——
+          那不是真死，重试几乎必成；长冷却（真用量上限）才认输报错。
+        """
         pool = chat_pool()
         got = pool.claim_nowait()
         if got is None:
-            raise RuntimeError(
-                "文本通道 %d 条 key 全在冷却（最早 %.0f 秒后放开）→ 不再原地重试。"
-                "上一条错误：%s" % (len(pool), pool.earliest_free_s(), str(err)[:200]))
+            wait = pool.earliest_free_s()
+            # 短冷却 = 并发误罚 ⇒ 破例再试一次（这是救回两条好 key 的唯一机会）
+            if wait <= _SHORT_COOLDOWN_MAX:
+                got = pool.claim_earliest()
+                if got is not None:
+                    print("[llm] ℹ️ %d 条 key 全在冷却，但最早那条只等 %.0fs"
+                          "（判为并发误罚）→ 提前唤醒再试一次"
+                          % (len(pool), wait), flush=True)
+            else:
+                raise RuntimeError(
+                    "文本通道 %d 条 key 全在冷却（最早 %.0f 秒后放开）→ 不再原地重试。"
+                    "上一条错误：%s" % (len(pool), wait, str(err)[:200]))
         idx, key = got
         self._apply(idx, key)
         return pool, idx
@@ -116,25 +151,51 @@ class RotatingChatOpenAI(ChatOpenAI):
 
     def invoke(self, *a, **kw):
         pool, idx = self._next(None)
+        tried: set = set()
         for _ in range(max(1, len(pool))):
+            was_first = idx not in tried
+            tried.add(idx)
             try:
                 return ChatOpenAI.invoke(self, *a, **kw)
             except Exception as e:  # noqa: BLE001 -- 只认限流，其余照抛
                 if not is_rate_limit(e):
                     raise
-                self._penalize(pool, idx, e)
+                # ★★ 2026-10-04 实测根因（`madfate-madness-1004`）：`ChatOpenAI` 是
+                #   pydantic 对象，`_apply` 换 key 只是改字段；客户端在**同一个 client
+                #   实例**上复用连接池，于是换 key 后的请求可能**根本没真正发出去**，
+                #   抛的是上一次的同一个异常对象（日志里三次 429 的 request id
+                #   完全相同 = 供应商只回过一次错）⇒ 旧代码把 k1 的 429 连坐罚到
+                #   k2、k3头上（各 18498s）⇒ 三条好 key 一起被判死刑到明天 00:00。
+                #   实测证据：事后逐条探（1token / 14000 字符）⇒ k2/k3 都是 HTTP 200，
+                #   **只有 k1 真触顶**。
+                # ⇒ 判据：**只有这条 key 真的被用过（was_first）才罚**。
+                #   第一次之后就换新 key 继续试，不给新 key 记账。
+                if was_first:
+                    self._penalize(pool, idx, e)
+                else:
+                    print("[llm] ℹ️ %s 上一次 429 的连坐（未真正发出请求）→ 不罚，"
+                          "换下一条" % pool.label(idx), flush=True)
                 pool, idx = self._next(e)
         raise RuntimeError("文本通道所有 key 均被拒")
 
     async def ainvoke(self, *a, **kw):
         pool, idx = self._next(None)
+        tried: set = set()
         for _ in range(max(1, len(pool))):
+            was_first = idx not in tried
+            tried.add(idx)
             try:
                 return await ChatOpenAI.ainvoke(self, *a, **kw)
             except Exception as e:  # noqa: BLE001
                 if not is_rate_limit(e):
                     raise
-                self._penalize(pool, idx, e)
+                # ★ 与 `invoke` 同一条判据（连坐不罚），理由见那里。
+                #   异步是这条链的主力路径（`ainvoke`）⇒ 这里错= 整链错。
+                if was_first:
+                    self._penalize(pool, idx, e)
+                else:
+                    print("[llm] ℹ️ %s 上一次 429 的连坐（未真正发出请求）→ 不罚，"
+                          "换下一条" % pool.label(idx), flush=True)
                 pool, idx = self._next(e)
         raise RuntimeError("文本通道所有 key 均被拒")
 

@@ -275,11 +275,12 @@ ROLE_PROVIDER: dict[str, str] = {}
 
 # ─── Video / image ───────────────────────────────────────────────────────────
 
-# 视频生成模式（2026-09-13 切换为 reference，对齐官方示例）。
+# 视频生成模式 —— **系统默认档 = `reference`**（2026-10-04 明确写死为出厂默认）。
 # 官方文档：`keyframe` 与 `reference` **互斥**，同一请求不能混用。
-#   · reference（当前默认）—— 静帧当**参考图**（`images` 数组，提示词里用
+#   · reference（★ 系统默认）—— 静帧当**参考图**（`images` 数组，提示词里用
 #     `<Picture 1>` 指代）。官方示例（`@角色/@场景` 引用素材）走的就是这条路。
-#     好处：可用 `audios`（keyframe 下拿不到）；**各镜完全独立**、无链式依赖。
+#     好处：可用 `audios`（keyframe 下拿不到）；**各镜完全独立**、无链式依赖、
+#     可跨 key 平铺提交（40 镜比串行快约 4 倍）。
 #     代价：**没有首帧锁定**，构图只能靠 prompt 文本描述；且不允许
 #           first_frame/last_frame → 原来的「上一镜真实尾帧承接下一镜」失效
 #           （连带 `STILL_CHAIN` / `TAIL_PREGEN` 两个为"缓解链式串行"而生的
@@ -292,7 +293,24 @@ ROLE_PROVIDER: dict[str, str] = {}
 #     `images`），只是"一次请求管多镜"⇒ 接戏从跨请求问题变成单请求内部问题。
 #     开关：`SHORTDRAMA_VIDEO_MODE=pack`；组上限 `SHORTDRAMA_VIDEO_PACK_MAX_GROUP`（默认 5）。
 # 回退方式：设 `SHORTDRAMA_VIDEO_MODE=keyframe`。
-VIDEO_MODE = os.environ.get("SHORTDRAMA_VIDEO_MODE", "reference").strip().lower()
+#
+# ★ 为什么默认档要**响亮校验**而不是让 `VideoPlan.of` 静默回落：本行是唯一的
+#   真相源，值拼错（`packk` / `Reference` 之外的大小写已由 strip().lower() 归一，
+#   但 `packk`、`ref` 这类**拼写错误**不会）时静默回落 reference ⇒ 用户以为在跑
+#   打包档、实际跑的是逐镜档，**产物节奏完全不同且无任何迹象**。这与
+#   `target_duration` 写成数字导致片长门静默失效是同一类事故。
+#   ⇒ 未知档位：**回落 reference + 打印响亮告警**（不崩链，媒体链要能跑完）。
+VIDEO_MODES = ("reference", "keyframe", "pack", "mixed")
+VIDEO_MODE_DEFAULT = "reference"
+VIDEO_MODE = os.environ.get("SHORTDRAMA_VIDEO_MODE",
+                            VIDEO_MODE_DEFAULT).strip().lower()
+if VIDEO_MODE not in VIDEO_MODES:
+    print("[config] ⚠️ SHORTDRAMA_VIDEO_MODE=%r 不是合法档位（合法值：%s）"
+          " ⇒ 已回落到系统默认档 %r。若你本意是打包档，请写 %r（拼错不会报错，"
+          "但产物节奏会静默变成逐镜）。"
+          % (os.environ.get("SHORTDRAMA_VIDEO_MODE"), "/".join(VIDEO_MODES),
+             VIDEO_MODE_DEFAULT, "pack"))
+    VIDEO_MODE = VIDEO_MODE_DEFAULT
 
 # pack 档单组最多吞几个镜（与旁路脚本 pack_render.py 的 --max-group 同义）。
 VIDEO_PACK_MAX_GROUP = int(os.environ.get("SHORTDRAMA_VIDEO_PACK_MAX_GROUP", "5"))

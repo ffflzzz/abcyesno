@@ -257,5 +257,69 @@ class TestScriptReachesTheRolesThatNeedIt(unittest.TestCase):
         self.assertNotIn("剧本原文", s)
 
 
+class TestReviewerHardGate(unittest.TestCase):
+    """★ reviewer **硬门**（2026-10-04）：上游没落盘就**拒绝开工**。
+
+    ## 为什么 reviewer 必须硬拒、其他角色只需「温和提醒」
+
+    创作角色上游缺失时，让它基于 brief 先干起来**是有增量**的（半程恢复能救链）。
+    但**评审的产物是一份判决**——它说「分镜表未落盘」，而**真实分镜表可能
+    2 分钟后才写出来**（实测 combat-archer-test：reviewer 13:14:27 写报告说
+    「未落盘」，scenedesigner 13:16:54 才落盘 ⇒ **评审审了一份不存在的文件**）。
+    后果链：判决进 manifest → 媒体门判「评审未通过」→ 分镜师被反复打回 →
+    反空转闸收工（实测两轮各白烧 14 分钟，视频配额零产出）。
+    且**没有人重审**：分镜表改好后那份过期 `review_*.md` 仍在盘上。
+
+    ## 这条测试钉的是什么
+
+    ⛔ 曾把 `_root` 写成 `root` ⇒ `NameError` **只在真起服时炸**（import 期测不出来），
+    而 `drive_chain` 的诊断语把原因猜成「429 限流」⇒ 差点引去查错方向。
+    ⇒ 下面**逐个调用点**检查：`guards_prereq_of(...)` 的实参必须是 `_root`。
+
+    ⚠️ 检查**不能**写成「全文不得出现 `root`」：本模块有一批**合法**用它的函数
+    （`guards_prereq_of(root)` 的形参、`supervisor_system_prompt(root=...)` 等），
+    全文扫描会误报（实测先写成全文扫描，结果 6 处误报）。
+    ⇒ 判据必须**只盯真正的错误形态**：调用 `guards_prereq_of` 时传裸 `root`。
+    """
+
+    def _call_args(self):
+        """抽出所有 `guards_prereq_of(X)` 的实参文本。"""
+        import ast
+        from pathlib import Path
+        from v5 import orchestrator
+        src = Path(orchestrator.__file__).read_text(encoding="utf-8")
+        out = []
+        for n in ast.walk(ast.parse(src)):
+            if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "guards_prereq_of":
+                out.append((n.lineno, ast.unparse(n.args[0]) if n.args else ""))
+        return out
+
+    def test_every_call_passes_underscore_root(self):
+        calls = self._call_args()
+        self.assertTrue(calls, "没找到任何 guards_prereq_of 调用 —— 硬门被删了？")
+        bad = [(ln, a) for ln, a in calls if a != "_root"]
+        self.assertEqual(bad, [],
+                         "这些调用传的不是 _root ⇒ 真起服时 NameError：%s" % bad)
+
+    def test_guard_helper_uses_module_root(self):
+        """两个调用点（硬门 + 温和提醒）都必须传 `_root`。"""
+        from pathlib import Path
+        from v5 import orchestrator
+        src = Path(orchestrator.__file__).read_text(encoding="utf-8")
+        self.assertIn("guards_prereq_of(_root)", src)
+        self.assertNotIn("guards_prereq_of(root)", src,
+                         "⛔ 实测 14:14 事故：这里传 root ⇒ 整个 run 判 error")
+
+    def test_prereq_helper_is_importable(self):
+        """读不到 brief 时必须**回落默认 7 个**，不得抛异常（硬门在真起服时跑）。"""
+        import tempfile
+        from pathlib import Path
+        from v5 import config, guards
+        from v5.orchestrator import guards_prereq_of
+        empty = Path(tempfile.mkdtemp())          # 没有任何 brief.json
+        self.assertEqual(guards_prereq_of(empty), guards.PREREQ)
+        self.assertEqual(len(guards_prereq_of(config.PROJECTS_DIR)), 7)
+
+
 if __name__ == "__main__":
     unittest.main()

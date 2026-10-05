@@ -33,7 +33,11 @@ from .. import config
 #: reference 请求（每镜一张静帧、逐拍 `<Picture i>` 点名+时间边界）——接戏从
 #: "跨请求问题"变成"单请求内部问题"。本质仍是 reference（图用法相同、无首帧锁定），
 #: 差别只在**提交粒度**：一个 job = 一组镜（详见 `group_shots`）。
-MODES = ("reference", "keyframe", "mixed", "pack")
+#:
+#: ★ 这份名单是 `config.VIDEO_MODES` 的**别名**而非第二份真相（2026-10-04）——
+#:   此前本模块自己写了一份，两份可以各自漂移。现在 config 是唯一判定点
+#:   （含未知档位的响亮告警），这里只做兼容导出。
+MODES = config.VIDEO_MODES
 
 # ─── pack 档：压缩式分组算法（自 scripts/pack_render.py 搬入，判据逐字节一致）──
 # 旁路脚本（pack_render.py）保留为独立验证入口；两处判据若有改动必须同步。
@@ -165,10 +169,16 @@ class VideoPlan:
 
         `mode` 缺省读 `config.VIDEO_MODE`；`still_chain` / `tail_pregen` 缺省读配置
         （后两者只在 keyframe 下参与"能否平铺"的判断）。
+
+        ⚠️ 显式传入的未知 `mode` 也**不静默**：`config` 只在自己 import 时校验环境变量，
+        这里收到的是调用点（如 `probe_*` 脚本、测试）塞进来的值，同样必须喊一声 ——
+        静默回落 reference 会让「我以为在跑打包档」变成逐镜档，产物节奏完全不同。
         """
-        m = (mode or config.VIDEO_MODE or "reference").strip().lower()
+        m = (mode or config.VIDEO_MODE or config.VIDEO_MODE_DEFAULT).strip().lower()
         if m not in MODES:
-            m = "reference"        # 未知模式回落 reference（与 config 默认一致）
+            print("[video_plan] ⚠️ 未知视频档位 %r（合法值：%s）⇒ 回落到系统默认档 %r"
+                  % (mode, "/".join(MODES), config.VIDEO_MODE_DEFAULT))
+            m = config.VIDEO_MODE_DEFAULT
 
         if m == "reference":
             # reference 不允许 first_frame → 各镜之间**没有任何可承接的依赖**

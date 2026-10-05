@@ -27,6 +27,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+from . import config
+
 #: 静帧与片段都是竖屏 9:16
 _PORTRAIT = (216, 384)
 #: 定妆照（三视图横图）
@@ -163,10 +165,13 @@ def fingerprint(root: Path, ep: int) -> str:
         h.update(f.read_bytes() if f.is_file() else b"<missing>")
     a = _read_json(root / "assets.json")
     h.update(("assets|%d|" % len((a or {}).get("assets") or [])).encode())
+    # ★ 档位读 `config.VIDEO_MODE`（**已校验过的值**）而不是裸 `os.environ.get`：
+    #   缓存键必须等于实际渲染用的档位。若这里读原始 env 而渲染读 config，
+    #   一个拼错的档位名（config 回落 reference）就会算出**同一把钥匙但不同产物**。
     h.update(("ep=%d|aspect=%s|mode=%s|packmax=%s" % (
         ep,
         os.environ.get("SHORTDRAMA_ASPECT", "9:16"),
-        os.environ.get("SHORTDRAMA_VIDEO_MODE", "reference"),
+        config.VIDEO_MODE,
         os.environ.get("SHORTDRAMA_VIDEO_PACK_MAX_GROUP", "5"))).encode())
     return h.hexdigest()[:16]
 

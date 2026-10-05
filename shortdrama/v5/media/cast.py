@@ -378,7 +378,16 @@ def _same_face_as(blk: str, appearance: str) -> str:
 # **必须排除 `#` 一级标题**：village-scale 的第一行是**文件标题**
 # `# 资产卡：村口那台会说话的磅秤（单集 3 分钟）`，用 `^#+` 会把它当卡片头
 # → 整个文件被切成 1 块（且那"1 块"是全文）→ 所有场景卡丢失（实测）。
-_CARD_HEAD_RE = re.compile(r"^#{2,4}\s*(?:资产卡|场景卡|道具卡|设施卡)\s*[:：]", re.M)
+# ⛔⛔ 2026-10-05 修：`角色卡` **漏在这个字符组里** —— 而 `_split_asset_blocks` 里
+#   `if len(parts) > 1: return parts[1:]` 会**提前返回**、走不到认角色卡的
+#   `_KIND_HEAD_RE` 分支 ⇒ 只要文件里有**任何一张道具卡**，角色卡就**全部静默丢失**。
+#   实测 `madfate-madness-1004` 的 `assets.md`：写了 4 张角色卡 + 5 张场景卡，
+#   `parse_assets` **只解析出 8 个道具**（角色 0、场景 0）⇒ 4 个主角的角色参考图
+#   一张都不会生成 ⇒ 「切镜就换人/换装」，而上游 assetdesigner 会因产物不合格反复重写。
+#   ⇒ 加「角色卡」进这个字符组，与 `_KIND_HEAD_RE`（本来就认角色卡）保持一致。
+_CARD_HEAD_RE = re.compile(
+    r"^#{2,4}\s*(?:资产卡|角色卡|人物卡|场景卡|道具卡|设施卡|器材卡)"
+    r"\s*(?:[①②③④⑤⑥S\d]+\s*)?[:：]", re.M)
 # ★ 2026-09-23：分块锚扩展（half-narrated 包用「场景卡：/道具卡：」标题——
 #   只认「资产卡」会让 9 张卡静默丢 8 张，实测舞狮项目）。
 #   kind 识别交给 _KIND_HEAD_RE（场景卡→location、道具卡→prop）。
@@ -404,6 +413,24 @@ _PROMPT_HEAD_RE = re.compile(r"^\s*\*{0,2}[^\n*]{0,20}提示词[^\n*]{0,24}\*{0,
 # 字段行：容忍 `- 名称：x` / `- **名称**：x` / `**名称**：x` 三种写法
 _FIELD_RE = r"^\s*[-*]?\s*\*{0,2}\s*%s\s*\*{0,2}\s*[:：]\s*(.+)$"
 
+# ★ 2026-10-05：`_CARD_HEAD_RE.split()` 会把「卡类型」前缀吃掉（`### 角色卡：沈拾`
+#   → 块首行只剩 `沈拾`），导致下游判不出类型、**角色卡全被当成 prop**。
+#   这里在每个块首行前把前缀补回去，让 `_KIND_HEAD_RE` / `_KIND_TYPE` 能恢复类型。
+_KIND_PREFIX_RE = re.compile(
+    r"^\s*(资产卡|角色卡|人物卡|场景卡|道具卡|设施卡|器材卡)\s*"
+    r"(?:[①②③④⑤⑥S\d]+\s*)?[:：]\s*")
+
+
+def _restore_kind_head(block: str) -> str:
+    """把被 `split` 吃掉的「卡类型」前缀补回块首行（幂等：已有前缀则不动）。"""
+    if not block:
+        return block
+    lines = block.split("\n")
+    m = _KIND_PREFIX_RE.match(lines[0] or "")
+    if not m:
+        return block
+    return "%s：%s" % (m.group(1), block)
+
 
 def _split_asset_blocks(md: str) -> list[str]:
     """把 `assets.md` 切成资产块 —— **两种历史格式都认**。
@@ -418,10 +445,14 @@ def _split_asset_blocks(md: str) -> list[str]:
         格式 ②。而本模块只认 ① → `parse_assets` 对 dawn-broadcast **恒返回 0 条**
         → 2 个场景资产**从未进注册表** → `scene_lines` 无场景可用、无场景锚点可注入
         → 每一镜的光源/陈设由模型自由发挥 → 切镜就换场景。
+    ⚠️ 2026-10-05：`split` 会把「卡类型」前缀**从标题里吃掉**（`### 角色卡：沈拾`
+       切完只剩 `沈拾`）⇒ `parse_assets` 的 `_KIND_HEAD_RE.match(head)` 再也匹配不到
+       ⇒ **类型信息整块丢失**。所以这里把切出来的块**还原**成带类型前缀的标题，
+       让下游 `_KIND_HEAD_RE` / `_KIND_TYPE` 能恢复 `character` / `location`。
     """
     parts = _CARD_HEAD_RE.split(md or "")
     if len(parts) > 1:
-        return parts[1:]
+        return [_restore_kind_head(p) for p in parts[1:]]
     out: list[str] = []
     cur: str | None = None
     for ln in (md or "").splitlines():
@@ -561,7 +592,10 @@ def parse_assets(assets_md: str) -> list[dict]:
         if not name:
             continue
         # 类型：字段优先 → 标题的 `（type）` 括号 → 标题的「卡类型」词
-        typ_cell = field("类型")
+        # ⚠️ 2026-10-05 修：产物常把字段写成 **英文 key**（`- **type**：character`），
+        #   而 `_FIELD_RE % "类型"` 只认中文「类型」⇒ 取不到 ⇒ 一律回落 `prop`
+        #   （实测角色卡全被判成 prop，角色参考图不会生成）。这里两种都认。
+        typ_cell = field("类型") or field("type") or field("Type") or field("TYPE")
         kw_extra = ""
         # 同行合并写法：`- 类型：scene｜关键词：`收粮站`、`深夜``（village-scale 实测）
         msep = re.split(r"[｜|]", typ_cell, maxsplit=1)

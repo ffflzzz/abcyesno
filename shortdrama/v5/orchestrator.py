@@ -28,7 +28,7 @@ from deepagents.middleware.filesystem import FilesystemMiddleware
 from deepagents.profiles import (GeneralPurposeSubagentProfile, HarnessProfile,
                                  register_harness_profile)
 from langchain.agents import create_agent
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import MessagesState
 
@@ -37,6 +37,22 @@ from .llm import role_chat
 from .media import rerender_agent
 from .roles import FS_TOOLS, director_system_prompt, role_input, role_system_prompt
 from .guards import PREREQ, boot_episode, load_manifest, out_path, record_phase
+
+
+def guards_prereq_of(root: Path) -> dict:
+    """本项目的依赖序（按 brief 的 `mode` 取，默认 = `PREREQ`）。
+
+    ⚠️ **必须走它、不能用模块级 `PREREQ`**：from_script 模式下派工名单少两个
+    （`mode.prereq_for` → `guards.prereq_for`），而 reviewer 的硬门要按**本模式**
+    判「要审的东西齐了没」。用常量 7 个会在 from_script 下永远判 `scenedesigner`
+    缺失（若它被省）⇒ reviewer 永远拒绝开工。
+    """
+    from . import guards
+    try:
+        return guards.prereq_for(root)
+    except Exception as e:  # noqa: BLE001 —— 读不到 brief 就用默认名单，不让起服失败
+        print("[orchestrator] ⚠️ 读依赖序失败（%s）→ 回落默认 7 个" % str(e)[:80])
+        return PREREQ
 
 # ── 禁用 general-purpose 同步子代理（2026-09-12 实测修复）─────────────────────
 # create_deep_agent 默认注入同步 `general-purpose` 子代理 → 挂 SubAgentMiddleware
@@ -191,13 +207,52 @@ def _build_role_graph(role: str, pack: str):
             print("[orchestrator] 本集 = 第 %d 集（起服时绑的是 %d；M3 起路径按开工契约"
                   "动态给定，两者不一致是正常的多集用法）" % (_live_ep, _EP))
         user = role_input(role, _root, m)
+        # ★★★ reviewer **硬门**：要审的东西不在盘 ⇒ **拒绝开工**（2026-10-04）。
+        #
+        # 为什么 reviewer 必须硬拒、其他角色只需"温和提醒"：
+        #   上面那段「上游缺失」对**创作**角色是**对的**——让它基于 brief 先干起来，
+        #   产物不完整但有增量（记忆里多次实测：半程恢复能救回整条链）。
+        #   但**评审**的产物是一份**判决**：它说"分镜表未落盘 / 缺列 / 覆盖不足"，
+        #   而**真实分镜表可能 2 分钟后才写出来**（实测 combat-archer-test：
+        #   reviewer 13:14:27 写报告说"分镜表未落盘"，scenedesigner 13:16:54 才落盘
+        #   —— **评审审了一份不存在的文件**）。
+        #   ⇒ 后果链：判决被 `guards.reconcile_manifest` 按磁盘事实解析进 manifest →
+        #     `media_gate` 判「评审未通过」→ 分镜师被反复打回 → 反空转闸收工
+        #     （实测两轮各白烧 14 分钟，视频配额零产出）。
+        #   ⇒ 且**没有人重审**：分镜表改好之后，那份过期的 `review_*.md` 仍在盘上，
+        #     `decision.parse_decision` 读到的还是空气判决。
+        #
+        # 判据是**磁盘事实**（本项目一贯口径）：`_root / out_path(...)` 存在且非空。
+        # 拒绝时**必须回一句可执行的话**，让 supervisor 知道该先派谁 ——
+        # 返回一条明确指令比抛异常好（异常会被 `run` 判 error ⇒ 整轮 rc=3）。
+        if role == "reviewer":
+            # ⚠️ 项目根在本函数里叫 `_root`（模块级那个），**不是 `root`** ——
+            #   写错会 `NameError` 且**只在真起服时炸**（import 期测不出来）。
+            #   实测 2026-10-04 14:14：daluo-school 首跑整个 run 判 error，
+            #   而 `drive_chain` 的诊断语把原因猜成「429 限流」⇒ 差点引去查错方向。
+            #   ⇒ 教训：诊断语里的「最常见原因」是**猜测**，事实要看 dev.log 的栈。
+            _need = [r for r in guards_prereq_of(_root).get("reviewer", [])
+                     if r != "reviewer"]
+            _miss = [r for r in _need
+                     if not (_root / out_path(r, _live_ep)).exists()]
+            if _miss:
+                _say = ("【拒绝开工・上游未就绪】你是评审，但**要审的东西还没写出来**：%s。\n"
+                        "你审一份不存在的文件只会产出一份**必然过期**的判决 —— "
+                        "实测会导致分镜师被无意义地反复打回、整条链收工、零出片。\n"
+                        "**请不要写任何文件**，直接回一句「上游未就绪，暂不评审」即可。\n"
+                        "正确顺序：先 `task(\"%s\")` 把这些角色派出去，等它们返回"
+                        "（产物落盘）之后，再派我。" % ("、".join(_miss), _miss[0]))
+                print("[orchestrator] ⛔ reviewer **拒绝开工**（上游未落盘：%s）"
+                      "—— 这是硬门，不是建议" % "、".join(_miss), flush=True)
+                return {"messages": [AIMessage(content=_say)]}
         # 上游就绪检查：每个角色开工时要读上游产物（开工契约），上游未落盘它就只能
         # 按自己对 brief 的理解发挥，产物必然对不上。这里在输入里明确列出**缺失的
         # 上游**，要求角色只在已有材料上工作并标注待补——温和约束，不硬拒绝
         # （保留"单独重跑某角色"的合法场景）。
         # ⚠️ 上游路径必须**按 manifest 的 live 集号**展开（不能默认 1）——否则第 2 集会
         #    拿第 1 集的上游来判"缺失/齐备"。
-        missing_up = [r for r in PREREQ.get(role, [])
+        _prereq = guards_prereq_of(_root)
+        missing_up = [r for r in _prereq.get(role, [])
                       if not (_root / out_path(r, _live_ep)).exists()]
         if missing_up:
             user += ("\n\n【⚠️ 上游产物缺失（未落盘）】%s\n"

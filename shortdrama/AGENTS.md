@@ -378,7 +378,7 @@ brief.json 的 `script-craft` 列表（项目级）> pack.json 的 `script-craft
 
 | 模式 | 图怎么用 | 允许的媒体字段 | 不允许 |
 |---|---|---|---|
-| **`reference`（当前默认）** | 静帧进 `images`，提示词里作 `<Picture 1>` | `images`(≤5) / `audios`(≤3) | `first_frame`、`last_frame` |
+| **`reference`（★ 系统默认档）** | 静帧进 `images`，提示词里作 `<Picture 1>` | `images`(≤5) / `audios`(≤3) | `first_frame`、`last_frame` |
 | `keyframe`（回退档） | 静帧当首帧，构图被锁死 | `first_frame` / `last_frame` | `images`、`audios` |
 | `pack`（2026-09-22 落管线） | **相邻同场景镜打包**成一条 ≤12s 的 reference 请求；job 与产物都是**组级**（`clips/packNN.mp4`），提交前自动生成跨组接缝静帧预检图 `seam_preview.jpg`（人眼扫，不阻断）。★ **图序（2026-09-28 A 臂实测改，`video.pack_ref_images`）**：人物设定表（≤2）→ 场景空镜 → **本组首镜静帧** → 前组末镜静帧 → 道具补空位，**不再每镜一张静帧**；提示词首段由 `prompt.pack_ref_declaration` 生成，声明"人物一律以设定表为准、静帧只沿用场景与站位、其中人物与设定表冲突就忽略其人物"。理由：静帧画错的身份会被视频**忠实继承**（v2 华山实测），而完全去掉静帧又会让同一处场景在相邻两组里长成两种样子 | 同 `reference`（≤5 张/请求 ⇒ 组上限默认 5） | 同 `reference` |
 
@@ -395,6 +395,15 @@ pack 档**跳过**逐镜 clipqc（组产物多镜
 合并、逐镜判据不适用）与落幅帧预生成。
 
 回退：`SHORTDRAMA_VIDEO_MODE=keyframe`。
+
+**★ 档位是「拼错就静默换档」的高危开关**（2026-10-04 已加响亮告警）：
+`config.VIDEO_MODE` 是唯一真相源，合法值只有 4 个
+（`reference` / `keyframe` / `pack` / `mixed`，见 `config.VIDEO_MODES`）。
+**拼错（`packk`）不报错**，会回落到 `reference` 并打印告警。
+⚠️ 打包版只读 `shortdrama/settings.env`、**不带 `.env`**，所以出厂档位那一行
+`SHORTDRAMA_VIDEO_MODE=reference` 已写死在 `settings.env` 里（真实环境变量仍优先）。
+换 `pack` 档要显式设 `SHORTDRAMA_VIDEO_MODE=pack`（真实 env 或改 `settings.env`），
+别指望改别的地方能顺带切档。
 
 **渲染放行条件**：媒体链**不在图内**；supervisor 图跑完后由 `series` 调
 `pipeline.run(root, ep=ep)`。是否真的渲染，由收在 `pipeline.run` 内部的

@@ -436,7 +436,7 @@ def _container_facts(vp) -> str:
     head = (
         "【出片容器事实·数字由管线代码给出，不是你该猜的东西】\n"
         "· 一条视频请求最长 %d 秒。" % req)
-    if (config.VIDEO_MODE or "reference").lower() == "pack":
+    if (config.VIDEO_MODE or config.VIDEO_MODE_DEFAULT).lower() == "pack":
         mg = config.VIDEO_PACK_MAX_GROUP
         body = (
             "最多 %d 个镜头并进同一条，且只有**同一场景的相邻镜**会并进去"
