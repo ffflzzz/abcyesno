@@ -117,6 +117,39 @@ class TestPostValidate(unittest.TestCase):
             self.assertEqual(path, "scriptwriter/scriptwriter_ep1.md")
             self.assertIn("对账承认", why)
 
+    def test_plotdesigner_catalog_missing_episodes_is_rejected(self):
+        """★ 目录**非空但缺集**必须判不合格（2026-10-05 实测，52 分钟零出片）。
+
+        旧判据只看"文件存在且非空"⇒ 对着只剩 4 个集条目的 10075 字目录放话"合格"，
+        于是角色在"我写完了"的反馈里重写 45 分钟，下游按集切片也切不出第 5–10 集。
+        现在当场列出缺哪几集，并给出可执行的修法（一次 write_file 交全）。
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "brief.json").write_text('{"topic":"t","episodes":10}', encoding="utf-8")
+            p = root / "plotdesigner" / "episodes.md"
+            p.parent.mkdir(parents=True)
+            short = "".join("### 第 %d 集：标题\n正文一行\n" % i for i in (1, 2, 3, 4))
+            p.write_text("## 第 1 卷\n" + short, encoding="utf-8")
+            ok, why, path = guards.post_validate("plotdesigner", _m(), root)
+            self.assertFalse(ok, "只有 4/10 集条目，不许放话合格")
+            self.assertIn("全剧目录缺集", why)
+            self.assertIn("缺第 5、6、7、8、9、10 集", why, "要点名到集号，角色才知道补哪几集")
+            self.assertIn("一次 `write_file` 交全 10 集", why, "要给出可执行的修法，不是只说错")
+            self.assertEqual(path, "plotdesigner/episodes.md")
+            # 反向对照：补齐 10 集 ⇒ 必须放行（不许把这条判据做成一律拦）
+            p.write_text("## 第 1 卷\n" +
+                         "".join("### 第 %d 集：标题\n正文一行\n" % i for i in range(1, 11)),
+                         encoding="utf-8")
+            ok2, why2, _ = guards.post_validate("plotdesigner", _m(), root)
+            self.assertTrue(ok2, why2)
+            # 单集项目（老项目）：不判，行为与改造前一字不变
+            (root / "brief.json").write_text('{"topic":"t","episodes":1}', encoding="utf-8")
+            p.write_text("## 第 1 卷\n### 第 1 集：标题\n正文一行\n", encoding="utf-8")
+            ok3, why3, _ = guards.post_validate("plotdesigner", _m(), root)
+            self.assertTrue(ok3, why3)
+
     def test_missing_artifact(self):
         import tempfile
         with tempfile.TemporaryDirectory() as d:

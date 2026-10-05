@@ -809,6 +809,26 @@ def post_validate(role: str, m: dict, root: Path,
         return False, ("产物未被本轮改写（%s 的 mtime 早于本轮起点）"
                        "——重跑该角色前先调 reset_from(root=...) 把旧产物移进 "
                        ".rerun_backup/" % rel), ""
+    if role == "plotdesigner":
+        # ★ 全剧目录**集集要有条目**（2026-10-05 实测，判据与理由见
+        #   `roles.catalog_missing_episodes`）：文件非空 ≠ 目录可用。第 4 轮那份
+        #   10075 字的目录只数出 4 个集条目（要 10 集），旧判据照常放话"合格"，
+        #   于是角色带着"我写完了"的反馈重写 45 分钟、整条链零出片。
+        #   brief 读不到 / 单集项目 ⇒ 一律不判（行为与改造前一字不变）。
+        try:
+            from .roles import catalog_missing_episodes
+            _n = int((load_brief(root) or {}).get("episodes") or 1)
+            _miss = catalog_missing_episodes(p.read_text(encoding="utf-8"), _n)
+        except Exception:      # noqa: BLE001 -- 判据本身坏不该把整条链判死
+            _n, _miss = 1, []
+        if _miss:
+            return False, ("全剧目录缺集：brief 写的是 %d 集，目录里只数出 %d 个集条目，"
+                           "**缺第 %s 集**（共缺 %d 集）。修法：按「全剧目录写法」的体量口径"
+                           "（每集 150–300 字、全文 ≤7000 字、不超过 3 卷、"
+                           "**不写场表与节拍表**）**一次 `write_file` 交全 %d 集**，"
+                           "⛔ 不要逐集 `edit_file` 追加——那是上一轮空转 45 分钟的成因。"
+                           % (_n, _n - len(_miss), "、".join(str(i) for i in _miss[:12]),
+                              len(_miss), _n)), rel
     return True, "（账本未记但产物在盘，按声明路径对账承认）", rel
 
 

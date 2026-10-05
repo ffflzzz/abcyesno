@@ -154,6 +154,27 @@ def _brief_episodes(root: Path) -> int:
         return 1
 
 
+def catalog_missing_episodes(text: str, episodes: int) -> list[int]:
+    """全剧目录里**缺哪几集**（**纯函数**，可单测）。`episodes <= 1` 恒返回空。
+
+    ★ 为什么必须有它（2026-10-05 实测 `madfate-abc-1005` 第 4 轮，52 分钟零出片）：
+      我给 brief 写的「场」口径（一集 9–11 场、每场 4–12 秒）被**全剧级**的目录角色
+      也照抄了，于是它给每集排一张场表 —— 文档胀到一次写不完，而它的契约同时明令
+      "不要分多次 write_file 追加"：盘上只剩 **4 个集条目 / 6 卷 / 10075 字**（要 10 集），
+      它就在自己的循环里重写了 45 分钟（图状态里那个子图落了 334 次，另两个角色各 12 与 18 次）。
+      而 `post_validate` 原先只查"文件存在且非空" ⇒ 对它说"产物合格" ⇒ **没人告诉它缺了 6 集**。
+      ⇒ 缺集必须当场点名到集号，角色才有可执行的修法；靠契约文字劝是劝不住的。
+
+    重复标题（`### 第 1 集：…` 与 `### 第 1 集 节拍表` 并存）按**集号**去重，
+    所以"多写一张节拍表"不会把缺的集补上。
+    """
+    n = int(episodes or 1)
+    if n <= 1:
+        return []
+    got = {int(k) for k in (parse_catalog(text).get("episodes") or {})}
+    return [i for i in range(1, n + 1) if i not in got]
+
+
 def slice_threshold() -> int:
     """本次运行生效的切片阈值（见 `SLICE_THRESHOLD_ENV`）。"""
     import os

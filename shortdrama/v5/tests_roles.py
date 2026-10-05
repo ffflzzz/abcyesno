@@ -769,6 +769,35 @@ class TestCatalogSlicing(unittest.TestCase):
                     os.environ[SLICE_SOFT_ENV] = old
 
 
+    def test_catalog_missing_episodes_names_the_gaps(self):
+        """★ 缺集必须**点名到集号**（2026-10-05 实测：文件非空 ≠ 目录可用）。
+
+        第 4 轮的目录 10075 字、6 卷、只数出 4 个集条目（brief 要 10 集），
+        旧判据照常放话"产物合格" ⇒ 角色带着"我写完了"的反馈重写 45 分钟、整条链零出片。
+        """
+        from v5.roles import catalog_missing_episodes as miss
+        self.assertEqual(miss(self.CAT, 4), [], "1–4 集齐 ⇒ 不许报")
+        self.assertEqual(miss(self.CAT, 10), [5, 6, 7, 8, 9, 10],
+                         "缺的要一个个列出来，角色才知道补哪几集")
+        self.assertEqual(miss(self.CAT, 1), [], "单集项目不判（行为与改造前一字不变）")
+        self.assertEqual(miss("", 3), [1, 2, 3], "整份目录没集条目 ⇒ 全缺，也要列出来")
+
+    def test_extra_beat_tables_do_not_count_as_episodes(self):
+        """反向对照：给同一集再写一张「节拍表」**补不上缺的集**（按集号去重）。
+
+        这正是那次事故的样子——角色把「场／节拍表」写进全剧目录，卷数膨胀、
+        每集条目却没写完。判据若按「### 标题条数」数，就会把 4 集判成"合格"。
+        """
+        from v5.roles import catalog_missing_episodes as miss
+        fat = ("## 第 1 卷\n### 第 1 集：开场\n正文\n### 第 1 集 节拍表（120 秒 / 10 场）\n"
+               "场1 验尸房·凌晨\n场2 天台·夜\n"
+               "## 第 2 卷\n### 第 2 集：反转\n正文\n### 第 2 集 节拍表（120 秒）\n场1 …\n"
+               "## 第 3 卷\n### 第 3 集 节拍表（120 秒）\n场1 …\n")
+        self.assertEqual(miss(fat, 3), [], "第 1、2、3 集都有条目 ⇒ 不报（哪怕只有一张表）")
+        self.assertEqual(miss(fat, 10), [4, 5, 6, 7, 8, 9, 10],
+                         "多写的节拍表不许把「缺第 4–10 集」瞒过去")
+
+
 class TestCameraLightCraftReachesRoles(unittest.TestCase):
     """`camera-light-physics` 必须**真的到达**它声明的角色（1003 接入）。
 
