@@ -299,7 +299,11 @@ class TestContainerFactsInjected(unittest.TestCase):
         self.assertIn("出片容器事实", s)
         self.assertIn("最长 %d 秒" % vp.PACK_MAX_SECONDS, s)
         self.assertIn("最多 5 个镜头并进同一条", s)
-        self.assertIn("同一场景的相邻镜", s, "跨场景必切这件事必须说明——它决定分组形状")
+        self.assertIn("同一场的相邻镜", s,
+                      "并组单位必须是**场**（2026-10-05 口径）——它决定分组形状")
+        self.assertIn("镜长不设地板", s,
+                      "★ 秒数地板已取消（场锁死、镜自由），注入里不许再写「每镜最短 N 秒」")
+        self.assertNotIn("每镜最短", s, "旧措辞会随 PACK_MIN_SHOT_SECONDS=0 变成「每镜最短 0 秒」的假话")
         self.assertIn("最多 %d 张参考图" % vp.REF_SLOTS, s)
         self.assertIn("第三个人没有定妆照", s)
         self.assertIn("不是每镜一张静帧", s)
