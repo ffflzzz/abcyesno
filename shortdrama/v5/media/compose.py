@@ -50,6 +50,39 @@ TRIM = _env_seconds("SHORTDRAMA_COMPOSE_TRIM", 0.15)
 XFADE = _env_seconds("SHORTDRAMA_COMPOSE_XFADE", 0.0)
 
 
+def _has_audio(clip: Path) -> bool | None:
+    """ffprobe 问一句「这条片段有没有音频流」。问不动 ⇒ None（**不当作「有」**）。
+
+    只报不拦（2026-10-05 用户定的四条之一）：拦下来会把已经跑完的二十几镜一起作废，
+    而「成片是哑的」这件事最怕的不是问题，是**没人知道**。
+    """
+    try:
+        r = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "a",
+             "-show_entries", "stream=codec_type", "-of", "csv=p=0", str(clip)],
+            capture_output=True, timeout=30)
+    except Exception:  # noqa: BLE001
+        return None
+    if r.returncode != 0:
+        return None
+    return bool((r.stdout or b"").strip())
+
+
+def _audio_note(clips: list[Path]) -> None:
+    """拼接前统计无声片段并**打一行**（本地 ComfyUI 的工作流可能不存音轨）。"""
+    results = [(p.name, _has_audio(p)) for p in clips]
+    silent = [n for n, v in results if v is False]
+    unknown = [n for n, v in results if v is None]
+    if silent:
+        print("[compose] ⚠ %d/%d 条片段**没有音轨**（%s%s）⇒ 拼出来的成片这些段落是静的"
+              % (len(silent), len(clips), "、".join(s[:6] for s in silent[:5]),
+                 "…" if len(silent) > 5 else ""), flush=True)
+    elif unknown:
+        # 问不出来 ≠ 有声。这一行的作用是别让「没查」被读成「查过、没问题」。
+        print("[compose] ⚠ %d 条片段用 ffprobe 问不出音轨（ffprobe 不可用或文件损坏）"
+              " ⇒ 无法确认成片有没有声" % len(unknown), flush=True)
+
+
 def concat(clip_dir: Path, out: Path) -> int:
     # 产物识别（2026-09-22 起 pack 档）：clips/ 下若存在 `pack*.mp4`（组级产物，
     # 一个文件含该组全部镜），按组编号顺序拼 —— pack 模式的 clips/ 里不会有
@@ -60,6 +93,7 @@ def concat(clip_dir: Path, out: Path) -> int:
              or sorted(clip_dir.glob("LN*.mp4"), key=lambda p: p.stem))
     if not clips:
         return 0
+    _audio_note(clips)
     out.parent.mkdir(parents=True, exist_ok=True)
     if len(clips) == 1:
         out.write_bytes(clips[0].read_bytes())

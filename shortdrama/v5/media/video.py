@@ -19,6 +19,7 @@ import time
 from pathlib import Path
 
 from .. import config
+from .. import vendors
 from . import assets
 from . import jobs as jobs_mod
 from . import keypool
@@ -58,7 +59,34 @@ def extract_last_frame(clip: Path, max_side: int = 512) -> str | None:
         return None
 
 
-def _wait_one(video_id: str, dest: Path, rounds: int = 60, interval: int = 10,
+#: 云端厂商的轮询窗口：60 轮 × 10 秒 ≈ 10 分钟（与接入本机厂商前**一字不变**）。
+WAIT_ROUNDS = 60
+WAIT_INTERVAL = 10
+POLL_ROUNDS = 40
+
+
+def poll_window(rounds: int | None = None, interval: int | None = None,
+                default_rounds: int = WAIT_ROUNDS,
+                default_interval: int = WAIT_INTERVAL) -> tuple[int, int]:
+    """轮询窗口 = 调用方显式传的 > **当前视频厂商档里的** `poll_rounds`/`poll_interval` > 旧常量。
+
+    ★ 为什么必须按厂商取：60×10 秒是照着云端 Agnes 的「排队 + 生成」时间定的。
+    本机一块 12G 卡渲 12 秒可能要十几分钟，用云端的窗口会把**还在渲**判成
+    `expired` ⇒ 上层重提 ⇒ 同一张显卡上把同一镜渲两遍，越等越久，而日志里
+    只看得到「超时重提」这一条正常流程。厂商档里有这两个值就用它，没有（云端）
+    就落回旧常量 ⇒ **改造前一字不变**。
+    """
+    try:
+        spec = vendors.spec_for("video")
+    except Exception:  # noqa: BLE001 —— 厂商未注册等场景不在这里判死
+        spec = {}
+    r = int(rounds or spec.get("poll_rounds") or default_rounds)
+    i = int(interval or spec.get("poll_interval") or default_interval)
+    return max(1, r), max(1, i)
+
+
+def _wait_one(video_id: str, dest: Path, rounds: int | None = None,
+              interval: int | None = None,
               log=print, key: str | None = None) -> str:
     """轮询单个任务直到完成并落盘。
 
@@ -68,8 +96,12 @@ def _wait_one(video_id: str, dest: Path, rounds: int = 60, interval: int = 10,
     `key`（2026-09-22）：**必须传创建该任务的那条 key** —— 国内/国际双入口下
     key 带自己的地址（`config.AGNES_KEY_BASE`），不传会拿全局地址去查国内
     创建的 video_id（403/404/查不到，任务假死）。
+
+    `rounds` / `interval`（2026-10-05）：不传 ⇒ 按当前视频厂商的档取
+    （本机 ComfyUI 一条渲十几分钟，云端的 10 分钟窗口会把「还在渲」判成超时）。
     """
     import httpx
+    rounds, interval = poll_window(rounds, interval)
     for _ in range(rounds):
         try:
             r = providers.query_video(video_id, key=key)
@@ -117,7 +149,7 @@ def _tail_if_needed(clip: Path, plan: "video_plan.VideoPlan") -> str | None:
 
 
 def submit_chain(project_root: Path, shots: list[dict], stills: dict, planned: list[dict],
-                 ep: int = 1, log=print, rounds: int = 60,
+                 ep: int = 1, log=print, rounds: int | None = None,
                  only: list[str] | None = None) -> dict:
     """提交 → 等完成 →（keyframe 模式下）抽尾帧给下一镜当首帧。
 
@@ -797,12 +829,14 @@ def expand_packs(project_root: Path, ep: int, done: dict, log=print) -> dict:
     return out
 
 
-def poll_all(project_root: Path, jobs: dict, ep: int = 1, rounds: int = 40, log=print) -> dict:
+def poll_all(project_root: Path, jobs: dict, ep: int = 1,
+             rounds: int | None = None, log=print) -> dict:
     """轮询 + 落盘（并铺式提交的收尾）。返回 {name: local_path}。"""
     out_dir = project_root / "media" / ("ep" + str(ep))
     clip_dir = out_dir / "clips"
     clip_dir.mkdir(parents=True, exist_ok=True)
     jobs = jobs_mod.migrate(jobs or jobs_mod.load(out_dir))
+    rounds, gap = poll_window(rounds, default_rounds=POLL_ROUNDS, default_interval=30)
     done: dict[str, str] = {}
     for name in jobs:
         if jobs_mod.done(jobs, name, clip_dir):
@@ -821,8 +855,19 @@ def poll_all(project_root: Path, jobs: dict, ep: int = 1, rounds: int = 40, log=
             if r.get("status") == "completed" and r.get("url"):
                 import httpx
                 dest = jobs_mod.local_clip(clip_dir, name)
-                with httpx.Client(timeout=120, trust_env=False) as c:  # CDN 直连
-                    dest.write_bytes(c.get(r["url"]).content)
+                # ★ 下载必须有异常捕获 —— 与 `_wait_one` 里同一条纪律（2026-09-13
+                #   CDN 抖动 502 把整条媒体链弄垮、46 镜里已完成的 40 张静帧全废）。
+                #   这一支原先是裸奔的 `dest.write_bytes(c.get(url).content)`，
+                #   接了本机 ComfyUI 之后更容易撞：那台机器重启 / 文件被清理时
+                #   `/view` 直接连不上，异常会从**已经跑完的收尾阶段**冒到顶层。
+                try:
+                    with httpx.Client(timeout=120, trust_env=False) as c:  # 直连
+                        resp = c.get(r["url"])
+                        resp.raise_for_status()
+                        dest.write_bytes(resp.content)
+                except Exception as e:  # noqa: BLE001
+                    log("[video] %s 下载失败（将重试）：%s" % (name, str(e)[:80]))
+                    continue
                 jobs_mod.mark(jobs, name, "completed", local=str(dest), error="")
                 done[name] = str(dest)
                 log("[video] %s done" % name)
@@ -830,7 +875,7 @@ def poll_all(project_root: Path, jobs: dict, ep: int = 1, rounds: int = 40, log=
                 log("[video] %s FAILED: %s" % (name, str(r.get("error"))[:80]))
                 jobs_mod.mark(jobs, name, "failed", error=str(r.get("error"))[:200])
         jobs_mod.save(out_dir, jobs)
-        time.sleep(30)
+        time.sleep(gap)
     for name in jobs:
         if name not in done and jobs[name].get("state") == "submitted":
             jobs_mod.mark(jobs, name, "expired", error="轮询超窗")

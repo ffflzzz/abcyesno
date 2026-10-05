@@ -126,9 +126,54 @@ def submitted(jobs: dict, name: str, video_id: str, **fields) -> dict:
 
 
 def done(jobs: dict, name: str, clip_dir: Path) -> bool:
-    """完成 = 状态 completed **且** 本地成片存在（防"记录说完成、文件没了"）。"""
+    """完成 = 状态 completed **且** 本地成片存在（防"记录说完成、文件没了"）
+    **且** 成片是**当前视频厂商**产的（2026-10-05 补的第三维）。
+
+    ## 为什么补产地这一维
+
+    `mark()` 从 2026-09-18 起就往每镜写 `video_vendor`，但**没有任何判据读它**。
+    后果在接了本机 ComfyUI 之后才真的咬人：云端跑完 10 镜、切本地再续跑，
+    旧判据只看「completed + 文件在」⇒ 那 10 镜的**云端片段**被原样拼进成片，
+    而这次的名义厂商是本机 H3 ⇒ 混血片、日志全绿、没人知道哪几镜来自谁。
+    本项目最贵的就是这一类「失败不可见」，所以产地**必须进判据**，
+    而且只在 `done()` 这一处进（19 个调用点各查一遍迟早漏一处）。
+
+    ## 三条边界
+
+    · **旧记录没有 `video_vendor`**（2026-09-18 之前写下的 jobs）⇒ 产地不可考，
+      按盘上事实**复用**、不报错 —— 不能因为字段缺失就把人家跑好的整集重烧。
+    · 判 False 时**打一行点名**，同一镜一轮内只打一次（见 `_STALE_ORIGIN`）。
+    · 判定用 `vendors.current("video")` **实时读**，不是 import 期常量 ——
+      per-run 换厂商走的是子进程 env（`media/runner.py`），常量会读成启动时的值。
+    """
     rec = jobs.get(name) or {}
-    return rec.get("state") == "completed" and (clip_dir / (name + ".mp4")).exists()
+    if rec.get("state") != "completed":
+        return False
+    if not (clip_dir / (name + ".mp4")).exists():
+        return False
+    produced = str(rec.get("video_vendor") or "").strip()
+    cur = str(vendors.current("video") or "").strip()
+    if produced and produced != cur:
+        if name not in _STALE_ORIGIN:
+            _STALE_ORIGIN[name] = produced
+            print("[jobs] ⚠ %s 盘上的成片是「%s」产的，本次视频厂商是「%s」"
+                  " ⇒ 不算完成，重渲" % (name, produced, cur), flush=True)
+        return False
+    return True
+
+
+#: 本轮被判「产地不符」的镜（`done()` 写、收尾报告读，见 `stale_origin_report`）
+_STALE_ORIGIN: dict[str, str] = {}
+
+
+def stale_origin_report() -> dict[str, str]:
+    """本轮有哪些镜因产地不符被重渲（镜名 → 旧产地）。"""
+    return dict(_STALE_ORIGIN)
+
+
+def reset_stale_origin() -> None:
+    """清一轮计数 —— 一次媒体链开始时装，别让上一轮的名单串进来。"""
+    _STALE_ORIGIN.clear()
 
 
 def local_clip(clip_dir: Path, name: str) -> Path:

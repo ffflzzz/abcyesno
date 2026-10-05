@@ -1578,14 +1578,114 @@ def vendors() -> dict:
             "builtin": spec.get("impl") is None,
             "output_delivery": spec.get("output_delivery") or "url",
             "native_audio": bool(spec.get("native_audio")),
+            # 能力声明（2026-10-05）：本机 ComfyUI 档**只接视频**，静帧仍走云端。
+            # 缺这个字段时前端会把一家厂商同时列进图片与视频两个下拉，
+            # 用户选中「用 ComfyUI 生图」只能在生成时才撞墙。
+            "capabilities": _caps(spec),
         })
     cur = {k: vendors_mod.current(k) for k in ("image", "video")}
     registered = set(vendors_mod.names())
+    image_items = [it for it in items if it["capabilities"]["image"]]
+    video_items = [it for it in items if it["capabilities"]["video"]]
     return {
         "current": cur,
         "current_ok": {k: (v in registered) for k, v in cur.items()},
+        # `items` 保留给**已构建好的旧 SPA**（它只认这一个键）；
+        # 新调用方（设置面板）按 `image_items` / `video_items` 取，别再自己筛。
         "items": items,
+        "image_items": image_items,
+        "video_items": video_items,
     }
+
+
+def _caps(spec: dict) -> dict:
+    """厂商能力：`{"image": bool, "video": bool}`。
+
+    判据取自档本身（`impl` 是否声明了那条实现）而不是模块里 `hasattr` 探测 ——
+    探测会把「忘了写 gen_image」读成「这厂商不支持图片」，两者该是不同的错。
+    """
+    caps = spec.get("capabilities")
+    if isinstance(caps, dict):
+        return {"image": bool(caps.get("image", True)),
+                "video": bool(caps.get("video", True))}
+    return {"image": True, "video": True}
+
+
+# ─────────────────────────────────────────────────── 本机出片服务（探测/接入）
+
+def local_services_status() -> dict:
+    """`GET /local-services` —— 设置面板打开时的一屏（**只读**，不改任何状态）。"""
+    from . import local_services
+    st = local_services.status()
+    st["default_address"] = local_services.DEFAULT_ADDRESS
+    st["env_key"] = vendors_mod.ENV_KEY["video"]
+    return st
+
+
+def local_services_probe(payload: dict | None = None) -> dict:
+    """`POST /local-services/probe` —— 一键探测：本机默认端口 + 用户手填的地址。
+
+    探不到时 `tried[]` 里每一条都带一句 `reason`（连不上 / 不是 ComfyUI /
+    版本太旧），面板必须把它摊开 —— 「什么都没探到」与「我这台机没装」
+    是两件事，混成一句会让人去重装。
+    """
+    from . import local_services
+    p = payload or {}
+    addrs = [str(a).strip() for a in (p.get("addresses") or []) if str(a).strip()]
+    out = local_services.probe(addrs)
+    out["ok"] = True
+    return out
+
+
+def local_services_inspect(payload: dict | None = None) -> dict:
+    """`POST /local-services/inspect` —— 先看那张工作流认不认得出参数落点。
+
+    ★ 为什么单独一步：接不接还没决定，就该让人看到「提示词我认在 2 号节点的
+      text、帧数认在 length」，认不出的指名要他指。存一张没校验过的图进档案，
+      坏的是后面每一次出片，而报出来的位置离根因很远。
+    """
+    from . import local_services
+    graph = local_services.parse_workflow((payload or {}).get("workflow"))
+    sug = local_services.suggest_mapping(graph)
+    return {"ok": True, "nodes": len(graph),
+            "required": list(local_services.REQUIRED_ROLES),
+            "mapping": sug["mapping"], "missing": sug["missing"]}
+
+
+def local_services_connect(payload: dict | None = None) -> dict:
+    """`POST /local-services/connect` —— 存档案、登记厂商档、按需设为本机默认。"""
+    from . import local_services
+    p = payload or {}
+    res = local_services.connect(
+        str(p.get("address") or ""), p.get("workflow"),
+        mapping=p.get("mapping") or None,
+        fps=int(p.get("fps") or 24),
+        align=str(p.get("align") or "4n+1"),
+        resolutions=p.get("resolutions") or None,
+        seconds_min=float(p.get("seconds_min") or 4),
+        seconds_max=float(p.get("seconds_max") or 12),
+        headers=p.get("headers") or None,
+        set_default=bool(p.get("set_default", True)),
+    )
+    res["status"] = local_services_status()
+    return res
+
+
+def local_services_default(payload: dict | None = None) -> dict:
+    """`POST /local-services/default` —— 只翻「是否本机默认」这一个开关。"""
+    from . import local_services
+    on = bool((payload or {}).get("on"))
+    out = local_services.set_default(on)
+    out["status"] = local_services_status()
+    return out
+
+
+def local_services_forget() -> dict:
+    """`POST /local-services/forget` —— 撤销接入：删档案、退回云端厂商。"""
+    from . import local_services
+    out = local_services.disconnect()
+    out["status"] = local_services_status()
+    return out
 
 
 # ─────────────────────────────────────────────────────────── 自检

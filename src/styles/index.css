@@ -5001,6 +5001,143 @@ body {
   padding-left: 2px;
 }
 
+/* 设置面板「本地出片服务」卡片（LocalMediaCard.jsx） */
+.lmc {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--panel-2);
+  font-size: 12px;
+}
+
+.lmc-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.lmc-k {
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.lmc-v {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  color: var(--text);
+}
+
+.lmc-sub {
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.lmc-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.lmc-field {
+  display: flex;
+  gap: 8px;
+}
+
+.lmc-input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.lmc-input-sm {
+  flex: 0 0 110px;
+}
+
+.lmc-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.lmc-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-items: flex-start;
+  text-align: left;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.lmc-item.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent) inset;
+}
+
+.lmc-item-title {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.lmc-item-desc {
+  color: var(--muted);
+}
+
+.lmc-dead {
+  color: var(--muted);
+  line-height: 1.5;
+  padding: 6px 10px;
+  border-left: 2px solid var(--border);
+  background: var(--panel);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.lmc-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.lmc-map {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.lmc-manual {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-top: 4px;
+}
+
+.lmc-warn {
+  color: var(--warning);
+  line-height: 1.5;
+}
+
+.lmc-notes {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
 .modal-error {
   color: var(--error);
   font-size: 12px;

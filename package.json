@@ -19,7 +19,8 @@
     "test:bridge": "node scripts/test-wechat-bridge-unit.mjs",
     "test:browser-panel": "node scripts/test-browser-panel/build.mjs && node scripts/test-browser-panel/run.mjs",
     "test:reconcile": "node scripts/test-session-reconcile.mjs",
-    "test:bg-procs": "node scripts/test-background-processes.mjs && node scripts/test-background-process-bar/run.mjs"
+    "test:bg-procs": "node scripts/test-background-processes.mjs && node scripts/test-background-process-bar/run.mjs",
+    "test:local-media": "node scripts/test-local-media/run.mjs"
   },
   "build": {
     "appId": "com.hermes.agent",

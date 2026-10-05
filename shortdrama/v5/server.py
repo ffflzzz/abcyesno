@@ -341,6 +341,56 @@ def create_app(base: str | None = None, web_root: str | None = None):
         """
         return wm.envelope(wm.vendors())
 
+    # ── 本机出片服务（ComfyUI 等）：一键探测 / 接入 / 撤销（2026-10-05）──────
+    #
+    # 为什么这五条都放在这里而不是 Electron 侧自己发请求：厂商档、接入档案、
+    # 轮询窗口全在 Python 这一侧（`v5/vendors.py` + `v5/local_services.py`）。
+    # Electron 只是**另一个调用方**，与短剧前端 SPA 并列 —— 在 Electron 里再实现
+    # 一遍探测与登记，就是同一件事两份真相，迟早只对一边生效。
+    # ⚠️ 写端点会改**本进程的环境变量**（`SHORTDRAMA_VIDEO_VENDOR`），
+    #    媒体子进程继承 ⇒ 下一次生成生效；已经在跑的那一轮不受影响。
+    @r.get("/v1/pixa/short-drama/local-services")
+    def local_services_get():
+        """面板打开时的一屏：档案、当前厂商、为什么是它。**只读**。"""
+        return wm.envelope(wm.local_services_status())
+
+    @r.post("/v1/pixa/short-drama/local-services/probe")
+    async def local_services_probe(payload: dict | None = None):
+        """探测本机默认端口 + 手填地址。`tried[]` 每条都带「为什么不通」。"""
+        try:
+            return wm.envelope(wm.local_services_probe(payload))
+        except ValueError as e:
+            raise _bad(str(e))
+
+    @r.post("/v1/pixa/short-drama/local-services/inspect")
+    async def local_services_inspect(payload: dict | None = None):
+        """先看那张工作流认不认得出参数落点（还没有任何写入）。"""
+        try:
+            return wm.envelope(wm.local_services_inspect(payload))
+        except ValueError as e:
+            raise _bad(str(e))
+
+    @r.post("/v1/pixa/short-drama/local-services/connect")
+    async def local_services_connect(payload: dict | None = None):
+        """存档案 + 登记厂商档 + 按需设为本机默认。校验全在写盘之前。"""
+        try:
+            return wm.envelope(wm.local_services_connect(payload))
+        except ValueError as e:
+            raise _bad(str(e))
+
+    @r.post("/v1/pixa/short-drama/local-services/default")
+    async def local_services_default(payload: dict | None = None):
+        """只翻「是否本机默认」这个开关（接入了但不想让它当默认时用）。"""
+        try:
+            return wm.envelope(wm.local_services_default(payload))
+        except ValueError as e:
+            raise _bad(str(e))
+
+    @r.post("/v1/pixa/short-drama/local-services/forget")
+    async def local_services_forget():
+        """撤销接入：删档案与工作流存档，视频厂商退回云端。"""
+        return wm.envelope(wm.local_services_forget())
+
     @r.get("/v1/pixa/short-drama/projects")
     def projects(page: int = 1, page_size: int = 10, is_demo: str | None = None):
         """项目列表。分页形状按线上给；`items` 与 `list` 同值，两个键都给以免猜错。

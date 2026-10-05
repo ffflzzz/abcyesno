@@ -1088,6 +1088,31 @@ ipcMain.handle('ensure-shortdrama', async () => {
 // Studio workbench: proxy Agnes calls through IPC (avoids renderer fetch/CSP issues)
 const agnes = require('./backend/agnes');
 const characterLibrary = require('./backend/character_library');
+const localMedia = require('./backend/localMedia');
+
+// 设置面板「本地出片服务」：一键探测本机 / 局域网的 ComfyUI，接入成本机的出片视频档。
+//
+// 这里只做转发（`backend/localMedia.js`），探测与厂商登记全在短剧后台那一侧 ——
+// 厂商档、接入档案、轮询窗口、断点续跑的产地判据都在 Python 里读，Electron 复制
+// 一份迟早只对一边生效。
+//
+// ⚠️ 调用会把短剧后台**懒启动**起来（一个 Python 进程 + 它自己管的 langgraph dev）。
+// 面板上要写明这一点，否则第一次点「一键探测」看起来像是卡死。
+ipcMain.handle('local-media-call', async (_event, payload) => {
+  const action = (payload && payload.action) || '';
+  try {
+    if (!shortdramaRunner) shortdramaRunner = new ShortdramaRunner({ app });
+    const baseUrl = await shortdramaRunner.start();
+    return await localMedia.request({
+      baseUrl,
+      action,
+      params: (payload && payload.params) || {},
+    });
+  } catch (err) {
+    log('local-media', `${action} failed: ${err.message}`);
+    return { ok: false, error: String(err.message || err) };
+  }
+});
 
 // WeChat bridge IPC — same {action, params} dispatch pattern as studio-call.
 ipcMain.handle('wechat-call', async (_event, payload) => {

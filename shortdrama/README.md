@@ -329,6 +329,45 @@ projects/<项目名>/
 
 > ⚠️ 请勿把真实密钥提交进仓库；`.env` 已在 `.gitignore` 中。
 
+### 本机出片服务（ComfyUI，2026-10-05）
+
+媒体链的视频档从此**可以不是云端**：Abcyesno 设置面板「本地出片服务」一键探测本机
+（或用户手填地址的另一台机器）上跑着的 ComfyUI，把那张工作流交进来后登记成一家
+厂商，出片视频改由本机显卡产。**静帧仍走云端 agnes**（用户定的口径），所以接入只动
+`SHORTDRAMA_VIDEO_VENDOR`，不动 `SHORTDRAMA_IMAGE_VENDOR`。
+
+| 部件 | 位置 | 说明 |
+|---|---|---|
+| 实现模块 | `v5/media/vendors/comfyui.py` | `v5/media/vendors/` 这个子包的**第一个**模块（自有协议厂商）。提交 = 往 `/prompt` 发一张工作流；轮询 = `/history/<id>` 与 `/queue` 三态；产物按 `videos → gifs → images` 扫输出节点，不写死节点号 |
+| 探测与档案 | `v5/local_services.py` | `probe` / `parse_workflow` / `suggest_mapping` / `connect` / `set_default` / `disconnect` / `status` |
+| 接入档案 | `RUNTIME_ROOT/local_media/profile.json`（工作流存 `comfyui_workflow.json`） | 放 RUNTIME_ROOT 而不是安装树：打包版的安装目录**按只读对待**（要能装进 Program Files） |
+| 后端路由 | `GET /v1/pixa/short-drama/local-services` + `POST …/probe|inspect|connect|default|forget` | 形状转换在 `webmap.py`，`server.py` 只做路由；Electron 面板是**另一个调用方**（`electron/backend/localMedia.js` 只转发），不在那侧重实现 |
+
+四条必须知道的语义：
+
+1. **默认值仍然只有一个真相源**：厂商选择始终读 `SHORTDRAMA_VIDEO_VENDOR`。
+   档案是它的**写入者之一**（`v5/vendors.py` 底部在 import 期挂钩，CLI / shim / 媒体子进程
+   三条路径共用这一处）。⚠️ 因此「设为本机默认」会把**命令行与外部 agent 出的片一起
+   带到本地** —— 这不是一个界面级开关。
+2. **人显式设的环境变量赢过档案**（`local_services.decide`）：判据是「env 里的值
+   是否 ≠ `settings.env` 出厂那一行」。打包版出厂那行是 `agnes`，所以点「接入」盖得过它；
+   而 `SHORTDRAMA_VIDEO_VENDOR=agnes python -m v5.series …` 这种单变量 A/B 臂**照旧生效**。
+3. **断点续跑多了产地这一维**（`media/jobs.py::done`）：`video_jobs.json` 里那条
+   `video_vendor`（2026-09-18 就在写，**从来没人读**）现在进判据 ⇒ 换了厂商后旧厂商的
+   片段不再被静默拼进新厂商的成片（混血片、日志全绿那一类）。旧记录没这字段 ⇒
+   产地不可考，按盘上事实复用、不重烧。
+4. **本地档的秒数 / 时长 / 参考图口径与云端不同**：秒数按 `fps` 与帧数网格换算，
+   钳位**必打日志**（不再重演 2026-09-16「静默压短 9 镜」）；轮询窗口读档里的
+   `poll_rounds` / `poll_interval`（`media/video.py::poll_window`），云端档没这两项 ⇒
+   落回旧的 60×10 秒，行为一字不变；`reference` / `pack` 档的多张参考图本机只有 1 个图位，
+   多余的会被**逐条点名丢弃**（这类项目建议把视频档切回云端）。拼接前 `compose` 用
+   ffprobe 统计「几条片段没有音轨」并打一行（只报不拦）。
+
+验证：`v5/tests_local_services.py` 用一台**本机假 ComfyUI**（按上表接口形状实现）把
+探测 → 认参数落点 → 提交 → 轮询 → 取回 → 撤销整条路径跑通，含五条路由的 `TestClient`
+收发与两条「旧病装回去」的红测试。真机第一次出片仍必须在用户的 GPU 机器上做
+（开发机的显卡跑不动 H3，那台机又跨网不可达）。
+
 ## 7. 维护脚本（`scripts/`）
 
 | 脚本 | 用途 |

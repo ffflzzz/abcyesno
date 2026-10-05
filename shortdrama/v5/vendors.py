@@ -178,6 +178,18 @@ def names() -> list[str]:
     return sorted(_REGISTRY)
 
 
+def unregister(name: str) -> bool:
+    """撤销一个**运行期登记**的厂商（本机出片服务断开时用）。返回是否删掉了。
+
+    ⛔ 内置档不许删：`DEFAULT`（agnes）没了，所有没设环境变量的机器都会
+    在 `current()` 上炸开 ——「撤销一个用户的接入」不该把出厂路径一起撤掉。
+    """
+    key = str(name or "").strip().lower()
+    if key == DEFAULT:
+        raise ValueError("内置厂商 %r 不能注销（它是所有路径的缺省档）" % DEFAULT)
+    return _REGISTRY.pop(key, None) is not None
+
+
 def get(name: str) -> dict:
     """取厂商档。未注册 ⇒ `UnknownVendor`（**不静默回退**）。"""
     key = str(name or "").strip().lower()
@@ -359,3 +371,24 @@ def describe(kind: str = "") -> str:
         except UnknownVendor:
             buf.append("%s=%s（★未注册！）" % (k, name))
     return "[vendor] " + " · ".join(buf) + " · 已注册[%s]" % ",".join(names())
+
+
+# ─── 本机出片服务（ComfyUI 等）的接入档案 ──────────────────────────────────
+#
+# ★ 为什么钩在 **import 期**：厂商选择的真相源始终只有 `SHORTDRAMA_VIDEO_VENDOR`
+#   这一个环境变量，而「这台机器上接了什么」是盘上的一份档案。档案必须变成
+#   「注册表里的一条 + env 里的一个值」之后，读 `current()` 的代码才看得见它。
+#   CLI / web shim / 媒体子进程三条路径都 import 本模块 ⇒ 钩这一处就够；
+#   在每条入口各挂一遍是「同一判据写三份」，迟早漏一处（本项目为此栽过多次）。
+# ⚠️ 有档案且 `default=True` 时这里会**改本进程的环境变量**，于是同一台机器上的
+#   CLI 与外部 agent 一起转本地 —— 这是用户选的「探到就设为默认」的真实含义。
+#   显式设过环境变量的调用方（A/B 的对照臂）赢过档案，见 `local_services.decide`。
+try:
+    from . import local_services as _local_services
+
+    _local_services.apply_at_import()
+except Exception as _e:  # noqa: BLE001
+    # 档案坏了**不能**把整个 v5 拖垮（没接过的机器就该与改造前一字不变），
+    # 但必须出声 —— 静默吞掉会变成「我明明接入了，怎么还在走云端」。
+    print("[vendor] ⚠ 本机出片服务档案加载失败：%s ⇒ 本次按云端出片"
+          % str(_e)[:160], flush=True)

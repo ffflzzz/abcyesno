@@ -188,6 +188,10 @@ contextBridge.exposeInMainWorld('hermes', {
   // Studio workbench: call Agnes image/video generation via IPC (main process)
   studioCall: (action, params) => ipcRenderer.invoke('studio-call', { action, params }),
 
+  // 设置面板「本地出片服务」：探测 / 接入 / 撤销本机或局域网的 ComfyUI。
+  // Actions: status/probe/inspect/connect/default/forget（转发明细见 backend/localMedia.js）
+  localMediaCall: (action, params) => ipcRenderer.invoke('local-media-call', { action, params }),
+
   // WeChat bridge: {action,params} dispatch to wechat-bridge-runner.
   // Actions: getStatus/start/stop/restart/getQrCode/refreshQrCode/unbind/getLogs/sendTestMessage/ensureSession/appendMessage
   wechatCall: (action, params) => ipcRenderer.invoke('wechat-call', { action, params }),

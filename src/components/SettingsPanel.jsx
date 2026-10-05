@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import Icon from "./Icon.jsx";
+import LocalMediaCard from "./LocalMediaCard.jsx";
 import { useTts } from "../hooks/useTts.jsx";
 
 function maskKey(key) {
@@ -210,6 +211,14 @@ export default function SettingsPanel({ apiKey = "", hasApiKey = false, apiKeys 
           )}
         </>
       ),
+    },
+    {
+      id: "local-media",
+      cat: "connection",
+      name: "本地出片服务",
+      desc: "探一探这台机（或你填的另一台机器）上跑着的 ComfyUI，把出片的视频从云端切成它。静帧仍走云端。",
+      kw: "comfyui 本地 模型 探测 接入 出片 视频 显卡 minimax h3 ollama",
+      after: <LocalMediaCard />,
     },
     {
       id: "model-default",

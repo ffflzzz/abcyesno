@@ -103,3 +103,4 @@ shortdrama/tmp/
 
 # 后台进程条无头截图验收的中间产物（bundle + 截图）
 scripts/test-background-process-bar/.tmp/
+scripts/test-local-media/.tmp/

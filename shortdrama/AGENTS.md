@@ -549,7 +549,7 @@ pack 档**跳过**逐镜 clipqc（组产物多镜
 | `SHORTDRAMA_SLICE_SOFT` | 0 | `1` = 切片失败降级为「告警 + 注入全文」|
 | `SHORTDRAMA_CHAT_VENDOR` | agnes | 文本通道厂商（`v5/vendors.py` 注册表）。旧名 `NEWDEEP_LLM_PROVIDER` 仍兼容回落 |
 | `SHORTDRAMA_IMAGE_VENDOR` | agnes | 生图厂商（同上注册表）。**未注册的名字响亮报错**，不静默回退 |
-| `SHORTDRAMA_VIDEO_VENDOR` | agnes | 生视频厂商（同上）。前端三个生成页面各自可选，随请求进该次 run 的**子进程 env** |
+| `SHORTDRAMA_VIDEO_VENDOR` | agnes | 生视频厂商（同上）。前端三个生成页面各自可选，随请求进该次 run 的**子进程 env**。⚠️ 2026-10-05 起它还可能由**本机接入档案**写入（`v5/local_services.py`，设置面板「本地出片服务」探到 ComfyUI 后设为默认）⇒ 那时**命令行与外部 agent 也会走本地**；显式设过本变量（值 ≠ `settings.env` 出厂那行）赢过档案，A/B 臂照旧有效。详见 README §6「本机出片服务」 |
 
 > **完整清单见 [`README.md`](README.md) §6 配置**（2026-09-18 起它是环境变量的**唯一完整表**）
 > —— 本节只列**会改变调用方行为**的那些。语义与理由见 `v5/config.py` 的注释。

@@ -195,6 +195,7 @@
 
 ### 9.6 设置面板 `SettingsPanel`
 - API Key 状态（保存前调用 `validate-api-key` 校验，失败保持弹窗开启）、默认模型、主题切换（深/浅/跟随系统）、打开数据目录（`shell.openPath` 到 `%USERPROFILE%/.hermes_portable_data`）。
+- 「API 与模型」分类下的**本地出片服务**卡片（`LocalMediaCard.jsx`，2026-10-05）：一键探测本机或手填地址上的 ComfyUI → 交出工作流 JSON → 先看一眼参数落点 → 接入并设为本机默认 → 可撤销回云端。数据全部来自短剧后台（`window.hermes.localMediaCall` → `electron/backend/localMedia.js` 转发），**面板内不做任何判定**；打开面板不自动查状态（那会顺手起一个 Python 进程，按钮上写明）。
 
 ### 9.7 工具卡片 `ToolCard`
 - 展示工具名、入参摘要、状态（执行中 spinner / 成功对勾 / 失败叉）。状态用令牌色，不用彩色装饰点堆叠。无 `tool_call_id` 时用稳定 `tool-${toolName}` 匹配 START/END。
