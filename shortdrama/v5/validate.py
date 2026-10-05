@@ -885,10 +885,14 @@ def check_storyboard(md: str, brief: dict | None = None,
 
 _SHOT_RANGE_RE = re.compile(r"(\d+)\s*[-–~至]\s*(\d+)\s*个?镜|共\s*(\d+)\s*个?镜"
                             r"|(\d+)\s*个?镜")
+#: 命中处**前面**出现这些词 ⇒ 那不是"全片共几镜"的声明，是别处的数字（2026-10-05）
+_SHOT_HEAD_STOPS = ("场", "≥", "≤", "少", "低", "超", "封顶")
+#: 命中处**后面**紧跟这些词 ⇒ 同上（「场内 2 镜起」「2 镜以上」是**下限**，不是总数）
+_SHOT_TAIL_STOPS = ("起", "以上", "以内", "封顶", "不设", "上限", "下限")
 
 
 def parse_shot_range(text: str | None) -> tuple[int, int] | None:
-    """从 brief 的 `target_duration` 里读「共 15-18 镜」这种区间。
+    r"""从 brief 的 `target_duration` 里读「共 15-18 镜」这种区间。
 
     ⚠️ 单值写法同样要读得出来（2026-10-03 实测）：上一版 brief 写的是「全片 26 镜」，
       而旧正则只认「共 N 镜」与「N-M 镜」⇒ **静默返回 None** ⇒ 链内体检与量表拿不到
@@ -898,13 +902,27 @@ def parse_shot_range(text: str | None) -> tuple[int, int] | None:
     为什么需要（2026-09-29 实测）：量表与链内体检的镜数下限写的是"目标秒 ÷ 8"，
     而 brief 自己明写 15-18 镜 —— 结果一条链交出 **12 镜 / 54 秒** 却"镜数合格"。
     判据不能只按派生公式，brief 写了区间就按区间判（读不出才回落公式）。
+
+    ⚠️ 但**"N 镜"必须真的是镜数声明**（2026-10-05 实测 `madfate-abc-1005`）：
+      「场」口径的 brief 里写的是「场内 2 镜起」「场内 ≥2 镜」「镜数不设上限」，
+      裸支 `(\d+)\s*个?镜` 把那个 **2** 读了出来 ⇒ `(2, 2)` ⇒ 链内体检对 24 镜全表
+      报「单镜时长要贴近 brief 声明的 60 秒（合格区间 **30-12** 秒）」——
+      区间倒挂、且是把一整场压成 2 镜的要求，**没有任何合法表能满足**。
+      这份退回清单会在任何一次打回重跑时注入给分镜角色 ⇒ 角色改不动、工头反复重派。
+      ⇒ 现在按**命中处的上下文**筛：前后沾着「场／≥／起／以上／不设…」的命中一律不算声明。
     """
     if not text:
         return None
-    m = _SHOT_RANGE_RE.search(str(text))
-    if not m:
-        return None
-    if m.group(3) or m.group(4):
-        n = int(m.group(3) or m.group(4))
-        return (n, n)
-    return (int(m.group(1)), int(m.group(2)))
+    s = str(text)
+    for m in _SHOT_RANGE_RE.finditer(s):
+        head = s[max(0, m.start() - 6):m.start()]
+        tail = s[m.end():m.end() + 3]
+        if any(k in head for k in _SHOT_HEAD_STOPS):
+            continue
+        if tail.startswith(_SHOT_TAIL_STOPS):
+            continue
+        if m.group(3) or m.group(4):
+            n = int(m.group(3) or m.group(4))
+            return (n, n)
+        return (int(m.group(1)), int(m.group(2)))
+    return None

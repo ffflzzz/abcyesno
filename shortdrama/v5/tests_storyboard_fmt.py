@@ -64,6 +64,30 @@ class TestShotCountWindow(unittest.TestCase):
         self.assertIsNone(validate.parse_shot_range("约 60 秒，镜数按目标秒推"))
         self.assertIsNone(validate.parse_shot_range(""))
 
+    def test_scene_unit_brief_never_yields_a_shot_count(self):
+        """★ 2026-10-05「场」口径的 brief 里那些 `N 镜` **不是**镜数声明，一个都不许读出来。
+
+        实测把 `madfate-abc-1005` 的真 brief 喂进来：裸支把「场内 2 镜起」的那个 **2**
+        读成 `(2, 2)` ⇒ 链内体检对 24 镜全表报「单镜时长要贴近 60 秒
+        （合格区间 **30-12** 秒）」——区间倒挂、没有合法表能满足，
+        而这份清单会在每次打回重跑时注入给分镜角色（角色改不动 ⇒ 工头反复重派）。
+        """
+        from v5 import validate
+        real = ("约 120 秒（每集）。★ 结构单位是**场**，不是镜：一集拆成 9–11 场，"
+                "**每场总长 4–12 秒**（4 秒是一条请求发得出去的最低限、12 秒是上限；"
+                "一场 = 一次生成），场内 2 镜起、**镜数不设上限**。"
+                "**每镜几秒完全由你按剧情节拍决定，本项目不设镜长地板**"
+                "——快切正反打写 1 秒甚至 0.5 秒一镜都是合法写法。")
+        self.assertIsNone(validate.parse_shot_range(real),
+                          "「9–11 场」是场数、「2 镜起」是场内下限，都不许当镜数读出来")
+        self.assertIsNone(validate.parse_shot_range("每场 ≥2 镜"), "≥ 前缀 = 下限，不是总数")
+        self.assertIsNone(validate.parse_shot_range("场内 2 镜起"), "「起」后缀 = 下限")
+        self.assertIsNone(validate.parse_shot_range("每场 4-8 镜"))
+        # 反向对照：真声明必须**照样读得出**（不许把筛上下文做成一律不读）
+        self.assertEqual(validate.parse_shot_range("约 120 秒，共 24 镜；场内 2 镜起"), (24, 24),
+                         "同句里既有声明又有下限 ⇒ 读声明那一个")
+        self.assertEqual(validate.parse_shot_range("24 镜 / 11 场"), (24, 24))
+
     def test_countable_uses_brief_range_not_only_formula(self):
         """brief 明写 15-18 镜时，12 镜必须不合格；16 镜必须合格。"""
         from v5 import shotcheck
