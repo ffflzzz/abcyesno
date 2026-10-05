@@ -549,13 +549,45 @@ class TestThrashStop(unittest.TestCase):
         spec.loader.exec_module(cls.mod)
 
     def test_rewrite_budget_is_the_gates_number_plus_one(self):
-        """>3 次重写才停：门的重试上限是 2，加一次首写 ⇒ 沿用同一份预算，不新造数字。"""
+        """预算本身：空转已成立时，3 次放行、4 次停（`MAX_REVISIONS + 1`，不新造数字）。"""
         f = self.mod.thrash_stop
-        self.assertEqual(f({"scenedesigner": 1}, 0, max_rewrites=3), "", "首写必须放行")
-        self.assertEqual(f({"scenedesigner": 3}, 0, max_rewrites=3), "", "打回两次必须放行")
-        stop = f({"scenedesigner": 4}, 0, max_rewrites=3)
+        stalled = self.mod.NO_PROGRESS_SECONDS
+        self.assertEqual(f({"scenedesigner": 3}, 0, max_rewrites=3,
+                           since_new_seconds=stalled), "", "打回两次必须放行")
+        self.assertEqual(f({"worldbuilder": 1, "scenedesigner": 2, "reviewer": 1}, 0,
+                           max_rewrites=3, since_new_seconds=stalled), "",
+                         "各角色都在预算内 ⇒ 不许停")
+
+    def test_rewrite_budget_alone_never_stops(self):
+        """★ 2026-10-05 改判据：**只数重写会误杀**，所以重写次数不许单独构成停机理由。
+
+        同一轮里连撞两次的实测（两次都零出片）：
+          · 15:44 plotdesigner 分 4 段写十集目录 ⇒ 掐在**写第一稿**中途；
+          · 16:29 scenedesigner 数到 4（分段已折掉 1 次）⇒ 掐在**只差 reviewer** 的地方，
+            而那张表是合格的：24 镜 / 11 场、场号连写不回头、每场 8–12 秒、每场 ≥2 镜。
+        ⇒ 现在必须**同时**满足"多久没有产物进出盘"，忘传时钟时倾向于**不停**。
+        """
+        f = self.mod.thrash_stop
+        self.assertEqual(f({"scenedesigner": 4}, 0, max_rewrites=3), "",
+                         "没传进展时钟 ⇒ 不许仅凭重写次数停（默认 0 = 刚有进展）")
+        self.assertEqual(f({"scenedesigner": 9}, 0, max_rewrites=3,
+                           since_new_seconds=380.0), "",
+                         "6 分钟前还有新产物落盘 ⇒ 判为角色在改自己的稿，继续跑")
+
+    def test_rewrite_plus_no_progress_stops(self):
+        """>3 次重写**且** 45 分钟没有任何产物进出 ⇒ 必须停（1003f 的形状）。"""
+        f = self.mod.thrash_stop
+        stop = f({"scenedesigner": 4}, 0, max_rewrites=3,
+                 since_new_seconds=self.mod.NO_PROGRESS_SECONDS)
         self.assertIn("scenedesigner", stop)
         self.assertIn("4 次", stop, "要报得出实际次数，不能只说「超了」")
+        self.assertIn("45 分钟", stop, "要报得出空转了多久，人才看得出这不是限流")
+        self.assertEqual(f({"scenedesigner": 4}, 0, max_rewrites=3,
+                           since_new_seconds=self.mod.NO_PROGRESS_SECONDS - 1), "",
+                         "差一秒不许停（边界要钉死，否则正常长跑随时被判打转）")
+        self.assertEqual(self.mod.NO_PROGRESS_SECONDS, 2700.0,
+                         "45 分钟：一个角色正常跑十几分钟、本轮相邻两个新产物最大间隔 260 秒，"
+                         "而 1003f 的真打转是连 2.5 小时")
 
     def test_two_rounds_without_new_artifact_stops(self):
         stop = self.mod.thrash_stop({}, 2, max_rewrites=3)
@@ -597,8 +629,9 @@ class TestThrashStop(unittest.TestCase):
         n, merged, _ = self.mod.write_bursts(None, s)
         self.assertEqual(n, 5, "6 次落盘 = 首写 1 + 独立重写 5")
         self.assertEqual(merged, 0)
-        stop = self.mod.thrash_stop({"scenedesigner": n}, 0, max_rewrites=3)
-        self.assertIn("scenedesigner", stop, "闸本身没改，仍然会停")
+        stop = self.mod.thrash_stop({"scenedesigner": n}, 0, max_rewrites=3,
+                                    since_new_seconds=self.mod.NO_PROGRESS_SECONDS)
+        self.assertIn("scenedesigner", stop, "闸本身没改，仍然会停（配合空转那条）")
 
     def test_shrink_counts_even_when_fast(self):
         """文件**变短** ⇒ 即使两秒内连续发生也算一次重写。

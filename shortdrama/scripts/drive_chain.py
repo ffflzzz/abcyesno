@@ -274,8 +274,16 @@ def write_bursts(prev, samples, min_gap: float = WRITE_BURST_GAP) -> tuple:
     return n, merged, prev
 
 
+#: 连续多久**盘上没有角色产物进出**就判"工头在原地打转"（秒）。
+#: 取 45 分钟的依据：正常一个角色跑十几分钟、本轮实测相邻两个新产物之间最大 260 秒，
+#: 而 1003f 那次真乒乓是**连 2.5 小时**没有任何新产物 ⇒ 两个量级同样差 2 倍以上。
+NO_PROGRESS_SECONDS = 2700.0
+
+
 def thrash_stop(rewrites: dict, rounds_without_new: int,
-                max_rewrites: int = 3, max_stall: int = 2) -> str:
+                max_rewrites: int = 3, max_stall: int = 2,
+                since_new_seconds: float = 0.0,
+                stall_seconds: float = NO_PROGRESS_SECONDS) -> str:
     """工头自己乒乓重派的停机判据（**纯函数**，可单测）。返回停因，空串 = 继续跑。
 
     ★ 为什么必须有它（2026-10-03 实测 `yoga-affair-1003f`）：驱动器原先只对
@@ -286,16 +294,31 @@ def thrash_stop(rewrites: dict, rounds_without_new: int,
       打回的理由还全是机械事（运镜写成"全程静止"、8 秒镜只写 2 段、自报镜数与表不符）
       —— 模型改不动格式，两个角色就互相打回，而没人喊停。
 
+    ★★ 但**重写次数不能单独当判据**（2026-10-05 同一轮里连撞两次，两次都零出片）：
+      它只是"没往前推进"的一个代理指标，而磁盘上有好几种东西都会让同一个产物反复变——
+      角色分几段写出长文档（隔 5 分钟存一段的，`write_bursts` 也折不掉），
+      角色在自己那一轮里回头改自己刚交的表（1003 那条"一次 `write_file` 交整表"的契约
+      模型并不总是遵守）。这些**都还在正常前进**，把它们当乒乓掐掉，闸自己就成了唯一堵点：
+      · 15:44 那次 plotdesigner 数到 4 ⇒ 掐在**写第一稿**中途；
+      · 16:29 那次 scenedesigner 数到 4（分段已折掉 1 次）⇒ 掐在**只差 reviewer** 的地方，
+        而那张表本身是**合格**的：24 镜 / 11 场、场号连写不回头、每场 8–12 秒、每场 ≥2 镜。
+      ⇒ 现在**两条同时成立才停**：① 重写超预算，② 且已 `stall_seconds` 没有任何角色产物
+      **进出盘**（新增和消失都算进展——打回时 `reset_from()` 先把旧的挪走，那也算进展，
+      所以不会把合法的"打回重做"一起掐掉）。
+
     判据只看**磁盘事实**（本项目一贯的验收口径）：
       · `rewrites[角色]` = 该产物在本轮 run 里被**独立重写**的次数
-        （分段写盘已由 `write_bursts` 折成一次，2026-10-05）；
+        （分段写盘已由 `write_bursts` 折成一次）；上限沿用门那一份预算，不新造数字：
+        `max_rewrites = MAX_REVISIONS + 1`；
+      · `since_new_seconds` = 距上次"产物集合变化"过了多少秒。**默认 0 = 刚有进展**，
+        所以调用方忘传时闸倾向于**不停**——误杀的代价是零出片，漏杀的代价只是晚 45 分钟；
       · `rounds_without_new` = 连续多少轮轮询没有任何新产物出现。
-    上限沿用门那一份预算，不新造数字：`max_rewrites = MAX_REVISIONS + 1`。
     """
     hot = sorted(r for r, n in (rewrites or {}).items() if n > max_rewrites)
-    if hot:
-        return ("同一份产物被重写超过 %d 次：%s（各 %d 次）"
-                % (max_rewrites, "、".join(hot),
+    if hot and since_new_seconds >= stall_seconds:
+        return ("已经 %d 分钟没有任何角色产物进出盘，而这段时间里 %s 被独立重写了 %d 次"
+                "（工头在原地乒乓重派，不往前推进）"
+                % (int(since_new_seconds // 60), "、".join(hot),
                    max((rewrites or {}).get(r, 0) for r in hot)))
     if rounds_without_new >= max_stall:
         return ("连续 %d 轮没有任何新产物出现（工头在原地重派，不往前推进）"
@@ -722,6 +745,12 @@ async def main() -> int:
         #   同一份产物再多一次 mtime 变化 ⇒ 跨轮累计的话，打回后的那一轮一开局就超限，
         #   于是合法重做被当成乒乓掐掉。跨轮的预算另有那份：`redo_left` / 门台账。
         _stamps, _rewrites, _merged = {}, {}, {}
+        # ★ 进展时钟：**产物集合任何变化**都算进展（新增或消失都算）。打回时
+        #   `reset_from()` 会先把旧表挪进 `.rerun_backup/` ⇒ 集合变小，那同样是进展，
+        #   所以"合法的打回重做"不会因为这个时钟而被判成打转。
+        _t_new = time.time()
+        _prev_set: set = set()
+        _warned_at = 0.0
         while time.time() - t0 < timeout:
             await asyncio.sleep(20)
             try:
@@ -734,13 +763,16 @@ async def main() -> int:
             _now = done_roles(t0)
             print("[%5ds] r%d run=%-12s 产物=%s"
                   % (time.time() - t0, round_no, status, _now), flush=True)
+            if set(_now) != _prev_set:
+                _prev_set = set(_now)
+                _t_new = time.time()
             # —— 反空转采样：数"这份产物被**独立重写**了几次" ——
-            #    ⚠️ 只数重写，**不在这里判"多久没新产物"**：一个角色正常就要跑
-            #    十几分钟（几十次轮询都不落新文件），按轮询判空转会在 40 秒误触发。
-            #    空转那条判据放在**外层轮次**上（每轮开始处比一次）。
             #    ⚠️ 分段写盘必须折成一次（`write_bursts`）：旧实现数"mtime 变了几个
             #    不同的值"，于是角色一次派发里分 4 段写出十集目录 = "乒乓 4 次"，
             #    闸在角色**还在写第一稿**时把整条 run 掐了（2026-10-05 实测，21 分钟零出片）。
+            #    ⚠️ 但光数重写还是会误杀（角色在自己那一轮里回头改自己刚交的表，
+            #    隔的就是"生成一遍"那么久）⇒ 重写次数只当**旁证**，停机必须同时满足
+            #    "多久没有新产物进出"（判据与两次实测见 `thrash_stop` 的文档字符串）。
             for _r in _now:
                 _p = root / out_path(_r, ep)
                 try:
@@ -761,7 +793,20 @@ async def main() -> int:
                         print("[drive]    %s 的产物离上次落盘不到 %d 分钟 ⇒ 算**同一次写作**"
                               "的分段保存（本角色已并入 %d 次），不计乒乓"
                               % (_r, int(WRITE_BURST_GAP // 60), _merged[_r]), flush=True)
-            _why = thrash_stop(_rewrites, 0, max_rewrites=_MAX_RW)
+            _since_new = time.time() - _t_new
+            _why = thrash_stop(_rewrites, 0, max_rewrites=_MAX_RW,
+                               since_new_seconds=_since_new)
+            if not _why and any(n > _MAX_RW for n in _rewrites.values()) \
+                    and time.time() - _warned_at > 300:
+                # 重写超预算**但链还在往前走** ⇒ 只报不停（停错了就是零出片，
+                # 而"往前走"这件事必须让人看得见，不能默默数着）。
+                _warned_at = time.time()
+                print("[drive]    ⚠️ %s 已被独立重写超过 %d 次，但 %d 分钟前还有产物进出盘"
+                      "⇒ 判为**角色在改自己的稿**，继续跑（累计空转满 %d 分钟才会停）"
+                      % ("、".join(sorted(k for k, n in _rewrites.items()
+                                          if n > _MAX_RW)),
+                         _MAX_RW, int(_since_new // 60),
+                         int(NO_PROGRESS_SECONDS // 60)), flush=True)
             if _why:
                 thrashed = _why
                 print("[drive] ⛔ 反空转闸触发：%s" % _why, flush=True)
