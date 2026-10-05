@@ -234,6 +234,46 @@ def reroll_plan(dec: dict, until: str = "", redo_left: int = 0,
     return "reroll", tgt, note
 
 
+#: 两次 mtime 变化隔得比这个近 ⇒ 算**同一次写作**的分段保存，不计乒乓（秒）。
+#: 取 4 分钟的依据：一次完整的角色派发要跑十几分钟（1003f 实测相邻两次重派约 16 分钟），
+#: 而一个角色分几段写完一份长文档的间隔是**生成一段的时间**（实测 plotdesigner
+#: 写 24316 字的十集目录：相邻写盘约 140 秒）。两个数量级差 2 倍以上，不会撞在一起。
+WRITE_BURST_GAP = 240.0
+
+
+def write_bursts(prev, samples, min_gap: float = WRITE_BURST_GAP) -> tuple:
+    """把「mtime 变了」的原始读数折成**独立重写次数**（**纯函数**，可单测）。
+
+    `prev` = 上一次采样看到的 `(mtime, size)`，首轮没有基线时传 `None`；
+    `samples` = 之后每次采样看到的 `(mtime, size)`（mtime 没变的由调用方滤掉）。
+    返回 `(独立重写次数, 并入同一次写作的分段次数, 最新基线)`。
+
+    ★ 为什么要折（2026-10-05 实测 `madfate-abc-1005`，**闸自己造的零出片**）：
+      旧判据把"每次 mtime 变化"都算成一次重写 ⇒ 角色**一次派发里分段写出**长文档
+      （plotdesigner 分 4 段写十集目录，相邻 140 秒）就被数成"乒乓重派 4 次"，
+      反空转闸在角色**还在写第一稿**的时候把整条 run 掐了：24316 字的目录是完整的，
+      盘上只有 3/7 个产物，21 分钟、零出片。这跟 1003g 是同一个病
+      ——「装闸是为了省时间，却把唯一的出口一起掐了」。
+
+    两条不折叠的情况（都是"真的换了一份"，不是分段）：
+      · 间隔 ≥ `min_gap`（够跑完一整轮派发）；
+      · **文件变短**：分段写只会长回去或写满，不会把已有内容删掉——
+        变短只能是从头重写的稿子（乒乓的磁盘特征），哪怕两秒内连续发生也照计。
+    """
+    n = merged = 0
+    for st, size in samples:
+        if prev is None:
+            prev = (st, size)          # 首见 = 第一次落盘，不是"重写"
+            continue
+        if st - prev[0] >= min_gap or (size is not None and prev[1] is not None
+                                       and size < prev[1]):
+            n += 1
+        else:
+            merged += 1
+        prev = (st, size)
+    return n, merged, prev
+
+
 def thrash_stop(rewrites: dict, rounds_without_new: int,
                 max_rewrites: int = 3, max_stall: int = 2) -> str:
     """工头自己乒乓重派的停机判据（**纯函数**，可单测）。返回停因，空串 = 继续跑。
@@ -247,7 +287,8 @@ def thrash_stop(rewrites: dict, rounds_without_new: int,
       —— 模型改不动格式，两个角色就互相打回，而没人喊停。
 
     判据只看**磁盘事实**（本项目一贯的验收口径）：
-      · `rewrites[角色]` = 该产物在本轮 run 里 mtime 变化过的次数（= 被重写次数）；
+      · `rewrites[角色]` = 该产物在本轮 run 里被**独立重写**的次数
+        （分段写盘已由 `write_bursts` 折成一次，2026-10-05）；
       · `rounds_without_new` = 连续多少轮轮询没有任何新产物出现。
     上限沿用门那一份预算，不新造数字：`max_rewrites = MAX_REVISIONS + 1`。
     """
@@ -680,7 +721,7 @@ async def main() -> int:
         # ★ 重写次数**按单轮数**（1003g 实测的假阳性）：驱动器自己发起的打回必然让
         #   同一份产物再多一次 mtime 变化 ⇒ 跨轮累计的话，打回后的那一轮一开局就超限，
         #   于是合法重做被当成乒乓掐掉。跨轮的预算另有那份：`redo_left` / 门台账。
-        _stamps, _rewrites = {}, {}
+        _stamps, _rewrites, _merged = {}, {}, {}
         while time.time() - t0 < timeout:
             await asyncio.sleep(20)
             try:
@@ -693,19 +734,33 @@ async def main() -> int:
             _now = done_roles(t0)
             print("[%5ds] r%d run=%-12s 产物=%s"
                   % (time.time() - t0, round_no, status, _now), flush=True)
-            # —— 反空转采样：数"这份产物被重写了几次" ——
+            # —— 反空转采样：数"这份产物被**独立重写**了几次" ——
             #    ⚠️ 只数重写，**不在这里判"多久没新产物"**：一个角色正常就要跑
             #    十几分钟（几十次轮询都不落新文件），按轮询判空转会在 40 秒误触发。
             #    空转那条判据放在**外层轮次**上（每轮开始处比一次）。
+            #    ⚠️ 分段写盘必须折成一次（`write_bursts`）：旧实现数"mtime 变了几个
+            #    不同的值"，于是角色一次派发里分 4 段写出十集目录 = "乒乓 4 次"，
+            #    闸在角色**还在写第一稿**时把整条 run 掐了（2026-10-05 实测，21 分钟零出片）。
             for _r in _now:
                 _p = root / out_path(_r, ep)
                 try:
-                    _st = _p.stat().st_mtime if _p.exists() else 0.0
+                    _m = _p.stat() if _p.exists() else None
                 except OSError:
-                    _st = 0.0
-                if _st and _stamps.get(_r) != _st:
-                    _rewrites[_r] = _rewrites.get(_r, 0) + 1
-                    _stamps[_r] = _st
+                    _m = None
+                if _m is None:
+                    continue
+                _cur = (_m.st_mtime, _m.st_size)
+                if _stamps.get(_r) == _cur:
+                    continue
+                _add, _mer, _stamps[_r] = write_bursts(_stamps.get(_r), [_cur])
+                if _add:
+                    _rewrites[_r] = _rewrites.get(_r, 0) + _add
+                elif _mer:
+                    _merged[_r] = _merged.get(_r, 0) + 1
+                    if _merged[_r] <= 6:   # 只报前 6 次，免得长文档刷屏
+                        print("[drive]    %s 的产物离上次落盘不到 %d 分钟 ⇒ 算**同一次写作**"
+                              "的分段保存（本角色已并入 %d 次），不计乒乓"
+                              % (_r, int(WRITE_BURST_GAP // 60), _merged[_r]), flush=True)
             _why = thrash_stop(_rewrites, 0, max_rewrites=_MAX_RW)
             if _why:
                 thrashed = _why

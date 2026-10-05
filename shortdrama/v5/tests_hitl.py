@@ -568,6 +568,55 @@ class TestThrashStop(unittest.TestCase):
         self.assertEqual(self.mod.thrash_stop(
             {"worldbuilder": 1, "scenedesigner": 2, "reviewer": 1}, 0, max_rewrites=3), "")
 
+    # ── 分段写盘 ≠ 乒乓（2026-10-05 实测 `madfate-abc-1005`：闸自己造的零出片）──
+
+    def test_chunked_authoring_counts_as_one_write(self):
+        """角色**一次派发里分 4 段**写出长文档 ⇒ 独立重写数必须是 0。
+
+        装回旧病：旧实现数"mtime 取到几个不同的值"，这串采样 = 4 次 ⇒ 超过阈值 3
+        ⇒ 反空转闸在角色还在写第一稿时 cancel 整条 run（实测盘上只有 3/7 个产物、
+        21 分钟、零出片，而那份十集目录是**完整**的）。
+        """
+        g = self.mod.WRITE_BURST_GAP
+        s = [(0.0, 6000), (140.0, 12000), (280.0, 18000), (420.0, 24316)]
+        n, merged, last = self.mod.write_bursts(None, s)
+        self.assertEqual(len(s), 4, "旧口径会数成 4 次「重写」——**反向对照**")
+        self.assertEqual(n, 0, "首见是「第一次落盘」，后面三段彼此只差 140 秒 ⇒ 同一次写作")
+        self.assertEqual(merged, 3)
+        self.assertEqual(last, s[-1], "基线要跟着走到最新一份，否则下次采样会重复计数")
+        self.assertLess(140.0, g, "夹具的间隔必须真的落在折叠窗口内，否则这条测试是空的")
+        self.assertEqual(self.mod.thrash_stop({"plotdesigner": n}, 0, max_rewrites=3), "",
+                         "⇒ 不许停（这就是那次误杀）")
+
+    def test_real_redispatch_still_counts(self):
+        """反向对照：**真乒乓**（每次间隔够跑完一整轮派发）必须照数，闸不许变瞎。
+
+        依据是量级差：1003f 实测相邻两次重派约 16 分钟，而分段写盘是 140 秒。
+        """
+        s = [(i * 400.0, 9000) for i in range(6)]      # 每 400 秒一份完整稿
+        n, merged, _ = self.mod.write_bursts(None, s)
+        self.assertEqual(n, 5, "6 次落盘 = 首写 1 + 独立重写 5")
+        self.assertEqual(merged, 0)
+        stop = self.mod.thrash_stop({"scenedesigner": n}, 0, max_rewrites=3)
+        self.assertIn("scenedesigner", stop, "闸本身没改，仍然会停")
+
+    def test_shrink_counts_even_when_fast(self):
+        """文件**变短** ⇒ 即使两秒内连续发生也算一次重写。
+
+        分段写只会长回去或写满；变短只能是从头重写的稿子——这是"分段"与"换稿"
+        唯一不靠时间也能分开的信号，所以它必须能盖过折叠窗口。
+        """
+        s = [(0.0, 1000), (5.0, 900), (10.0, 950), (15.0, 800)]
+        n, merged, _ = self.mod.write_bursts(None, s)
+        self.assertEqual(n, 2, "900 与 800 两次变短各计一次")
+        self.assertEqual(merged, 1, "900→950 变长且间隔极近 ⇒ 并入同一次写作")
+
+    def test_missing_artifact_is_not_a_write(self):
+        """产物被 `reset_from` 挪走（打回）时不许凭空计一次重写。"""
+        n, merged, last = self.mod.write_bursts(None, [])
+        self.assertEqual((n, merged, last), (0, 0, None))
+
+
 
 class TestDriveChainUntil(unittest.TestCase):
     """`--until` 的达成判据（2026-09-19 前端两段式的骨架）。
