@@ -906,5 +906,134 @@ class TestPropAliasTailBinding(unittest.TestCase):
             self.assertFalse(any("一次都没进过任何一次请求" in p for p in probs2), probs2)
 
 
+class TestPropSlotOrder(unittest.TestCase):
+    """★ 道具抢同一个参考图名额时，谁该留下（2026-10-06）。
+
+    实测事故《听见灯》ep1 夜堤那一场：分镜写「坐在@折叠竹椅上 … 扶住膝上@走马灯灯边」，
+    椅子在灯**前面**被 @，而双人镜 cap=3 只剩一个道具位 ⇒ 标题道具整场没参考图，
+    成片里那盏六角走马灯三镜画成三种形状，返工两轮约 1 小时。
+    注册表里所有 prop 的 priority 都是 `cast._register` 写死的 8，所以"按 priority 排"
+    在道具之间等于没排 —— 判据必须是盘上已有的**事实**，⛔ 不是模型自觉。
+    """
+
+    def _mk_root(self, key_props=None, with_brief=True):
+        tmp = tempfile.TemporaryDirectory()
+        root = Path(tmp.name)
+        for i, n in enumerate(("沈知夏.png", "老钟.png", "走马灯.png",
+                               "折叠竹椅.png", "牛皮纸订单.png", "半片竹篾.png",
+                               "秦淮河边夜堤.png")):
+            _mk(root, n, pad=i + 1)
+        assets_json = [
+            {"id": "a", "name": "沈知夏", "type": "character", "keywords": ["沈知夏"],
+             "priority": 10, "public_url": "", "url": "", "ref_image": "沈知夏.png"},
+            {"id": "b", "name": "老钟", "type": "character", "keywords": ["老钟"],
+             "priority": 10, "public_url": "", "url": "", "ref_image": "老钟.png"},
+            {"id": "c", "name": "走马灯", "type": "prop", "keywords": ["走马灯"],
+             "priority": 8, "public_url": "", "url": "", "ref_image": "走马灯.png"},
+            {"id": "d", "name": "折叠竹椅", "type": "prop", "keywords": ["折叠竹椅", "竹椅"],
+             "priority": 8, "public_url": "", "url": "", "ref_image": "折叠竹椅.png"},
+            {"id": "e", "name": "牛皮纸订单", "type": "prop", "keywords": ["牛皮纸订单"],
+             "priority": 8, "public_url": "", "url": "", "ref_image": "牛皮纸订单.png"},
+            {"id": "f", "name": "半片竹篾", "type": "prop", "keywords": ["半片竹篾"],
+             "priority": 8, "public_url": "", "url": "", "ref_image": "半片竹篾.png"},
+            {"id": "g", "name": "秦淮河边夜堤", "type": "location",
+             "keywords": ["秦淮河", "夜堤"], "priority": 8,
+             "public_url": "", "url": "", "ref_image": "秦淮河边夜堤.png"},
+        ]
+        (root / "assets.json").write_text(
+            json.dumps({"assets": assets_json}, ensure_ascii=False), encoding="utf-8")
+        if with_brief:
+            (root / "brief.json").write_text(
+                json.dumps({"key_props": key_props or ["走马灯：六角竹骨宫灯、米白绢面"]},
+                           ensure_ascii=False), encoding="utf-8")
+        return tmp, root
+
+    #: 争议镜：椅子先被 @（旧实现就因此赢），两个人物 ⇒ cap 3 ⇒ 只剩一个道具位
+    HOT = {"name": "LN23", "shot_type": "近景", "scene": "秦淮河边夜堤",
+           "visual": "@老钟（黑色旧棉袄）坐在@折叠竹椅上，左手扶住膝上@走马灯灯边，"
+                     "@沈知夏（靛蓝围裙）站在他侧前",
+           "dialogue": "老钟：你外头风大。"}
+
+    def _episode(self, lamp_times=9, chair_times=2):
+        shots = [dict(self.HOT)]
+        for i in range(lamp_times):
+            shots.append({"name": "L%d" % i, "shot_type": "近景", "scene": "秦淮河边夜堤",
+                          "visual": "@沈知夏捧着@走马灯", "dialogue": ""})
+        for i in range(chair_times):
+            shots.append({"name": "C%d" % i, "shot_type": "近景", "scene": "秦淮河边夜堤",
+                          "visual": "@老钟坐在@折叠竹椅上", "dialogue": ""})
+        return shots
+
+    def test_fixture_reproduces_the_losing_order(self):
+        """反向对照：夹具里椅子确实**排在灯前面**，且灯的提及镜数确实更高 ——
+        否则下面那条断言可能只是"顺序碰巧对"，测不到东西。"""
+        t = self.HOT["visual"]
+        self.assertLess(t.index("@折叠竹椅"), t.index("@走马灯"))
+        tmp, root = self._mk_root()
+        self.addCleanup(tmp.cleanup)
+        cnt = assets.mention_counts(assets.load_registry(root), self._episode())
+        self.assertGreater(cnt["走马灯"], cnt["折叠竹椅"])
+        self.assertEqual(cnt["走马灯"], 10)     # 争议镜 + 9 段填充
+        # ★ 旧病装回去：`hits_for_shot` 返回的顺序**就是**改造前 `picks` 的顺序
+        #   （旧实现 `picks = (chars + others)[:cap]`，没有排序那一步）。
+        #   实测它给出椅子 ⇒ 上面那条"灯赢"的断言在改造前必红，不是顺序碰巧对。
+        hits, _ = assets.hits_for_shot(assets.load_registry(root), self.HOT)
+        pre_fix = [h["name"] for h in hits
+                   if h.get("type") == "character"] + \
+                  [h["name"] for h in hits
+                   if h.get("type") not in ("character", "location")]
+        self.assertEqual(pre_fix[:3], ["沈知夏", "老钟", "折叠竹椅"])
+
+    def test_prop_slot_goes_to_the_lamp_not_the_chair(self):
+        tmp, root = self._mk_root()
+        self.addCleanup(tmp.cleanup)
+        nm: dict = {}
+        assets.bind(root, self._episode(), names_out=nm)
+        self.assertEqual(nm["LN23"], ["沈知夏", "老钟", "走马灯"],
+                         "双人镜只剩一个道具位时，关键道具必须压过先被 @ 的椅子")
+
+    def test_key_prop_beats_mention_count(self):
+        """「半片竹篾：…全片只出现一次」这类**镜数少但被 brief 点名**的道具也要赢。"""
+        tmp, root = self._mk_root(key_props=["半片竹篾：约二十二厘米青竹篾、断口斜茬"])
+        self.addCleanup(tmp.cleanup)
+        shots = [{"name": "LN01", "shot_type": "近景", "scene": "沈记灯铺后屋作坊",
+                  "visual": "@沈知夏手里是@牛皮纸订单与那半片@半片竹篾", "dialogue": ""}]
+        for i in range(5):
+            shots.append({"name": "P%d" % i, "shot_type": "近景",
+                          "visual": "@沈知夏翻看@牛皮纸订单", "dialogue": ""})
+        nm: dict = {}
+        assets.bind(root, shots, names_out=nm)
+        self.assertEqual(nm["LN01"], ["沈知夏", "半片竹篾"])
+
+    def test_single_prop_shot_unchanged(self):
+        """只有一个道具入镜 ⇒ 排序不参与，行为与改造前一字不变。"""
+        tmp, root = self._mk_root()
+        self.addCleanup(tmp.cleanup)
+        nm: dict = {}
+        assets.bind(root, [{"name": "LN01", "shot_type": "近景",
+                            "visual": "@沈知夏坐在@折叠竹椅上", "dialogue": ""}], names_out=nm)
+        self.assertEqual(nm["LN01"], ["沈知夏", "折叠竹椅"])
+
+    def test_scene_still_wins_the_solo_slot(self):
+        """⚠️ 2026-09-23 的「场景优先」不许被这次改动顺带翻掉：
+        1 人物宽景镜 cap=2 ⇒ 第 2 格仍是场景空镜，道具进不来。"""
+        tmp, root = self._mk_root()
+        self.addCleanup(tmp.cleanup)
+        nm: dict = {}
+        assets.bind(root, [{"name": "LN01", "shot_type": "全景", "scene": "秦淮河边夜堤",
+                            "visual": "@沈知夏站在堤上，膝上是@走马灯与@折叠竹椅",
+                            "dialogue": ""}], names_out=nm)
+        self.assertEqual(nm["LN01"], ["沈知夏", "秦淮河边夜堤"])
+
+    def test_no_brief_falls_back_to_counts(self):
+        """老项目没有 `key_props` ⇒ 只按本集提及镜数排，不报错、结论不变。"""
+        tmp, root = self._mk_root(with_brief=False)
+        self.addCleanup(tmp.cleanup)
+        self.assertEqual(assets.key_prop_names(root), set())
+        nm: dict = {}
+        assets.bind(root, self._episode(), names_out=nm)
+        self.assertEqual(nm["LN23"], ["沈知夏", "老钟", "走马灯"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1170,6 +1170,42 @@ def _chars_from_worldbuilder(root: Path) -> list[dict]:
         return []
 
 
+def key_prop_names(root: Path) -> set:
+    """brief.json 里 `key_props` 声明的**道具名**（每项形如「走马灯：六角竹骨…」）。
+
+    为什么读它而不是读资产卡的 priority：`cast._register` 把所有 prop 的 priority
+    **写死成 8**（只有 character 给 10），卡上根本没有"优先级"这一栏可写 ——
+    而 `key_props` 是 brief 契约里就定义为「跨镜一致性的锚点」的字段，
+    是人**已经会填**的东西，不需要模型配合。
+    """
+    try:
+        data = json.loads((Path(root) / "brief.json").read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 -- 没有 brief 就退化成"按本集提及镜数排"
+        return set()
+    out: set = set()
+    for it in (data.get("key_props") or []):
+        nm = re.split(r"[：:]", str(it), maxsplit=1)[0].strip()
+        if nm:
+            out.add(nm)
+    return out
+
+
+def mention_counts(reg: dict, shots: list) -> dict:
+    """每件资产在**本集分镜**里被提到的镜数（keywords 或全名尾词命中，与 `unbound_mentions` 同源）。"""
+    tails = _unambiguous_tails(reg)
+    cnt: dict = {}
+    for a in reg.get("assets", []):
+        nm = str(a.get("name") or "").strip()
+        if not nm:
+            continue
+        kws = [str(k) for k in (a.get("keywords") or []) if k]
+        ts = [t for t in name_tails(nm) if tails.get(t) == nm]
+        cnt[nm] = sum(1 for s in shots
+                      if any(k in _shot_text(s) for k in kws)
+                      or any(t in _shot_text(s) for t in ts))
+    return cnt
+
+
 def bind(root: Path, shots: list[dict], max_n: int = 5,
          names_out: dict | None = None,
          types_out: dict | None = None, ep=None) -> dict[str, list[str]]:
@@ -1206,6 +1242,9 @@ def bind(root: Path, shots: list[dict], max_n: int = 5,
     # ★ 本集**默认年龄段**：分镜契约只在第一拍写全角色锚点，后续拍的 `@名（衣装）`
     #   不带年龄 ⇒ 只按括注换表会让整集 17/18 次点名绑回孩童表（实测见 apply_age_variants）
     defaults = episode_defaults(reg, shots, root=root, ep=ep)
+    # ★ 道具抢同一个参考图名额时谁该留下 —— 判据见下方 `others.sort` 那段
+    key_props = key_prop_names(root)
+    counts = mention_counts(reg, shots)
     out: dict[str, list[str]] = {}
     for s in shots:
         text = (s.get("visual") or "") + " " + (s.get("dialogue") or "")
@@ -1243,6 +1282,27 @@ def bind(root: Path, shots: list[dict], max_n: int = 5,
         #   注入提示词。
         others = [h for h in hits
                   if h.get("type") not in ("character", "location")]
+        # ★★ **道具之间先排序，再交给 cap 截断**（2026-10-06 加）。
+        #   病：`hits` 的顺序 = 分镜正文里 `@` 出现的先后（`resolve_mentions`），
+        #   而 `picks = (chars + others)[:cap]` 直接按这个顺序截断 ⇒
+        #   **谁先被 @ 谁进请求**。实测《听见灯》夜堤那一场：
+        #   「坐在@折叠竹椅上 … 扶住膝上@走马灯灯边」——椅子写在灯前面，
+        #   双人镜 cap=3 只剩一个道具位 ⇒ 标题道具整场拿不到参考图，
+        #   成片里那盏六角走马灯被画成圆球／大红圆柱／星形平轮（三镜各一种），
+        #   为它返工了两轮（重出静帧 + 重渲视频 ≈ 1 小时）。
+        #   而注册表里所有 prop 的 priority 都是 `cast._register` 写死的 8，
+        #   卡上也没有可填优先级的栏位 ⇒ 排序在道具之间**等于没排**。
+        #   判据取两层，全部是盘上已有事实，⛔ 不要求模型自觉：
+        #   ① brief 的 `key_props`（契约里就定义为"跨镜一致性的锚点"，
+        #      且**镜数少的关键道具也赢**——「半片竹篾：…全片只出现一次」这种正是如此）；
+        #   ② 本集提到的镜数（没有 brief 的老项目只剩这一层）。
+        #   `list.sort` 稳定 ⇒ 两者都同分时保持注册表序，行为与改造前一字不变。
+        #   ⚠️ **不动「场景优先」**（2026-09-23 定的 `others = [scene_pick] + others`）：
+        #   那条是"1 人物镜里场景空镜与道具抢第 2 格"的独立决定，要改得先 A/B。
+        if len(others) > 1:
+            others.sort(key=lambda a: (0 if str(a.get("name") or "").strip() in key_props
+                                       else 1,
+                                       -int(counts.get(str(a.get("name") or "").strip(), 0))))
         # 总数上限**按本镜角色数分档**（2026-09-13 精细化）：
         #
         #   本镜角色数 0  → 纯道具镜，不受限（旧 A/B：3 张纯道具仍只 1 个人）
