@@ -44,12 +44,13 @@ MODES = config.VIDEO_MODES
 
 PACK_MAX_SECONDS = 12    # 单条请求硬上限（供应商 seconds ∈ [4, 12]）
 PACK_MIN_KEEP_RATIO = 0.6  # 压缩后每镜至少保留原声明的 60%
-# ★ 2026-09-25 放权：每拍（镜）下限 4→2s。Pavo 参考片实证同 agnes 模型
-#   12s 里 6 拍×2s 精确执行；旧 4s 下限是**我们的保守钳制**，不是供应商约束
-#   （[4,12] 管的是整条请求时长，拍内边界只是提示词文本）。节奏设计权交给
-#   scenedesigner（镜内节拍见 storyboard.split_beats）。供应商请求级下限
-#   由 group_shots 的「单镜成组补到 4s」兜底。
-PACK_MIN_SHOT_SECONDS = 2
+# ★ 2026-10-05：**取消每镜下限**（原 2s）。单位换成「场」之后，供应商 [4,12] 管的是
+#   **一条请求**（= 一场），镜内秒数只是提示词里的时间边界，不该再有地板。
+#   09-25 那次「4→2」的放权仍嫌保守：用户实测**单条 clip 内的时间分段可精确到零点几秒**，
+#   快切正反打（1 秒甚至 0.5 秒一镜）正是短剧的节奏手段，被地板卡住等于扼杀 brief 要的东西。
+#   唯一保留的补时是**单镜成组补到 4s**（供应商请求级下限，见 `group_shots`）——
+#   那是一条请求发不出去的硬拒，不是审美。
+PACK_MIN_SHOT_SECONDS = 0.0
 
 # ─── 一次请求能带几张图、按什么优先级带（**单一真相源**）─────────────────────
 #   为什么做成常量而不是散在 `video.pack_ref_images` 的字面量里：
@@ -66,34 +67,54 @@ PACK_REF_MAX_CHARS = 2
 PACK_REF_MAX_LOCS = 1
 
 
-def pack_clamp_sec(s: dict) -> int:
-    """分镜声明时长：解析失败按 4s 兜底，硬区间 2-12（组内可到 2s）。"""
-    v = int(s.get("seconds") or 0) or 4
-    return max(PACK_MIN_SHOT_SECONDS, min(12, v))
+def _sec(v) -> float:
+    """分镜声明的秒数 → float（**保留小数**，0.5 秒一镜是合法写法）。"""
+    try:
+        return float(v or 0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
-def pack_speech_need(s: dict) -> int:
-    """镜最短可行秒数：台词语音（5 字/秒）+ 1s 余量；无声镜 2s 起步。"""
+def pack_clamp_sec(s: dict) -> float:
+    """分镜声明时长：解析失败按 4s 兜底，上限 12；**不设下限**（2026-10-05 场口径）。
+
+    旧写法 `int(s["seconds"])` 会把 0.5 秒直接截成 0 → 再被"或 4"兜成 4 秒，
+    于是**快切镜在分组阶段被悄悄拉长**，与分镜声明的时间边界不符。
+    """
+    v = _sec(s.get("seconds")) or 4.0
+    return min(float(PACK_MAX_SECONDS), v)
+
+
+def pack_speech_need(s: dict) -> float:
+    """台词镜的最短可行秒数（5 字/秒 + 1s 余量）；**无声镜给 0，不再兜 2 秒**。
+
+    台词那条是物理（把一句话说完要那么多时间），保留；无声镜的 2 秒是审美，删掉。
+    """
     chars = len(re.sub(r"[^一-龥]", "", s.get("dialogue") or ""))
-    need = chars / 5.0 + 1.0 if chars else 2.0
-    return max(PACK_MIN_SHOT_SECONDS, math.ceil(need))
+    return round(chars / 5.0 + 1.0, 2) if chars else 0.0
 
 
-def _pack_fit(declared: list[int], mins: list[int]) -> list[int] | None:
-    """把 declared 等比压到 ≤12s；保每镜 ≥mins 且 ≥60% 原声明。失败返回 None。"""
+def _pack_fit(declared: list[float], mins: list[float]) -> list[float] | None:
+    """把 declared 等比压到 ≤12s；保每镜 ≥mins 且 ≥60% 原声明。失败返回 None。
+
+    ★ 2026-10-05 改成**小数**运算：原来 `round(x)` + 步进 1 秒，会把 0.5 秒的快切镜
+    一压就弹回 1 秒 —— 分镜声明的节拍边界与实际下单秒数脱节（同型病：
+    `storyboard.parse` 的 `int(float(...))` 截小数）。
+    """
     total = sum(declared)
     if total <= PACK_MAX_SECONDS:
         return declared
     scaled = [d * PACK_MAX_SECONDS / total for d in declared]
-    out = [max(m, round(x)) for x, m in zip(scaled, mins)]
-    while sum(out) > PACK_MAX_SECONDS:
+    out = [round(max(m, x), 2) for x, m in zip(scaled, mins)]
+    while sum(out) > PACK_MAX_SECONDS + 1e-9:
         idx = max(range(len(out)), key=lambda k: out[k] - mins[k])
-        if out[idx] - 1 < mins[idx] or out[idx] - 1 < declared[idx] * PACK_MIN_KEEP_RATIO:
+        if (out[idx] - 0.1 < mins[idx]
+                or out[idx] - 0.1 < declared[idx] * PACK_MIN_KEEP_RATIO):
             return None
-        out[idx] -= 1
-    if any(o < declared[idx] * PACK_MIN_KEEP_RATIO for idx, o in enumerate(out)):
+        out[idx] = round(out[idx] - 0.1, 2)
+    if any(o < d * PACK_MIN_KEEP_RATIO - 1e-9 for o, d in zip(out, declared)):
         return None
-    return out if sum(out) <= PACK_MAX_SECONDS else None
+    return out if sum(out) <= PACK_MAX_SECONDS + 1e-9 else None
 
 
 def same_unit(a: dict, b: dict) -> bool:

@@ -312,8 +312,14 @@ if VIDEO_MODE not in VIDEO_MODES:
              VIDEO_MODE_DEFAULT, "pack"))
     VIDEO_MODE = VIDEO_MODE_DEFAULT
 
-# pack 档单组最多吞几个镜（与旁路脚本 pack_render.py 的 --max-group 同义）。
-VIDEO_PACK_MAX_GROUP = int(os.environ.get("SHORTDRAMA_VIDEO_PACK_MAX_GROUP", "5"))
+# pack 档单组最多吞几个镜。
+# ★ 2026-10-05：默认从 **5 放开到 12**。5 这个数的依据是当年「每镜一张静帧」
+#   （一条请求最多 5 张参考图 ⇒ 5 镜 = 5 图），而 **2026-09-28 图序已改成
+#   设定表→场景→首镜静帧→末帧→道具**，不再每镜一张图 ⇒ 依据消失，只剩数值撞车。
+#   真正决定一条请求能装几镜的是两条物理约束：**总长 ≤12 秒**（供应商）与
+#   分镜声明的每镜秒数。设 12 = 让秒数当唯一判据，不留魔法数字。
+#   ⚠️ 调小它仍然有效（`SHORTDRAMA_VIDEO_PACK_MAX_GROUP`），画布分带按它算格数。
+VIDEO_PACK_MAX_GROUP = int(os.environ.get("SHORTDRAMA_VIDEO_PACK_MAX_GROUP", "12"))
 
 # 生视频**提交**的读超时（秒）。默认 60 = 历史行为（`providers.submit_video` 的旧写死值）。
 # 为什么开这个口（2026-09-26 xianxia-vfx-action 首跑实测）：pack 档多参考图组

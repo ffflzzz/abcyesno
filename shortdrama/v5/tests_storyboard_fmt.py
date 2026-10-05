@@ -136,5 +136,24 @@ class TestSceneColumn(unittest.TestCase):
                          "没有场次列却猜出场号 = 会把两段戏误并进一条请求")
 
 
+    def test_fractional_seconds_are_not_truncated(self):
+        """★ 2026-10-05：`时长(秒)` 写 0.5 必须读成 0.5。
+
+        旧写法 `int(float(...))` 把 0.5 截成 0，随后 `pack_clamp_sec` 的"或 4"又把它
+        兜成 4 秒 ⇒ 快切镜在分组阶段被悄悄拉长，分镜声明与实际下单脱节。
+        """
+        from v5.media import storyboard
+        rows = ["| %d | 场1 后巷 | 近景 | 平视 | 手持 | %s | 后巷 | 夜 | "
+                "0-0.5秒：@沈砚 侧头、0.5-1秒：@沈砚 拔剑半寸 | 剑柄出鞘 | "
+                "（无声，环境音）| 风声 | 否 | 承接上一镜落点 |"
+                % (i, sec) for i, sec in enumerate(["0.5", "0.5", "1.5", "5", "12"], 1)]
+        md_txt = ("# 分镜脚本\n\n" + self.HDR_ACT + "\n" + self.SEP_ACT + "\n"
+                  + "\n".join(rows) + "\n")
+        shots = storyboard.parse(md_txt)
+        self.assertEqual(len(shots), 5, "五行都要读出来")
+        self.assertEqual([s["seconds"] for s in shots], [0.5, 0.5, 1.5, 5, 12],
+                         "小数秒必须原样保留，整数照旧是 int")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

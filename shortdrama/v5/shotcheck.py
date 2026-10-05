@@ -139,8 +139,16 @@ def countable(shots: list[dict], target_seconds: int = 0,
     """
     out = []
     n = len(shots) or 1
-    total = sum(int(s.get("seconds") or 0) for s in shots)
-    secs = [int(s.get("seconds") or 0) for s in shots]
+    #: ★ 2026-10-05：秒数按 **float** 读。旧写法 `int(...)` 会把 0.5 秒的快切镜读成 0，
+    #:   于是"每场总秒数"少算、单镜判据把它当越界 —— 而场口径下 0.5 秒一镜是合法写法。
+    def _f(s):
+        try:
+            return float(s.get("seconds") or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    secs = [_f(s) for s in shots]
+    total = round(sum(secs), 2)
 
     def need(ok, check, detail, names=()):
         if not ok:
@@ -248,14 +256,26 @@ def countable(shots: list[dict], target_seconds: int = 0,
              "偏离 %d 镜 —— 例：把该镜「时长(秒)」改成区间内的数，或按同一步长重排全表"
              % len(off), names=off)
     else:
-        # brief 没声明镜数 ⇒ **不再拿"≤5s 常态"当规范**（那是 ÷4 时代的节奏口径，
-        # 2026-10-03 随除法基线一起废弃）。只守供应商硬区间：越界会被媒体层改写
-        # （>12 秒等比压缩、<4 秒直接拒），这一条与"镜长归谁定"无关，是硬事实。
-        out_of_band = [s["name"] for s, x in zip(shots, secs) if not (4 <= x <= 12)]
-        need(not out_of_band,
-             "每镜秒数必须在供应商硬区间 **4–12 秒**内（区间内怎么排由你定）",
-             "越界 %d 镜 —— 超过 12 秒会被媒体层等比压缩，低于 4 秒会被接口拒"
-             % len(out_of_band), names=out_of_band)
+        # ★ 2026-10-05：**判据跟着单位走**。有「场次」列 ⇒ 一条请求 = 一场，
+        #   供应商 [4,12] 管的是**请求**，不是镜 —— 旧写法把 4 秒地板挂在每镜上，
+        #   快切正反打（1 秒甚至 0.5 秒一镜）会被整批点名退回，而媒体层其实照收
+        #   （`video_plan` 的注释早就写着"[4,12] 管的是整条请求时长"）。
+        #   没有场次列时"一镜 = 一条请求"，地板照旧成立 ⇒ 原样保留，不误伤老项目。
+        if any(int(s.get("act") or 0) for s in shots):
+            over12 = [s["name"] for s, x in zip(shots, secs) if x > 12]
+            need(not over12, "单镜不得超过 12 秒（一条请求的上限）",
+                 "越界 %d 镜 —— 超过 12 秒会被媒体层等比压缩；"
+                 "要快切请把同场的镜写成小秒数，不是把一镜拉长"
+                 % len(over12), names=over12)
+        else:
+            # brief 没声明镜数 ⇒ **不再拿"≤5s 常态"当规范**（那是 ÷4 时代的节奏口径，
+            # 2026-10-03 随除法基线一起废弃）。只守供应商硬区间：越界会被媒体层改写
+            # （>12 秒等比压缩、<4 秒直接拒），这一条与"镜长归谁定"无关，是硬事实。
+            out_of_band = [s["name"] for s, x in zip(shots, secs) if not (4 <= x <= 12)]
+            need(not out_of_band,
+                 "每镜秒数必须在供应商硬区间 **4–12 秒**内（区间内怎么排由你定）",
+                 "越界 %d 镜 —— 超过 12 秒会被媒体层等比压缩，低于 4 秒会被接口拒"
+                 % len(out_of_band), names=out_of_band)
     # ★ 本包 10b：**非宽景不许两个角色同时 @ 同框**（实测那样会多画一个人）。
     #   这条完全数得出来 —— 不必等审稿角色绕一轮重派（2026-09-29 实测：它抓到了，
     #   但代价是一整轮分镜重派 + 20 分钟起）。
@@ -301,12 +321,18 @@ def countable(shots: list[dict], target_seconds: int = 0,
                 seen_acts.add(a)
                 units[a] = [s]
             prev_a = a
-        over = [(a, sum(int(s.get("seconds") or 0) for s in g))
+        over = [(a, round(sum(_f(s) for s in g), 2))
                 for a, g in sorted(units.items())
-                if sum(int(s.get("seconds") or 0) for s in g) > 12]
+                if round(sum(_f(s) for s in g), 2) > 12]
         need(not over, "每场总秒数 ≤12（一条请求的上限）",
              "超了 %d 场：%s —— 修法：**把超出的镜拆成下一场**，或压场内某镜秒数"
-             % (len(over), "、".join("场%d=%ds" % (a, t) for a, t in over[:6])))
+             % (len(over), "、".join("场%d=%ss" % (a, t) for a, t in over[:6])))
+        short = [(a, round(sum(_f(s) for s in g), 2))
+                 for a, g in sorted(units.items())
+                 if 0 < round(sum(_f(s) for s in g), 2) < 4]
+        need(not short, "每场总秒数 ≥4（低于 4 秒这条请求会被接口拒）",
+             "太短 %d 场：%s —— 修法：与相邻同地点的场并成一场，或给场内镜补足秒数"
+             % (len(short), "、".join("场%d=%ss" % (a, t) for a, t in short[:6])))
         single = [(a, len(g)) for a, g in sorted(units.items()) if len(g) < 2]
         need(not single, "每场 ≥2 镜（场是「一段戏多镜头」，单镜不成场）",
              "命中 %d 场：%s —— 修法：与相邻同地点的镜并成一场，或把这场拆出第二镜"

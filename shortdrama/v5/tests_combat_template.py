@@ -105,29 +105,31 @@ class TestTimecodeCellsAreMisread(unittest.TestCase):
         secs = [s["seconds"] for s in shots]
         self.assertEqual(secs[:5], [0, 1, 2, 3, 4], "抓的是每拍的**起点**")
         self.assertEqual(secs[-1], 28, "最后一拍『28-29』被读成 28（起点）")
-        # ⚠️ **两个口径差 2 秒，这是实测事实、不是笔误**（2026-10-04）：
-        #   `storyboard.parse` 逐镜加总 = 257；`validate.check_storyboard`
-        #   的 `seconds_total` = 259.0。差值 2 来自 parse 走 `int(float(...))`
-        #   而门走另一条累加路径（记忆里早有此结论：「判片长只能用门的口径，
-        #   parse 加总与门判据**两家口径不同**」—— 这里再次实测到）。
-        #   ⇒ **门判据一律用 `seconds_total`**，别拿 parse 的数当"标准答案"。
-        self.assertEqual(sum(secs), 257, "parse 口径（实测）")
+        # ✅ 2026-10-05：**两家口径已合一**。原来 `storyboard.parse` 走 `int(float(...))`
+        #   把小数秒截掉 ⇒ parse 加总 257、门 `seconds_total` 259，差 2 秒
+        #   （记忆里那条「判片长只能用门的口径」就是这个裂口）。
+        #   现在 parse 保留小数（场口径下 0.5 秒一镜是合法写法），两边同为 259.0。
+        #   ⚠️ 本测试的**主角不是这个数**：把时间码原样填进「时长(秒)」列，
+        #   解析器抓到的仍是每拍**起点**，30 秒的片照样被读成 259 秒。
+        self.assertEqual(sum(secs), 259.0, "parse 与门现在同口径")
         self.assertGreater(sum(secs), 30 * 8,
                            "而且是**偏大** ⇒ 片长门会报「超出」而不是「不足」")
 
     def test_clamp_silently_makes_it_4s(self):
         """兜底：**0 秒 → 4 秒**，**全程不报错**。
 
-        ⚠️ 一个容易读错的细节：0 秒**不是**被钳到 `PACK_MIN_SHOT_SECONDS`（2），
-        而是被 `int(s.get("seconds") or 0) or 4` 里的**第二个 `or` 短路**成 4
-        —— 压根没走到 `max(2, ...)` 那一步。两个 4 秒来源不同，但结果一样。
+        ⚠️ 一个容易读错的细节：0 秒**不是**被钳到每镜下限，而是被
+        `_sec(...) or 4.0` 的 **`or` 短路**成 4 —— 压根没有"下限"参与（2026-10-05 起
+        `PACK_MIN_SHOT_SECONDS = 0`，场口径下秒数地板挂在**场**上，不挂在镜上）。
         """
         from v5.media.video_plan import pack_clamp_sec
         self.assertEqual(pack_clamp_sec({"seconds": 0}), 4)
-        self.assertEqual(pack_clamp_sec({}), 4, "缺字段也是 4（不是 2）")
-        self.assertEqual(pack_clamp_sec({"seconds": 3}), 3, "区间内原样（3 > 2）")
+        self.assertEqual(pack_clamp_sec({}), 4, "缺字段也是 4")
+        self.assertEqual(pack_clamp_sec({"seconds": 3}), 3, "区间内原样")
         self.assertEqual(pack_clamp_sec({"seconds": 16}), 12, "超上限压到 12")
-        self.assertEqual(pack_clamp_sec({"seconds": 1}), 2, "1 秒才真的被钳到下限 2")
+        # ★ 2026-10-05：小秒数是**合法写法**（快切正反打），不再被拉长
+        self.assertEqual(pack_clamp_sec({"seconds": 1}), 1, "1 秒照原样（原来会被钳成 2）")
+        self.assertEqual(pack_clamp_sec({"seconds": 0.5}), 0.5, "0.5 秒照原样")
 
 
 class TestGateRejectsRawTemplate(unittest.TestCase):

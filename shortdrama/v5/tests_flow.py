@@ -3869,9 +3869,36 @@ class TestPackMode(unittest.TestCase):
         ]
         groups = video_plan.group_shots(shots, 5)
         self.assertEqual(1, len(groups), "场号相同即同一条请求，地点字面漂移不该拆组")
+
+    def test_group_shots_twelve_short_shots_in_one_request(self):
+        """★ 2026-10-05：组上限 5→12（5 的依据是"每镜一张静帧"，09-28 改图序后已失效）。
+
+        12 镜 × 1 秒 = 12 秒，正好是一条请求的上限 ⇒ 快切正反打能整场并成一次生成。
+        真正限制镜数的只剩物理：**总长 ≤12 秒**。
+        """
+        from v5.media import video_plan
+
+        shots = [{"name": "LN%02d" % i, "scene": "后巷", "act": 1,
+                  "seconds": 1.0, "dialogue": ""} for i in range(1, 13)]
+        groups = video_plan.group_shots(shots)
+        self.assertEqual(1, len(groups), "12 镜 × 1 秒应并成一条请求")
+        self.assertEqual([1.0] * 12, groups[0][1], "声明秒数不得被拉长或取整")
         for _, declared in groups:
-            self.assertGreaterEqual(sum(declared), 4)
-            self.assertLessEqual(sum(declared), 12)
+            self.assertGreaterEqual(sum(declared), 4, "一条请求不得低于供应商下限")
+            self.assertLessEqual(sum(declared), 12, "一条请求不得超过供应商上限")
+
+    def test_fractional_beats_survive_clamp_and_fit(self):
+        """0.5 秒拍不许被地板拉长，也不许在压缩时被弹回整数秒。"""
+        from v5.media import video_plan
+
+        self.assertEqual(0.5, video_plan.pack_clamp_sec({"seconds": 0.5}))
+        self.assertEqual(0.0, video_plan.pack_speech_need(
+            {"seconds": 0.5, "dialogue": ""}), "无声镜不再有 2 秒地板")
+        fit = video_plan._pack_fit([2.0] * 9, [0.0] * 9)     # 18 秒 → 压进 12
+        self.assertTrue(fit, "压缩应成功")
+        self.assertLessEqual(sum(fit), 12.01, fit)
+        self.assertTrue(all(abs(x - 1.33) < 0.05 for x in fit),
+                        "小数精度要留住（旧实现 round 成整数会弹回 1 秒或 2 秒）：%s" % fit)
 
     def test_pack_prompt_remaps_beats_to_global_timeline(self):
         """★ 2026-09-25：镜内节拍时间戳必须平移到 pack 全局时间轴。

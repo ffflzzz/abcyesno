@@ -304,7 +304,11 @@ def parse(md: str) -> list[dict]:
         if i_sec is not None and i_sec < n:
             msec = re.search(r"(\d+(?:\.\d+)?)", cells[i_sec])
             if msec:
-                sec = int(float(msec.group(1)))
+                #: ★ 2026-10-05：小秒数**必须留住**。旧写法 `int(float(...))` 把 0.5 秒
+                #: 截成 0，于是快切镜在分组时被 `pack_clamp_sec` 的"或 4"兜成 4 秒 ——
+                #: 分镜声明的节拍边界与实际下单秒数脱节。整数照旧给 int（不动既有消费方）。
+                f = float(msec.group(1))
+                sec = int(f) if f == int(f) else round(f, 2)
         _shot_num = m.group(1)
         if "①" <= _shot_num <= "⑳":      # 圈号镜号 ①②③… → 阿拉伯数字
             _shot_num = str(ord(_shot_num) - ord("①") + 1)

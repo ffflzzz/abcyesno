@@ -583,7 +583,31 @@ class TestSceneLaws(unittest.TestCase):
         self.assertTrue(any("≤12" in c for c in names), hits)
         self.assertTrue(any("≥2 镜" in c for c in names), hits)
         over = [h for h in hits if "≤12" in h["check"]][0]
-        self.assertIn("场1=16s", over["detail"], over["detail"])
+        self.assertIn("场1=16", over["detail"], over["detail"])
+
+    def test_half_second_shots_are_not_flagged_when_scenes_are_used(self):
+        """★ 2026-10-05：有场次列 ⇒ 秒数地板挂在**场**上，不挂在镜上。
+
+        快切正反打（0.5 秒一镜）以前会被"每镜必须 4–12 秒"整批点名退回，
+        而供应商那条 [4,12] 管的是一条请求（= 一场）的时长。
+        """
+        shots = []
+        for i in range(1, 9):        # 场1、场2 各 4 镜 × 1.5 秒 = 6 秒（快切正反打）
+            shots.append(_shot("LN%02d" % i,
+                               "@裴烛 蹬地前冲劈出剑罡，对方侧身避开后横移格开",
+                               seconds=1.5, act=1 + (i - 1) // 4))
+        hits = shotcheck.countable(shots, 12)
+        self.assertEqual([h for h in hits if "4–12 秒" in h["check"]], [],
+                         "有场次列时不该再有每镜 4 秒地板：%s" % hits)
+        self.assertEqual([h for h in hits if "每场" in h["check"]], [], hits)
+
+    def test_scene_shorter_than_request_floor_is_flagged(self):
+        """反向对照：场总长 2 秒（低于请求级 4 秒）必须点名——那条请求会被接口拒。"""
+        shots = [_shot("LN01", "@裴烛 蹬地前冲劈出剑罡，对方侧身避开", seconds=1, act=1),
+                 _shot("LN02", "@裴烛 反手压上，对方退两步", seconds=1, act=1)]
+        hits = [h for h in shotcheck.countable(shots, 2) if "≥4" in h["check"]]
+        self.assertTrue(hits, hits)
+        self.assertIn("场1=2", hits[0]["detail"], hits[0]["detail"])
 
     def test_scene_split_across_table_is_flagged(self):
         """场号回头（场1、场2、又场1）必须点名——同场拆开 = 打包档切两条。"""
