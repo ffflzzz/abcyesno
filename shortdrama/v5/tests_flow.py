@@ -3837,6 +3837,38 @@ class TestPackMode(unittest.TestCase):
                          [["LN01", "LN02"], ["LN03"]])
         self.assertEqual(groups[0][1], [6, 2])
         self.assertEqual(groups[1][1], [4], "单镜成组必须补到供应商请求下限")
+
+    def test_group_shots_uses_scene_number_when_present(self):
+        """★ 2026-10-05：有「场次」就按**场次**并组，地点名不再决定分组。
+
+        反向对照放同一条里：同一个地点的第 1 场与第 3 场是两段不同的戏
+        （时间/剧情都不同），旧判据只看「场景」列会把它们塞进一条请求。
+        madfate-abc-1005 实测：15 镜只有「验尸房 / 天台水塔间」两个地点值，
+        而剧本写了 4 场 —— 分组与场无关。
+        """
+        from v5.media import video_plan
+
+        shots = [
+            {"name": "LN01", "scene": "验尸房", "act": 1, "seconds": 5},
+            {"name": "LN02", "scene": "验尸房", "act": 1, "seconds": 5},
+            {"name": "LN03", "scene": "验尸房", "act": 3, "seconds": 6},
+            {"name": "LN04", "scene": "验尸房", "act": 3, "seconds": 4},
+        ]
+        groups = video_plan.group_shots(shots, 5)
+        self.assertEqual([["LN01", "LN02"], ["LN03", "LN04"]],
+                         [[s["name"] for s in g] for g, _ in groups],
+                         "同地点不同场必须断开")
+
+    def test_group_shots_same_act_survives_scene_wording_drift(self):
+        """同一场内「场景」列字面漂了（多写个时间/换个说法）也不该拆组。"""
+        from v5.media import video_plan
+
+        shots = [
+            {"name": "LN01", "scene": "验尸房", "act": 2, "seconds": 6},
+            {"name": "LN02", "scene": "验尸房 凌晨", "act": 2, "seconds": 5},
+        ]
+        groups = video_plan.group_shots(shots, 5)
+        self.assertEqual(1, len(groups), "场号相同即同一条请求，地点字面漂移不该拆组")
         for _, declared in groups:
             self.assertGreaterEqual(sum(declared), 4)
             self.assertLessEqual(sum(declared), 12)

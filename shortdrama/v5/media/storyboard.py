@@ -182,6 +182,19 @@ def _col(headers: list[str], *keys: str) -> int | None:
     return None
 
 
+def _act_num(raw: str) -> int:
+    """「场次」单元格 → 场号整数。认 `3`／`场3`／`第3场`／`场 3 验尸房·凌晨`。
+
+    解析不出就是 0（= 这一集没用场次列），**不猜**：猜错场号会让打包档把
+    两段不同的戏并成一条请求，而那正是这条改动要解决的问题。
+    """
+    s = (raw or "").strip()
+    if not s:
+        return 0
+    m = re.search(r"(\d+)", s)
+    return int(m.group(1)) if m else 0
+
+
 #: 「本镜不绑角色参考图」标记（2026-09-27，xianxia-vfx-action 化身镜实测新增）。
 #: 写在「画面描述」单元格任意位置，解析时**从正文里剥掉**并置 `shot["no_human"]=True`。
 #: 为什么需要它（而不是靠措辞）：仙侠包的「人化作兽形能量体」那一镜，分镜已经不写
@@ -270,6 +283,10 @@ def parse(md: str) -> list[dict]:
         i_text = _col(headers, "文字镜", "text_shot")
         i_join = _col(headers, "承接", "join")
         i_sfx = _col(headers, "音效", "sfx")
+        #: 「场次」列（2026-10-05 新增）：场 = 一次生成 = 一条 ≤12 秒请求的容器。
+        #: ★ 只认「场次/场号/act/scene_no」，**不认单字「场」**——`_col` 是子串匹配，
+        #:   「场」会命中「场景」，于是地点列被当成场号（同型的键名漂移本仓库犯过多次）。
+        i_act = _col(headers, "场次", "场号", "scene_no", "act")
 
         def cell(idx: int | None) -> str:
             return cells[idx] if (idx is not None and idx < n) else ""
@@ -312,5 +329,8 @@ def parse(md: str) -> list[dict]:
             "text_shot": cell(i_text),
             "join_note": cell(i_join),
             "sfx": cell(i_sfx),
+            #: 场号（整数，缺列或解析不出 = 0）。见 `i_act` 的注释。
+            "act": _act_num(cell(i_act)),
+            "act_label": cell(i_act),
         })
     return shots

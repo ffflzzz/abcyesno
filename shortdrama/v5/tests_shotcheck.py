@@ -551,5 +551,63 @@ class TestDurationBlocksContradicted(unittest.TestCase):
             self.assertEqual(len(kept), 2, kept)
 
 
+class TestSceneLaws(unittest.TestCase):
+    """★ 2026-10-05：场 = 一次生成 = 一条 ≤12 秒的请求。口径是「场锁死、镜自由」——
+    每场几镜、每镜几秒由分镜师按节拍定，程序只查场这一层。
+    """
+
+    _SCENE_KEYS = ("每场", "同一场", "场数")
+
+    def _scene_hits(self, shots, target):
+        return [h for h in shotcheck.countable(shots, target)
+                if any(k in h["check"] for k in self._SCENE_KEYS)]
+
+    def test_no_act_column_means_no_scene_checks(self):
+        """没写「场次」列的项目一条场级判据都不许出（旧项目行为一字不变）。"""
+        shots = [_shot("LN01", "@裴烛 蹬地前冲劈出剑罡，对方侧身避开后横移格开", seconds=9),
+                 _shot("LN02", "@裴烛 反手压上，对方退两步撞开纸伞", seconds=9)]
+        self.assertEqual(self._scene_hits(shots, 18), [],
+                         "没有场号却出场级判据 = 误伤所有老项目")
+
+    def test_scene_over_12s_and_one_shot_scene_are_flagged(self):
+        shots = [
+            _shot("LN01", "@裴烛 蹬地前冲劈出剑罡，对方侧身避开后横移格开",
+                  seconds=8, act=1),
+            _shot("LN02", "@裴烛 反手压上，对方退两步撞开纸伞，两人换位",
+                  seconds=8, act=1),      # 场1 = 16 秒 > 一条请求上限
+            _shot("LN03", "@谢潮生 独立一镜撑起长枪，枪缨抖开",
+                  seconds=6, act=2),      # 场2 只 1 镜
+        ]
+        hits = self._scene_hits(shots, 22)
+        names = [h["check"] for h in hits]
+        self.assertTrue(any("≤12" in c for c in names), hits)
+        self.assertTrue(any("≥2 镜" in c for c in names), hits)
+        over = [h for h in hits if "≤12" in h["check"]][0]
+        self.assertIn("场1=16s", over["detail"], over["detail"])
+
+    def test_scene_split_across_table_is_flagged(self):
+        """场号回头（场1、场2、又场1）必须点名——同场拆开 = 打包档切两条。"""
+        shots = [
+            _shot("LN01", "@裴烛 蹬地前冲劈出剑罡，对方侧身避开", seconds=5, act=1),
+            _shot("LN02", "@谢潮生 横移两步撑起长枪，枪缨抖开", seconds=5, act=2),
+            _shot("LN03", "@裴烛 反手压上，对方退两步撞开纸伞", seconds=5, act=1),
+        ]
+        hits = [h for h in self._scene_hits(shots, 15) if "连写" in h["check"]]
+        self.assertTrue(hits, hits)
+        self.assertIn("LN03", hits[0]["detail"], hits[0]["detail"])
+
+    def test_compliant_scene_table_passes(self):
+        """反向对照：3 场 × 每场 2 镜 × 每镜 5 秒 = 30 秒 ⇒ 场级一条都不该出。"""
+        shots = []
+        for a in (1, 2, 3):
+            shots.append(_shot("LN%02d" % (2 * a - 1),
+                               "@裴烛 蹬地前冲劈出板状剑罡，对方侧身避开后横移格开",
+                               seconds=5, act=a))
+            shots.append(_shot("LN%02d" % (2 * a),
+                               "@裴烛 反手压上，对方退两步撞开纸伞，两人换位",
+                               seconds=5, act=a))
+        self.assertEqual(self._scene_hits(shots, 30), [], self._scene_hits(shots, 30))
+
+
 if __name__ == "__main__":
     unittest.main()

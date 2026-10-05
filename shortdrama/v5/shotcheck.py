@@ -278,6 +278,44 @@ def countable(shots: list[dict], target_seconds: int = 0,
                 and not any(w in (s["visual"] or "") for w in CONTACT)]
     need(len(env_only) <= 1, "禁「砍环境」为一镜主内容",
          "命中 %d 镜" % len(env_only), names=env_only)
+    # ── 场级判据（2026-10-05）：场 = 一次生成 = 一条 ≤12 秒的请求 ──
+    # 口径是「场锁死、镜自由」：每场总长不超过一条请求的上限，场内至少 2 镜，
+    # 每镜几秒**不由程序规定**（那是分镜师的节拍决定权，2026-10-03 定的）。
+    # ★ 只在表里**真有「场次」列**时才判 —— 旧项目与别的包不写这列 ⇒ 一条都不判，
+    #   行为与改造前一字不变（同 `camera_light` 那条的生效方式）。
+    acts = [int(s.get("act") or 0) for s in shots]
+    if any(acts):
+        units: dict[int, list[dict]] = {}
+        seen_acts: set[int] = set()
+        prev_a = None
+        for s in shots:
+            a = int(s.get("act") or 0)
+            if a == prev_a and a in units:
+                units[a].append(s)
+            elif a in seen_acts:
+                need(False, "同一场必须连写（场号不许断续出现）",
+                     "场 %d 在 %s 处又出现 —— 同场被拆开会让打包档把它切成两条，"
+                     "接戏又回到跨请求" % (a, s["name"]))
+                units.setdefault(a, []).append(s)
+            else:
+                seen_acts.add(a)
+                units[a] = [s]
+            prev_a = a
+        over = [(a, sum(int(s.get("seconds") or 0) for s in g))
+                for a, g in sorted(units.items())
+                if sum(int(s.get("seconds") or 0) for s in g) > 12]
+        need(not over, "每场总秒数 ≤12（一条请求的上限）",
+             "超了 %d 场：%s —— 修法：**把超出的镜拆成下一场**，或压场内某镜秒数"
+             % (len(over), "、".join("场%d=%ds" % (a, t) for a, t in over[:6])))
+        single = [(a, len(g)) for a, g in sorted(units.items()) if len(g) < 2]
+        need(not single, "每场 ≥2 镜（场是「一段戏多镜头」，单镜不成场）",
+             "命中 %d 场：%s —— 修法：与相邻同地点的镜并成一场，或把这场拆出第二镜"
+             % (len(single), "、".join("场%d=%d镜" % x for x in single[:6])))
+        if target_seconds:
+            lo_acts = max(2, int(target_seconds / 13))
+            need(len(units) >= lo_acts, "场数达目标时长要求（每场 ≤12 秒 ⇒ 场数下限）",
+                 "%d 场 / %d 秒（目标 %ds ⇒ 至少 %d 场；场数不够就是每场写太长）"
+                 % (len(units), total, target_seconds, lo_acts))
     if target_seconds:
         # 镜数下限**按目标秒数推**，不写死（2026-09-29 实测：写死 25 镜把一部
         # 60 秒 / 17 镜的片子误判成不合格 —— 判据按"我以为片子多长"写，就是错的）。

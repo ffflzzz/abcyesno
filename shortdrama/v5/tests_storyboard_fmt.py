@@ -89,5 +89,52 @@ class TestShotCountWindow(unittest.TestCase):
         self.assertTrue(bad, "6 镜 / 24 秒远低于 60 秒目标，该拦")
 
 
+class TestSceneColumn(unittest.TestCase):
+    """★ 2026-10-05：分镜表新增可选「场次」列 —— 场 = 一次生成 = 一条 ≤12 秒请求。
+
+    没有这一列时"场"在盘上根本不存在（madfate-abc-1005 实测：剧本 4 场，
+    分镜只剩 2 个地点值，分组与场无关）。
+    """
+
+    HDR_ACT = ("| 镜头号 | 场次 | 景别 | 角度 | 运镜 | 时长(秒) | 场景 | 视觉风格 "
+               "| 画面描述 | 落幅 | 对白 | 音效 | 文字镜 | 承接 |")
+    SEP_ACT = "|---|" * 14
+
+    @classmethod
+    def _md(cls, cells):
+        """cells = [(场次单元格原文, 场景单元格原文)]；镜头号一律纯数字（占第 1 列）。"""
+        rows = []
+        for i, (act_cell, loc) in enumerate(cells, 1):
+            rows.append("| %d | %s | 中景 | 平视 | 缓推 | 5 | %s | 夜 | "
+                        "0-5秒：@沈砚 侧身左移半步再拔剑横端至胸前 | 剑尖前点 | "
+                        "（无声，环境音）| 风声 | 否 | 承接上一镜落点 |"
+                        % (i, act_cell, loc))
+        return ("# 分镜脚本\n\n" + cls.HDR_ACT + "\n" + cls.SEP_ACT + "\n"
+                + "\n".join(rows) + "\n")
+
+    def test_scene_column_parses_to_int(self):
+        from v5.media import storyboard
+        shots = storyboard.parse(self._md([
+            ("1", "场1 验尸房·凌晨"), ("场2", "验尸房"),
+            ("3", "天台"), ("第4场", "天台")]))
+        self.assertEqual(len(shots), 4, "四行必须都读出来")
+        self.assertEqual([s["act"] for s in shots], [1, 2, 3, 4],
+                         "四种写法（裸数字／场N／第N场）都要取出场号")
+
+    def test_scene_cell_with_words_still_yields_number(self):
+        from v5.media import storyboard
+        shots = storyboard.parse(self._md([("场 7 验尸房·凌晨", "验尸房")]))
+        self.assertEqual(len(shots), 1)
+        self.assertEqual(shots[0]["act"], 7, "「场 7 验尸房·凌晨」要取到 7")
+
+    def test_scene_column_absent_means_zero_not_guessed(self):
+        """⛔「场」是「场景」的子串 —— 只认旧表头时 act 必须全 0，不许拿地点当场号。"""
+        from v5.media import storyboard
+        shots = storyboard.parse(md("", 3))
+        self.assertEqual(len(shots), 3, "旧表头三行仍要全读出来")
+        self.assertEqual([s["act"] for s in shots], [0, 0, 0],
+                         "没有场次列却猜出场号 = 会把两段戏误并进一条请求")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

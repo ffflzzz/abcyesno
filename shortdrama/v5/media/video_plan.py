@@ -96,11 +96,27 @@ def _pack_fit(declared: list[int], mins: list[int]) -> list[int] | None:
     return out if sum(out) <= PACK_MAX_SECONDS else None
 
 
+def same_unit(a: dict, b: dict) -> bool:
+    """两镜能不能并进**同一条请求**：有「场次」就按场次，没有才退回场景名。
+
+    为什么不能只看场景名（2026-10-05）：场景名只是地点。同一个地点的第 1 场和
+    第 3 场是两段不同的戏（时间不同、剧情不同），旧判据会把它们并成一条 ——
+    madfate-abc-1005 实测：15 镜只有「验尸房 / 天台水塔间」两个值，而剧本写了 4 场，
+    分镜层根本没有"场"这个容器，切出来的组与场无关。
+    """
+    aa = int(a.get("act") or 0)
+    bb = int(b.get("act") or 0)
+    if aa and bb:
+        return aa == bb
+    sc = (a.get("scene") or "").strip()
+    return bool(sc) and sc == (b.get("scene") or "").strip()
+
+
 def group_shots(shots: list[dict], max_group: int | None = None) -> list[tuple[list[dict], list[int]]]:
     """pack 档分组：**同场景**相邻镜贪心合并，返回 [(镜列表, 每镜分配秒)]。
 
     规则（v2 压缩式，与旁路脚本实测闭环版本一致）：
-    - 仅同场景相邻镜合并（跨场景切换是分镜语义，不交给模型即兴）；
+    - 仅**同一场**的相邻镜合并（有「场次」列按场次，没有才按场景名，见 `same_unit`）；
     - 声明时长之和 ≤12s 直接合并；
     - 超限时等比压缩到 12s，但每镜不得低于 `pack_speech_need`（台词时长下限），
       且压幅不得超原声明 40% —— 否则放弃合并、该镜独立成组。
@@ -121,9 +137,7 @@ def group_shots(shots: list[dict], max_group: int | None = None) -> list[tuple[l
         declared = [pack_clamp_sec(shots[i])]
         while len(cur) < mg and i + len(cur) < n:
             nxt = shots[i + len(cur)]
-            sc_cur = (cur[-1].get("scene") or "").strip()
-            sc_nxt = (nxt.get("scene") or "").strip()
-            if not sc_cur or sc_cur != sc_nxt:
+            if not same_unit(cur[-1], nxt):
                 break
             trial_d = declared + [pack_clamp_sec(nxt)]
             mins = [pack_speech_need(s) for s in cur + [nxt]]
