@@ -646,6 +646,46 @@ def _chars_by_name(reg: dict, text: str, max_n: int = 2) -> list:
     return found[:max_n]
 
 
+_AMBIG_SCENES: set = set()      # 已喊过的歧义写法，防逐镜刷屏
+
+
+def _scene_asset(reg: dict, scene_text: str, by_name: dict):
+    """按分镜「场景」列取那张场景资产。先**精确同名**（旧行为），再退回资产卡自己的关键词。
+
+    为什么要有第二级（2026-10-06 实测 `ice-spring-bridge-duel` 第 1 集）：注册表里的
+    场景叫「秋宫山谷·石拱桥与桥下溪流」，而分镜「场景」列写的是「秋宫山谷·石拱桥桥面」
+    —— **同一处地方的两种写法**，精确匹配 5 镜全落空 ⇒ 一张场景图都没绑上，静帧把
+    "石拱桥上的决斗"画成了开满花的山坡。资产卡的 `关键词` 栏里明明写着「石拱桥」
+    「秋宫山谷」，只是这条通道从来没用过它（道具那侧 10-05 已经开了尾词兜底，场景这侧漏了）。
+    ⛔ **两个以上场景同时命中就不猜**：拿 A 处的图塞进 B 处的镜，比不绑更糟
+    （构图会被那张图的固定机位带走）。不猜时响亮报一行，别静默。
+    """
+    st = str(scene_text or "").strip()
+    a = by_name.get(st)
+    if a is not None and str(a.get("type") or "") in LOCATION_TYPES:
+        return a
+    if not st:
+        return None
+    cands = []
+    for loc in reg.get("assets", []):
+        if str(loc.get("type") or "") not in LOCATION_TYPES:
+            continue
+        name = str(loc.get("name") or "")
+        keys = [str(k) for k in (loc.get("keywords") or []) if len(str(k)) >= 3]
+        if (name and (name in st or st in name)) or any(k in st for k in keys):
+            cands.append(loc)
+    if len(cands) == 1:
+        return cands[0]
+    if len(cands) > 1:
+        # 每种写法只喊一次（一集 15 镜同一处场景会反复走到这里）
+        if st not in _AMBIG_SCENES:
+            _AMBIG_SCENES.add(st)
+            print("[assets] ⚠️ 「场景」列 %r 同时命中 %d 个场景资产（%s）→ 不绑，"
+                  "避免拿错地方的图当锚点"
+                  % (st, len(cands), "、".join(str(c.get("name")) for c in cands)))
+    return None
+
+
 def hits_for_shot(reg: dict, shot: dict, max_n: int = 5, defaults=None) -> tuple:
     """按镜匹配参考图。返回 `(hits, unresolved)`。
 
@@ -722,9 +762,8 @@ def hits_for_shot(reg: dict, shot: dict, max_n: int = 5, defaults=None) -> tuple
     #   （实测 9 个宽景镜全部已写 `@场景名`，它说"以情绪小标题开头"）。
     #   ⇒ 「场景」列本来就是分镜契约的必填列，直接按它绑，位置约束从此与模型无关。
     if any(w in (shot.get("shot_type") or "") for w in WIDE_SHOT_WORDS):
-        scene_a = by_name.get((shot.get("scene") or "").strip())
-        if (scene_a is not None and scene_a.get("type") == "location"
-                and scene_a not in hits):
+        scene_a = _scene_asset(reg, shot.get("scene") or "", by_name)
+        if scene_a is not None and scene_a not in hits:
             hits = hits + [scene_a]
     # ★ **按本镜括注换到对应年龄的设定表**（2026-09-30，见 `apply_age_variants`）。
     #   放在限流截断**之前**：换完才是"本镜真正该用的那张脸"，之后再按人物数上限裁。
@@ -1381,7 +1420,7 @@ def bind(root: Path, shots: list[dict], max_n: int = 5,
         wide_shot = any(w in (s.get("shot_type") or "") for w in WIDE_SHOT_WORDS)
         scene_pick = None
         if wide_shot:
-            locs = [h for h in hits if h.get("type") == "location" and h.get("name")]
+            locs = [h for h in hits if h.get("type") in LOCATION_TYPES and h.get("name")]
             if locs:
                 scene_pick = locs[0]
         if scene_pick:

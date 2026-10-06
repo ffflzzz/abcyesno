@@ -1114,5 +1114,62 @@ class TestRefCapEnv(unittest.TestCase):
         self.assertEqual((solo, multi), (assets.REF_CAP_SOLO, 5))
 
 
+class TestSceneColumnAlias(unittest.TestCase):
+    """「场景」列写的是**同一处地方的另一种说法**时，也要绑到那张场景图。
+
+    2026-10-06 实测（`ice-spring-bridge-duel` 第 1 集）：注册表里的场景叫
+    「秋宫山谷·石拱桥与桥下溪流」，分镜「场景」列写「秋宫山谷·石拱桥桥面」
+    （第 3 镜还写成「…桥面及桥上方空域」）⇒ 旧实现只做**精确同名**查表，
+    5 镜一张场景图都没绑上，静帧把"石拱桥上的决斗"画成开满花的山坡。
+    资产卡的 `关键词` 栏里本来就写着「石拱桥」，只是这条通道没用过它。
+    """
+
+    REG = json.dumps({"assets": [
+        {"id": "桥", "name": "秋宫山谷·石拱桥与桥下溪流", "type": "location",
+         "keywords": ["石拱桥", "秋宫山谷", "桥下溪流", "木栏杆"],
+         "ref_image": "秋宫山谷·石拱桥与桥下溪流.png", "url": "https://x/bridge.png"},
+        {"id": "冰仙", "name": "冰仙", "type": "character", "keywords": ["冰仙"],
+         "ref_image": "冰仙.png", "url": "https://x/bing.png"},
+        {"id": "春灵", "name": "春灵", "type": "character", "keywords": ["春灵"],
+         "ref_image": "春灵.png", "url": "https://x/chun.png"},
+    ]})
+
+    def _names(self, scene, shot_type="全景"):
+        reg = json.loads(self.REG)
+        shot = {"name": "LN01", "scene": scene, "shot_type": shot_type,
+                "visual": "@冰仙 与 @春灵 在桥面对砍"}
+        return [h.get("name") for h in assets.hits_for_shot(reg, shot)[0]]
+
+    def test_scene_column_shares_a_keyword_with_the_asset(self):
+        got = self._names("秋宫山谷·石拱桥桥面")
+        self.assertIn("秋宫山谷·石拱桥与桥下溪流", got,
+                      "「桥面」这种写法也要认回同一处场景")
+        self.assertIn("冰仙", got, "角色不能被场景挤掉")
+
+    def test_exact_name_still_works(self):
+        """反向对照：加别名通道**不许**弄坏精确同名那条路。"""
+        self.assertIn("秋宫山谷·石拱桥与桥下溪流",
+                      self._names("秋宫山谷·石拱桥与桥下溪流"))
+
+    def test_near_shot_still_binds_nothing(self):
+        """近景不绑场景图的政策（2026-09-23）不因别名通道而放宽。"""
+        self.assertNotIn("秋宫山谷·石拱桥与桥下溪流",
+                         self._names("秋宫山谷·石拱桥桥面", shot_type="近景"))
+
+    def test_ambiguous_alias_binds_nothing(self):
+        """★ 两个场景同时命中 ⇒ 谁都不绑（拿错地方的图比不绑更糟）。"""
+        reg = json.loads(self.REG)
+        reg["assets"].append({
+            "id": "亭", "name": "秋宫山谷·临溪亭", "type": "location",
+            "keywords": ["临溪亭", "石拱桥"],     # 与桥共有「石拱桥」这个词
+            "ref_image": "亭.png", "url": "https://x/pavilion.png"})
+        got = [h.get("name") for h in
+               assets.hits_for_shot(reg, {"name": "LN02", "scene": "秋宫山谷·石拱桥桥面",
+                                          "shot_type": "全景", "visual": "@冰仙"})[0]]
+        self.assertNotIn("秋宫山谷·临溪亭", got)
+        self.assertNotIn("秋宫山谷·石拱桥与桥下溪流", got,
+                         "两处都命中时不猜 —— 宁可不绑")
+
+
 if __name__ == "__main__":
     unittest.main()
