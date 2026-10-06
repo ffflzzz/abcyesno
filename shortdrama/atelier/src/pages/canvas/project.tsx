@@ -41,6 +41,7 @@ import { CanvasSidePanel } from "@/components/canvas/canvas-side-panel";
 import { CanvasZoomControls } from "@/components/canvas/canvas-zoom-controls";
 import { DirectorPanel } from "@/components/canvas/director-panel";
 import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
+import { usePixaBridge, usePixaReport, usePixaSelection } from "@/lib/pixa-bridge";
 import { useGenerationHistoryStore, type GenerationHistoryImage } from "@/stores/canvas/use-generation-history-store";
 import { buildNodeMentionReferences, type CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
 import { exportCanvasProjects } from "@/lib/canvas/canvas-export";
@@ -422,6 +423,15 @@ function AtelierCanvasPage() {
     useLayoutEffect(() => {
         selectionBoxRef.current = selectionBox;
     }, [selectionBox]);
+
+    // ── Pixa bridge（shortdrama 三栏工作室的实时视图 + 选中回传）──────────────
+    // ★ **惰性激活**：只有宿主 postMessage 进来才生效；`/frontend` 那种
+    //   直接开 iframe 的旧用法一条消息都收不到 ⇒ 行为与改造前一字不变。
+    //   为什么必须走 setNodes 而不是 store：见 `@/lib/pixa-bridge` 顶部说明
+    //   （本组件把 nodes 存在本地 state，:391 那条 effect 每帧把它推回 store）。
+    usePixaBridge({ setNodes, setConnections });
+    usePixaReport(nodes);
+    usePixaSelection(selectedNodeIds);
 
     useEffect(() => {
         const el = containerRef.current;
