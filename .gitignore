@@ -97,6 +97,10 @@ shortdrama/.env.*
 .workbuddy/
 .qoder/
 shortdrama/tmp/
+# 2026-10-06：封面/ vibe 图的落地目录（实测一张 2.4MB PNG，代码零引用、每次跑项目会再长）。
+# 与 shortdrama/tmp/ 同性质（运行期产物），既不入库也不进包 —— 见 package.json 的
+# build.files 排除表同款条目，否则每个用户装完都会白背几 MB 自己的项目图。
+shortdrama/vibe_images/
 # 仓库根 tmp/ 是 scripts/test-browser-panel/build.mjs 的默认输出目录，
 # 每次跑都会长出来，别再让它进 status。
 /tmp/
