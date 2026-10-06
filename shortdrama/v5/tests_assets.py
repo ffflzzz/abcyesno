@@ -1035,5 +1035,84 @@ class TestPropSlotOrder(unittest.TestCase):
         self.assertEqual(nm["LN23"], ["沈知夏", "老钟", "走马灯"])
 
 
+class TestRefCapEnv(unittest.TestCase):
+    """★ 多人镜的参考图封顶：默认仍是实测值 3，放宽要显式开、收紧一律不认。
+
+    病（2026-10-06 实测 `ice-spring-bridge-duel` 第 1 集）：双人打斗镜 2 张脸占掉
+    两格，只剩 1 个道具位 ⇒ 春灵的荆棘弯刃 **5 镜零绑定**、场景图也进不来，
+    结尾镜头一拉远桥就换成了另一个地方。
+    """
+
+    def setUp(self):
+        import os
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self._saved = {k: os.environ.pop(k, None) for k in
+                       (assets.REF_CAP_MULTI_ENV, assets.REF_CAP_SOLO_ENV)}
+        # ⚠️ 每张图的内容必须**互不相同**：`bind()` 按 URL 去重，而 `_mk` 写的是
+        #    同一张 1x1 PNG 加 pad 字节 —— pad 一样 ⇒ data URI 一样 ⇒ 五张图被去重成一张。
+        for i, f in enumerate(("甲.png", "乙.png", "剑.png", "刀.png", "桥.png"), start=1):
+            _mk(self.root, f, pad=i)
+        (self.root / "assets.json").write_text(json.dumps({"assets": [
+            {"id": "c1", "name": "甲", "type": "character", "keywords": ["甲"],
+             "priority": 10, "ref_image": "甲.png"},
+            {"id": "c2", "name": "乙", "type": "character", "keywords": ["乙"],
+             "priority": 10, "ref_image": "乙.png"},
+            {"id": "p1", "name": "紫晶剑", "type": "prop", "keywords": ["紫晶剑", "剑"],
+             "priority": 8, "ref_image": "剑.png"},
+            {"id": "p2", "name": "荆棘弯刃", "type": "prop", "keywords": ["荆棘弯刃", "刀"],
+             "priority": 8, "ref_image": "刀.png"},
+            {"id": "l1", "name": "石拱桥", "type": "location", "keywords": ["石拱桥", "桥"],
+             "priority": 8, "ref_image": "桥.png"},
+        ]}, ensure_ascii=False), encoding="utf-8")
+        (self.root / "brief.json").write_text('{"topic":"t","episodes":1}', encoding="utf-8")
+        # 「场景」列要有值：宽景镜的 location 是**无条件按场景列绑**的（2026-09-28 修），
+        # 只靠正文提到桥名不会进 `hits`（正文补漏只并 prop）。
+        self.shots = [{"name": "LN01", "shot_type": "全景", "scene": "石拱桥",
+                       "visual": "@甲 @乙 各持剑与刀在石拱桥上对峙", "dialogue": ""}]
+
+    def tearDown(self):
+        import os
+        for k, v in self._saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        self.tmp.cleanup()
+
+    def _bound(self):
+        names: dict = {}
+        assets.bind(self.root, self.shots, names_out=names)
+        return names.get("LN01") or []
+
+    def test_default_keeps_the_measured_three(self):
+        got = self._bound()
+        self.assertEqual(len(got), 3, "默认档不许变：2 张脸 + 1 格（实测值）")
+        self.assertEqual(got[:2], ["甲", "乙"], "先满足人脸")
+        self.assertNotIn("荆棘弯刃", got, "默认档下第二件兵器进不来 —— 这正是要放宽的理由")
+
+    def test_env_widens_and_the_second_weapon_gets_in(self):
+        import os
+        os.environ[assets.REF_CAP_MULTI_ENV] = "5"
+        got = self._bound()
+        self.assertEqual(len(got), 5, "放宽到 5 ⇒ 2 脸 + 场景 + 两把兵器都进得来")
+        self.assertIn("荆棘弯刃", got)
+        self.assertIn("石拱桥", got)
+
+    def test_tightening_is_refused(self):
+        """反向对照：设成比实测更小的数**不许生效**（没有 A/B 依据的收紧）。"""
+        import os
+        os.environ[assets.REF_CAP_MULTI_ENV] = "1"
+        self.assertEqual(assets.ref_caps()[1], assets.REF_CAP_MULTI)
+        self.assertEqual(len(self._bound()), 3)
+
+    def test_solo_cap_untouched_by_the_multi_env(self):
+        """单变量：放宽多人封顶不该顺手改掉单人镜的那个数。"""
+        import os
+        os.environ[assets.REF_CAP_MULTI_ENV] = "5"
+        solo, multi = assets.ref_caps()
+        self.assertEqual((solo, multi), (assets.REF_CAP_SOLO, 5))
+
+
 if __name__ == "__main__":
     unittest.main()

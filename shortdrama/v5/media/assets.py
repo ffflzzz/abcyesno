@@ -14,6 +14,7 @@ from __future__ import annotations
 import base64
 import json
 import mimetypes
+import os
 import re
 from pathlib import Path
 
@@ -540,6 +541,44 @@ MAX_CAST_PER_SHOT = 5
 #: 交给分镜师看（"出片容器事实"），所以做成常量，不许在文案里再抄一份。
 REF_CAP_SOLO = 2
 REF_CAP_MULTI = 3
+
+#: 放宽用的环境变量（**只放宽、不收紧**）
+REF_CAP_MULTI_ENV = "SHORTDRAMA_REF_CAP_MULTI"
+REF_CAP_SOLO_ENV = "SHORTDRAMA_REF_CAP_SOLO"
+
+
+def ref_caps() -> tuple:
+    """实际生效的 `(单人封顶, 多人封顶)`。默认 = 上面两个实测常量。
+
+    ★ 为什么开这一个口子（2026-10-06）：`REF_CAP_MULTI=3` 的依据是
+      "1 人物镜喂 3 张会多画一个人"，但那是**单人镜**的实测；**双人打斗镜**里
+      2 张脸 + 1 个道具位 = 第二件兵器与场景图**永远进不来**。实测
+      `ice-spring-bridge-duel` 第 1 集：5 镜全部只带 冰仙+春灵+紫晶剑，
+      春灵的荆棘弯刃一张没进过 ⇒ 那把刀每镜现编；结尾拉远时场景也没有图锚，
+      桥从暖秋木栏变成白栅栏加粉樱。
+    ⛔ **收紧没有依据**：设成比实测值更小的数会被忽略并响亮告警——
+      那等于拿一条没验过的数字改掉 09-09/09-15 两次 A/B 的结论。
+    ⚠️ 放宽是**有代价的赌注**（多一张图可能多画一个人），所以默认不变、
+      由调用方按项目显式打开，且打开时打一行日志说明这是实验档。
+    """
+    solo, multi = REF_CAP_SOLO, REF_CAP_MULTI
+    for env, cur, label in ((REF_CAP_SOLO_ENV, REF_CAP_SOLO, "单人"),
+                            (REF_CAP_MULTI_ENV, REF_CAP_MULTI, "多人")):
+        raw = (os.environ.get(env) or "").strip()
+        if not raw.isdigit():
+            continue
+        want = int(raw)
+        if want < cur:
+            print("[assets] ⛔ %s 封顶只许放宽：%s=%d 比实测值 %d 更紧 ⇒ 按 %d 走"
+                  "（收紧没有 A/B 依据）" % (label, env, want, cur, cur))
+        elif want > cur:
+            print("[assets] ⚠️ 实验档：%s 封顶 %d → %d（%s）。多一张图有可能多画一个人，"
+                  "这一档要人眼看片确认。" % (label, cur, want, env))
+            if label == "单人":
+                solo = want
+            else:
+                multi = want
+    return solo, multi
 
 
 def _asset_name_spans(text: str, reg: dict) -> list:
@@ -1245,6 +1284,7 @@ def bind(root: Path, shots: list[dict], max_n: int = 5,
     # ★ 道具抢同一个参考图名额时谁该留下 —— 判据见下方 `others.sort` 那段
     key_props = key_prop_names(root)
     counts = mention_counts(reg, shots)
+    cap_solo, cap_multi = ref_caps()
     out: dict[str, list[str]] = {}
     for s in shots:
         text = (s.get("visual") or "") + " " + (s.get("dialogue") or "")
@@ -1330,9 +1370,9 @@ def bind(root: Path, shots: list[dict], max_n: int = 5,
         if not chars:
             cap = max_n
         elif n_char == 1:
-            cap = min(max_n, REF_CAP_SOLO)
+            cap = min(max_n, cap_solo)
         else:
-            cap = min(max_n, REF_CAP_MULTI)
+            cap = min(max_n, cap_multi)
         # ★ 2026-09-23：场景图**按景别选择性绑定**（用户要求三类资产出图锚定；
         #   但 2026-09-09/09-14 的实测教训仍在——场景空镜自带机位会污染构图）。
         #   折中：**全景/远景/大全景/空镜**绑场景图（构图本来就是 Wide，不打架，

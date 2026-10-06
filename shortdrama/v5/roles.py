@@ -483,7 +483,7 @@ def _container_facts(vp) -> str:
             "剩下的位置给场景空镜（只有 全景/远景/大全景/空镜 才绑得到）与道具。\n"
             "· 镜头与镜头**互不知情**（每条独立生成）。"
             % (config.VIDEO_MODE, req, vp.REF_SLOTS,
-               _assets.REF_CAP_SOLO, _assets.REF_CAP_MULTI, _assets.REF_CAP_MULTI))
+               *_assets.ref_caps(), _assets.ref_caps()[1]))
     return head + body + (
         "\n· ⇒ 所以：跨镜的长相、服装、道具位置、场景地貌**没有图兜底**，"
         "只能靠你把字写在每一镜上；多人镜要逐人写站位与朝向。\n"
