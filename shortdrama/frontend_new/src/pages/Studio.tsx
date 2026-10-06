@@ -28,6 +28,8 @@ export function Studio() {
   const [pid, setPid] = useState('');
   const [ep, setEp] = useState(1);
   const [signals, setSignals] = useState<RailSignals>({ running: {}, pending: {}, nextRole: {} });
+  /** pid → 正在跑的那个 run_id（「停掉这次跑」要用） */
+  const [runIds, setRunIds] = useState<Record<string, string>>({});
   const [doc, setDoc] = useState<CanvasDoc | null>(null);
   const [docError, setDocError] = useState('');
   const [segments, setSegments] = useState<Segment[]>([]);
@@ -61,13 +63,18 @@ export function Studio() {
         setProjects(list);
         if (!pid && list.length) setPid(list[0].id);
         const running: Record<string, string> = {};
+        const runIds: Record<string, string> = {};
         for (const p of list) {
           const runs = await Api.listRuns(p.id, 3).catch(() => []);
           const live = runs.find((x) => isRunning(String(x.status || '')));
-          if (live) running[p.id] = String(live.status);
+          if (live) {
+            running[p.id] = String(live.status);
+            if (live.run_id) runIds[p.id] = String(live.run_id);
+          }
         }
         if (stop) return;
         setSignals((s) => ({ ...s, running }));
+        setRunIds(runIds);
       } catch (e) { if (!stop) setInboxError(errText(e)); }
     };
     void pull();
@@ -142,6 +149,38 @@ export function Studio() {
       setProjects(await (await Api.listProjects(1, 200)).list);
       setPid((p as Project).id || topic); setEp(1);
     } catch (e) { toast('创建失败：' + errText(e), true); } finally { setBusy(false); }
+  };
+
+  const renameProject = async (target: string, name: string) => {
+    try {
+      await Api.renameProject(target, name);
+      toast(`已改片名：${name}（目录名 ${target} 不动）`);
+      const r = await Api.listProjects(1, 200);
+      setProjects(r.list);
+    } catch (e) { toast('改名失败：' + errText(e), true); }
+  };
+
+  const stopRun = async (target: string) => {
+    const rid = runIds[target];
+    if (!rid) { toast('找不到该项目正在跑的 run（可能刚结束）', true); return; }
+    try {
+      await Api.cancelRun(rid);
+      toast('已请求停掉 ' + rid);
+    } catch (e) { toast('停跑失败：' + errText(e), true); }
+  };
+
+  /** ⛔ 不自动 `force`：后端在有非终态 run 时回 409，那是**它替人拦的**
+   *  （删掉一个正在跑创作链的项目，链随后会把产物写回原路径 —— 2026-09-15 实测踩过）。
+   *  要删就先把跑停掉，别一键绕过。 */
+  const deleteProject = async (target: string) => {
+    if (!window.confirm(`删除项目 ${target}？\n\n产物会移到 .tmp/_deleted/<时间戳>/ 暂存，不是硬删，可恢复。`)) return;
+    try {
+      const r = await Api.deleteProject(target) as { deleted?: string[]; skipped?: unknown[] };
+      toast(`已删除 ${(r.deleted || []).join('、') || target}${(r.skipped || []).length ? '；有跳过项' : ''}`);
+      if (target === pid) { setPid(''); setDoc(null); setSegments([]); }
+      const list = await Api.listProjects(1, 200);
+      setProjects(list.list);
+    } catch (e) { toast('删除失败：' + errText(e), true); }
   };
 
   const beginProduction = async () => {
@@ -219,7 +258,9 @@ export function Studio() {
       <ProjectRail projects={projects} signals={signals} pid={pid}
                    packs={health.packs || []} ratios={health.ratio_choices || []}
                    busy={busy} onPick={(v) => { setPid(v); setEp(1); setShot(''); }}
-                   onNew={createProject} />
+                   onNew={createProject}
+                   runIds={runIds} onRename={renameProject}
+                   onStop={stopRun} onDelete={deleteProject} />
 
       <CanvasPane pid={pid || '-'} ep={ep} doc={doc} docError={docError}
                   segments={segments} shot={shot} onShot={setShot}

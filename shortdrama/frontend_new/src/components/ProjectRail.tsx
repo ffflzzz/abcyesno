@@ -28,9 +28,15 @@ type Props = {
   packs: string[];
   ratios: string[];
   busy: boolean;
+  /** 管理动作。「管理并行生产」这句话里"管理"指的就是这三个：改名、停跑、删。 */
+  runIds: Record<string, string>;
+  onRename: (pid: string, name: string) => Promise<void>;
+  onStop: (pid: string) => Promise<void>;
+  onDelete: (pid: string) => Promise<void>;
 };
 
-export function ProjectRail({ projects, signals, pid, onPick, onNew, packs, ratios, busy }: Props) {
+export function ProjectRail({ projects, signals, pid, onPick, onNew, packs, ratios, busy,
+  runIds, onRename, onStop, onDelete }: Props) {
   const [q, setQ] = useState('');
   const [creating, setCreating] = useState(false);
   const [topic, setTopic] = useState('');
@@ -50,24 +56,41 @@ export function ProjectRail({ projects, signals, pid, onPick, onNew, packs, rati
   const history = shown.filter((p) => !isRunning(signals.running[p.id]) && !signals.pending[p.id]);
 
   const row = (p: Project, kind: 'run' | 'wait' | 'idle') => (
-    <button key={p.id} type="button"
-            className={'rail-item' + (p.id === pid ? ' rail-item--on' : '')}
-            onClick={() => onPick(p.id)}>
-      <span className={'dot' + (kind === 'run' ? ' dot--run' : kind === 'wait' ? ' dot--wait' : '')} />
-      <span className="rail-item-main">
-        {/* ★ 主标签用 **pid**（目录名），副标签才是中文片名。
-            理由与截图一致，且是有用处的：pid 才是接口参数、产物目录名、
-            命令行里要敲的那个串；片名（`brief.topic`）可以随便改也会撞名，
-            把它放主位会让人照着它去敲 CLI 而失败。 */}
-        <span className="rail-item-name">{p.id}</span>
-        <span className="rail-item-sub">
-          {kind === 'run' ? '正在生产'
-            : kind === 'wait' ? '等你确认 · ' + (ROLE_ZH[signals.nextRole[p.id] || ''] || signals.nextRole[p.id] || '')
-            : ([p.name, p.style?.name].filter(Boolean).join(' · ') || '（无片名）')
-              + (p.created_at ? ' · ' + hhmm(p.created_at) : '')}
+    <div key={p.id}>
+      <button type="button"
+              className={'rail-item' + (p.id === pid ? ' rail-item--on' : '')}
+              onClick={() => onPick(p.id)}>
+        <span className={'dot' + (kind === 'run' ? ' dot--run' : kind === 'wait' ? ' dot--wait' : '')} />
+        <span className="rail-item-main">
+          {/* ★ 主标签用 **pid**（目录名），副标签才是中文片名。
+              理由与截图一致，且是有用处的：pid 才是接口参数、产物目录名、
+              命令行里要敲的那个串；片名（`brief.topic`）可以随便改也会撞名，
+              把它放主位会让人照着它去敲 CLI 而失败。 */}
+          <span className="rail-item-name">{p.id}</span>
+          <span className="rail-item-sub">
+            {kind === 'run' ? '正在生产'
+              : kind === 'wait' ? '等你确认 · ' + (ROLE_ZH[signals.nextRole[p.id] || ''] || signals.nextRole[p.id] || '')
+              : ([p.name, p.style?.name].filter(Boolean).join(' · ') || '（无片名）')
+                + (p.created_at ? ' · ' + hhmm(p.created_at) : '')}
+          </span>
         </span>
-      </span>
-    </button>
+      </button>
+      {p.id === pid ? (
+        <div style={{ display: 'flex', gap: 6, padding: '0 10px 6px 26px', flexWrap: 'wrap' }}>
+          <button type="button" className="btn btn--sm" disabled={busy}
+                  onClick={() => {
+                    const v = window.prompt('改片名（写进 brief.topic，目录名不动）', p.name || p.id);
+                    if (v && v.trim()) void onRename(p.id, v.trim());
+                  }}>改名</button>
+          {kind === 'run' ? (
+            <button type="button" className="btn btn--sm btn--danger" disabled={busy || !runIds[p.id]}
+                    onClick={() => void onStop(p.id)}>停掉这次跑</button>
+          ) : null}
+          <button type="button" className="btn btn--sm btn--danger" disabled={busy}
+                  onClick={() => void onDelete(p.id)}>删除</button>
+        </div>
+      ) : null}
+    </div>
   );
 
   return (
