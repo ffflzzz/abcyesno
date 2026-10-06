@@ -72,8 +72,11 @@ python -m v5.series <项目名> --hitl-redo --target 角色 --note "原因"
 #   ↑ 打回：重跑「该角色 + 它的**全部下游**」（旧产物移入 `.rerun_backup/` 后重跑）。
 #     `--target` 省略 = 打回**刚产出的那个**角色（= pending 里的 `prev_role`）。
 #     ① 前端网页端另有「继续 / 打回」确认条，走同一套（`GET/POST .../projects/{pid}/hitl`）；
-#     ② 前端起的 dev server **自带** `SHORTDRAMA_APPROVE_EACH_ROLE=1`（见 `v5/webchain.py`）
-#        ⇒ 网页端**天然逐步停下**，外部 agent 不受影响。
+#     ② ️ **（2026-10-06 更正）** 前端**不是**天然逐步停下：`manual_steps` 默认**关**
+#        （`webchain.py:116` 读 `SHORTDRAMA_WEB_MANUAL_STEPS`，出厂 `"0"`），
+#        要**每个请求体自己带** `manual_steps` 才开（`POST .../devserver` 或各生成端点），
+#        且它是**编译期**烘进 dev server 的 ⇒ 翻了要重启 dev server、只对下一次生成生效。
+#        旧版本这里写着"前端起的 dev server 自带 =1 ⇒ 网页端天然逐步停下"，**与代码不符**。
 #     ③ ★ 打回目标里**含 `director`**（制作规格 `director/director.md`，前提是它在盘）：
 #        链路第一停时人唯一能审的就是它；打回它 = **重写规格 + 全部 7 个角色重做**
 #        （规格是整条链的输入）。判据见 `v5/hitl.redo_targets_of`。
@@ -573,7 +576,7 @@ pack 档**跳过**逐镜 clipqc（组产物多镜
 | `SHORTDRAMA_OPEN_CHAIN` | 0 | **人用开关**：`1` 开放全链路，`--resume-media` 放行 |
 | `SHORTDRAMA_ALLOW_RESUME` | 0 | **人用开关**：`1` 放行单次内部恢复 |
 | `SHORTDRAMA_REQUIRE_APPROVAL` | 0 | `1` 启用三道**阶段级**审批门（`storyboard` / `stills` / `media`；指纹绑定产物）|
-| `SHORTDRAMA_APPROVE_EACH_ROLE` | 0 | `1` 启用**步级 HITL**（图运行中每次派发子代理前 interrupt；配合 `--hitl*` CLI，信道见 `v5/hitl.py`）。**默认关是硬要求**——全自动驱动脚本会挂在第一步。★ **前端那条路由 `v5/webchain.py` 自己带上它**（只影响它起的那个 dev server ⇒ 外部 agent 不受影响）；⛔ **绝不要写进 `.env`**（会全局生效、把外部 agent 也挂住）|
+| `SHORTDRAMA_APPROVE_EACH_ROLE` | 0 | `1` 启用**步级 HITL**（图运行中每次派发子代理前 interrupt；配合 `--hitl*` CLI，信道见 `v5/hitl.py`）。**默认关是硬要求**——全自动驱动脚本会挂在第一步。⚠️ **（2026-10-06 更正）** 前端那条路由**不**自带它：`webchain` 的 `manual_steps` 出厂 `"0"`，要**每个请求体自己带**才开（且翻了要重启 dev server、只对下一次生成生效）。三栏工作室 `frontend_new` 的「逐步确认」勾选框就是干这个的；⛔ **绝不要写进 `.env`**（会全局生效、把外部 agent 也挂住）|
 | `SHORTDRAMA_HUMAN_IN_CHARGE` | 0 | **人工模式：判断权在人**。`1` 时两道门**降级为报告**：`media_gate` 的「必须 `reviewer.passed`」不再拦、分镜契约门只出警告（判决落 `media/ep{N}/gates.json`）。★ 由**前端路径**自己带上（`runner.start` 写子进程 env，只影响前端那次 run）；⛔ **绝不要写进 `.env`** —— 那会把外部 agent 全自动链路唯一的保护也拆掉。「7 个角色产物齐」**照旧硬拦**（与人在不在无关）|
 | `AGNES_VIDEO_MAX_SHOTS` | 20 | **超过 20 镜的项目必须调大**，否则按上限**截断**（会打印醒目警告）|
 | `AGNES_VIDEO_MAX_SECONDS` | 12 | 单镜秒数**上限**（供应商硬约束 `seconds ∈ [4,12]`；下限 4 固定）。★ 设成小于 12 会让超长的镜被**静默压短**——2026-09-16 曾因误设 `10` 压短 620 镜中的 9 镜 |
@@ -740,6 +743,76 @@ python -m v5.series <项目名> --rerender LN03 --from still   # 连静帧一起
 
 `GET /projects/{pid}/progress` 现在收 **`?ep=N`**（缺省 1，`ep<1` → 400）。
 不传就永远按第 1 集算 `v5.render` / `cover` / `flow` ⇒ 多集连载会串集。
+
+## 三栏工作室 `frontend_new/`（2026-10-06 起）与导演信箱
+
+**它是什么**：`/studio` 同源挂载的第三个前端（左=项目栏 / 中=atelier 画布 / 右=导演对话）。
+`frontend/` **一字未动**，两者共用数据层（`api.ts` / `types.ts` / `lib/quality` / `lib/chainMode`），
+视图层各走各的。启动台两个入口都调同一个 `ensureShortdrama()` ⇒ 一次起服、两个界面。
+
+```bash
+# 构建（产物入库：release 不会自动跑任何 shortdrama:* 构建脚本）
+cd frontend_new && npm install && npm run build           # base=/studio/ 写死在 vite.config
+cd atelier && MSYS_NO_PATHCONV=1 VITE_BASE=/atelier/ npm run build   # 桥在 atelier 里，必须重构建
+python scripts/studio_smoke.py                            # 12 条接口验收（自建夹具，跑完删）
+node ../scripts/studio_shot.mjs <项目名>                   # 无头浏览器四项（需后端在 8787）
+```
+
+### 入站信道 `v5/inbox.py`（★ 这条是新的，改链路前必读）
+
+补的是**两个真实缺口**，不是"顺手加功能"：
+
+1. `hitl.decide` 要求链**正挂在步级门上**，而 `manual_steps` 默认**关**
+   （`webchain.py:116`，AGENTS.md 旧版那句"前端起的 dev server 自带它"**是过期的**：
+   它只在前端请求体带 `manual_steps` 时才开）⇒ 链一路跑到底时人说的话无处可去。
+2. `webwrite` 改分镜表**不碰链的失效机制**（phases 不动、`reviewer.passed` 照样绿）
+   ⇒ 人改完，导演下一轮读到的仍是"表没被改过"。
+
+**投递语义两种，别混（作废条件不同）**：
+
+| 条目 | 谁能读到 | 什么时候消失 |
+|---|---|---|
+| `message` | 下一个派发的角色；`to` 定向时**别的角色跳过而非吃掉** | 投递一次即记 `delivered_to` |
+| `edit`（画布/网页改表的台账） | 只有两个**表主**（`scenedesigner` / `reviewer`） | 分镜表被重写（指纹变了）当场剪掉 |
+
+⛔ `message` 不广播：一条给分镜师的话被 `worldbuilder` 消费掉，**没有任何一处会报错**。
+要广播就重发一次 —— 显式比隐式好。
+⚠️ `edit` 不"消费一次"：改了三镜，这三镜的账在表被重写前**每一轮都必须在场**。
+
+**注入点只有一个**：`roles.role_input` 末尾（`v5/roles.py`）。无条目时返回空串 ⇒
+不开这条信道时，派发给角色的文本**一个子都没多**（`tests_inbox` 有这条零回归证明）。
+
+**「让导演重做」是显式动作，不自动**：`POST .../director/redo` 三条出口按盘上事实选 ——
+挂着 → HITL 打回；有非终态 run → **409 不制造第二写者**；否则先 `reset_from` 再起链
+（⛔ 不撤销记账就重跑 = 空转，见 `guards.reset_from` 的物化守卫）。
+理由：`reset_from(scenedesigner)` 会重做该角色**及全部下游**（实测 ≈95 分钟），
+改一个错字也重做一遍不可接受。
+
+### 画布双向同步的边界（★ 别照着"节点可编辑"去实现，那是错的）
+
+- **表 → 画布**：宿主轮询 `GET .../canvas?ep=N`（后端每次重读盘），`fingerprint` 变了才
+  postMessage 推给 iframe；画布侧做**保位合并**（只更新产物事实，人拖过的坐标保留）。
+  ⚠️ 桥**必须走 `setNodes`**，不能走 `useCanvasStore.updateProject` ——
+  `project.tsx` 把 nodes 存在组件本地 state，`:391` 那条 effect 每帧把本地 state 推回 store，
+  从外面写**下一帧就被覆盖**（表现是"推进去了但画面没变"）。
+- **画布 → 表**：入口是**选中**（`pixa:select` 报 `s:LNxx` → 宿主镜头检查器切到那一镜），
+  编辑走 `POST /segments/{sid}` 带 `source=canvas`。
+  ⛔ **不许**把节点的 `metadata.prompt` 写回「画面描述」列 —— 那是**组装后的静帧提示词**
+  （含类型包风格块 / 参考图声明 / 反烧字条款），写回去等于把整列污染成机器文本，
+  下一轮静帧就在错误指令上重画。
+  ⚠️ 检查器初值取 `scenes[0].shots[0].content_plain`，**不是 `summary`** ——
+  后者是 `_first_sentence(visual)`，拿它回填再保存会把这一镜**截成一句**。
+- **桥是惰性激活的**：没收到宿主消息时一条行为都不发生 ⇒ `frontend/` 直接开 iframe 的
+  旧用法不变。改 `atelier` 前先看这条，否则会把"没在用"误判成"没生效"。
+
+### 对调用方的影响
+
+- 三条新路由：`GET|POST .../projects/{pid}/director/{inbox,message}`、`POST .../director/redo`。
+- `POST /segments/{sid}` 与 `POST /episodes/{eid}/segments` 多收 `source` / `by`
+  （只进台账，不影响写盘）。⚠️ 调用方传了它们就要**指望服务端 pop 掉** ——
+  漏了会被列进 `skipped` 并回一条"这些列不存在"的假警告（`server.py` 已处理，别退回）。
+- 实时性**仍是轮询**（后端无 SSE/WebSocket，`api.ts:366` 那句"前端不依赖长连接"照旧成立）。
+  真正的延迟地板是 `drive_chain` 自己 20 秒比一次产物，前端快于它是白快。
 
 ## 硬性注意事项
 

@@ -460,6 +460,10 @@ v5/
 scripts/                    # 运维脚本（人用）
 projects/                   # 运行时产出（已 gitignore）
 frontend/                   # React 工作台源码（`npm run build` → `frontend/dist`，由 `/` 同源托管）
+frontend_new/               # **三栏工作室**（项目栏 / 画布 / 导演对话），数据层复用 `frontend/`
+│                             #   `npm run build` → `frontend_new/dist`，由 `/studio` 同源挂载
+│                             #   base 写死在 `vite.config.ts`（不靠环境变量）；dev 端口 **5174**
+│                             #   （`frontend/` 钉 5173 + strictPort，同开会起不来）
 atelier/                    # **vendored 的画布应用**（Infinite Atelier，React+antd+tailwind）
 │                             #   `MSYS_NO_PATHCONV=1 VITE_BASE=/atelier/ npm run build`
 │                             #   → `atelier/dist`，由 `/atelier` 同源挂载（dist 与 node_modules 不入库）
@@ -467,10 +471,17 @@ docs/pavo/                  # 外部平台对接的取证材料（端点全集 /
 AGENTS.md                   # 外部 Agent 调用规范（权威）
 ```
 
-**前端两棵树**：`frontend/`（工作台）与 `atelier/`（画布）各自构建、由 `v5/server.py` 挂到
-同一个 origin 下（`/` 与 `/atelier`）。旧的原生 JS `web/` 已于 2026-09-30 退役删除。
+**前端三棵树**：`frontend/`（工作台）、`frontend_new/`（三栏工作室）、`atelier/`（画布）
+各自构建、由 `v5/server.py` 挂到**同一个 origin** 下（`/`、`/studio`、`/atelier`）。
+必须同源是因为后端返回的封面/静帧是**根相对路径** —— 另起一个端口就会让另一边的图全裂。
+⚠️ 子路径挂载**必须排在 `/` 之前**（Starlette 按注册顺序匹配，挂反了会被根挂载整个吞掉）。
+旧的原生 JS `web/` 已于 2026-09-30 退役删除。
 ⚠️ 在 Git Bash 里构建 `atelier/` **必须带 `MSYS_NO_PATHCONV=1`** —— 否则 `/atelier/`
-会被 MSYS 当成 Unix 路径改写成 `/Program Files/Git/atelier/`，产物里的资源地址全部 404（实测黑屏）。
+会被 MSYS 当成 Unix 路径改写成 `/Program Files/Git/atelier/`，产物里的资源地址全部 404（实测黑屏；
+2026-10-06 给 `frontend_new` 重构建 `atelier` 时**又踩了一次**，所以这条纪律别当成历史轶事）。
+⚠️ 与 `atelier/dist` 相反，`frontend/dist` 与 `frontend_new/dist` **是入库的**：
+release 流程今天不会自动跑任何 `shortdrama:*` 构建脚本，产物靠提交。
+`.gitignore` 里的 `!shortdrama/frontend_new/dist/` 两条豁免是必需的，漏了就是打包后 503。
 
 ### 画布的模型请求走同源代理（`v5/aigc.py`）
 
