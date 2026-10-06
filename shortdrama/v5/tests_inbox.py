@@ -99,6 +99,21 @@ class TestInboxBasics(_Base):
         with self.assertRaises(ValueError):
             inbox.append_message(self.root, "   ", ep=1)
 
+    def test_reading_an_inbox_creates_no_directory(self):
+        """读端点不许在盘上留东西。
+
+        实测：`GET .../director/inbox` 原先经 `dir_of()` 顺带 mkdir，
+        对 67 个项目扫一遍就在每个下面留一个空 `.tmp/inbox/`。
+        """
+        self.assertFalse((self.root / inbox.DIR_NAME).exists())
+        inbox.items(self.root)
+        inbox.history(self.root, ep=1)
+        inbox.render_block(self.root, "reviewer", 1)
+        self.assertFalse((self.root / inbox.DIR_NAME).exists())
+        # 写一次才建目录
+        inbox.append_message(self.root, "现在才写", ep=1)
+        self.assertTrue((self.root / inbox.DIR_NAME).exists())
+
     def test_corrupt_inbox_file_degrades_to_empty_not_crash(self):
         """半截 JSON 不许把创作链弄死 —— `render_block` 必须返回空串。"""
         inbox.append_message(self.root, "先写一条", ep=1)

@@ -77,7 +77,12 @@ def dir_of(root: Path) -> Path:
 
 
 def path_of(root: Path) -> Path:
-    return dir_of(root) / _FILE
+    """信箱文件路径。**不建目录** —— 读端点（`GET .../director/inbox`）
+    原先经 `dir_of()` 顺带 `mkdir`，结果"看一眼信箱"就在每个被看过的项目下
+    留下一个空 `.tmp/inbox/`（实测：对 67 个项目扫一遍会多出 67 个目录）。
+    目录只在真要写的时候由 `_Locked` / `_write` 建。
+    """
+    return Path(root) / DIR_NAME / _FILE
 
 
 # ─────────────────────────────────────────────────────────── 锁与读写
@@ -143,6 +148,7 @@ def _read(root: Path) -> dict:
 
 def _write(root: Path, obj: dict) -> None:
     p = path_of(root)
+    p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(".json.tmp")
     try:
         tmp.write_text(json.dumps(obj, ensure_ascii=False, indent=1), encoding="utf-8")
