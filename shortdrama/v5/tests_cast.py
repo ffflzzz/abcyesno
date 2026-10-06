@@ -198,6 +198,39 @@ class TestParseCharacters(unittest.TestCase):
             self.assertIn(w, ap, w)
         self.assertNotIn("全片主角", ap, "用途/剧情类字段不得进生图提示词")
 
+    def test_appearance_key_must_start_a_line(self):
+        """★★ KEY 必须站在一行开头 —— 别的字段**正文里**出现"外貌"两个字就完蛋。
+
+        2026-10-06 实测事故（`ice-spring-bridge-duel` 两集）：世界设定卡写的是
+            `- 年龄／身份：约二十岁**外貌**，秋宫山谷守桥的寒水剑修`
+            `- 核心性格（3个词）：冷静、克制、决断`
+            `## 外貌特征（用于生图）`
+            `3D 游戏 CG 渲染造型（非真人实拍）……淡青色渐变薄纱长裙三层叠放……`
+        旧正则没有行首锚，从"约二十岁外貌"这一行开始匹配、吃到下一个标题为止 ⇒
+        抓到的"外貌段"只有「- 核心性格…」20 字，真正的 241 字造型段整段丢失。
+        后果：定妆照画成**现代职业装真人照片**、`identity` 里只剩性格词、
+        `sheetcheck` 报「卡片里没有可对账的外形项 ⇒ 不判」直接放行，
+        两集 20 镜全部锚在这张错图上（用户原话：连画风都变了，这是真人了）。
+        """
+        md = ("# 角色卡：冰仙\n"
+              "## 基本信息\n"
+              "- 姓名：冰仙\n"
+              "- 年龄／身份：约二十岁外貌，秋宫山谷守桥的寒水剑修\n"
+              "- 核心性格（3个词）：冷静、克制、决断\n"
+              "## 外貌特征（用于生图）\n"
+              "3D 游戏 CG 渲染造型（stylized game cinematic，非真人实拍），"
+              "及腰黑色长直发、额前白莲形发饰；淡青色渐变薄纱长裙三层叠放，"
+              "腰系水纹刺绣绦带；右手单握紫晶长剑。\n"
+              "## 背景故事\n她守桥二十年，不让人渡。\n")
+        chars = cast.parse_characters(md)
+        self.assertEqual([c["name"] for c in chars], ["冰仙"])
+        ap = chars[0]["appearance"]
+        self.assertGreaterEqual(len(ap), 60, "抓到 20 字那种「性格行」就是本 bug 的形状")
+        for w in ("3D 游戏 CG", "白莲形发饰", "薄纱长裙"):
+            self.assertIn(w, ap, w)
+        self.assertNotIn("核心性格", ap, "基本信息段不得顶替外貌段")
+        self.assertNotIn("守桥二十年", ap, "背景故事不得进生图提示词")
+
     def test_appearance_section_still_preferred_over_fields(self):
         """回归：**有**外貌段时仍走原路径（兜底只在抓不到时启用，不改变既有行为）。"""
         md = ("# 角色卡：林宇（固定人名）\n"
