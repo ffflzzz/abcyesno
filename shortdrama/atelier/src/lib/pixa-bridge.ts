@@ -114,9 +114,12 @@ export function mergeConnections(
 }
 
 function post(kind: string, payload: unknown) {
-    if (!active) return;
+    // ★ `hello` / `ready` **不受 `active` 门限** —— 桥的激活靠画布先自报家门。
+    //   第一版把这条也一起挡了，于是：画布等宿主先说话才激活、宿主等画布先打招呼
+    //   才推数据 ⇒ **双向死等**，界面永远显示「画布未连接」（实测抓到）。
+    if (!active && kind !== "pixa:hello" && kind !== "pixa:ready") return;
     try {
-        parent.postMessage({ source: CANVAS_SOURCE, kind, payload }, hostOrigin);
+        parent.postMessage({ source: CANVAS_SOURCE, kind, payload }, active ? hostOrigin : "*");
     } catch {
         /* 宿主没了（iframe 被拆）⇒ 静默，桥不该把画布弄崩 */
     }
