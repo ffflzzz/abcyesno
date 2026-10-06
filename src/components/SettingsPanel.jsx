@@ -1,13 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
 import Icon from "./Icon.jsx";
 import LocalMediaCard from "./LocalMediaCard.jsx";
+import KeyPoolModal from "./KeyPoolModal.jsx";
 import { useTts } from "../hooks/useTts.jsx";
-
-function maskKey(key) {
-  if (!key) return "";
-  if (key.length <= 8) return "****";
-  return `${key.slice(0, 4)}...${key.slice(-4)}`;
-}
 
 const CATEGORIES = [
   { id: "connection", label: "API 与模型", icon: "key", hint: "各类密钥额度与默认模型" },
@@ -18,11 +13,17 @@ const CATEGORIES = [
   { id: "advanced", label: "高级", icon: "wrench", hint: "控制台、更新与退出" },
 ];
 
-export default function SettingsPanel({ apiKey = "", hasApiKey = false, apiKeys = null, keyStatus = "", model = "", theme = "dark", onThemeChange, onEditApiKey, onClearApiKey, onClose, version = "", onOpenWechatBind }) {
+export default function SettingsPanel({ apiKeys = null, keyStatus = "", model = "", theme = "dark", onThemeChange, onEditApiKey, onClearApiKey, onClose, version = "", onOpenWechatBind }) {
   const [openDirStatus, setOpenDirStatus] = useState("");
   const [updater, setUpdater] = useState(null);
   const [activeCat, setActiveCat] = useState(CATEGORIES[0].id);
   const [query, setQuery] = useState("");
+  // Key 池（AGNES_API_KEYS）：掩码快照 + 编辑弹窗 + 保存后的生效提示。
+  const [pool, setPool] = useState(null);
+  const [showPool, setShowPool] = useState(false);
+  const [poolNote, setPoolNote] = useState("");
+  const [restarting, setRestarting] = useState(false);
+  const [localMediaOpen, setLocalMediaOpen] = useState(false);
   const paneRef = useRef(null);
   const { ttsSettings, updateTtsSettings, voiceOptions } = useTts();
   const { autoRead, voice, rate } = ttsSettings;
@@ -30,10 +31,44 @@ export default function SettingsPanel({ apiKey = "", hasApiKey = false, apiKeys 
   const has = (scope) => !!(apiKeys && apiKeys[scope] && apiKeys[scope].set);
   const masked = (scope) => (apiKeys && apiKeys[scope] ? apiKeys[scope].masked : "");
 
-  // 主 Key 显示值：优先用主进程返回的掩码快照，回退到旧 props。
-  const mainDisplay = apiKeys && apiKeys.main
-    ? (apiKeys.main.set ? apiKeys.main.masked : "")
-    : (apiKey ? maskKey(apiKey) : hasApiKey ? "" : "");
+  function refreshPool() {
+    const h = window.hermes;
+    if (!h || !h.getApiKeyPool) return;
+    h.getApiKeyPool().then(setPool).catch(() => {});
+  }
+
+  useEffect(() => { refreshPool(); }, []);
+
+  function handlePoolSaved(res) {
+    setShowPool(false);
+    refreshPool();
+    setPoolNote(res && res.mainChanged
+      ? "已保存；主 Key 变了，对话后台已自动重启。"
+      : "已保存。");
+  }
+
+  async function handleRestartShortdrama() {
+    const h = window.hermes;
+    if (!h || !h.restartShortdrama || restarting) return;
+    if (!window.confirm("重启会打断正在跑的短剧任务，确定重启短剧后台？")) return;
+    setRestarting(true);
+    try {
+      const r = await h.restartShortdrama();
+      if (!r || r.ok === false) {
+        setPoolNote(`重启失败：${(r && r.error) || "未知错误"}`);
+      } else if (r.started) {
+        setPoolNote("短剧后台已重启，新 Key 池已生效。");
+      } else {
+        setPoolNote("短剧后台没在跑 —— 下次打开短剧工厂时就用的新 Key。");
+      }
+    } catch (err) {
+      setPoolNote(`重启失败：${err && err.message ? err.message : String(err)}`);
+    } finally {
+      setRestarting(false);
+    }
+  }
+
+  const poolEntries = (pool && pool.entries) || [];
 
   useEffect(() => {
     setOpenDirStatus("");
@@ -56,10 +91,11 @@ export default function SettingsPanel({ apiKey = "", hasApiKey = false, apiKeys 
   }, []);
 
   useEffect(() => {
-    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    // 池编辑弹窗开着时 Esc 只关它（两个 window 级监听都会收到按键）。
+    const onKey = (e) => { if (e.key === "Escape" && !showPool) onClose(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, showPool]);
 
   useEffect(() => {
     if (paneRef.current) paneRef.current.scrollTop = 0;
@@ -142,31 +178,63 @@ export default function SettingsPanel({ apiKey = "", hasApiKey = false, apiKeys 
   // 每项 { id, cat, name, desc, kw, badge, value, control }
   const items = [
     {
-      id: "key-main",
+      id: "key-pool",
       cat: "connection",
-      name: "对话（LLM）",
-      desc: "主 Key，所有应用共用；保存在本机，保存后重启后台。",
-      kw: "api key 密钥 对话 llm 主key",
-      badge: mainDisplay ? { tone: "ok", text: "已设置" } : { tone: "warn", text: "未设置" },
-      value: mainDisplay,
+      name: "Key 池（对话 + 短剧工厂）",
+      desc: "第一条是主 Key（对话与其他应用共用）；多条 key 轮换提交，视频与生图按各自的 rpm 并行。国内 key 可带专属地址与限速。",
+      kw: "api key 密钥 池 keypool 多条 轮换 主key 对话 llm 地址 rpm 短剧工厂",
+      badge: poolEntries.length ? { tone: "ok", text: `${poolEntries.length} 条` } : { tone: "warn", text: "未设置" },
+      value: poolEntries.length ? poolEntries[0].masked : "",
       control: (
-        <button className="ghost settings-inline-btn" onClick={() => onEditApiKey("main")}>
-          {mainDisplay ? "修改" : "设置"}
+        <button className="ghost settings-inline-btn" onClick={() => setShowPool(true)}>
+          {poolEntries.length ? "编辑" : "设置"}
         </button>
+      ),
+      after: (
+        <div className="keypool">
+          {poolEntries.length > 0 && (
+            <div className="keypool-list">
+              {poolEntries.map((e, i) => (
+                <div className="keypool-row" key={e.idx}>
+                  <span className="keypool-idx">{i === 0 ? "主" : i + 1}</span>
+                  <span className="keypool-key">{e.masked}</span>
+                  {e.base ? <span className="keypool-meta">{e.base.replace(/^https?:\/\//i, "")}</span> : null}
+                  {e.videoRpm ? <span className="keypool-meta">视频 {e.videoRpm}rpm</span> : null}
+                  {e.imageRpm ? <span className="keypool-meta">图片 {e.imageRpm}rpm</span> : null}
+                </div>
+              ))}
+            </div>
+          )}
+          {poolNote ? (
+            <div className="keypool-note">
+              <span>{poolNote}</span>
+              {poolEntries.length > 0 && (
+                <button
+                  className="ghost settings-inline-btn"
+                  title="让短剧后台重读 Key；正在跑的短剧任务会中断"
+                  onClick={handleRestartShortdrama}
+                  disabled={restarting}
+                >
+                  {restarting ? "重启中…" : "重启短剧后台"}
+                </button>
+              )}
+            </div>
+          ) : null}
+        </div>
       ),
     },
     {
       id: "key-image",
       cat: "connection",
       name: "图片生成",
-      desc: "不填则跟随对话 Key。适合给创作类应用单独隔离额度。",
-      kw: "api key 密钥 图片 生图 image",
+      desc: "不填则跟随对话 Key。只作用于工作台与漫剧的图片调用 —— 短剧工厂走上面的 Key 池。",
+      kw: "api key 密钥 图片 生图 image 工作台 漫剧",
       badge: has("image") ? { tone: "ok", text: "独立 Key" } : { tone: "muted", text: "跟随主 Key" },
       value: has("image") ? masked("image") : "",
       control: (
         <>
           <button className="ghost settings-inline-btn" onClick={() => onEditApiKey("image")}>
-            {has("image") ? "修改" : "覆盖"}
+            {has("image") ? "修改" : "设置"}
           </button>
           {has("image") && (
             <button className="ghost settings-inline-btn" onClick={() => onClearApiKey("image")}>清除</button>
@@ -178,14 +246,14 @@ export default function SettingsPanel({ apiKey = "", hasApiKey = false, apiKeys 
       id: "key-video",
       cat: "connection",
       name: "视频生成",
-      desc: "不填则跟随对话 Key；覆盖后下次生成任务生效。",
-      kw: "api key 密钥 视频 生视频 video",
+      desc: "不填则跟随对话 Key。只作用于工作台与漫剧的视频调用 —— 短剧工厂走上面的 Key 池。",
+      kw: "api key 密钥 视频 生视频 video 工作台 漫剧",
       badge: has("video") ? { tone: "ok", text: "独立 Key" } : { tone: "muted", text: "跟随主 Key" },
       value: has("video") ? masked("video") : "",
       control: (
         <>
           <button className="ghost settings-inline-btn" onClick={() => onEditApiKey("video")}>
-            {has("video") ? "修改" : "覆盖"}
+            {has("video") ? "修改" : "设置"}
           </button>
           {has("video") && (
             <button className="ghost settings-inline-btn" onClick={() => onClearApiKey("video")}>清除</button>
@@ -197,7 +265,7 @@ export default function SettingsPanel({ apiKey = "", hasApiKey = false, apiKeys 
       id: "key-fallback",
       cat: "connection",
       name: "备用 Key",
-      desc: "对话 Key 额度耗尽（429）时降级使用，可选。",
+      desc: "对话 Key 额度耗尽（429）时降级使用，可选。只作用于对话与工作台 —— 短剧工厂靠池内多条 key 轮换。",
       kw: "api key 密钥 备用 fallback 429 额度",
       badge: has("fallback") ? { tone: "ok", text: "已设置" } : { tone: "muted", text: "未设置" },
       value: has("fallback") ? masked("fallback") : "",
@@ -218,7 +286,18 @@ export default function SettingsPanel({ apiKey = "", hasApiKey = false, apiKeys 
       name: "本地出片服务",
       desc: "探一探这台机（或你填的另一台机器）上跑着的 ComfyUI，把出片的视频从云端切成它。静帧仍走云端。",
       kw: "comfyui 本地 模型 探测 接入 出片 视频 显卡 minimax h3 ollama",
-      after: <LocalMediaCard />,
+      control: (
+        <button className="ghost settings-inline-btn" onClick={() => setLocalMediaOpen((v) => !v)}>
+          {localMediaOpen ? "收起" : "展开"}
+        </button>
+      ),
+      // 常挂不卸载：面板里只有按按钮才会起后台进程（见 LocalMediaCard 文件头），
+      // 折起来只是 display:none，探测结果不会因为收起再展开而丢失。
+      after: (
+        <div style={localMediaOpen ? undefined : { display: "none" }}>
+          <LocalMediaCard />
+        </div>
+      ),
     },
     {
       id: "model-default",
@@ -417,6 +496,7 @@ export default function SettingsPanel({ apiKey = "", hasApiKey = false, apiKeys 
   });
 
   return (
+    <>
     <div className="modal-mask" onClick={onClose}>
       <div className="modal settings-modal" onClick={(e) => e.stopPropagation()}>
         <div className="settings-head">
@@ -476,5 +556,9 @@ export default function SettingsPanel({ apiKey = "", hasApiKey = false, apiKeys 
         </div>
       </div>
     </div>
+    {showPool && (
+      <KeyPoolModal onClose={() => setShowPool(false)} onSaved={handlePoolSaved} />
+    )}
+    </>
   );
 }

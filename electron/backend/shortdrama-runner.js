@@ -76,6 +76,10 @@ class ShortdramaRunner {
     return this.port ? `http://${HOST}:${this.port}` : '';
   }
 
+  isRunning() {
+    return !!this.process;
+  }
+
   _readEnvKeys() {
     // shortdrama's config.py only falls back to PROJECT_ROOT/.env for keys it
     // cannot find in os.environ, and the shipped tree deliberately has no
@@ -88,7 +92,10 @@ class ShortdramaRunner {
         // Explicit key names: scoped media keys (IMAGE/VIDEO) must NOT be
         // matched by a loose prefix — they only apply where shortdrama's
         // config actually consumes them. Fallback stays for quota retries.
-        if (m && /^(AGNES_API_KEY|AGNES_IMAGE_API_KEY|AGNES_VIDEO_API_KEY|AGNES_FALLBACK_API_KEY)$/.test(m[1]) && m[2].trim()) out[m[1]] = m[2].trim();
+        // AGNES_API_KEYS (plural) is the shortdrama key pool
+        // (`key@base#video_rpm[:image_rpm]`); without it the shim always runs
+        // single-key and VIDEO_KEY_ROTATE can never do anything.
+        if (m && /^(AGNES_API_KEYS|AGNES_API_KEY|AGNES_IMAGE_API_KEY|AGNES_VIDEO_API_KEY|AGNES_FALLBACK_API_KEY)$/.test(m[1]) && m[2].trim()) out[m[1]] = m[2].trim();
       }
     } catch (_) {
       /* no .env yet — the shim still boots, generation just won't work */

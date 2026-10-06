@@ -1085,6 +1085,22 @@ ipcMain.handle('ensure-shortdrama', async () => {
   }
 });
 
+// 重启短剧后台：Key 池/密钥是**起进程时**从 .env 注入的（shortdrama-runner
+// `_readEnvKeys`），运行中的 shim 拿不到新值 —— 保存密钥后要重起才生效。
+// 没在跑就什么都不做（下次打开自然读新值），免得白起一个 Python 进程。
+// ⚠️ 正在跑的短剧任务会被打断（stop() 走 taskkill /T 连子进程一起清）。
+ipcMain.handle('restart-shortdrama', async () => {
+  try {
+    if (!shortdramaRunner || !shortdramaRunner.isRunning()) return { ok: true, started: false };
+    await shortdramaRunner.stop();
+    const url = await shortdramaRunner.start();
+    return { ok: true, started: true, url };
+  } catch (err) {
+    log('shortdrama', `restart failed: ${err.message}`);
+    return { ok: false, error: String(err.message || err) };
+  }
+});
+
 // Studio workbench: proxy Agnes calls through IPC (avoids renderer fetch/CSP issues)
 const agnes = require('./backend/agnes');
 const characterLibrary = require('./backend/character_library');
@@ -1262,9 +1278,13 @@ ipcMain.handle('get-api-key-status', () => {
 // so they take effect immediately without restarting Hermes. Only the main
 // key goes through the restart flow (chat provider + config.yaml).
 
-async function validateAgnesKey(key) {
+async function validateAgnesKey(key, base) {
+  // 带专属地址的 key（池里的 `key@base` 写法）必须打**它自己的入口**；没带就
+  // 沿用默认国际入口。地址尾巴的 /v1 先剥掉再拼 /v1/models（与短剧侧同规则）。
+  const root = String(base || '').trim().replace(/\/+$/, '').replace(/\/v1$/i, '');
+  const url = `${root || 'https://apihub.agnes-ai.com'}/v1/models`;
   try {
-    const res = await fetch('https://apihub.agnes-ai.com/v1/models', {
+    const res = await fetch(url, {
       method: 'GET',
       headers: { Authorization: `Bearer ${key}` },
     });
@@ -1307,78 +1327,121 @@ ipcMain.handle('set-api-key-scoped', async (_event, scope, key) => {
 
 let apiKeyRestartPromise = null;
 
-ipcMain.handle('set-api-key', async (_event, key) => {
-  if (!hermesRunner) return { success: false, error: 'runner not ready' };
+// 主 Key 变化后的重启（主 Key 保存与 Key 池保存**共用这一条**）：
+// 重启 Hermes 进程，再把 gateway 客户端接到新端口上。
+async function restartHermesAfterKeyChange() {
+  await hermesRunner.restart();
 
-  // Serialize API-key restarts so two rapid saves don't spawn two Hermes processes.
+  if (gatewayClient) {
+    gatewayClient.removeAllListeners();
+    gatewayClient.close();
+  }
+
+  const wsUrl = `ws://127.0.0.1:${hermesRunner.getPort()}/api/ws`;
+  gatewayClient = new GatewayClient({ url: wsUrl, token: hermesRunner.getSessionToken() });
+
+  gatewayClient.on('event', (type, params) => {
+    if (type === 'approval.request') {
+      if (mainWindow) {
+        // 附带 session_id：respond-approval 需要它回传给 gateway
+        mainWindow.webContents.send('approval-request', { ...(params.payload || params), session_id: params.session_id });
+      }
+    } else if (type === 'sudo.request') {
+      if (mainWindow) {
+        mainWindow.webContents.send('sudo-request', params.payload || params);
+      }
+    } else if (type === 'secret.request') {
+      if (mainWindow) {
+        mainWindow.webContents.send('secret-request', params.payload || params);
+      }
+    } else if (type === 'terminal.read.request') {
+      if (mainWindow) {
+        mainWindow.webContents.send('terminal-read-request', params.payload || params);
+      }
+    } else if (type === 'clarify.request') {
+      if (mainWindow) {
+        mainWindow.webContents.send('clarify-request', params.payload || params);
+      }
+    } else if (type === 'message.complete') {
+      reconcileOnTurnComplete(params);
+    }
+  });
+  gatewayClient.on('close', () => {
+    gatewayReady = false;
+    if (mainWindow) mainWindow.webContents.send('gateway-status', { connected: false });
+  });
+  gatewayClient.on('open', () => {
+    gatewayReady = true;
+    sessionReconciler.reconcileAll().catch((err) => {
+      log('reconcile', `restart sweep failed: ${err.message}`);
+    });
+    if (mainWindow) {
+      mainWindow.webContents.send('gateway-status', { connected: true });
+      mainWindow.webContents.send('agui-ready', { port: aguiPort });
+    }
+  });
+
+  await gatewayClient.connect();
+}
+
+// 串行化"改 key → 重启 Hermes"：两次快速保存（主 Key / Key 池）排队执行，
+// 不会 fork 两个 Hermes 进程。
+async function runSerializedKeyRestart(work) {
   if (apiKeyRestartPromise) {
     try { await apiKeyRestartPromise; } catch (_) {}
   }
-
-  apiKeyRestartPromise = (async () => {
-    await hermesRunner.setApiKey(key);
-    await hermesRunner.restart();
-
-    if (gatewayClient) {
-      gatewayClient.removeAllListeners();
-      gatewayClient.close();
-    }
-
-    const wsUrl = `ws://127.0.0.1:${hermesRunner.getPort()}/api/ws`;
-    gatewayClient = new GatewayClient({ url: wsUrl, token: hermesRunner.getSessionToken() });
-
-    gatewayClient.on('event', (type, params) => {
-      if (type === 'approval.request') {
-        if (mainWindow) {
-          // 附带 session_id：respond-approval 需要它回传给 gateway
-          mainWindow.webContents.send('approval-request', { ...(params.payload || params), session_id: params.session_id });
-        }
-      } else if (type === 'sudo.request') {
-        if (mainWindow) {
-          mainWindow.webContents.send('sudo-request', params.payload || params);
-        }
-      } else if (type === 'secret.request') {
-        if (mainWindow) {
-          mainWindow.webContents.send('secret-request', params.payload || params);
-        }
-      } else if (type === 'terminal.read.request') {
-        if (mainWindow) {
-          mainWindow.webContents.send('terminal-read-request', params.payload || params);
-        }
-      } else if (type === 'clarify.request') {
-        if (mainWindow) {
-          mainWindow.webContents.send('clarify-request', params.payload || params);
-        }
-      } else if (type === 'message.complete') {
-        reconcileOnTurnComplete(params);
-      }
-    });
-    gatewayClient.on('close', () => {
-      gatewayReady = false;
-      if (mainWindow) mainWindow.webContents.send('gateway-status', { connected: false });
-    });
-    gatewayClient.on('open', () => {
-      gatewayReady = true;
-      sessionReconciler.reconcileAll().catch((err) => {
-        log('reconcile', `restart sweep failed: ${err.message}`);
-      });
-      if (mainWindow) {
-        mainWindow.webContents.send('gateway-status', { connected: true });
-        mainWindow.webContents.send('agui-ready', { port: aguiPort });
-      }
-    });
-
-    await gatewayClient.connect();
-    return { success: true };
-  })();
-
+  const run = (async () => { await work(); })();
+  apiKeyRestartPromise = run;
   try {
-    return await apiKeyRestartPromise;
+    return await run;
+  } finally {
+    if (apiKeyRestartPromise === run) apiKeyRestartPromise = null;
+  }
+}
+
+ipcMain.handle('set-api-key', async (_event, key) => {
+  if (!hermesRunner) return { success: false, error: 'runner not ready' };
+  try {
+    await runSerializedKeyRestart(async () => {
+      await hermesRunner.setApiKey(key);
+      await restartHermesAfterKeyChange();
+    });
+    return { success: true };
   } catch (err) {
     log('main', `restart after api key change failed: ${err.message}`);
     return { success: false, error: err.message };
-  } finally {
-    apiKeyRestartPromise = null;
+  }
+});
+
+// ── Key 池（AGNES_API_KEYS）────────────────────────────────────────────────
+// 池里第一条 = 主 Key：保存池时同写 `AGNES_API_KEY`，第一条变了就走与主 Key
+// 相同的重启流程。已存的 key 不重复打网校验，只校验本次新粘的（用各自地址）。
+ipcMain.handle('get-api-key-pool', () => {
+  if (!hermesRunner) return { entries: [] };
+  return hermesRunner.getApiKeyPoolSnapshot();
+});
+
+ipcMain.handle('set-api-key-pool', async (_event, rows) => {
+  if (!hermesRunner) return { success: false, error: 'runner not ready' };
+  const resolved = hermesRunner.resolvePoolRows(rows);
+  if (resolved.error) return { success: false, error: resolved.error };
+  const failures = [];
+  await Promise.all(resolved.changed.map(async (c) => {
+    const check = await validateAgnesKey(c.key, c.base);
+    if (!check.valid) failures.push({ row: c.row, error: check.error });
+  }));
+  if (failures.length) {
+    failures.sort((a, b) => a.row - b.row);
+    return { success: false, error: '有 key 没通过校验，逐行见下', failures };
+  }
+  try {
+    const { mainChanged } = await hermesRunner.setApiKeyPool(resolved.entries);
+    // 首条没变就只写盘：对话侧不必重启；短剧后台另走「重启短剧后台」按钮。
+    if (mainChanged) await runSerializedKeyRestart(() => restartHermesAfterKeyChange());
+    return { success: true, mainChanged };
+  } catch (err) {
+    log('main', `save key pool failed: ${err.message}`);
+    return { success: false, error: err.message };
   }
 });
 

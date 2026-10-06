@@ -38,6 +38,12 @@ contextBridge.exposeInMainWorld('hermes', {
   setApiKeyScoped: (scope, key) => ipcRenderer.invoke('set-api-key-scoped', scope, key),
   validateApiKey: (key) => ipcRenderer.invoke('validate-api-key', key),
   setApiKey: (key) => ipcRenderer.invoke('set-api-key', key),
+  // Key 池（AGNES_API_KEYS）：多条轮换 + 每条可选地址/限速。rows 里已存的 key
+  // 用 { keep: 序号 } 引用（明文不出主进程），新粘的才传 key 文本。
+  getApiKeyPool: () => ipcRenderer.invoke('get-api-key-pool'),
+  setApiKeyPool: (rows) => ipcRenderer.invoke('set-api-key-pool', rows),
+  // 让短剧后台重读 .env（密钥是起进程时注入的；没在跑时是空操作）。
+  restartShortdrama: () => ipcRenderer.invoke('restart-shortdrama'),
   logError: (msg) => ipcRenderer.invoke('log-error', msg),
   openDataDir: () => ipcRenderer.invoke('open-data-dir'),
 

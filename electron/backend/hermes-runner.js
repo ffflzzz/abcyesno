@@ -352,6 +352,125 @@ class HermesRunner {
     return this._readEnvKey('AGNES_FALLBACK_API_KEY');
   }
 
+  // ── Key 池（AGNES_API_KEYS）──────────────────────────────────────────────
+  // 与 `shortdrama/v5/config.py::_split_keys_with_base` **同一套语法**（那边是
+  // 唯一解析点的权威实现，这里读写必须逐条对齐）：
+  //   逗号/分号/换行分隔；每条 `key[@base][#video_rpm[:image_rpm]]`；
+  //   首条出现优先（同名去重）；视频 rpm 缺失时整段 `#…` 视为 key 的一部分。
+  // 池里第一条 = 主 Key：`AGNES_API_KEY` 始终与它保持同步，所以对话、工作台
+  // 等只认单 key 的消费者行为不变。默认入口 `/v1` 由读取侧剥（这里原样存）。
+  static KEY_POOL_ENV = 'AGNES_API_KEYS';
+
+  static parsePoolLine(raw) {
+    const out = [];
+    for (const part of String(raw || '').replace(/;/g, ',').replace(/\n/g, ',').split(',')) {
+      const p = part.trim().replace(/^["']+|["']+$/g, '');
+      if (!p) continue;
+      let keyBase = p;
+      let videoRpm = '';
+      let imageRpm = '';
+      const hash = p.lastIndexOf('#');
+      if (hash >= 0) {
+        const [v, i] = p.slice(hash + 1).split(':');
+        if (/^\d+$/.test(v || '') && parseInt(v, 10) > 0) {
+          keyBase = p.slice(0, hash);
+          videoRpm = v;
+          imageRpm = /^\d+$/.test(i || '') && parseInt(i, 10) > 0 ? i : '';
+        }
+      }
+      const at = keyBase.indexOf('@');
+      const key = (at >= 0 ? keyBase.slice(0, at) : keyBase).trim();
+      const base = (at >= 0 ? keyBase.slice(at + 1) : '').trim().replace(/\/+$/, '');
+      if (key && !out.some((e) => e.key === key)) out.push({ key, base, videoRpm, imageRpm });
+    }
+    return out;
+  }
+
+  static formatPoolEntry(e) {
+    let s = e.key;
+    if (e.base) s += `@${e.base}`;
+    if (e.videoRpm) {
+      s += `#${e.videoRpm}`;
+      if (e.imageRpm) s += `:${e.imageRpm}`;
+    }
+    return s;
+  }
+
+  // 池里有什么（未设 AGNES_API_KEYS 时用单条主 Key 种一条，让编辑器一打开
+  // 就看得到现值）。返回全部是掩码，明文不出主进程。
+  getApiKeyPoolSnapshot() {
+    return {
+      entries: this._poolEntries().map((e, idx) => ({
+        idx,
+        masked: HermesRunner.maskKey(e.key),
+        base: e.base,
+        videoRpm: e.videoRpm,
+        imageRpm: e.imageRpm,
+      })),
+    };
+  }
+
+  _poolEntries() {
+    const entries = HermesRunner.parsePoolLine(this._readEnvKey(HermesRunner.KEY_POOL_ENV));
+    if (entries.length) return entries;
+    const main = this._readEnvKey('AGNES_API_KEY');
+    return main ? [{ key: main, base: '', videoRpm: '', imageRpm: '' }] : [];
+  }
+
+  // 把 UI 的编辑行解析成最终池。行 = { keep: 第几条已存(可空), key, base, videoRpm, imageRpm }；
+  // `keep` 且没重粘 key = 复用明文（明文只在主进程，UI 从不回传）。
+  // 返回 { entries, changed } 或 { error }；`changed` 是本次新粘的 key，供逐条校验。
+  resolvePoolRows(rows) {
+    const existing = this._poolEntries();
+    const out = [];
+    const changed = [];
+    if (!Array.isArray(rows)) rows = [];
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i] || {};
+      const base = String(r.base || '').trim().replace(/\/+$/, '');
+      if (base && !/^https?:\/\//i.test(base)) {
+        return { error: `第 ${i + 1} 行：地址要以 http:// 或 https:// 开头` };
+      }
+      const videoRpm = String(r.videoRpm || '').trim();
+      const imageRpm = String(r.imageRpm || '').trim();
+      if (videoRpm && !/^\d+$/.test(videoRpm)) return { error: `第 ${i + 1} 行：视频 rpm 要填整数` };
+      if (imageRpm && !/^\d+$/.test(imageRpm)) return { error: `第 ${i + 1} 行：图片 rpm 要填整数` };
+      if (imageRpm && !videoRpm) {
+        return { error: `第 ${i + 1} 行：填了图片 rpm 就得先填视频 rpm（池语法是 #视频[:图片]）` };
+      }
+      const typed = String(r.key || '').trim();
+      const hasKeep = r.keep !== null && r.keep !== undefined && r.keep !== '';
+      let key = typed;
+      let baseChanged = false;
+      if (!key && hasKeep) {
+        const src = existing[Number(r.keep)];
+        if (!src) return { error: `第 ${i + 1} 行引用的旧 key 不存在，请重新粘贴` };
+        key = src.key;
+        // 改了已存 key 的地址也要重打一次校验（打错主机名 = 请求发去空处）。
+        baseChanged = (src.base || '') !== base;
+      }
+      if (!key) continue;
+      if (out.some((e) => e.key === key)) return { error: `第 ${i + 1} 行与前面重复了同一条 key` };
+      out.push({ key, base, videoRpm, imageRpm });
+      if (typed || !hasKeep || baseChanged) changed.push({ row: i, key, base });
+    }
+    if (!out.length) return { error: '至少要留一条 key（对话要用池里第一条）' };
+    return { entries: out, changed };
+  }
+
+  // 整池覆盖写。两个变量一起写：AGNES_API_KEYS = 全池；AGNES_API_KEY = 第一条裸 key。
+  async setApiKeyPool(entries) {
+    const line = entries.map((e) => HermesRunner.formatPoolEntry(e)).join(',');
+    const main = entries[0] ? entries[0].key : '';
+    const prevMain = this._readEnvKey('AGNES_API_KEY');
+    await this._writeEnvKeyLine(HermesRunner.KEY_POOL_ENV, line);
+    this.apiKey = main;
+    await this._writeEnvKeyLine('AGNES_API_KEY', main);
+    this._ensureConfig();
+    if (main) this._updateConfigApiKey(main);
+    return { mainChanged: prevMain !== main };
+  }
+
   // Save an API key by scope. scope='main' additionally syncs Hermes'
   // config.yaml (the chat provider reads it); scoped media keys deliberately
   // stay .env-only so the chat provider can never pick up a media key.
