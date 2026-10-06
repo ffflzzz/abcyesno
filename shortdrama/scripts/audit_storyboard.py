@@ -113,7 +113,8 @@ def main() -> None:
         brief = json.loads((root / "brief.json").read_text(encoding="utf-8"))
     except Exception as e:  # noqa: BLE001
         raise SystemExit("⛔ brief.json 读不出来（%s）——先修 brief 再体检" % e)
-    tgt = int(validate.parse_target_seconds(brief.get("target_duration")) or 0)
+    tgt = int(validate.parse_target_seconds(
+        brief.get("target_duration"), ep=ep) or 0)
     _rng = validate.parse_shot_range(brief.get("target_duration"))   # brief 的镜数区间
     if not tgt:
         print("⚠️ brief.target_duration 解析不出秒数 → **片长这条无法体检**，"

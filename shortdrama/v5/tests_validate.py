@@ -495,6 +495,33 @@ class TestDurationContract(unittest.TestCase):
         self.assertIsNone(f(None))
         self.assertIsNone(f(""))
 
+    def test_per_episode_target_duration_is_read_per_episode(self):
+        """★ 连载里各集可以**不等长**，而一个项目只有一份 brief（2026-10-06）。
+
+        真实事故（`ice-spring-bridge-duel`）：第 1 集是 1 分钟版、第 2 集按需求 ≈2 分钟。
+        为了第 2 集把 brief 的 `target_duration` 改成 156 秒之后，**已验收的第 1 集**
+        被片长判据钉在门外：`分镜总时长 60s 与 brief 目标 156s 不符（38%）`。
+        一个数字管两集 = 必然有一集被误伤。
+        """
+        s = "第 1 集约 60 秒，第 2 集约 156 秒（成片有损耗，按 156 秒排内容）"
+        f = validate.parse_target_seconds
+        self.assertEqual(f(s, ep=1), 60.0, "点名第 1 集的那条归第 1 集")
+        self.assertEqual(f(s, ep=2), 156.0, "点名第 2 集的那条归第 2 集")
+        self.assertEqual(f("第 二集 约 2 分钟", ep=2), 120.0, "中文集号 + 分钟也要读得出")
+        # 反向对照 ①：brief **没有**分集措辞 ⇒ 退回第一个时间量词（旧行为一字不变）
+        self.assertEqual(f("约 120 秒，共 15 镜", ep=3), 120.0)
+        # 反向对照 ②：brief 只点名了别的集 ⇒ 不拿它当本集目标（退回通用量词）
+        self.assertEqual(f("约 90 秒；第 2 集约 156 秒", ep=3), 90.0)
+        self.assertIsNone(f("第 2 集约 156 秒", ep=3), "没有通用量词也没有本集条目 → None")
+
+        # 门这一侧的落点：同一份 60 秒的分镜表，按集号得到不同判决
+        md = self._md(n=5, secs=12)
+        b = _brief(target_duration=s)
+        self.assertEqual(validate.check_storyboard(md, b, ep=1)["duration_off"], "",
+                         "第 1 集 60 秒对着「第 1 集约 60 秒」应当合格")
+        self.assertIn("不符", validate.check_storyboard(md, b, ep=2)["duration_off"],
+                      "第 2 集要 156 秒，60 秒的表必须照旧拦住")
+
     def test_shortfall_detected(self):
         """2 镜 8s = 16s，brief 目标 90s → 只有 18%，一定是漏了内容。"""
         r = validate.check_storyboard(self._md(n=2, secs=8),

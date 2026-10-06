@@ -711,7 +711,7 @@ def role_input(role: str, root: Path, m: dict, reasons: list[str] | None = None)
             "（伞未收就一直写在手边）。状态发生变化时（起身 / 收伞 / 拿起 / 放下）"
             "**必须显式写出那个变化动作**，绝不许默认模型记得上一镜——"
             "**每一段视频是独立生成的，它不知道上一镜发生了什么。**")
-        tgt = validate.parse_target_seconds(guards.load_brief(root))
+        tgt = validate.parse_target_seconds(guards.load_brief(root), ep=ep)
         if tgt:
             cap = int(getattr(config, "VIDEO_MAX_SHOTS", 0) or 0)
             # ★★ 2026-10-03 废弃「镜数 = 目标秒数 ÷ 4」这条除法基线（用户决定）。
@@ -843,7 +843,7 @@ def role_input(role: str, root: Path, m: dict, reasons: list[str] | None = None)
             try:
                 _brief = guards.load_brief(root)
                 _tgt = int(validate.parse_target_seconds(
-                    _brief.get("target_duration")) or 0)
+                    _brief.get("target_duration"), ep=ep) or 0)
             except Exception:  # noqa: BLE001 -- 片长这条可缺，不该挡住其余判据
                 _tgt = 0
                 _brief = {}

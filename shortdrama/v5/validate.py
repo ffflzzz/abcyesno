@@ -254,21 +254,72 @@ TARGET_TOL_LOW = 0.85
 TARGET_TOL_HIGH = 1.30
 
 
-def parse_target_seconds(text) -> float | None:
-    """从 `brief.target_duration` 的自由文本里取第一个"N 秒 / N 分钟"。
+def parse_target_seconds(text, ep=None) -> float | None:
+    """从 `brief.target_duration` 的自由文本里取"N 秒 / N 分钟"。
 
     为什么是自由文本解析而不是新增数字字段：`target_duration` 是**必填字段**且
     历史上都是自然语言（如"约 25 秒，共 6 镜，每镜约 4 秒（单镜硬性 4-12 秒…）"），
     新增字段会与存量 brief 不兼容；取**第一个**时间量词恰好能命中"约 25 秒"这个
     主目标（后面那些"每镜约 4 秒 / 硬性 4-12 秒"都是次要说明）。
 
+    ★ **分集时长**（`ep` 传入时）：连载里各集可以长短不同（实测
+    `ice-spring-bridge-duel`：第 1 集是 1 分钟版、第 2 集按用户要求 ≈2 分钟），
+    而一个项目只有一份 brief。写成「第 1 集约 60 秒，第 2 集约 156 秒」时，
+    **本集那条赢**；读不出分集条目就退回第一个时间量词（行为与改造前一致）。
+    旧实现只取第一个数 ⇒ 第 1 集被按第 2 集的秒数判，
+    `分镜总时长 60s 与 brief 目标 156s 不符（38%）` 一条把已验收的那集钉在门外。
+
     解析不出 → 返回 None，调用方**只警告不阻断**（不能因为 brief 措辞不规范就拦住生产）。
     """
-    m = re.search(r"(\d+(?:\.\d+)?)\s*(分钟|分|秒)", str(text or ""))
+    s = str(text or "")
+    hits = list(_EP_TARGET_RE.finditer(s))
+    if ep is not None:
+        for m in hits:
+            if _to_int(m.group(1)) == _as_int(ep):
+                v = float(m.group(2))
+                return v * 60.0 if m.group(3) in ("分钟", "分") else v
+    # 通用口径 = 第一个时间量词，但**分集条目要先遮住**：
+    # 「第 1 集约 60 秒，第 2 集约 156 秒」里没有全片目标，
+    # 直接搜会把别集的秒数当成本集的（读不出比读错好——读错会拦住合格的一集）。
+    masked = list(s)
+    for m in hits:
+        for i in range(m.start(), m.end()):
+            masked[i] = " "
+    m = re.search(r"(\d+(?:\.\d+)?)\s*(分钟|分|秒)", "".join(masked))
     if not m:
         return None
     v = float(m.group(1))
     return v * 60.0 if m.group(2) in ("分钟", "分") else v
+
+
+#: 「第 N 集 … 156 秒」——集号与秒数之间只允许少量非数字说明字（`约` / `不少于`…）
+_EP_TARGET_RE = re.compile(
+    r"第\s*([0-9]{1,3}|[一二三四五六七八九十百])\s*(?:集|话|ep(?:isode)?)\s*"
+    r"[^0-9\n]{0,12}?(\d+(?:\.\d+)?)\s*(分钟|分|秒)")
+
+
+def _as_int(value) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _to_int(token: str) -> int | None:
+    """阿拉伯数字直接转；`一`…`二十`这类中文数字手翻（位数小、够用）。"""
+    if token.isdigit():
+        return int(token)
+    units = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5,
+             "六": 6, "七": 7, "八": 8, "九": 9}
+    if token == "十":
+        return 10
+    if token.startswith("十"):
+        return 10 + units.get(token[1:], 0)
+    if "十" in token:
+        tens, _, ones = token.partition("十")
+        if tens in units:
+            return units[tens] * 10 + units.get(ones, 0)
+    return units.get(token)
 
 
 def _norm_verbatim(t: str) -> str:
@@ -393,10 +444,11 @@ def check_dialogue_verbatim_files(root, ep: int | None = None) -> dict | None:
         return None
 
 
-def _duration_gap(seconds_total: float, brief: dict | None) -> dict:
+def _duration_gap(seconds_total: float, brief: dict | None, ep=None) -> dict:
     """`{"target": float|None, "ratio": float|None, "off": str}`（`off` 非空 = 偏离超标）。"""
     b = brief or {}
-    target = parse_target_seconds(b.get("target_duration") or b.get("target-duration"))
+    target = parse_target_seconds(b.get("target_duration") or b.get("target-duration"),
+                                  ep=ep)
     if not target or seconds_total <= 0:
         return {"target": target, "ratio": None, "off": ""}
     ratio = seconds_total / target
@@ -615,10 +667,12 @@ def _shot_num_of(s: str) -> int:
 
 
 def check_storyboard(md: str, brief: dict | None = None,
-                     style_keywords: list | None = None) -> dict:
+                     style_keywords: list | None = None, *,
+                     ep=None) -> dict:
     """分镜表契约校验：schema / 镜序 / must_have 覆盖 / 空对白 / 画内文字 / 节奏。
 
     兼容现役分镜格式：镜头号为纯数字或 LN 前缀，允许多幕多张表（表头重复）。
+    `ep` 传入时，brief 里**点名本集**的时长（「第 2 集约 156 秒」）用于片长判据。
     """
     # 表头选择：取**命中契约列最多**的表头行（2026-09-11 实测：产物把 SKILL 的
     # "列契约说明表"抄在正文前，第一个含"画面描述"的表头是说明表 → 误判缺列）。
@@ -848,7 +902,7 @@ def check_storyboard(md: str, brief: dict | None = None,
     # 总时长 vs brief 目标（2026-09-13）：`seconds_total` 一直算却没被人用，
     # brief 那边 `target_duration` 也是必填 —— 接上这一根线，片长不对在
     # **分镜门口**就拦住，不用等整条媒体链跑完。
-    dur = _duration_gap(seconds_total, brief)
+    dur = _duration_gap(seconds_total, brief, ep=ep)
 
     # ★ **解析不出镜头 = 不能算通过**（2026-09-14 实测，fail-closed）。
     #

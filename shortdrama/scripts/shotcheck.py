@@ -36,7 +36,8 @@ def main() -> int:
     try:
         from v5 import validate
         brief = json.loads((root / "brief.json").read_text(encoding="utf-8"))
-        tgt = int(validate.parse_target_seconds(brief.get("target_duration")) or 0)
+        tgt = int(validate.parse_target_seconds(
+            brief.get("target_duration"), ep=ep) or 0)
     except Exception as e:  # noqa: BLE001 -- brief 坏不该挡住可数判据
         print("⚠️ brief 读不到（%s）→ 跳过片长这条" % str(e)[:60])
     print("=== %s 第 %s 集：%d 镜 / %d 秒（目标 %ds）"

@@ -541,7 +541,7 @@ def _storyboard_gate(root: Path, brief: dict, ep: int | None = None) -> None:
                 brief = _json.loads(bp.read_text(encoding="utf-8"))
             except Exception:  # noqa: BLE001
                 print("[storyboard] ⚠️ brief.json 解析失败 → 覆盖率与片长两条判据跳过")
-    r = validate.check_storyboard(sb.read_text(encoding="utf-8"), brief)
+    r = validate.check_storyboard(sb.read_text(encoding="utf-8"), brief, ep=ep)
 
     fatal = []
     if r["missing_cols"]:

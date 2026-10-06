@@ -597,7 +597,8 @@ def duration_band(root, ep: int = 1) -> dict | None:
         from . import guards, validate
         from .media import storyboard as sb
         brief = guards.load_brief(Path(root))
-        target = int(validate.parse_target_seconds(brief.get("target_duration")) or 0)
+        target = int(validate.parse_target_seconds(
+            brief.get("target_duration"), ep=ep) or 0)
         if target <= 0:
             return None
         p = guards.resolve_path(Path(root), "scenedesigner", ep)
