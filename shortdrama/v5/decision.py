@@ -283,6 +283,18 @@ def parse_decision(text: str) -> dict | None:
             except Exception:  # noqa: BLE001
                 data = None
         if not isinstance(data, dict):
+            # ★ **围栏在、内容 YAML 读不出来**时，先把这个块本身交给行解析兜一遍。
+            #   2026-10-06 实测（`ice-spring-bridge-duel` 第 3 集）：评审在双引号字符串里
+            #   引用了正则 `(\d+)`，YAML 认 `\d` 是非法转义 ⇒ **整块**读不出来 ⇒
+            #   `media_gate` 判「未通过」⇒ 创作链 32 分钟、七件产物齐全、
+            #   两道门全过，**零出片**。判定本身是清楚的（`pass: false` + 两条理由），
+            #   废在一个转义字符上。行解析不认转义、只认 `key: value` 与 `- 项`，
+            #   正好吃得下这种写法；键的合法性仍由 `_from_mapping` 把关。
+            lenient = _parse_bare_kv(block.splitlines())
+            res = _from_mapping(lenient) if lenient else None
+            if res:
+                res["lenient"] = True      # 调用方可据此如实告警，但不阻断
+                return res
             continue
         res = _from_mapping(data)
         if res:

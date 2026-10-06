@@ -64,6 +64,58 @@ class RerollBudgetTests(unittest.TestCase):
 
 
 class RerollPlanTests(unittest.TestCase):
+    def test_fenced_yaml_with_bad_escape_still_parses(self):
+        """★ 围栏在、内容 YAML 读不出来时，**行解析要兜住这个块**（2026-10-06 零出片）。
+
+        真实事故（`ice-spring-bridge-duel` 第 3 集）：评审在双引号字符串里引用了正则
+        `(\\d+)`，YAML 报 `found unknown escape character 'd'` ⇒ **整块**读不出来 ⇒
+        `media_gate` 判「评审未通过」⇒ 创作链 32 分钟、七件产物齐全、两道输入门全过，
+        **零出片**。判定本身一直是清楚的（`pass: false` + 两条理由）。
+        """
+        txt = ("## 总结\n\n```yaml\n"
+               "pass: false\n"
+               "rerun: [scenedesigner]\n"
+               "reason_owners: [scenedesigner, scenedesigner]\n"
+               "reasons:\n"
+               "  - \"LN01-LN05 全部节拍时间码使用小数秒，解析正则 (\\d+) 会把 '1.5-3秒' 切成假拍\"\n"
+               "  - \"LN01-LN05 全部第一拍锚点串缺能量色项\"\n"
+               "advisory:\n"
+               "  - \"建议改为半静态收势\"\n"
+               "```\n")
+        import yaml
+        body = txt.split("```yaml")[1].split("```")[0]
+        with self.assertRaises(Exception):
+            yaml.safe_load(body)          # 前提：YAML 确实读不出来（不是我在测一个能过的块）
+        dec = decision.parse_decision(txt)
+        self.assertIsNotNone(dec, "YAML 读不出来时行解析必须兜住，否则媒体链被拦死")
+        self.assertFalse(dec.get("pass"))
+        self.assertEqual(dec.get("rerun"), ["scenedesigner"])
+        self.assertEqual(len(dec.get("reasons") or []), 2)
+        self.assertIn("(\\d+)", dec["reasons"][0], "理由原文要保住，别把转义吃掉")
+        self.assertTrue(dec.get("lenient"), "要留下『走了兜底』的标记，供调用方如实告警")
+
+    def test_lenient_fallback_does_not_invent_a_pass(self):
+        """★ 兜底**不许把拦得住的判决读成放行**（反向对照）。
+
+        走兜底时 `pass` 与理由必须原样带出：否则这条兜底就成了"解析器替评审放行"，
+        比原来读不出来更危险。
+        """
+        blocked = ("```yaml\npass: false\nrerun: [scenedesigner]\n"
+                   "reasons:\n  - \"引用正则 (\\d+) 时 YAML 报错的那一型\"\n```\n")
+        d1 = decision.parse_decision(blocked)
+        self.assertIsNotNone(d1)
+        self.assertFalse(d1.get("pass"), "评审说不过，兜底不许改成过")
+        self.assertEqual(d1.get("rerun"), ["scenedesigner"])
+        # 块里连 `pass` 都没有 ⇒ 兜底也不该编出一个判定（仍走「读不出」）
+        self.assertIsNone(decision.parse_decision(
+            "```yaml\nnotes:\n  - \"没有判定键 (\\d+)\"\n```\n"))
+
+    def test_normal_fenced_yaml_is_not_marked_lenient(self):
+        """反向对照：正常能解析的块**不许**被兜底路径改写行为。"""
+        dec = decision.parse_decision(REAL_FAIL)
+        self.assertIsNotNone(dec)
+        self.assertIsNone(dec.get("lenient"))
+
     def test_real_verdict_rerolls_scenedesigner(self):
         """真实那次判决喂进去：必须得出"打回 scenedesigner"，并把原因带上。"""
         dec = decision.parse_decision(REAL_FAIL)
