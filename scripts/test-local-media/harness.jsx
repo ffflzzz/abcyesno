@@ -79,7 +79,15 @@ function inspectOf(missing) {
     frames: { node: "2", field: "length", class_type: "MiniMaxH3Fl2vaSampler" },
   };
   (missing || []).forEach((r) => delete mapping[r]);
-  return { ok: true, nodes: 3, required: ["prompt", "image", "frames"], mapping, missing: missing || [] };
+  return {
+    ok: true,
+    nodes: 4,
+    // 真实来历文案由后端拼（`resolve_workflow`），面板只回显 —— 这里照形状给
+    source: "它最近跑过的那一次（队列号 7，产出 h3_take7.mp4）",
+    required: ["prompt", "image", "frames"],
+    mapping,
+    missing: missing || [],
+  };
 }
 
 window.hermes = {

@@ -79,15 +79,39 @@ export default function LocalMediaCard() {
     if (st.profile && st.profile.address && !picked) setPicked(st.profile.address);
   }
 
+  async function runInspect(address, opts) {
+    if (!address) { setError("先选一台机器"); return; }
+    const params = { address };
+    const path = (opts && opts.workflow_path) !== undefined ? opts.workflow_path : wfPath;
+    if (path) params.workflow_path = path;
+    const d = await call("inspect", params);
+    if (!d || !mounted.current) return;
+    setInspect(d);
+    setNote(
+      (d.missing || []).length
+        ? `这张图（${d.source}）认出 ${Object.keys(d.mapping || {}).length} 项，还有 ${(d.missing || []).length} 项要你在下面指一下`
+        : `这张图来自：${d.source}。${Object.keys(d.mapping || {}).length} 项参数都认出来了（共 ${d.nodes} 个节点），可以直接接入`
+    );
+  }
+
   async function handleProbe() {
     const addrs = extraAddr.trim() ? [extraAddr.trim()] : [];
     const d = await call("probe", { addresses: addrs });
     if (!d || !mounted.current) return;
     setFound(d.found || []);
     setTried(d.tried || []);
+    if ((d.found || []).length === 1) {
+      // 只有一台候选时不必再让人点一次：直接把它跑过的那张图取来看。
+      // ★ 为什么默认取「历史里最近那次」而不是让用户导出 JSON：那张图已经在
+      //   那台机器上出过片，节点链与模型名都是对的，比手边随便导出的文件更可靠。
+      const only = d.found[0].address;
+      setPicked(only);
+      await runInspect(only, { workflow_path: "" });
+      return;
+    }
     setNote(
       (d.found || []).length
-        ? `探到 ${(d.found || []).length} 台，下面选一台并交出那张工作流`
+        ? `探到 ${(d.found || []).length} 台，点一台来用它跑过的那张图`
         : "一台都没探到。逐条原因见上面，别急着重装 ComfyUI"
     );
   }
@@ -96,30 +120,17 @@ export default function LocalMediaCard() {
     applyStatus(await call("status", {}));
   }
 
-  async function handlePickWorkflow() {
+  async function handleUseOwnFile() {
     const h = window.hermes;
     if (!h || !h.selectFile) { setError("这版应用不能选文件"); return; }
     const p = await h.selectFile({ filters: [{ name: "工作流 JSON", extensions: ["json"] }] });
     if (!p) return;
     setWfPath(p);
-    setInspect(null);
-    setManual({});
-  }
-
-  async function handleInspect() {
-    if (!picked || !wfPath) { setError("先选一台机器，再选那张工作流 JSON"); return; }
-    const d = await call("inspect", { workflow_path: wfPath });
-    if (!d || !mounted.current) return;
-    setInspect(d);
-    setNote(
-      (d.missing || []).length
-        ? `认出 ${(d.mapping || []).length ? Object.keys(d.mapping).length : 0} 项，还有 ${(d.missing || []).length} 项要你在下面指一下`
-        : `五项参数都认出来了（共 ${d.nodes} 个节点），可以直接接入`
-    );
+    await runInspect(picked, { workflow_path: p });
   }
 
   async function handleConnect() {
-    if (!picked || !wfPath) { setError("先选机器和工作流，再点接入"); return; }
+    if (!picked) { setError("先选一台机器"); return; }
     const mapping = { ...(inspect && inspect.mapping ? inspect.mapping : {}) };
     Object.keys(manual).forEach((role) => {
       const m = manual[role] || {};
@@ -132,7 +143,7 @@ export default function LocalMediaCard() {
     }
     const d = await call("connect", {
       address: picked,
-      workflow_path: wfPath,
+      ...(wfPath ? { workflow_path: wfPath } : {}),
       mapping,
       set_default: true,
     });
@@ -239,26 +250,26 @@ export default function LocalMediaCard() {
           <div className="lmc-line">
             <span className="lmc-k">准备用</span>
             <span className="lmc-v">{picked}</span>
-          </div>
-          <div className="lmc-actions">
-            <button className="ghost settings-inline-btn" onClick={handlePickWorkflow} disabled={!!busy}>
-              选工作流 JSON
-            </button>
-            <button className="ghost settings-inline-btn" onClick={handleInspect} disabled={!!busy || !wfPath}>
-              {busy === "inspect" ? "正在看…" : "先看一眼这张图"}
+            <button className="ghost settings-inline-btn" onClick={() => runInspect(picked)} disabled={!!busy}>
+              {busy === "inspect" ? "正在看…" : "重新看一次"}
             </button>
           </div>
-          {wfPath ? <div className="lmc-sub">已选：{wfPath}</div> : (
-            <div className="lmc-sub">
-              要 ComfyUI 菜单里 Workflow → Export (API) 导出的那个 .json（不是界面保存的图）
-            </div>
-          )}
+          <div className="lmc-sub">
+            图用的是那台机器上「最近跑成功的那一次」，不用你导出文件。
+            {wfPath ? <span> 已改用你选的：{wfPath}</span> : (
+              <button className="lmc-link" onClick={handleUseOwnFile} disabled={!!busy}>
+                换一张（自己选 JSON）
+              </button>
+            )}
+          </div>
         </div>
       )}
 
       {inspect && (
         <div className="lmc-section">
-          <div className="lmc-sub">共 {inspect.nodes} 个节点。参数落点：</div>
+          <div className="lmc-sub">
+            {inspect.nodes} 个节点，来自 {inspect.source}。参数落点：
+          </div>
           {Object.keys(inspect.mapping || {}).map((role) => {
             const m = inspect.mapping[role];
             return (

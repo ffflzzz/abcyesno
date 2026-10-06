@@ -341,9 +341,16 @@ projects/<项目名>/
 | 部件 | 位置 | 说明 |
 |---|---|---|
 | 实现模块 | `v5/media/vendors/comfyui.py` | `v5/media/vendors/` 这个子包的**第一个**模块（自有协议厂商）。提交 = 往 `/prompt` 发一张工作流；轮询 = `/history/<id>` 与 `/queue` 三态；产物按 `videos → gifs → images` 扫输出节点，不写死节点号 |
-| 探测与档案 | `v5/local_services.py` | `probe` / `parse_workflow` / `suggest_mapping` / `connect` / `set_default` / `disconnect` / `status` |
+| 探测与档案 | `v5/local_services.py` | `probe` / `recent_workflow` / `resolve_workflow` / `parse_workflow` / `suggest_mapping` / `connect` / `set_default` / `disconnect` / `status` |
 | 接入档案 | `RUNTIME_ROOT/local_media/profile.json`（工作流存 `comfyui_workflow.json`） | 放 RUNTIME_ROOT 而不是安装树：打包版的安装目录**按只读对待**（要能装进 Program Files） |
 | 后端路由 | `GET /v1/pixa/short-drama/local-services` + `POST …/probe|inspect|connect|default|forget` | 形状转换在 `webmap.py`，`server.py` 只做路由；Electron 面板是**另一个调用方**（`electron/backend/localMedia.js` 只转发），不在那侧重实现 |
+
+**那张工作流不用用户导出文件**：ComfyUI 把每次提交的 API 图原样存在 `/history` 里
+（`entry["prompt"] = [队列号, prompt_id, API图, 额外数据, 界面图]`），接入时取**队列号最大的
+那一条** —— 它是这台机器真跑出过片的图，节点链与模型文件名都是对的，比手边随便导出的
+更可靠。`_graph_from_prompt` 认结构不认位置（老版本可能直接存图）。取不到（那台机器
+一次都没跑过）⇒ 报错并给下一步「先在 ComfyUI 里把那张图跑一遍」，面板同时保留
+「换一张（自己选 JSON）」这条兜底入口；档案里记 `workflow_source` 说明这张图究竟从哪来。
 
 四条必须知道的语义：
 

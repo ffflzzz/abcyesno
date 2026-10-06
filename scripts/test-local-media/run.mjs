@@ -95,27 +95,17 @@ try {
   const dead = await card.locator('.lmc-dead').innerText();
   check('不通那条给出可动手的原因', dead.includes('握手超时') && dead.includes('192.168.1.31'), dead);
 
-  // ③ 选了机器才出现工作流入口，且没选文件时「先看一眼」是禁用的
-  await card.locator('.lmc-item').click();
-  check('选中后出现工作流入口', (await card.innerText()).includes('选工作流 JSON'));
-  check('没交文件之前不能看图',
-    await card.getByRole('button', { name: '先看一眼这张图' }).isDisabled());
-  await card.getByRole('button', { name: '选工作流 JSON' }).click();
-  await page.waitForTimeout(60);
-  check('交完文件回显路径',
-    (await card.innerText()).includes('h3_i2v.api.json'), await card.innerText());
-
-  // ④ 看一眼：五项落点全部摊开
-  await card.getByRole('button', { name: '先看一眼这张图' }).click();
+  // ③ 只有一台候选 ⇒ 自动取它跑过的那张图，**不需要用户导出/选文件**
   await page.waitForSelector('.lmc-map');
-  const mapText = await card.innerText();
-  for (const label of ['提示词', '首帧图', '画面宽', '画面高', '帧数']) {
-    check(`参数落点摊开：${label}`, mapText.includes(label), mapText.slice(0, 400));
-  }
-  check('认出全部落点时给出可接入的说明',
-    mapText.includes('五项参数都认出来了'), mapText.slice(0, 400));
+  const auto = await card.innerText();
+  check('探测后自动认出参数落点（免选手动工作流）',
+    auto.includes('提示词') && auto.includes('帧数'), auto.slice(0, 500));
+  check('写明这张图的来历（队列号 + 产出文件名）',
+    auto.includes('队列号 7') && auto.includes('h3_take7.mp4'), auto.slice(0, 500));
+  check('仍保留「自己选 JSON」的兜底入口',
+    await card.getByText('换一张（自己选 JSON）').count() === 1);
 
-  // ⑤ 接入：状态、产地来源、降级说明、撤销入口都要出现
+  // ④ 接入：状态、产地来源、降级说明、撤销入口都要出现
   await card.getByRole('button', { name: /接入并设为本机默认/ }).click();
   await page.waitForTimeout(120);
   const after = await card.innerText();
@@ -127,9 +117,9 @@ try {
   check('接入后能一键回云端',
     await card.getByRole('button', { name: '断开并回云端' }).count() === 1);
 
-  // ⑥ 认不出参数时必须**拦住**接入，并指名要哪一项（不许拿残留值发出去）
+  // ⑥ 认不出参数时必须拦住接入，并指名要哪一项（不许拿图里的残留值发出去）
   await page.evaluate(() => { window.__stub.missing = ['frames']; });
-  await card.getByRole('button', { name: '先看一眼这张图' }).click();
+  await card.getByRole('button', { name: '重新看一次' }).click();
   await page.waitForTimeout(120);
   check('认不出时指名要手填的项',
     (await card.innerText()).includes('帧数') && (await card.innerText()).includes('认不出来'),

@@ -1643,11 +1643,14 @@ def local_services_inspect(payload: dict | None = None) -> dict:
     ★ 为什么单独一步：接不接还没决定，就该让人看到「提示词我认在 2 号节点的
       text、帧数认在 length」，认不出的指名要他指。存一张没校验过的图进档案，
       坏的是后面每一次出片，而报出来的位置离根因很远。
+
+    图从哪来两种都收：只给 `address` ⇒ 取那台机器**最近跑过的那一次**（正常路径，
+    用户不用导出文件）；另给 `workflow` ⇒ 用他交的那份 JSON（兜底）。
     """
     from . import local_services
-    graph = local_services.parse_workflow((payload or {}).get("workflow"))
+    graph, came_from = local_services.resolve_workflow(payload)
     sug = local_services.suggest_mapping(graph)
-    return {"ok": True, "nodes": len(graph),
+    return {"ok": True, "nodes": len(graph), "source": came_from,
             "required": list(local_services.REQUIRED_ROLES),
             "mapping": sug["mapping"], "missing": sug["missing"]}
 

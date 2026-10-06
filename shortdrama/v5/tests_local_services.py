@@ -79,6 +79,8 @@ class _FakeState:
         self.prompts = []                    # 收到过哪些 /prompt 的图
         self.last_prompt_id = "pid-fixed-1"
         self.reject_next = False             # 下一次 /prompt 返 400
+        # 「这台机器以前跑过什么」——`/history` 的整份返回，用例可塞多条
+        self.submissions = {}
 
     # —— 输出文件（`/view` 给的就是这串字节）
     OUTPUT_BYTES = b"FAKE-MP4-BYTES-0123456789"
@@ -130,6 +132,11 @@ class _Handler(BaseHTTPRequestHandler):
             running = [[1, st.last_prompt_id, {}, [], None]] if (
                 st.in_queue and not st.history_ready) else []
             self._json({"queue_running": running, "queue_pending": []})
+            return
+        if u.path == "/history":
+            # 真 ComfyUI 的整份历史：`{pid: {"prompt": [队列号, pid, API图, 额外, 界面图],
+            # "outputs": {...}, "status": {...}}}`。`recent_workflow` 吃的就是这个形状。
+            self._json(st.submissions)
             return
         if u.path.startswith("/history/"):
             pid = u.path.split("/history/", 1)[1]
@@ -558,6 +565,69 @@ class TestVendorOriginGuard(_Isolated):
         (self.clip_dir / "LN01.mp4").unlink()
         os.environ["SHORTDRAMA_VIDEO_VENDOR"] = "agnes"
         self.assertFalse(jobs_mod.done(self._jobs("agnes"), "LN01", self.clip_dir))
+
+
+class TestRecentWorkflow(_Isolated):
+    """★ 免掉「导出 JSON 再选文件」那一步：图直接从那台机器的历史里取。
+
+    为什么这比让用户交文件更好：历史里那条是**这台机器真跑出过片**的图，
+    节点链、模型文件名、采样器参数都是对的；而用户手边导出的可能是另一张、
+    或者干脆导成界面格式（那种我们只能拒掉）。
+    """
+
+    def _submit(self, srv, number, graph=None, filename=None):
+        pid = "pid-%d" % number
+        srv.state.submissions[pid] = {
+            "prompt": [number, pid, graph or _api_graph(),
+                       {"1": {"meta": {"node_title": "加载图像"}}},
+                       {"nodes": [], "links": {}}],
+            "outputs": {"9": {"videos": [{"filename": filename or ("h3_%d.mp4" % number),
+                                          "subfolder": "", "type": "output"}]}},
+            "status": {"status_str": "success", "completed": True},
+        }
+        return pid
+
+    def test_takes_the_newest_submission_not_the_first(self):
+        srv = _Server()
+        self.addCleanup(srv.stop)
+        old = _api_graph()
+        new = _api_graph()
+        new["12"] = {"class_type": "MiniMaxH3AudioVAE", "inputs": {"audio": ["2", 1]}}
+        self._submit(srv, 3, old)
+        self._submit(srv, 7, new)
+        got = local_services.recent_workflow(srv.address)
+        self.assertEqual(got["queue_number"], 7)
+        self.assertEqual(got["nodes"], 4, "取到的应当是较新那张（多一个节点）")
+        self.assertEqual(got["outputs"], ["h3_7.mp4"])
+        self.assertTrue(got["completed"])
+
+    def test_connect_without_a_file_uses_history_and_records_the_source(self):
+        srv = _Server()
+        self.addCleanup(srv.stop)
+        self._submit(srv, 5, _api_graph(), filename="h3_take5.mp4")
+        with mock.patch("builtins.print", lambda *a, **k: None):
+            res = local_services.connect(srv.address, None)
+        self.assertIn("队列号 5", res["profile"]["workflow_source"])
+        self.assertIn("h3_take5.mp4", res["profile"]["workflow_source"])
+        saved = json.loads(local_services.workflow_path().read_text(encoding="utf-8"))
+        self.assertEqual(sorted(saved), ["1", "2", "9"])
+        self.assertEqual(vendors.current("video"), local_services.VENDOR)
+
+    def test_machine_without_history_says_what_to_do_next(self):
+        srv = _Server()
+        self.addCleanup(srv.stop)
+        self.assertEqual(local_services.recent_workflow(srv.address), {})
+        with self.assertRaises(ValueError) as cm:
+            local_services.connect(srv.address, None)
+        text = str(cm.exception)
+        self.assertIn("还没有任何一次提交", text)
+        self.assertIn("先在那台机器的 ComfyUI 里", text)
+
+    def test_dict_shaped_prompt_is_also_accepted(self):
+        """老版本 / 别的实现可能直接把图当 `prompt` 存（不是那个五元组）。"""
+        graph = _api_graph()
+        self.assertEqual(local_services._graph_from_prompt(graph), graph)
+        self.assertEqual(local_services._graph_from_prompt(["1", "p", {"x": 1}]), {})
 
 
 class TestRoutes(_Isolated):

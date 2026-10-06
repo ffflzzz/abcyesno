@@ -5138,6 +5138,17 @@ body {
   line-height: 1.6;
 }
 
+/* 「换一张（自己选 JSON）」——兜底路径要看得见，但不能长得像主路径 */
+.lmc-link {
+  border: 0;
+  background: none;
+  padding: 0 0 0 4px;
+  font-size: inherit;
+  color: var(--muted);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 .modal-error {
   color: var(--error);
   font-size: 12px;

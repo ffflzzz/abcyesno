@@ -300,6 +300,111 @@ def parse_workflow(workflow: Any) -> dict:
     return workflow
 
 
+def recent_workflow(address: str, timeout: float = 12.0) -> dict:
+    """从那台 ComfyUI 的 `/history` 里取**最近提交过的那张图**（API 格式）。
+
+    ★ 为什么要这一手：让用户导出 JSON 再选文件，是把「机器上已经有这张图」这件事
+    推给用户做。ComfyUI 每次提交都把整张 API 图原样存进历史
+    （`entry["prompt"] = [队列号, prompt_id, {节点号: {class_type, inputs}}, 额外数据, 界面图]`），
+    第 3 项就是我们要的东西，而且它**保证是这台机器真跑得通的图**
+    （节点链、模型文件名、采样器参数都是对的），比用户手边随便导出的那张更可靠。
+
+    取哪一条：按**队列号最大**的那条（不看 JSON 键序 —— 那依赖服务端实现）。
+    返回 `{}` 表示这台机器还没跑过任何东西 ⇒ 面板退回「选文件」那条路，
+    并给出可动手的下一步（先去 ComfyUI 出一张图）。
+    """
+    base = _norm(address)
+    if not base:
+        return {}
+    import httpx
+    try:
+        with httpx.Client(base_url=base, timeout=timeout, trust_env=False) as c:
+            r = c.get("/history", params={"max_items": 20})
+            if r.status_code >= 400:
+                return {}
+            hist = r.json() or {}
+    except Exception:  # noqa: BLE001 —— 取不到历史不是错误，是「这台没跑过」
+        return {}
+    best: tuple[int, str, dict] | None = None
+    for pid, entry in (hist.items() if isinstance(hist, dict) else []):
+        if not isinstance(entry, dict):
+            continue
+        graph = _graph_from_prompt(entry.get("prompt"))
+        if not graph:
+            continue
+        try:
+            number = int((entry.get("prompt") or [0])[0])
+        except Exception:  # noqa: BLE001
+            number = 0
+        if best is None or number > best[0]:
+            best = (number, str(pid), graph)
+        # 顺带把产出的文件名留给面板认人
+    if best is None:
+        return {}
+    number, pid, graph = best
+    outputs: list[str] = []
+    for node in ((hist.get(pid) or {}).get("outputs") or {}).values():
+        for key in _OUTPUT_KEYS:
+            for item in (node or {}).get(key) or []:
+                if isinstance(item, dict) and item.get("filename"):
+                    outputs.append(str(item["filename"]))
+    status = (hist.get(pid) or {}).get("status") or {}
+    return {"prompt_id": pid, "queue_number": number, "graph": graph,
+            "nodes": len(graph), "outputs": outputs[:6],
+            "status": str(status.get("status_str") or ""),
+            "completed": bool(status.get("completed"))}
+
+
+_OUTPUT_KEYS = ("videos", "gifs", "images")
+
+
+def _graph_from_prompt(prompt: Any) -> dict:
+    """从 `/history` 那条 `prompt` 里挑出 API 图。
+
+    形状按版本有两种（列表 `[号, id, 图, 额外, 界面图]`，或直接就是图），
+    所以**认结构不认位置**：找一个「值都是带 inputs/class_type 的 dict」的那一项。
+    """
+    if isinstance(prompt, dict):
+        return parse_workflow(prompt) if prompt else {}
+    if isinstance(prompt, (list, tuple)):
+        for item in prompt:
+            if not isinstance(item, dict) or not item:
+                continue
+            looks_like_graph = all(
+                isinstance(v, dict) and ("inputs" in v or "class_type" in v)
+                for v in item.values())
+            if looks_like_graph:
+                try:
+                    return parse_workflow(item)
+                except ValueError:
+                    continue
+    return {}
+
+
+def resolve_workflow(payload: dict | None = None) -> tuple[dict, str]:
+    """按面板给的信息拿到图，返回 `(API 图, 这图的来历)`。
+
+    两种来历都要支持，且**优先历史**：用户既然在那台机器上跑通过一次，
+    那张图就是最可靠的；文件选择留作「跑过的是别的图 / 老版本没历史」的兜底。
+    """
+    p = payload or {}
+    wf = p.get("workflow")
+    if wf not in (None, "", {}, []):
+        return parse_workflow(wf), "你交进来的那份 JSON 文件"
+    address = _norm(str(p.get("address") or ""))
+    if not address:
+        raise ValueError("要取最近跑过的那张图，得先选定一台机器")
+    got = recent_workflow(address)
+    if not got:
+        raise ValueError(
+            "这台 ComfyUI 的历史里还没有任何一次提交 ⇒ 先在那台机器的 ComfyUI 里"
+            "把 H3 那张图跑一遍（出片成功），再回来点这个按钮")
+    came = "它最近跑过的那一次（队列号 %d，产出 %s%s）" % (
+        got["queue_number"], "、".join(got["outputs"][:2]) or "没记录到文件",
+        "" if len(got["outputs"]) <= 2 else "…")
+    return got["graph"], came
+
+
 def suggest_mapping(graph: dict) -> dict:
     """按字段名**猜** mapping，猜不中的列进 `missing` 指名要人来指。
 
@@ -349,10 +454,11 @@ def connect(address: str, workflow: Any, mapping: dict | None = None,
     base = _norm(address)
     if not base:
         raise ValueError("地址是空的")
-    graph = parse_workflow(workflow)
     check = probe_one(base)
     if not check["reachable"]:
         raise ValueError(check["reason"] or "ComfyUI 不可达")
+    # 图的来历：交了文件就用文件，没交就去那台机器的历史里取最近跑过的那一次。
+    graph, came_from = resolve_workflow({"workflow": workflow, "address": base})
 
     sug = suggest_mapping(graph)
     mapping = dict(sug["mapping"]) | dict(mapping or {})
@@ -392,6 +498,9 @@ def connect(address: str, workflow: Any, mapping: dict | None = None,
         "poll_rounds": int(poll_rounds),
         "poll_interval": int(poll_interval),
         "default": bool(set_default),
+        # 这张图是**从哪来的**（历史里最近那次 / 用户交的文件）。事后有人问
+        # 「我接入的到底是哪张图」，档案里要能直接答，不用猜。
+        "workflow_source": came_from,
         "detected": {"comfyui_version": check.get("comfyui_version"),
                      "devices": check.get("devices"),
                      "h3_nodes": check.get("h3_nodes"),
@@ -440,6 +549,7 @@ def _profile_view(profile: dict) -> dict:
         "seconds_min": profile.get("seconds_min"),
         "seconds_max": profile.get("seconds_max"),
         "mapping": profile.get("mapping"),
+        "workflow_source": profile.get("workflow_source") or "",
         "detected": profile.get("detected"),
         "workflow_exists": bool(Path(str(profile.get("workflow_path") or "")).is_file()),
     }
