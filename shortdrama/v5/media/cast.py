@@ -1220,6 +1220,23 @@ def _derive_variant_cards(root: Path, chars: list, items: list, ep, log=print) -
                                  covered=covered_ages(chars), log=log)
 
 
+def contract_prose_divergence(prose_md: str, used_items: list) -> list[str]:
+    """同名资产里**散文卡与契约卡出图文字不一致**的那些名字（契约卡优先）。
+
+    存在的意义只为一件事：让人知道**自己改的那份不算**。抽成纯函数是为了可测
+    （`ensure` 那条路径会生图，测试不该生图）。
+    """
+    used = {str(a.get("name") or ""): str(a.get("prompt") or "")
+            for a in (used_items or [])}
+    out = []
+    for a in (parse_assets(prose_md or "") or []):
+        n = str(a.get("name") or "")
+        p = str(a.get("prompt") or "")
+        if n in used and p and p != used[n]:
+            out.append(n)
+    return sorted(set(out))
+
+
 def ensure(root: Path, *, log=print, force: bool = False,
            max_characters: int = 6, max_assets: int = 12, ep=None) -> dict:
     """为所有角色 / 资产生成权威参考图并登记注册表。返回统计。
@@ -1240,10 +1257,22 @@ def ensure(root: Path, *, log=print, force: bool = False,
     # 解析失败，而失败不报错 → 参考图不生成、也没人知道（这就是"有卡没图"的根源）。
     # 现在：`assets.contract.json` 存在就用它；不存在再回退散文解析（向后兼容）。
     chars, items = _load_contract(root)
+    _from_contract = items is not None
     if chars is None:
         chars = parse_characters(wb.read_text(encoding="utf-8")) if wb.exists() else []
     if items is None:
         items = parse_assets(ad.read_text(encoding="utf-8")) if ad.exists() else []
+    if _from_contract and ad.exists():
+        # ★ **改在没人读的那份上，必须当场说出来**（2026-10-06 我自己踩的）：
+        #   `assets.contract.json` 在就**完全不看** `assets.md`，而两份长得很像、
+        #   都能改。实测：我把"机位站在桥面上"写进散文卡，日志照打「跳过 5」、
+        #   场景图一秒没重画 —— 没有任何一行说"你改的那份不算"。
+        _diff = contract_prose_divergence(ad.read_text(encoding="utf-8"), items)
+        if _diff:
+            log("[cast] ⚠️ 出图文字取自 **assets.contract.json**（优先级高于 assets.md）"
+                "→ 散文卡上 %d 张卡的改动**不会生效**（%s）。要改就改契约那份，"
+                "或把契约归档让散文解析接管。"
+                % (len(_diff), "、".join(sorted(_diff))[:120]))
     # ★ **场景卡静默丢失必须响亮**（2026-09-26，brawl 实测）：
     #   `assets.md` 里明明有 `### 场景 S1：名` 这类场景小节，但解析器不认 →
     #   `items` 里 0 个 location → `scene_lines()` 无场景锚点 → 每镜光源/陈设

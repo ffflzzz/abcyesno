@@ -445,6 +445,34 @@ class TestParseAssetsFormatCompat(unittest.TestCase):
                              "名字里不该留着卡类型前缀：%s" % a["name"])
 
 
+class TestContractWinsOverProse(unittest.TestCase):
+    """`assets.contract.json` 在，`assets.md` 就**完全不被读** —— 改错了份要喊出来。
+
+    2026-10-06 我自己踩的：把「机位站在桥面上」写进散文卡，日志照打「跳过 5」、
+    场景图一秒没重画，没有任何一行说"你改的那份不算"。
+    """
+
+    MD = ("## 场景卡：石拱桥\n"
+          "- 地理特征：桥面由三块并排青石铺成\n"
+          "**外形提示词（出图 prompt）**\n"
+          "机位站在桥面正中央，左右两排木栏杆向远处收拢成两条斜线。\n")
+
+    def test_divergence_is_named(self):
+        used = [{"name": "石拱桥", "type": "location", "prompt": "一座青灰色石拱桥横跨窄溪"}]
+        self.assertEqual(cast.contract_prose_divergence(self.MD, used), ["石拱桥"])
+
+    def test_identical_text_stays_silent(self):
+        """反向对照：两份一模一样时不许喊（否则每轮白吵一行）。"""
+        same = "机位站在桥面正中央，左右两排木栏杆向远处收拢成两条斜线。"
+        self.assertEqual(
+            cast.contract_prose_divergence(self.MD,
+                                           [{"name": "石拱桥", "prompt": same}]), [])
+
+    def test_asset_absent_from_contract_is_not_divergence(self):
+        """契约里根本没这条 ⇒ 不是"改动被吞"，别拿它凑数。"""
+        self.assertEqual(cast.contract_prose_divergence(self.MD, []), [])
+
+
 class TestCleanDialogue(unittest.TestCase):
     def test_strips_speaker_and_tone(self):
         """角色名与语气标注是导演提示，不是台词——念出来就是"乱念"。"""
