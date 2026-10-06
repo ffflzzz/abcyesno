@@ -9,3 +9,6 @@
 atelier/node_modules/
 atelier/dist/
 atelier/tsconfig.tsbuildinfo
+
+# 三栏工作室的无头验收截图（scripts/studio_shot.mjs 产出，本机看片用，不入库）
+.tmp-studio-shot/
