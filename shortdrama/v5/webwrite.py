@@ -20,7 +20,7 @@ import json
 import re
 from pathlib import Path
 
-from . import config
+from . import config, inbox
 from .media import assets, clipqc, jobs as jobs_mod, renumber, storyboard
 
 #: 新增镜头时的占位画面描述。
@@ -381,8 +381,13 @@ def _write_md(root: Path, ep: int, lines: list, md: str) -> Path:
     return p
 
 
-def update_segment(root: Path, ep: int, shot: str, patch: dict) -> dict:
+def update_segment(root: Path, ep: int, shot: str, patch: dict,
+                   source: str = "web", by: str = "") -> dict:
     """按**列名**改分镜表的一行。返回里写明**作废了什么**。
+
+    `source` / `by` 只进**改动台账**（`v5/inbox.py`），不影响写盘行为：
+    `"canvas"` = 工作室画布上改的，`"web"` = 分镜编辑器改的。导演读到的那条账
+    会写明来源，因为"人在画布上拖了一下"和"人在表格里重写了这一镜"是两回事。
 
     ⚠️ v5 没有细粒度失效：改一镜的文字也会让该镜的静帧/成片**不再可信**
     （提示词里含画面描述与对白）→ 一律作废静帧 + 暂存 clip + job 置 pending，
@@ -408,7 +413,7 @@ def update_segment(root: Path, ep: int, shot: str, patch: dict) -> dict:
     headers = _split_row(lines[head_i])
 
     cells = _split_row(lines[idx])
-    applied, skipped = {}, []
+    applied, skipped, before = {}, [], {}
     for k, v in (patch or {}).items():
         keys = EDITABLE_COLS.get(k)
         if not keys:
@@ -420,6 +425,7 @@ def update_segment(root: Path, ep: int, shot: str, patch: dict) -> dict:
             continue
         while len(cells) <= ci:
             cells.append("")
+        before[k] = str(cells[ci] or "").strip()
         applied[k] = str(v or "")
         cells[ci] = " %s " % str(v or "").replace("|", "／")   # `|` 会破坏表格
     if not applied:
@@ -429,8 +435,22 @@ def update_segment(root: Path, ep: int, shot: str, patch: dict) -> dict:
     _write_md(root, ep, lines, md)
 
     invalidated = _invalidate_shot(root, ep, shot)
+    # ★ 记入改动台账（`v5/inbox.py`）—— 这是「画布改了 → 导演觉知」的**唯一**机制。
+    #   为什么必须在**写盘之后**取指纹：台账的作废判据是"表在这之后被重写过没有"，
+    #   所以要记的是**改完之后**的指纹；用改之前的会把这条账在下一轮就剪掉。
+    #   ⛔ 台账失败不许让编辑失败（表已经改了，回滚比丢一条账更糟）—— `append_edit`
+    #   内部不抛，这里再兜一层。
+    for k, new in applied.items():
+        if before.get(k, "") == new:
+            continue                                  # 值没变，不记账
+        try:
+            inbox.append_edit(root, shot, k, before.get(k, ""), new,
+                              ep=ep, by=by, source=source)
+        except Exception:  # noqa: BLE001
+            pass
     out = {"shot": shot, "ep": int(ep), "applied": applied, "skipped": skipped,
            "invalidated": invalidated,
+           "logged": len([k for k, v in applied.items() if before.get(k, "") != v]),
            "note": "分镜已改；该镜的静帧与成片已作废，需重新生成"}
     if skipped:
         # ⛔ 不许「部分成功」静默：未知键必须让人看见（前端把它列出来）
@@ -439,7 +459,8 @@ def update_segment(root: Path, ep: int, shot: str, patch: dict) -> dict:
     return out
 
 
-def delete_segment(root: Path, ep: int, shot: str) -> dict:
+def delete_segment(root: Path, ep: int, shot: str,
+                   source: str = "web", by: str = "") -> dict:
     """删除分镜的一行，并作废该镜的产物。**暂存 clip 而非删除**（宁要有瑕疵但完整）。
 
     ★★ 删掉中间一镜会让**后面每一镜的名字全体前移一位**（镜名按行序编），
@@ -458,13 +479,19 @@ def delete_segment(root: Path, ep: int, shot: str) -> dict:
     _write_md(root, ep, lines, md)
 
     remap = renumber.remap_after_edit(root, ep, "delete", pos, log=print)
+    try:
+        inbox.append_edit(root, shot, "", "", "", ep=ep, action="delete",
+                          by=by, source=source, position=pos)
+    except Exception:  # noqa: BLE001 —— 台账失败不许让编辑失败（表已经改了）
+        pass
     return {"removed": shot, "ep": int(ep), "removed_position": pos,
             "remaining": len(shots) - 1, "remap": remap,
             "note": "分镜行已删除；后续每一镜的静帧/片段已**跟着改名重挂**，"
                     "被删那镜的素材已作废（clip 暂存，不删）"}
 
 
-def add_segment(root: Path, ep: int, after: str = "", fields: dict | None = None) -> dict:
+def add_segment(root: Path, ep: int, after: str = "", fields: dict | None = None,
+                source: str = "web", by: str = "") -> dict:
     """在某镜之后插入一镜（默认带占位画面描述，需人补内容）。
 
     ⛔ **两个必须同时满足的条件**，否则这行不会被认作镜头（"插了等于没插"）：
@@ -551,6 +578,13 @@ def add_segment(root: Path, ep: int, after: str = "", fields: dict | None = None
         out["warning"] += "；这些列不存在、未写入：%s" % "、".join(unknown)
     # 片长契约：加一镜会让本集总时长 +N 秒，可能触发门的「片长与 brief 不符」
     out["duration_added_s"] = int(_NEW_SHOT_SECONDS)
+    try:
+        # 镜名按**行序**编 ⇒ 插到第 new_pos 位，它就叫 LN{new_pos}（表尾追加同理）
+        inbox.append_edit(root, "LN%02d" % new_pos, "visual",
+                          "", str(vis or PLACEHOLDER_VISUAL)[:120],
+                          ep=ep, action="add", by=by, source=source)
+    except Exception:  # noqa: BLE001
+        pass
     return out
 
 

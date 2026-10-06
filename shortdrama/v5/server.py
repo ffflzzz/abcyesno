@@ -788,20 +788,29 @@ def create_app(base: str | None = None, web_root: str | None = None):
     @r.post("/v1/pixa/short-drama/segments/{sid}")
     def update_segment(sid: str, payload: dict | None = None):
         pid, ep, shot = _resolve_sid(sid)
+        p = dict(payload or {})
+        # `source` / `by` 是**记账用的元数据**，不是分镜列 —— 必须先从 patch 里取走，
+        # 否则 `update_segment` 会把它们列进 `skipped` 并回一条"这些列不存在"的警告，
+        # 而画布上每次编辑都弹这个警告。
+        src = str(p.pop("source", "") or "web")
+        by = str(p.pop("by", "") or "")
         return _edit(webwrite.update_segment, webmap.project_root(pid), ep, shot,
-                     payload or {})
+                     p, src, by)
 
     @r.delete("/v1/pixa/short-drama/segments/{sid}")
-    def delete_segment(sid: str):
+    def delete_segment(sid: str, source: str = "web", by: str = ""):
         pid, ep, shot = _resolve_sid(sid)
-        return _edit(webwrite.delete_segment, webmap.project_root(pid), ep, shot)
+        return _edit(webwrite.delete_segment, webmap.project_root(pid), ep, shot,
+                     source or "web", by)
 
     @r.post("/v1/pixa/short-drama/episodes/{eid}/segments")
     def add_segment(eid: str, payload: dict | None = None):
         pid, ep = _resolve_eid(eid)
-        p = payload or {}
+        p = dict(payload or {})
+        src = str(p.pop("source", "") or "web")
+        by = str(p.pop("by", "") or "")
         return _edit(webwrite.add_segment, webmap.project_root(pid), ep,
-                     p.get("after", ""), p.get("fields"))
+                     p.get("after", ""), p.get("fields"), src, by)
 
     # ══════════════════ P2b：创建链（剧本解析 + 跑创作链） ══════════════════
 
@@ -951,6 +960,123 @@ def create_app(base: str | None = None, web_root: str | None = None):
             raise _bad(str(e))
         return wm.envelope(wm.hitl_state(root))
 
+    # ══════════ 导演信箱（2026-10-06，工作室三栏界面 `frontend_new` 的入站半边）══════════
+    #
+    # 与上面 HITL 的分工（**两条都要，不是二选一**）：
+    #   · HITL   = 链**正挂在步级门上**时才有决定可下（`decide` 无 pending 直接 400），
+    #              而 `manual_steps` 默认关（`webchain.py:116`）⇒ 链一路跑到底时它不可用；
+    #   · 信箱    = **任何时候**都能送话进去，投递点是 `roles.role_input`
+    #              （每次派发都经过），所以下一个被派发的角色会读到人说的话。
+    # 信道本体见 `v5/inbox.py`（含投递规则与"为什么不能广播"的事故说明）。
+    @r.get("/v1/pixa/short-drama/projects/{pid}/director/inbox")
+    def director_inbox(pid: str, ep: int = 1):
+        """回显对话框：信箱历史 + 未投递的 + 仍然有效的改动台账 + 当前挂起状态。
+
+        ★ 一次调用把**右栏要渲染的全套事实**给齐 —— 前端只轮询这一个端点，
+        不为 hitl / 台账各开一条轮询（`runs/{id}` 搭车 `hitl` 是同一个理由）。
+        """
+        from . import hitl, inbox
+        root = _resolve_pid(pid)
+        ep = max(1, int(ep or 1))
+        return wm.envelope({
+            "messages": inbox.history(root, ep=ep, limit=80),
+            "pending": inbox.pending_messages(root, ep=ep),
+            "edits": inbox.live_edits(root, ep),
+            "stats": inbox.status(root, ep=ep),
+            "hitl": wm.hitl_state(root),
+            "manual_steps": bool(webchain.manual_steps_on()),
+            "targets": list(inbox.KNOWN_TARGETS),
+        })
+
+    @r.post("/v1/pixa/short-drama/projects/{pid}/director/message")
+    def director_message(pid: str, payload: dict | None = None):
+        """往信箱里投一句话。body：`{text*, ep?, by?, to?}`。
+
+        `to` 省略或空串 = **谁下一个被派发谁收到**；填角色名 = 定向（别的角色跳过，
+        ⛔ 不许被它吃掉）。非法目标 400（不静默降级成"任意" —— 那会让一条本来
+        定向的话被随便一个角色消费掉，而人以为它送到了分镜师）。
+
+        ⚠️ 本端点**不判断链是否在跑**，也不假装"已经送到导演手上"：
+        返回里的 `delivered_to` 是空串，前端据此显示「排队中」而不是「已发送」。
+        """
+        from . import inbox
+        root = _resolve_pid(pid)
+        p = payload or {}
+        try:
+            rec = inbox.append_message(
+                root, str(p.get("text") or ""), ep=int(p.get("ep") or 1),
+                by=str(p.get("by") or ""), to=str(p.get("to") or ""))
+        except ValueError as e:
+            raise _bad(str(e))
+        return wm.envelope(rec)
+
+    @r.post("/v1/pixa/short-drama/projects/{pid}/director/redo")
+    def director_redo(pid: str, payload: dict | None = None):
+        """「让导演重做」—— 画布改完表之后，人**显式**点它才回退重跑。
+
+        ★ 为什么不自动做：`reset_from(scenedesigner)` 会把该角色**及全部下游**重做
+          （实测整表重派 ≈95 分钟）。改一个错字也重做一遍是不可接受的，
+          所以默认只入表 + 作废那几镜的素材，重做由人决定（AGENTS.md 的口径）。
+
+        三条出口，按盘上事实选（**判据只写这一处**）：
+          1. 链**正挂在门上** → 走 `hitl.decide(redo)`：既有路径，立刻生效；
+          2. 本集**有非终态 run 在跑** → **409 拒绝**，不制造第二个写者
+             （并行时杀掉别人的链是本项目明令禁止的动作）；
+          3. 链没在跑 → `reset_from` 清记账 + 旧产物进 `.rerun_backup/` → 起一轮
+             `chain` run。⚠️ 必须先 `reset_from` 再起：驱动器按"产物在不在盘上"
+             派活，不撤销记账 ⇒ 重跑是空转（1006 实测过的那条）。
+        """
+        from . import guards, hitl, inbox
+        root = _resolve_pid(pid)
+        p = payload or {}
+        ep = max(1, int(p.get("ep") or 1))
+        note = str(p.get("note") or "").strip()
+        target = str(p.get("target") or "").strip()
+        by = str(p.get("by") or "")
+
+        # 「有没有挂起」的判据**复用 `hitl_state`**，不在这里重算 ——
+        # 它是 `GET /hitl` 用的同一份，且已经处理过"pending 文件在但已过期"。
+        st = wm.hitl_state(root)
+        if st.get("pending"):
+            tgt = target or str(st.get("prev_role") or "")
+            try:
+                hitl.decide(root, "redo", by=by, note=note, target=tgt,
+                            stamp=str(p.get("stamp") or st.get("stamp") or ""))
+            except ValueError as e:
+                raise _bad(str(e))
+            return wm.envelope({"channel": "hitl", "target": tgt,
+                                "hitl": st,
+                                "note": "已作为「打回」交给正挂起的链路"})
+
+        if not target:
+            raise _bad("当前没有挂起的步骤，必须指明打回哪个角色"
+                       "（target=worldbuilder/assetdesigner/…/reviewer）")
+        busy = [x for x in runner.list_runs(pid, 20)
+                if str(x.get("status") or "") not in runner.TERMINAL]
+        if busy:
+            raise _conflict("本项目有 %d 个任务正在跑（%s）⇒ 不能同时起第二条链。"
+                            "先停掉它，或等它挂在步骤上再点。"
+                            % (len(busy), str(busy[0].get("run_id") or "")))
+
+        m = guards.load_manifest(root)
+        try:
+            moved = guards.reset_from(target, m, root=root, ep=ep)
+        except Exception as e:  # noqa: BLE001 —— 目标不是角色名等
+            raise _bad("回退失败（%s）：%s" % (target, str(e)[:120]))
+        try:
+            inbox.append_message(root, "【人工要求重做】目标角色 %s。人写的理由：%s"
+                                 % (target, note or "（未填写）"), ep=ep, by=by,
+                                 to=target)
+        except ValueError:
+            pass
+        rec = runner.start(pid, "chain", ep=ep,
+                           image_vendor=str(p.get("image_vendor") or ""),
+                           video_vendor=str(p.get("video_vendor") or ""))
+        return wm.envelope({"channel": "chain", "target": target,
+                            "reset_roles": moved, "run": rec,
+                            "note": "已清空 %s 及其下游的本集记账并起了新一轮创作链"
+                                    % target})
+
     # ── 删除项目：**移到可恢复的暂存区**，不真删 ──
     @r.post("/v1/pixa/short-drama/projects/batch-delete")
     async def batch_delete(payload: dict | None = None):
@@ -1037,6 +1163,7 @@ def create_app(base: str | None = None, web_root: str | None = None):
     # ⚠️ 这是**有意把几棵目录合到一个 origin 上**，但**不合并仓库**：
     #   · `/`        → `frontend/dist`（React 工作台；旧的原生 JS `web/` 已于 2026-09-30 退役）
     #   · `/atelier` → `atelier/dist`（vendored 的画布应用 Infinite Atelier）
+    #   · `/studio`  → `frontend_new/dist`（三栏工作室：项目栏 + 画布 + 导演对话）
     #   真正的收益是**同源**（见 create_app 的 docstring），不是目录结构。
     _mounts: list[tuple[str, Path, str]] = []
     _atelier = config.PROJECT_ROOT / "atelier" / "dist"
@@ -1055,6 +1182,21 @@ def create_app(base: str | None = None, web_root: str | None = None):
                     "画布应用没构建：找不到 %s/index.html。先跑 "
                     "cd atelier && npm install && VITE_BASE=/atelier/ npm run build"
                     % _atelier, code="E503"))
+
+    _studio = config.PROJECT_ROOT / "frontend_new" / "dist"
+    if (_studio / "index.html").is_file():
+        _mounts.append(("/studio", _studio, "studio"))
+    else:
+        @app.api_route("/studio", methods=["GET"], include_in_schema=False)
+        @app.api_route("/studio/{rest:path}", methods=["GET"], include_in_schema=False)
+        def _studio_missing(rest: str = ""):         # noqa: ANN202, ARG001
+            return JSONResponse(
+                status_code=503,
+                content=wm.error_body(
+                    "三栏工作室没构建：找不到 %s/index.html。先跑 "
+                    "cd frontend_new && npm install && npm run build"
+                    "（构建前缀由 vite.config 的 base 定，不用设环境变量）"
+                    % _studio, code="E503"))
 
     if root_dir is not None:
         _mounts.append(("/", root_dir, "web"))

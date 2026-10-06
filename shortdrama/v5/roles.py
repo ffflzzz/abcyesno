@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 import re
 
-from . import config, guards, validate
+from . import config, guards, inbox, validate
 from . import mode as chain_mode          # ⚠️ 必须带别名！
 from .guards import PREREQ, out_path
 # ⚠️ 为什么带别名：本模块的 `role_input` 里**早就有**一个局部变量叫 `mode`
@@ -916,6 +916,23 @@ def role_input(role: str, root: Path, m: dict, reasons: list[str] | None = None)
         lines.append("【本次是评审打回后的重跑，必须修正以下问题】")
         for x in reasons:
             lines.append("- " + str(x))
+    # ★★ 人工入站（2026-10-06，工作室三栏界面 `frontend_new` 的入站半边）。
+    #
+    # 为什么必须注入在**这里**（而不是只写进包 SKILL、也不是只走 HITL）：
+    #   · `hitl.decide` 要求链**正挂在步级门上**，而 `manual_steps` 默认关
+    #     （`webchain.py:116`）⇒ 链一路跑到底时人说的话**无处可去**；
+    #   · `webwrite` 改分镜表**不碰链的失效机制**（phases 不动、`reviewer.passed`
+    #     照样绿）⇒ 人在画布上改完，导演下一轮读到的仍是"表没被改过"。
+    #   本函数是**每次派发都经过**的唯一注入点，两条缺口一起补上。
+    #
+    # ⚠️ 放在**最末尾**：这是本轮最新的信息（人刚说的话 / 刚改的格子），
+    # 而模型对结尾的注意力同样高；且它必须在 `reasons`（评审打回清单）之后 ——
+    # 打回清单是上一轮的程序结论，人的改动是**这一轮**的新事实，后者覆盖前者。
+    #
+    # 无条目时 `render_block` 返回空串 ⇒ **一行都不加**，既有链路行为零变化。
+    _ib = inbox.render_block(root, role, ep)
+    if _ib:
+        lines.append(_ib)
     return "\n".join(lines)
 
 
