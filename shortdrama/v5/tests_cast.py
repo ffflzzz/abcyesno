@@ -410,6 +410,40 @@ class TestParseAssetsFormatCompat(unittest.TestCase):
         self.assertFalse([k for k in got if "资产卡" in k],
                          "文件级一级标题不能被当成卡片：%s" % list(got))
 
+    MD_TWO_HASH = (
+        "## 场景卡：秋宫山谷·石拱桥与桥下溪流\n"
+        "- 地理特征：一座青灰色石拱桥横跨一条窄溪，桥面由三块并排青石铺成\n"
+        "- 用途：全片唯一空间\n"
+        "**外形提示词（出图 prompt）**\n"
+        "环境全景空镜，机位站在石拱桥桥面正中央、视线沿桥面望向桥远端，"
+        "左右各一排约一米高的木栏杆向远处收拢成两条斜线。\n\n"
+        "## 道具卡：紫晶剑\n"
+        "- 形制：一把直形长剑，剑身通透紫晶质感，护手为银白莲瓣形\n")
+
+    def test_two_hash_card_heading_keeps_its_kind(self):
+        """★★ `## 场景卡：…`（二级标题）的**类型不许丢**（2026-10-06 实测）。
+
+        `_CARD_HEAD_RE` 当时是**非捕获组**，`split` 把「场景卡」三个字一起吃掉，
+        而补前缀的 `_restore_kind_head` 只在"首行还带前缀"时才动手 ⇒
+        **修复从未生效**：这张卡静默退化成 `prop`。后果不是"少一张图"——
+        场景图只在宽景镜按 `location` 通道绑定，退化成 prop 后
+        它既不再当场景锚、又被当道具塞进每一镜（构图被空镜机位带走）。
+        """
+        got = {a["name"]: a for a in cast.parse_assets(self.MD_TWO_HASH)}
+        self.assertEqual(sorted(got), ["秋宫山谷·石拱桥与桥下溪流", "紫晶剑"])
+        self.assertEqual(got["秋宫山谷·石拱桥与桥下溪流"]["type"], "location",
+                         "「场景卡」前缀必须映射成 location，不能回落 prop")
+        self.assertEqual(got["紫晶剑"]["type"], "prop")
+        self.assertIn("桥面正中央", got["秋宫山谷·石拱桥与桥下溪流"]["prompt"],
+                      "「外形提示词」段落要取出，而不是回落到字段列表")
+
+    def test_kind_prefix_is_not_doubled(self):
+        """反向对照：补前缀**不许补成两遍**（`场景卡：场景卡：X` 会让标题匹配失败）。"""
+        for a in cast.parse_assets(self.MD_TWO_HASH):
+            self.assertNotIn("场景卡：场景卡", a["name"] + str(a.get("prompt")))
+            self.assertFalse(a["name"].startswith(("场景卡", "道具卡")),
+                             "名字里不该留着卡类型前缀：%s" % a["name"])
+
 
 class TestCleanDialogue(unittest.TestCase):
     def test_strips_speaker_and_tone(self):

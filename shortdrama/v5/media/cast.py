@@ -403,7 +403,7 @@ def _same_face_as(blk: str, appearance: str) -> str:
 #   一张都不会生成 ⇒ 「切镜就换人/换装」，而上游 assetdesigner 会因产物不合格反复重写。
 #   ⇒ 加「角色卡」进这个字符组，与 `_KIND_HEAD_RE`（本来就认角色卡）保持一致。
 _CARD_HEAD_RE = re.compile(
-    r"^#{2,4}\s*(?:资产卡|角色卡|人物卡|场景卡|道具卡|设施卡|器材卡)"
+    r"^#{2,4}\s*(资产卡|角色卡|人物卡|场景卡|道具卡|设施卡|器材卡)"
     r"\s*(?:[①②③④⑤⑥S\d]+\s*)?[:：]", re.M)
 # ★ 2026-09-23：分块锚扩展（half-narrated 包用「场景卡：/道具卡：」标题——
 #   只认「资产卡」会让 9 张卡静默丢 8 张，实测舞狮项目）。
@@ -438,15 +438,21 @@ _KIND_PREFIX_RE = re.compile(
     r"(?:[①②③④⑤⑥S\d]+\s*)?[:：]\s*")
 
 
-def _restore_kind_head(block: str) -> str:
-    """把被 `split` 吃掉的「卡类型」前缀补回块首行（幂等：已有前缀则不动）。"""
-    if not block:
-        return block
-    lines = block.split("\n")
-    m = _KIND_PREFIX_RE.match(lines[0] or "")
-    if not m:
-        return block
-    return "%s：%s" % (m.group(1), block)
+def _restore_kind_head(kind: str, body: str) -> str:
+    """把被 `split` 吃掉的「卡类型」前缀接回块首行（幂等：首行本来就带前缀则不动）。
+
+    ★ 2026-10-06 重写：旧签名 `_restore_kind_head(block)` 只在**首行还带前缀**时才动手，
+      而 `split` 交出来的块**恰恰是前缀已被吃掉的** ⇒ 它永远走"不动"那一支；
+      更糟的是真带前缀时它会把前缀**再补一遍**（`场景卡：场景卡：X`）。
+      也就是说 2026-10-05 那次"补前缀"的修复**从来没有生效过**，
+      而 `_CARD_HEAD_RE` 当时是非捕获组 ⇒ 「卡类型」三个字整块丢失 ⇒
+      `## 场景卡：…` 静默退化成 prop（场景图不再走 location 的宽景通道）。
+    """
+    body = (body or "").lstrip("\n")
+    first = body.split("\n", 1)[0]
+    if _KIND_PREFIX_RE.match(first or ""):
+        return body
+    return "%s：%s" % (kind, body)
 
 
 def _split_asset_blocks(md: str) -> list[str]:
@@ -469,7 +475,9 @@ def _split_asset_blocks(md: str) -> list[str]:
     """
     parts = _CARD_HEAD_RE.split(md or "")
     if len(parts) > 1:
-        return [_restore_kind_head(p) for p in parts[1:]]
+        # 一个捕获组 ⇒ parts = [前, 卡类型, 正文, 卡类型, 正文, …]
+        return [_restore_kind_head(parts[i], parts[i + 1])
+                for i in range(1, len(parts) - 1, 2)]
     out: list[str] = []
     cur: str | None = None
     for ln in (md or "").splitlines():
