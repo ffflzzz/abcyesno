@@ -1,0 +1,84 @@
+/* ==========================================================================
+   Pavo 短剧工作台 · 离线复刻版
+   tokens.css —— 设计令牌
+   数值来源：对 app.pavo-ai.cn 线上页面的 computed style 实测
+   （关闭 Chrome Auto Dark Mode 后测得，站点真实设计为浅色主题）
+   ========================================================================== */
+
+:root {
+  /* ---- 背景层级 ---- */
+  --bg-body: #f8f7f5;        /* body 实测 rgb(248,247,245) */
+  --bg-page: #fbfbfb;        /* 页面容器实测 rgb(251,251,251) */
+  --bg-card: #f5f5f5;        /* 信息卡实测 rgb(245,245,245) */
+  --bg-subtle: #f2f2f2;      /* 次级底 / 项目卡实测 rgb(242,242,242) */
+  --bg-white: #ffffff;
+  --bg-hover: #ebebeb;
+
+  /* ---- 文字层级 ---- */
+  --text-strong: #000000;    /* h1 实测 rgb(0,0,0) */
+  --text-primary: #121212;   /* 正文实测 rgb(18,18,18) */
+  --text-secondary: #717171; /* 次级实测 rgb(113,113,113) */
+  --text-tertiary: #9c9c9c;  /* 三级实测 rgb(156,156,156) */
+  --text-inverse: #ffffff;
+
+  /* ---- 描边 ---- */
+  --border: #e8e8e8;         /* 实测 rgb(232,232,232) */
+  --border-soft: #efefef;
+
+  /* ---- 品牌强调色 ---- */
+  --accent: #0abccf;         /* 实测 rgb(10,188,207) */
+  --accent-soft: rgba(10, 188, 207, 0.1);
+  --accent-hover: #09a8b9;
+
+  /* ---- 功能色 ---- */
+  --success: #16a34a;
+  --success-soft: rgba(22, 163, 74, 0.1);
+  --warn: #e08c1a;
+  --warn-soft: rgba(224, 140, 26, 0.12);
+  --danger: #e5484d;
+  --danger-soft: rgba(229, 72, 77, 0.1);
+
+  /* ---- 极深色（主按钮/提示条） ---- */
+  --ink: #121212;
+  --ink-soft: #2a2a2a;
+
+  /* ---- 圆角 ---- */
+  --r-pill: 999px;
+  --r-card: 24px;
+  --r-md: 16px;
+  --r-sm: 8px;
+  --r-xs: 6px;
+
+  /* ---- 尺寸（实测） ---- */
+  --siderbar-width: 6.125rem;  /* 98px，取自 --siderbar-width */
+  --header-h: 87.5px;          /* header 实测 87.5px */
+  --header-h-short: 64px;      /* 工作台二级页头部近似高度 */
+  --main-pt: 77px;             /* main padding-top 实测 77px */
+  --content-px: 56px;          /* 内容区左右内边距实测 */
+  --content-max: 1280px;       /* 内容最大宽度（pavo 使用 max-w-[1280px]） */
+
+  /* ---- 字体 ---- */
+  --font-sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei",
+    "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-num: "SF Mono", "JetBrains Mono", Consolas, monospace;
+
+  /* ---- 过渡 ---- */
+  --t-fast: 0.16s ease;
+  --t-base: 0.22s ease;
+
+  /* ---- 阴影 ---- */
+  --shadow-card: 0 0 0 1px var(--border);
+  --shadow-pop: 0 8px 28px rgba(0, 0, 0, 0.12);
+  --shadow-hover: 0 4px 10px rgba(0, 0, 0, 0.08);
+
+  /* ---- 积分胶囊（`.credits`，实测自线上站点顶栏的暖色族）---- */
+  --credits-fg: #4f4132;
+  --credits-bg-from: #f7f1e4;
+  --credits-bg-to: #fdf7ea;
+  --credits-border: #f0e4cc;
+  --credits-sep: #e6d9bf;
+  --credits-accent: #b8862f;
+
+  /* ---- 危险色 hover（与 --accent-hover 对称）---- */
+  --danger-hover: #d13a3f;
+}

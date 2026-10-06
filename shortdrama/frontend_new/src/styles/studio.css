@@ -1,0 +1,132 @@
+/* ==========================================================================
+   styles/studio.css —— 三栏工作室（项目栏 / 画布 / 导演对话）
+   --------------------------------------------------------------------------
+   暗色、按截图的三栏形状。**不复用 app.css 的 `.sider` / `.main`** —— 那套是
+   旧工作台的亮色布局，混用会让两边互相覆盖（`tokens.css` 仍复用，变量是共用的）。
+   ========================================================================== */
+
+.studio {
+  display: grid;
+  grid-template-columns: 268px minmax(0, 1fr) 400px;
+  height: 100vh;
+  background: var(--sd-bg, #0b0b0d);
+  color: var(--sd-fg, #e8e8ea);
+  font: 14px/1.55 var(--sd-font, system-ui, "PingFang SC", "Microsoft YaHei", sans-serif);
+  overflow: hidden;
+}
+.studio--collapsed { grid-template-columns: 56px minmax(0, 1fr) 400px; }
+.studio--nochat { grid-template-columns: 268px minmax(0, 1fr) 0; }
+
+/* ── 左栏：历史会话 / 并行生产的项目 ─────────────────────────────── */
+.rail { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid #1e1e24; background: #0e0e11; }
+.rail-head { display: flex; align-items: center; gap: 8px; padding: 14px 12px 10px; }
+.rail-title { font-weight: 600; letter-spacing: .2px; }
+.rail-search { margin: 0 12px 10px; }
+.rail-search input {
+  width: 100%; padding: 7px 10px; border-radius: 8px;
+  border: 1px solid #26262e; background: #141419; color: inherit; outline: none;
+}
+.rail-search input:focus { border-color: #4a4a58; }
+.rail-body { flex: 1; min-height: 0; overflow: auto; padding: 0 8px 12px; }
+.rail-group { margin: 12px 4px 6px; font-size: 12px; color: #7d7d8a; display: flex; justify-content: space-between; }
+.rail-item {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  padding: 8px 10px; margin-bottom: 2px; border: 0; border-radius: 8px;
+  background: transparent; color: inherit; cursor: pointer;
+}
+.rail-item:hover { background: #17171d; }
+.rail-item--on { background: #1d1d27; box-shadow: inset 2px 0 0 #6c5ce7; }
+.rail-item-main { flex: 1; min-width: 0; }
+.rail-item-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rail-item-sub { display: block; font-size: 11px; color: #6f6f7c; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: #3f3f4a; flex: none; }
+.dot--run { background: #22c55e; box-shadow: 0 0 0 3px rgba(34,199,94,.16); animation: sd-pulse 1.6s infinite; }
+.dot--wait { background: #f59e0b; box-shadow: 0 0 0 3px rgba(245,158,11,.16); }
+@keyframes sd-pulse { 50% { opacity: .35; } }
+.rail-foot { padding: 10px 12px; border-top: 1px solid #1e1e24; display: flex; gap: 8px; }
+
+/* ── 中栏：画布 ─────────────────────────────────────────────────── */
+.stage { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.stage-bar {
+  display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+  border-bottom: 1px solid #1e1e24; background: #0e0e11; flex: none;
+}
+.stage-title { font-weight: 600; }
+.stage-meta { font-size: 12px; color: #7d7d8a; }
+.stage-spacer { flex: 1; }
+.stage-canvas { position: relative; flex: 1; min-height: 0; background: #08080a; }
+.stage-canvas iframe { width: 100%; height: 100%; border: 0; display: block; }
+.stage-empty {
+  position: absolute; inset: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 10px; color: #6f6f7c; text-align: center; padding: 24px;
+}
+.stage-note {
+  position: absolute; left: 14px; bottom: 14px; max-width: 60%;
+  padding: 8px 11px; border-radius: 9px; font-size: 12px;
+  background: rgba(20,20,26,.92); border: 1px solid #2a2a34; color: #b9b9c6;
+}
+
+/* 镜头检查器：画布上选中一格 ⇒ 这里改，改完入表 */
+.inspector {
+  flex: none; max-height: 46%; overflow: auto; border-top: 1px solid #1e1e24;
+  background: #0e0e11; padding: 12px 14px;
+}
+.inspector h4 { margin: 0 0 4px; font-size: 13px; }
+.inspector-hint { color: #7d7d8a; font-size: 12px; margin: 0 0 10px; }
+.field { margin-bottom: 9px; }
+.field label { display: block; font-size: 11px; color: #8b8b98; margin-bottom: 3px; }
+.field textarea, .field input {
+  width: 100%; box-sizing: border-box; padding: 7px 9px; border-radius: 7px;
+  border: 1px solid #26262e; background: #141419; color: inherit; font: inherit; resize: vertical;
+}
+.field--row { display: flex; gap: 8px; }
+.field--row > div { flex: 1; min-width: 0; }
+.inspector-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.inspector-log { font-size: 12px; color: #8b8b98; margin-top: 8px; }
+.chip { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11px; background: #1d1d27; color: #a9a9b8; }
+.chip--warn { background: #2a1f0b; color: #f0b429; }
+.chip--bad { background: #2a1010; color: #f87171; }
+.chip--good { background: #0e2417; color: #4ade80; }
+
+/* ── 右栏：导演对话 ─────────────────────────────────────────────── */
+.chat { display: flex; flex-direction: column; min-height: 0; border-left: 1px solid #1e1e24; background: #0e0e11; }
+.chat-head { display: flex; align-items: center; gap: 8px; padding: 14px; border-bottom: 1px solid #1e1e24; }
+.chat-state { font-size: 12px; color: #7d7d8a; }
+.chat-body { flex: 1; min-height: 0; overflow: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+.msg { max-width: 88%; padding: 9px 12px; border-radius: 12px; white-space: pre-wrap; word-break: break-word; }
+.msg--me { align-self: flex-end; background: #2b2540; border: 1px solid #3d3560; }
+.msg--sys { align-self: flex-start; background: #15151b; border: 1px solid #23232c; color: #b0b0bd; font-size: 13px; }
+.msg--edit { align-self: flex-start; background: #101820; border: 1px solid #1e2f3d; color: #9ec5dd; font-size: 12px; }
+.msg-meta { display: block; margin-top: 4px; font-size: 11px; color: #6f6f7c; }
+.chat-gate { margin: 0 14px; padding: 10px 12px; border-radius: 10px; background: #1a1508; border: 1px solid #3a2e10; font-size: 12px; }
+.chat-gate-row { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.chat-input { padding: 12px 14px 14px; border-top: 1px solid #1e1e24; }
+.chat-input textarea {
+  width: 100%; box-sizing: border-box; min-height: 62px; padding: 9px 11px;
+  border-radius: 10px; border: 1px solid #26262e; background: #141419; color: inherit;
+  font: inherit; resize: vertical; outline: none;
+}
+.chat-input textarea:focus { border-color: #4a4a58; }
+.chat-input-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.chat-input-row select {
+  padding: 5px 8px; border-radius: 7px; border: 1px solid #26262e;
+  background: #141419; color: inherit; font: inherit;
+}
+
+/* ── 通用小件 ───────────────────────────────────────────────────── */
+.btn {
+  padding: 6px 12px; border-radius: 8px; border: 1px solid #2c2c36;
+  background: #17171d; color: inherit; cursor: pointer; font: inherit;
+}
+.btn:hover { background: #1f1f27; }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn--primary { background: #6c5ce7; border-color: #6c5ce7; color: #fff; }
+.btn--primary:hover:not(:disabled) { background: #7d6ef0; }
+.btn--danger { border-color: #4a1f1f; background: #221010; color: #f87171; }
+.btn--sm { padding: 4px 9px; font-size: 12px; }
+.spin { width: 13px; height: 13px; border: 2px solid #3a3a46; border-top-color: #6c5ce7; border-radius: 50%; animation: sd-spin .8s linear infinite; display: inline-block; }
+@keyframes sd-spin { to { transform: rotate(360deg); } }
+.err { color: #f87171; font-size: 12px; }
+.toast { position: fixed; right: 18px; bottom: 18px; z-index: 50; display: flex; flex-direction: column; gap: 8px; }
+.toast div { padding: 10px 13px; border-radius: 9px; background: #17171d; border: 1px solid #2c2c36; font-size: 13px; max-width: 380px; }
+.toast div[data-t="bad"] { border-color: #4a1f1f; color: #fca5a5; }
