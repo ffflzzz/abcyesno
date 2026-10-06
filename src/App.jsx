@@ -1480,7 +1480,13 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
   // 短剧工厂: the backend is a lazily-started local FastAPI on a runtime-chosen
   // port, so the URL cannot come from a build-time manifest — ask the main
   // process for it, then open it in the built-in browser tab (Excalidraw path).
-  const openShortdrama = useCallback(async () => {
+  //
+  // `subpath` exists because the SAME shim serves several frontends side by side:
+  // `/` → shortdrama/frontend/dist, `/atelier` → the canvas app, `/studio` →
+  // shortdrama/frontend_new/dist (the 3-pane studio). They must share one origin
+  // — the backend hands out root-relative media URLs — so a second port would
+  // break every image. Hence one boot, two entry points.
+  const openShortdrama = useCallback(async (subpath = "", title = "短剧工厂") => {
     if (sdBootRef.current) return sdBootRef.current;
     const attempt = (async () => {
       setSdBoot("booting");
@@ -1490,9 +1496,9 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
         setSdBoot("idle");
         createTab({
           type: "browser",
-          title: "短剧工厂",
+          title,
           icon: "clapperboard",
-          browserUrl: res.url,
+          browserUrl: res.url + subpath,
         });
       } catch (err) {
         console.error("[shortdrama] boot failed:", err);
@@ -1557,6 +1563,21 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
       icon: "clapperboard",
       onClick: () => {
         void openShortdrama().catch(() => {});
+      },
+    },
+    // 短剧工作室 — the three-pane production view (project rail + live atelier
+    // canvas + director chat). Same Python backend and same origin as 短剧工厂,
+    // just mounted at /studio by v5/server.py, so this reuses the one boot.
+    // Trailing slash matters: the static mount resolves "/" for the directory.
+    {
+      key: "shortdrama-studio",
+      title:
+        sdBoot === "booting" ? "工作室启动中…"
+        : sdBoot === "error" ? "工作室启动失败"
+        : "短剧工作室",
+      icon: "clapperboard",
+      onClick: () => {
+        void openShortdrama("/studio/", "短剧工作室").catch(() => {});
       },
     },
     // Excalidraw online whiteboard — opens as a NEW in-app tab with the

@@ -88,6 +88,10 @@ shortdrama/.env.*
 # 会连它一起吞掉，导致打包后短剧页 404。
 !shortdrama/frontend/dist/
 !shortdrama/frontend/dist/**
+# 三栏工作室（shortdrama/frontend_new）同理：它由同一个 shim 挂在 /studio，
+# 构建产物必须入库，否则新克隆/打包时 v5/server.py 只能回一条 503。
+!shortdrama/frontend_new/dist/
+!shortdrama/frontend_new/dist/**
 
 # ── 在跑的会话状态与实验产物：只忽略，内容一律不删 ──────────────────
 # 2026-09-30 清 git status 时确认这几处是别的会话正在写的，删了就是毁工作现场：

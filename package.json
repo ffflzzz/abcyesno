@@ -16,6 +16,8 @@
     "bridge:build": "node electron/backend/wechat_bridge/build.mjs",
     "shortdrama:venv": "node scripts/setup-shortdrama-venv.mjs",
     "shortdrama:web": "cd shortdrama/frontend && npm ci && npm run build",
+    "shortdrama:studio": "cd shortdrama/frontend_new && npm ci && npm run build",
+    "shortdrama:all": "npm run shortdrama:web && npm run shortdrama:studio",
     "test:bridge": "node scripts/test-wechat-bridge-unit.mjs",
     "test:browser-panel": "node scripts/test-browser-panel/build.mjs && node scripts/test-browser-panel/run.mjs",
     "test:reconcile": "node scripts/test-session-reconcile.mjs",
