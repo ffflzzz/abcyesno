@@ -200,22 +200,35 @@ def submit_chain(project_root: Path, shots: list[dict], stills: dict, planned: l
             continue
         plan = p.get("frame_plan", {})
         own = (stills.get(name) or {}).get("url")
-        if not own:
-            log("[video] %s 无静帧，跳过" % name)
-            jobs_mod.mark(jobs, name, "failed", error="无静帧")
-            continue
         # 「图怎么用」按模式分流（2026-09-13，见 config.VIDEO_MODE）：
-        #   · reference（默认）：静帧进 `images`，在提示词里作 `<Picture 1>` 参考图。
-        #     **没有首帧锁定**，因此不做承接——各镜完全独立（这顺带消灭了
-        #     「连续镜必须等上一镜渲完」的串行瓶颈）。
+        #   · reference（默认）：喂什么图由 `VideoPlan.from_sheets` 定 ——
+        #       True（2026-10-07 新默认）→ 本镜的资产图（定妆照/场景空镜/道具），
+        #         **静帧不再是输入**，所以这一镜没有静帧也能渲（见下面的放行）；
+        #       False → 旧行为，静帧当 `<Picture 1>` 参考图，各镜完全独立。
         #   · keyframe（回退档）：连续/匹配镜 first=上一镜真实尾帧（承接动作）、
         #     last=本镜静帧（收在本镜该有的构图）——静帧因此不会被浪费。
         images: list[str] = []
+        ref_roles: list | None = None
         first = last = None
         use_tail = False
         if video_mode == "reference":
-            images = [own]
+            if vplan.from_sheets:
+                images, ref_roles = assets.sheets_for_shot(project_root, s, ep=ep)
+            if not images:
+                if not own:
+                    log("[video] %s 既无资产图也无静帧，跳过" % name)
+                    jobs_mod.mark(jobs, name, "failed", error="无图可喂")
+                    continue
+                if vplan.from_sheets:
+                    log("[video] ⚠️ %s 没绑到任何资产图（注册表空/名字没对上？）"
+                        "⇒ 这一镜退回喂静帧。整批都这样说明资产阶段没跑成。" % name)
+                images = [own]
+                ref_roles = None
         else:
+            if not own:
+                log("[video] %s 无静帧，跳过" % name)
+                jobs_mod.mark(jobs, name, "failed", error="无静帧")
+                continue
             use_tail = bool(plan.get("use_prev_last")) and bool(prev_tail)
             # 首尾帧模式（连续/匹配镜）
             first = prev_tail if use_tail else own
@@ -241,7 +254,8 @@ def submit_chain(project_root: Path, shots: list[dict], stills: dict, planned: l
         # 提交：**队列满(503) 是可恢复的**——退避重试同一镜，而不是直接判死。
         # 实测（2026-09-10）：批量重拍时反复收到 503 video_queue_full，原实现
         # 立即 mark failed → 该镜缺席成片。队列满只意味着"稍后再来"。
-        vprompt = prompt_mod.build_video_prompt(s, p, mode=video_mode)
+        vprompt = prompt_mod.build_video_prompt(s, p, mode=video_mode,
+                                                ref_roles=ref_roles)
         r = None
         stop_chain = False
         for q_try in range(config.VIDEO_QUEUE_RETRIES + 1):
@@ -287,11 +301,13 @@ def submit_chain(project_root: Path, shots: list[dict], stills: dict, planned: l
         # 记账里的 `first_frame` 字段语义随模式变（两模式都必须有"驱动图"）：
         #   reference → 记静帧 URL（它进的是 images，不是 first_frame）
         #   keyframe  → 记真正的首帧（可能是上一镜尾帧）
-        anchor = own if video_mode == "reference" else first
+        anchor = (images[0] if (video_mode == "reference" and images) else own)             if video_mode == "reference" else first
         jobs_mod.submitted(
             jobs, name, vid,
-            first_frame_kind=("reference_still" if video_mode == "reference"
-                              else ("prev_tail" if use_tail else "own_still")),
+            first_frame_kind=("reference_sheets" if (video_mode == "reference"
+                                                    and ref_roles)
+                              else ("reference_still" if video_mode == "reference"
+                                    else ("prev_tail" if use_tail else "own_still"))),
             has_last_frame=bool(last),
             first_frame=anchor[:120] + ("..." if len(anchor) > 120 else ""),
             seconds=s.get("seconds") or 8)
@@ -391,11 +407,19 @@ def submit_all(project_root: Path, shots: list[dict], stills: dict, planned: lis
         # 没有落幅图就退回 own-still（不能因此不渲）。
         tail_url = (tails.get(prev_name) or {}).get("url") if prev_name else None
         first, last, first_kind = own, None, "own_still"
+        # 喂资产图时（2026-10-07 新默认）这一镜的输入不再是静帧
+        ref_roles: list | None = None
+        sheet_imgs: list[str] = []
         if shot_mode == "reference":
-            # reference 不允许 first_frame（见 providers.submit_video）→ 各镜独立，
-            # 静帧进 images 当 <Picture 1>。连带 `tails`（落幅预生成）在这条路径上
-            # 也不再有消费方。
-            first_kind = "reference_still"
+            # reference 不允许 first_frame（见 providers.submit_video）→ 各镜独立。
+            # 喂什么图由 `from_sheets` 定：True → 本镜资产图（定妆照/场景/道具），
+            # 静帧退出输入；False → 旧行为，静帧进 images 当 `<Picture 1>`。
+            # 连带 `tails`（落幅预生成）在这条路径上不再有消费方。
+            if vplan.from_sheets:
+                sheet_imgs, ref_roles = assets.sheets_for_shot(project_root, s, ep=ep)
+            first_kind = "reference_sheets" if sheet_imgs else "reference_still"
+            if sheet_imgs:
+                first = sheet_imgs[0]
         elif plan.get("use_prev_last") and tail_url:
             first, last, first_kind = tail_url, own, "prev_tail_pregen"
         if not first:
@@ -409,7 +433,8 @@ def submit_all(project_root: Path, shots: list[dict], stills: dict, planned: lis
         r = None
         # **领 key = 过闸门**：阻塞到这条 key 的窗口放开，返回即已占用。
         # 选的是"最早到期"的那条（多条 key 自然轮转）。
-        vp = prompt_mod.build_video_prompt(s, p, mode=shot_mode)
+        vp = prompt_mod.build_video_prompt(s, p, mode=shot_mode,
+                                          ref_roles=ref_roles)
         for q_try in range(config.VIDEO_QUEUE_RETRIES + 1):
             # ★ 每轮**重新领 key**（2026-09-22 队列满换通道改造）：队列满是
             #   **每条通道各自的状态**（实测同一晚 pack03 撞满 2 次后由另一条 key
@@ -418,7 +443,8 @@ def submit_all(project_root: Path, shots: list[dict], stills: dict, planned: lis
             key_idx, key = pool.claim()
             try:
                 if shot_mode == "reference":
-                    r = providers.submit_video(vp, mode="reference", images=[first],
+                    r = providers.submit_video(vp, mode="reference",
+                                               images=sheet_imgs or [first],
                                                seconds=s.get("seconds") or 8, key=key)
                 else:
                     r = providers.submit_video(vp, mode="keyframe",

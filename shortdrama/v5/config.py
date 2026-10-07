@@ -312,6 +312,29 @@ if VIDEO_MODE not in VIDEO_MODES:
              VIDEO_MODE_DEFAULT, "pack"))
     VIDEO_MODE = VIDEO_MODE_DEFAULT
 
+# ★ 视频请求**喂什么图**（2026-10-07 用户看片后定的新默认）。
+#   `sheets`（新默认）= 喂资产图：角色定妆照（≤2）+ 本镜场景空镜 + 道具图，**不含静帧**。
+#   `stills`（旧行为）= 只喂本镜静帧那一张。
+# 定这条的依据（两轮实跑，同一套分镜与提示词组装器）：
+#   · `madfate-abc-1005-nostill` 15 镜 vs 10-05 的 reference 臂：场景地貌从"每镜自己
+#     发明一遍"变成照场景卡一致；代价是那栋天台场景卡**自带一排红字** ⇒ 原样进成片。
+#   · `xianxia-zhongzhui-1007-nostill` 6 镜 60 秒：八张资产图逐张查过无字 ⇒ 成片
+#     一帧无字；能量色双色对撞、跨镜人数与地貌全稳。
+# ⇒ 这条开关的红利取决于**资产图干不干净**，所以配套要求见 `v5/media/sheetcheck.py`
+#   的查字闸门（Stage C）：图上带可读文字就不进提交。
+# ⚠️ 拼错不报错会静默换喂法（与 `SHORTDRAMA_VIDEO_MODE` 同型事故），故同样响亮校验。
+VIDEO_REF_SOURCES = ("sheets", "stills")
+VIDEO_REF_SOURCE_DEFAULT = "sheets"
+VIDEO_REF_SOURCE = os.environ.get("SHORTDRAMA_VIDEO_REF_SOURCE",
+                                  VIDEO_REF_SOURCE_DEFAULT).strip().lower()
+if VIDEO_REF_SOURCE not in VIDEO_REF_SOURCES:
+    print("[config] ⚠️ SHORTDRAMA_VIDEO_REF_SOURCE=%r 不是合法值（合法值：%s）"
+          " ⇒ 已回落到默认 %r。这一项决定视频请求里喂的是资产图还是静帧，"
+          "拼错的代价是产物静默换喂法。"
+          % (os.environ.get("SHORTDRAMA_VIDEO_REF_SOURCE"),
+             "/".join(VIDEO_REF_SOURCES), VIDEO_REF_SOURCE_DEFAULT))
+    VIDEO_REF_SOURCE = VIDEO_REF_SOURCE_DEFAULT
+
 # pack 档单组最多吞几个镜。
 # ★ 2026-10-05：默认从 **5 放开到 12**。5 这个数的依据是当年「每镜一张静帧」
 #   （一条请求最多 5 张参考图 ⇒ 5 镜 = 5 图），而 **2026-09-28 图序已改成

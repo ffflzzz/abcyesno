@@ -1335,7 +1335,8 @@ def build_tail_prompt(shot: dict, plan: dict | None = None,
 def build_video_prompt(shot: dict, plan: dict | None = None,
                        global_tail: str | None = None,
                        profile: "_mp.ModelProfile | None" = None,
-                       mode: str | None = None) -> str:
+                       mode: str | None = None,
+                       ref_roles: list | None = None) -> str:
     """视频（图生视频）提示词：六段式骨架。
 
     镜头语言。视觉风格。画面内容。镜间承接。落幅。声音。全局约束。
@@ -1395,7 +1396,15 @@ def build_video_prompt(shot: dict, plan: dict | None = None,
     if vp.announce_picture and not lean:
         # 素材用途声明**打头**（官方 reference 示例就是这个位置）。
         # 语言跟随提示词主体：英文主体的声明用英文版，否则会被 strip_cjk 清成空。
-        segs.insert(0, REF_USAGE_EN if english_body else REF_USAGE_ZH)
+        #
+        # ★ `ref_roles`（2026-10-07，视频改喂资产图）：此时 Picture 1 **不是静帧**，
+        #   那句"以 <Picture 1> 中的角色、服装与场景为参考"会变成一句假话（它会把
+        #   定妆照说成"这一镜的画面"）。给了分工声明就改用逐张点名版 —— 与 pack 档
+        #   同源（`pack_ref_declaration`），并明说场景图只锁地貌、机位听文字。
+        if ref_roles:
+            segs.insert(0, pack_ref_declaration(ref_roles))
+        else:
+            segs.insert(0, REF_USAGE_EN if english_body else REF_USAGE_ZH)
     # 中文字形清除（2026-09-10 maskparade 事故：衬衫被烧上「老周」二字）。
     # 只对**英文主体**生效；中文正文原样保留（见 strip_cjk / _CJK_EN_BODY_MAX）。
     #

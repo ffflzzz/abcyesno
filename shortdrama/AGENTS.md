@@ -582,6 +582,7 @@ pack 档**跳过**逐镜 clipqc（组产物多镜
 | `AGNES_VIDEO_MAX_SECONDS` | 12 | 单镜秒数**上限**（供应商硬约束 `seconds ∈ [4,12]`；下限 4 固定）。★ 设成小于 12 会让超长的镜被**静默压短**——2026-09-16 曾因误设 `10` 压短 620 镜中的 9 镜 |
 | `SHORTDRAMA_VIDEO_BGM` | 1 | 类型包禁忌 BGM 时设 `0` |
 | `SHORTDRAMA_VIDEO_MODE` | reference | `keyframe` 为回退档；`pack` 为 12s 打包档（见上文模式表）|
+| `SHORTDRAMA_VIDEO_REF_SOURCE` | **sheets** | **视频请求喂什么图**（2026-10-07 起的新默认，改的是"吃什么"不是"怎么提交"）。`sheets` = 本镜的定妆照（≤2）+ 场景空镜 + 道具图，**静帧不再是输入**（封顶 3 张：图数 > 分镜人数就多画人）；`stills` = 旧行为（只喂本镜静帧）。两轮实跑定案：`madfate-abc-1005-nostill` 15 镜、`xianxia-zhongzhui-1007-nostill` 6 镜。**红利取决于资产图干不干净**——场景卡自带可读文字时会原样进成片（命案集实测 4 镜），所以喂之前先人眼扫一遍图。判据在 `v5/media/assets.sheets_for_shot`，回归测试 `v5/tests_video_sheets.py` |
 | `SHORTDRAMA_VIDEO_PACK_MAX_GROUP` | 12 | `pack` 模式单组最多镜数（2026-10-05 从 5 放开；5 的依据「每镜一张静帧」已随 09-28 图序失效。同 README §6）|
 | `SHORTDRAMA_VIDEO_SUBMIT_TIMEOUT` | 60 | 生视频**提交**读超时（秒）。多参考图的 pack 组建议 180（60s 会把多图提交判成失败，同 README §6）|
 | `SHORTDRAMA_STILL_QC` | 1 | `0` = 跳过静帧 QC。★ **前端路径（`v5/media/runner.start`）默认传 `0`**（人工模式：判断权在人），前端工具栏的「自动质检」开关可打开 |

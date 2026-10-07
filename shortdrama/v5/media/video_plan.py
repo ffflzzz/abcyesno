@@ -193,6 +193,8 @@ class VideoPlan:
     can_submit_flat: bool      # 各镜互相独立 → 可平铺提交（提交与等待解耦）
     # ── 提示词 ──
     announce_picture: bool     # 是否写 `<Picture 1>` 用途声明（reference 要求）
+    # ── 图的来源（2026-10-07 新默认，判据见 `config.VIDEO_REF_SOURCE`）──
+    from_sheets: bool = False  # True ⇒ 逐镜喂资产图（定妆照/场景/道具），⛔不喂静帧
 
     @classmethod
     def of(cls, mode: str | None = None, *,
@@ -215,12 +217,13 @@ class VideoPlan:
                   % (mode, "/".join(MODES), config.VIDEO_MODE_DEFAULT))
             m = config.VIDEO_MODE_DEFAULT
 
+        sheets = (config.VIDEO_REF_SOURCE == "sheets")
         if m == "reference":
             # reference 不允许 first_frame → 各镜之间**没有任何可承接的依赖**
             # → 平铺是唯一合理选择（串行只是白等；40 镜时差 4 倍）。
             return cls(mode=m, use_images=True, use_keyframes=False,
                        needs_tail_extract=False, can_submit_flat=True,
-                       announce_picture=True)
+                       announce_picture=True, from_sheets=sheets)
 
         if m == "pack":
             # 打包档（2026-09-22）：本质是 reference（静帧进 images、无首帧锁定），
@@ -230,14 +233,14 @@ class VideoPlan:
             # 自行做 `<Picture i>` 逐拍声明，不走单镜六段式组装器。
             return cls(mode=m, use_images=True, use_keyframes=False,
                        needs_tail_extract=False, can_submit_flat=True,
-                       announce_picture=False)
+                       announce_picture=False, from_sheets=True)
 
         if m == "mixed":
             # 逐镜决策（见 `mode_for`）。串行依赖全靠"预生成落幅图"解除 ⇒ 必须平铺；
             # 不抽真实尾帧（那是 submit_chain 的机制，mixed 不走链式）。
             return cls(mode=m, use_images=True, use_keyframes=True,
                        needs_tail_extract=False, can_submit_flat=True,
-                       announce_picture=False)
+                       announce_picture=False, from_sheets=sheets)
 
         # keyframe：各镜可能靠"上一镜真实尾帧"承接 → 平铺取决于依赖是否已解除。
         sc = config.STILL_CHAIN if still_chain is None else still_chain

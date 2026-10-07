@@ -1448,3 +1448,88 @@ def bind(root: Path, shots: list[dict], max_n: int = 5,
                 #   ep1 实测：残旧仕女图/白玉平安扣都被说成"角色"，模型困惑）。
                 types_out[s["name"]] = [str(h.get("type") or "prop") for h in picks]
     return out
+
+
+# ─── 视频请求喂什么图：资产图，不含静帧（2026-10-07 新默认）───────────────────
+# 依据与回退开关都在 `config.VIDEO_REF_SOURCE` 的注释里（两轮实跑：命案集 15 镜、
+# 仙侠集 6 镜）。这里只回答"这一镜该喂哪几张图"。
+
+def scene_asset_for_shot(reg: dict, shot: dict) -> tuple:
+    """按分镜**「场景」列原值**找那张场景空镜。返回 `(资产|None, 说明)`。
+
+    ⚠️ 读的是 `scene_col` 不是 `scene`：`relations.plan_frames` 会用段落标题派生的
+      场景名**覆写** `scene`（实测 `xianxia-zhongzhui-1007`：标题「第 1 场：断剑坪·
+      钟坠（云海之上）」覆写后与资产卡名「断剑坪·坪内」对不上 ⇒ 六镜全部拿不到场景图）。
+    ⚠️ **歧义不猜**：两张卡都对得上就谁都不绑（同 `hits_for_text` 的尾词规则）。
+      实测该集收尾两镜场景列只写「云海」，而两张卡的关键词里都有它 ⇒ 那两镜只有人脸，
+      场景靠文字。这比绑错一处场景好。
+    """
+    key = str(shot.get("scene_col") or shot.get("scene") or "").strip().lstrip("@")
+    key = key.split("（")[0].strip()
+    if not key:
+        return None, "本镜无场景列"
+    locs = [a for a in reg.get("assets", []) if a.get("type") == "location"]
+    names = [str(a.get("name") or "").strip() for a in locs]
+    cands = [a for a, nm in zip(locs, names)
+             if nm == key or (nm and nm in key) or (len(key) >= 3 and key in nm)]
+    if not cands:                      # 名字没对上再试关键词（分镜常写简称）
+        cands = [a for a in locs
+                 if any(key == str(k).strip() or (len(key) >= 2 and key in str(k))
+                        for k in (a.get("keywords") or []))]
+    if not cands:
+        return None, "注册表无匹配场景卡(%s)" % key
+    if len(cands) > 1:
+        return None, "场景名歧义(%s→%s)" % (
+            key, "/".join(str(c.get("name")) for c in cands))
+    return cands[0], str(cands[0].get("name") or key)
+
+
+def sheets_for_shot(root: Path, shot: dict, ep=None,
+                    max_n: int = 3) -> tuple[list[str], list[tuple[str, str]]]:
+    """这一镜喂给视频的资产图。返回 `(urls, roles)`，`roles` 与 `urls` 同序。
+
+    槽位：角色设定表（≤2，双人戏两张脸）→ 本镜场景空镜（1）→ 道具图补位，
+    **总数默认 3**。不放开到接口上限 5：10-06 桥上决斗在视频通道实测「图的张数 >
+    分镜要求的人数 ⇒ 多画一个人」（5 张画三人、3 张全对）。
+
+    与 `bind()` 的两处**有意**不同：
+      · `bind()` 的封顶是给静帧用的（静帧会被"图数>人数"多画，且场景图会把构图拉回
+        大 Wide）；这里场景图**无条件给**，因为提示词里明说它只锁地貌、机位听文字。
+      · `bind()` 谁先被 @ 谁进请求；这里按 脸→场景→道具 的固定优先级排。
+    """
+    reg = auto_sync(root)
+    hits, _unresolved = hits_for_shot(reg, shot, max_n=max_n)
+    if not any(h.get("type") == "character" for h in hits):
+        prot = protagonist(root, reg)
+        text = (shot.get("visual") or "") + " " + (shot.get("dialogue") or "")
+        names = [str(a.get("name") or "") for a in reg.get("assets", [])
+                 if a.get("type") == "character"]
+        if prot and person_in_text(text, names):
+            hits = [prot] + list(hits)
+    if shot.get("no_human"):           # 【无人像】镜：不绑任何角色表（同 bind）
+        hits = [h for h in hits if h.get("type") != "character"]
+
+    chars = [h for h in hits if h.get("type") == "character"]
+    props = [h for h in hits if h.get("type") not in ("character", "location")]
+    scene, scene_info = scene_asset_for_shot(reg, shot)
+
+    urls: list[str] = []
+    roles: list[tuple[str, str]] = []
+
+    def add(asset: dict | None, kind: str, label: str) -> None:
+        if len(urls) >= max_n:
+            return
+        for u in _safe_ref_urls(asset, root) if asset else []:
+            if u and u not in urls:
+                urls.append(u)
+                roles.append((kind, label))
+                return
+
+    for a in chars[:2]:
+        add(a, "character", "角色「%s」的人物设定表" % (a.get("name") or ""))
+    add(scene, "location",
+        "场景「%s」的空镜（只锁建筑与地貌，不锁机位）" % scene_info)
+    for a in props:
+        add(a, "prop", "道具「%s」" % (a.get("name") or ""))
+    return urls, roles
+

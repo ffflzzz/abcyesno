@@ -276,6 +276,7 @@ projects/<项目名>/
 | `SHORTDRAMA_SLICE_THRESHOLD` | 4000 | **按集切片注入**的阈值（字符）：全剧级目录（`plotdesigner/episodes.md`）超过它就只注入「本集 ±1 + 本卷摘要」而非全文。**给真机验证用**，生产别设 |
 | `SHORTDRAMA_SLICE_SOFT` | 0 | 切片失败时的降级开关：默认（0）**响亮终止**；设 1 则「告警 + 注入全文」（应急用） |
 | `SHORTDRAMA_VIDEO_MODE` | reference | **系统默认档**。静帧当**参考图**（各镜独立、可用 `audios`）vs `keyframe`（静帧当**首帧**，支持镜间承接但拿不到 `audios`）vs `pack`（**12s 打包**：相邻同场景镜合成一条 ≤12s 的 reference 请求，接戏变单请求内部问题；提交前自动生成跨组接缝静帧预检图 `seam_preview.jpg`）vs `mixed`（逐镜在 reference/keyframe 间选）。前三者官方互斥关系同上。**拼错不报错**，会回落 `reference` 并告警 |
+| `SHORTDRAMA_VIDEO_REF_SOURCE` | sheets | **视频请求喂什么图**（2026-10-07 新默认）。`sheets` = 本镜的角色定妆照（≤2）+ 场景空镜 + 道具图，**静帧退出输入**，槽位封顶 3（图数 > 分镜人数会多画一个人，10-06 实测）；`stills` = 旧行为，只喂本镜静帧那一张。依据：`madfate-abc-1005-nostill` 15 镜与 `xianxia-zhongzhui-1007-nostill` 6 镜两轮实跑——场景地貌从"每镜自己发明一遍"变成照场景卡一致，代价是**场景卡自带的字会原样进成片**（那栋天台卡带一排红字 ⇒ 4 镜有字；仙侠那批图干净 ⇒ 一帧无字）。**拼错不报错**会回落 `sheets`，故与 `VIDEO_MODE` 同样做响亮校验。回归测试：`v5/tests_video_sheets.py` |
 | `SHORTDRAMA_NARRATION_TTS` | 0 | `1` = 启用**独立旁白音轨**（`v5/media/narration.py`：按真实时间轴 edge-tts 逐句生成 + ffmpeg amix 混入成片）。**默认关**——agnes 画外音烘焙已验证，再混 TTS 会**双声重叠**（实测）。仅 `audio_mode=narration-led` 时生效；失败不挡链（保留原声成片）|
 | `SHORTDRAMA_NARRATION_VOICE` | zh-CN-YunxiNeural | 旁白音色（edge-tts 音色名，低沉男声）|
 | `SHORTDRAMA_NARRATION_RATE` | +0% | 旁白语速（edge-tts 语法，如 `+10%`）|
