@@ -122,6 +122,7 @@ SHORTDRAMA_V5_PROJECT=<项目名> .venv/Scripts/langgraph.exe dev \
 | `--episodes SPEC` | **按集跑 N 集**：`1-3` / `3` / `1,3,5` / `1-3,7`。`run_new_project` 上为全链路、`series` 上需配 `--resume-media`。**任一一集被门拦下即停止**（不静默跳过）|
 | `--fresh` | 归档**整个项目**的产物后重跑。**与多集互斥**（脚本 `rc=2` 拒绝）|
 | `--resume-media` | 断点续跑媒体链（需 `SHORTDRAMA_OPEN_CHAIN=1` 或 `SHORTDRAMA_ALLOW_RESUME=1`）|
+| `--stills-only` | **显式预览路径**：只出静帧给人看风格。默认档（视频吃资产图）平时**不产静帧**，这条是「我就想看看静帧长什么样」时手动按的按钮，不是流程的一环 |
 | `--monitor` / `--watch` | 只读观察：不写盘、不推进图 |
 | `--rerender` | 单镜重渲（`--from still` 连静帧；逗号分隔多镜）|
 | `--approvals` / `--approve` / `--revoke` | 人工审批门（**阶段之间**；指纹绑定产物，上游一变审批自动作废。需 `SHORTDRAMA_REQUIRE_APPROVAL=1`）|
@@ -602,7 +603,7 @@ pack 档**跳过**逐镜 clipqc（组产物多镜
 | `SHORTDRAMA_SHEET_TEXT_GATE` | 1 | 上面那条的**必要配套**：出片前用视觉模型查这批资产图有没有可读文字（按文件指纹缓存，判据复用 `qc.is_hard_issue`）。命中 ⇒ 那张图**剔出请求** + 响亮报资产名；闸门关掉 ⇒ 打一行"这批图没查过"的告警。别把它和 `SHORTDRAMA_STILL_QC` 当成一回事：静帧 QC 查的是"这一镜画得对不对"，这道查的是"我要喂出去的图会不会把字带进成片" |
 | `SHORTDRAMA_VIDEO_PACK_MAX_GROUP` | 12 | `pack` 模式单组最多镜数（2026-10-05 从 5 放开；5 的依据「每镜一张静帧」已随 09-28 图序失效。同 README §6）|
 | `SHORTDRAMA_VIDEO_SUBMIT_TIMEOUT` | 60 | 生视频**提交**读超时（秒）。多参考图的 pack 组建议 180（60s 会把多图提交判成失败，同 README §6）|
-| `SHORTDRAMA_STILL_QC` | 1 | `0` = 跳过静帧 QC。★ **前端路径（`v5/media/runner.start`）默认传 `0`**（人工模式：判断权在人），前端工具栏的「自动质检」开关可打开 |
+| `SHORTDRAMA_STILL_QC` | 1 | ⚠️ 默认档**不产静帧** ⇒ 这道开关没有对象（前端勾了会打一行告警）。`0` = 跳过静帧 QC。★ **前端路径（`v5/media/runner.start`）默认传 `0`**（人工模式：判断权在人），前端工具栏的「自动质检」开关可打开 |
 | `SHORTDRAMA_CLIP_QC` | 1 | `0` = 跳过成片抽帧复核。同上，前端默认 `0`、可开关 |
 | `SHORTDRAMA_SLICE_THRESHOLD` | 4000 | 按集切片注入阈值（字符）|
 | `SHORTDRAMA_SLICE_SOFT` | 0 | `1` = 切片失败降级为「告警 + 注入全文」|
@@ -620,7 +621,7 @@ pack 档**跳过**逐镜 clipqc（组产物多镜
 - **分镜**：`scenedesigner/scenedesigner_ep{N}.md`
 - **渲染任务**：`media/ep{N}/video_jobs.json`（显式状态机：`pending`/`submitted`/
   `completed`/`failed`/`expired`；断点续跑依据）
-- **审批记录**：`media/ep{N}/approvals.json`（三道门的 by / at / note / **产物指纹**）
+- **审批记录**：`media/ep{N}/approvals.json`（三道门的 by / at / note / **产物指纹**；默认档下 stills 那道不适用）
 - **黑板**：`projects/<项目名>/.agent_state.json`（**勿手改**）。`phases` / `media_loop`
   都是**按集**的（`{"1": {...}, "2": {...}}`）
 

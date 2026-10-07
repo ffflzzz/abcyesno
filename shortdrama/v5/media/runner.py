@@ -38,6 +38,7 @@ from pathlib import Path
 
 from .. import config
 from .. import vendors
+from . import video_plan
 
 RUNS_SUBDIR = ".tmp/web-runs"
 
@@ -263,6 +264,10 @@ def start(pid: str, kind: str, ep: int = 1, shots=None, from_still: bool = False
     #   ⛔ 必须**显式写 env**（不能只靠"不设"）：子进程会继承本进程的 env，
     #      而本进程（shim）可能从 `.env` 里读到过 `=1` —— 不覆盖就等于漏开关。
     env["SHORTDRAMA_STILL_QC"] = _qc_flag(still_qc)
+    if _qc_flag(still_qc) == "1" and not video_plan.VideoPlan.of().needs_stills:
+        log("[runner] ⚠️ 勾了「静帧质检」，但这一档**不产静帧**（视频吃资产图）"
+            "⇒ 这道开关没有对象。要挡带字的素材，靠的是出片前的"
+            "资产图查字闸门（SHORTDRAMA_SHEET_TEXT_GATE，默认开）。")
     env["SHORTDRAMA_CLIP_QC"] = _qc_flag(clip_qc)
     with log_path(rid).open("w", encoding="utf-8") as lf:
         lf.write("[runner] %s %s pid=%s ep=%d shots=%s\n"

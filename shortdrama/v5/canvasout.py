@@ -80,10 +80,22 @@ def _node(nid: str, ntype: str, title: str, x: int, y: int, size: tuple[int, int
 #: 「这一类没数据」的三条说法。**只在这里写一遍** —— `build()` 与 `node_sources()`
 #: 共用，否则列表页给的理由会和真打开画布时看到的不一致。
 _WARN_NO_STILLS = "第 %d 集没有静帧登记表（stills.json）⇒ 画布里没有逐镜格"
-_WARN_NO_JOBS = "第 %d 集没有渲染任务表（video_jobs.json）⇒ 画布里只有静帧，没有片段组"
+#: 默认档（视频吃资产图）**本来就不产静帧** —— 说成"缺失"会让人以为坏了。
+_WARN_NO_STILLS_BY_DESIGN = (
+    "第 %d 集没有静帧登记表（stills.json）—— 这一档**按设计不产静帧**"
+    "（视频直接吃定妆照/场景空镜/道具图，见 `SHORTDRAMA_VIDEO_REF_SOURCE`），"
+    "不是故障；逐镜格为空，成片与片段组节点照常显示")
+_WARN_NO_JOBS = "第 %d 集没有渲染任务表（video_jobs.json）⇒ 画布里只有素材图，没有片段组"
 _WARN_NO_FINAL = "第 %d 集还没有 episode_final.mp4 ⇒ 画布右侧无收尾节点"
 _WARN_NO_ASSET_IMG = "资产「%s」的定妆照不在盘上（%s）"
 _WARN_GROUP_SHOT = "组 %s 点名了 %s，但静帧登记表里没有它"
+
+
+def _no_stills_warning(ep: int) -> str:
+    """没有静帧登记表时该说哪句 —— 取决于这一档**是不是按设计不产静帧**。"""
+    from .media import video_plan
+    return (_WARN_NO_STILLS if video_plan.VideoPlan.of().needs_stills
+            else _WARN_NO_STILLS_BY_DESIGN) % ep
 
 
 def _read_inputs(root: Path, ep: int) -> tuple[Path, dict, dict, list]:
@@ -129,7 +141,7 @@ def node_sources(root: Path, ep: int = 1) -> dict[str, Any]:
     ep_dir, stills, jobs, assets = _read_inputs(root, ep)
     warns: list[str] = []
     if not stills:
-        warns.append(_WARN_NO_STILLS % ep)
+        warns.append(_no_stills_warning(ep) if not stills else _WARN_NO_STILLS % ep)
     if not jobs:
         warns.append(_WARN_NO_JOBS % ep)
     # 走一遍带（与 build() 同序）：一条带尾挂一个组节点，`pk=None` 的散镜带没有
@@ -212,7 +224,7 @@ def build(root: Path, ep: int = 1, base: str = "") -> dict[str, Any]:
     warns: list[str] = []
 
     if not stills:
-        warns.append(_WARN_NO_STILLS % ep)
+        warns.append(_no_stills_warning(ep) if not stills else _WARN_NO_STILLS % ep)
     if not jobs:
         warns.append(_WARN_NO_JOBS % ep)
 

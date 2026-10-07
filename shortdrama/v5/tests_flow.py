@@ -227,6 +227,58 @@ class TestApprovalGates(unittest.TestCase):
         (root / "media" / "ep1" / "stills.json").write_text("{}", encoding="utf-8")
         return d, root
 
+    def setUp(self):
+        """这一组测的是**审批机器本身**。
+
+        2026-10-07 起默认档视频不吃静帧 ⇒ `stills` 门按设计不适用（会直接放行）。
+        这里把判据钉成"吃静帧"，让原有的阻断/作废覆盖继续有效；
+        不适用那条路单独有测试（`test_stills_gate_not_applicable_by_default`）。
+        """
+        from unittest import mock
+
+        from v5.media import approvals
+        _p = mock.patch.object(approvals, "video_needs_stills", lambda: True)
+        _p.start()
+        self.addCleanup(_p.stop)
+
+    def test_stills_gate_not_applicable_by_default(self):
+        """默认档：`stills` 门**响亮地不适用**，不是"悄悄算成已通过"。"""
+        from unittest import mock
+
+        from v5.media import approvals
+        d, root = self._root()
+        with d, mock.patch.object(approvals, "video_needs_stills", lambda: False):
+            ok, why = approvals.check(root, "stills")
+            self.assertTrue(ok)
+            self.assertIn("不适用", why)
+            self.assertIn("SHORTDRAMA_VIDEO_REF_SOURCE", why,
+                          "理由要指到人能自己去改的那个开关，不能只说「不适用」")
+
+    def test_media_gate_tracks_what_video_actually_eats(self):
+        """`media` 门的指纹源 = 视频真正吃的那些东西。"""
+        from unittest import mock
+
+        from v5.media import approvals
+        d, root = self._root()
+        with d:
+            src = approvals.sources_for("media", root, 1)
+            self.assertIn("assets.json#stable", src,
+                          "资产图是视频的真正输入，必须进指纹（只取稳定字段）")
+            # 盘上**有** stills.json（老项目/回退档跑出来的）⇒ 仍要盯，否则静帧变了
+            # 批文不作废 = 又回到"看着正常其实没通"。判据只看盘上有没有，不看档位：
+            # 掺进运行时的可变量会让"已渲染无需重渲"那道配额闸门莫名失效。
+            self.assertIn("media/ep{ep}/stills.json", src)
+            (root / "media" / "ep1" / "stills.json").unlink()
+            self.assertNotIn("media/ep{ep}/stills.json",
+                             approvals.sources_for("media", root, 1),
+                             "既不消费、盘上也没有 ⇒ 不该再盯一个永不存在的文件")
+            (root / "assets.json").write_text('{"assets": []}', encoding="utf-8")
+            f1 = approvals.fingerprint(root, "media", 1)
+            (root / "assets.json").write_text('{"assets": [{"name": "换了一套图"}]}',
+                                              encoding="utf-8")
+            self.assertNotEqual(f1, approvals.fingerprint(root, "media", 1),
+                                "资产图换了整套，成片批文必须作废")
+
     def test_unknown_gate_rejected(self):
         from v5.media import approvals
 

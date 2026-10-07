@@ -157,6 +157,10 @@ class TestMissingIsLoud(_Case):
         self.assertEqual(c["nodes"], [])
         self.assertEqual(c["connections"], [])
         self.assertTrue(any("stills.json" in w for w in c["warnings"]), c["warnings"])
+        # 默认档（视频吃资产图）不产静帧是**按设计**，文案要同时给出文件名与理由，
+        # 否则看的人以为坏了去补画静帧。
+        self.assertTrue(any("按设计不产静帧" in w for w in c["warnings"]),
+                        c["warnings"])
 
 
 class TestUnpackedShots(_Case):

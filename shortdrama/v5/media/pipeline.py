@@ -901,6 +901,11 @@ def _run_impl(project_root: Path, ep: int = 1, log=print, max_regen: int = 2,
     if feed_sheets:
         st: dict = {}
         missing: list[str] = []
+        if from_still:
+            log("[media] ⚠️ `--from still` 在这一档**没有对象**：视频不吃静帧、"
+                "媒体链也不产静帧。要重画的是资产图（定妆照 / 场景空镜）——"
+                "手删 `images/<名>.png` 后重跑，或走 `cast.ensure(force=True)`；"
+                "只想重渲视频就别带这个参数。")
         log("[media] 视频喂资产图（VIDEO_REF_SOURCE=sheets）⇒ 本集不画静帧、"
             "不跑静帧 QC；出片前先查这批图有没有可读文字")
         # 逐镜兜底：某镜一张图都没绑上（空镜/名字没对上）时不能直接判死 ——

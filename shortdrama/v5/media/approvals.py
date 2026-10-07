@@ -19,7 +19,12 @@
 三道门的位置：
     storyboard  分镜定稿   → 指纹 = scenedesigner.md      （拦"分镜还没定稿就烧配额"）
     stills      静帧验收   → 指纹 = stills.json           （拦"静帧有缺陷就进视频"）
-    media       成片放行   → 指纹 = stills.json + 分镜      （拦"没验收就拼接出片"）
+    media       成片放行   → 指纹 = 分镜 + 资产注册表（+ 静帧，仅当这一档真吃静帧）
+
+★ 2026-10-07：默认档（`VIDEO_REF_SOURCE=sheets` 且档位 `needs_stills=False`）**不产静帧**，
+  于是 `stills` 这道门**自动不适用**（响亮说明，不是"悄悄算成已通过"），
+  而 `media` 门的指纹源换成"视频真正吃的那两样"：分镜 + `assets.json`。
+  留着 stills.json 当指纹源 = 资产图换了整套批文都不作废，那正是审批门要防的事。
 
 注意：**默认不启用**（`config.REQUIRE_APPROVAL=0`）。
 启用后 `check()` 返回 False 会阻断对应阶段——这是有意的强制力。
@@ -39,9 +44,41 @@ GATES = ("storyboard", "stills", "media")
 _GATE_SOURCES: dict[str, tuple[str, ...]] = {
     "storyboard": ("scenedesigner",),
     "stills": ("media/ep{ep}/stills.json",),
-    # 成片放行盯的是"静帧 + 分镜"——视频阶段吃这两样；分镜改了同样要重批。
-    "media": ("media/ep{ep}/stills.json", "scenedesigner"),
+    # 成片放行盯"视频真正吃的东西"。默认档 = 分镜 + 资产注册表；
+    # 只有这一档确实吃静帧时（keyframe / mixed 的承接镜 / sheets 回退档）才加 stills.json。
+    # ★ `assets.json#stable` 不是笔误：注册表整份字节进指纹会**自我失配** ——
+    #   媒体链自己会在跑的过程中改写它（`cast.ensure` 登记、`ref_ver` 升级、时间戳），
+    #   于是"输入变了"每次都成立、"已渲染无需重渲"这道配额闸门从此形同虚设
+    #   （实测把整份 assets.json 加进指纹后，重复渲染由 blocked 变 ok）。
+    #   所以只取**稳定字段**：换了一整套图仍然作废批文，跑一次自己改自己不会。
+    "media": ("scenedesigner", "assets.json#stable"),
 }
+
+
+def video_needs_stills() -> bool:
+    """这一档的视频请求吃不吃静帧。判据只有一份：`VideoPlan.needs_stills`。"""
+    from . import video_plan
+    return video_plan.VideoPlan.of().needs_stills
+
+
+def sources_for(gate: str, project_root: Path, ep: int = 1) -> tuple:
+    """这道门**实际**盯哪些产物。
+
+    `media` 门只在两种情况下把 `stills.json` 算进指纹：这一档真吃静帧，
+    或这一集盘上本来就有静帧（老项目 / 回退档跑出来的）。
+    两种都不是的时候还盯着它 = 盯一个永不存在的文件，
+    资产图整套换掉批文都不作废 —— 那正是审批门要防的事。
+    """
+    src = list(_GATE_SOURCES.get(gate, ()))
+    if gate == "media":
+        # ★ 只看**盘上有没有**，不看当前档位 —— 指纹源必须是"跑一次前后都同一个答案"的
+        #   东西。掺进档位在运行时被 patch 的可变量，会出现"种指纹时算一份、门比较时
+        #   算另一份"，于是"已渲染且无待修订"这道配额闸门莫名失效（10-07 实测：
+        #   tests_flow 的对照组由 blocked 变 ok）。
+        #   不吃静帧的档通常也没有这个文件；老项目留着它，多盯一份无害。
+        if (project_root / "media" / ("ep%d" % ep) / "stills.json").exists():
+            src.append("media/ep{ep}/stills.json")
+    return tuple(src)
 
 
 def _resolve_source(project_root: Path, spec: str, ep: int) -> Path:
@@ -57,15 +94,33 @@ def _resolve_source(project_root: Path, spec: str, ep: int) -> Path:
     return project_root / spec.format(ep=ep)
 
 
+def _stable_registry_bytes(path: Path) -> bytes:
+    """注册表里**真正决定画面**的那几个字段，按名字排序后序列化。
+
+    刻意不含时间戳/URL 之类每次跑都可能动的东西；含 `ref_ver`——
+    它就是"这张参考图重画过"的版本号，换了图必须让批文作废。
+    """
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return b"unreadable"
+    rows = []
+    for a in (data.get("assets") or []):
+        rows.append([str(a.get(k) or "") for k in
+                     ("name", "type", "ref_image", "ref_ver", "identity")])
+    return json.dumps(sorted(rows), ensure_ascii=False).encode("utf-8")
+
+
 def _fingerprint(project_root: Path, gate: str, ep: int) -> str:
     """当前产物的指纹（缺失的文件记为 missing，不参与哈希）。"""
     h = hashlib.sha256()
-    for rel in _GATE_SOURCES.get(gate, ()):
-        p = _resolve_source(project_root, rel, ep)
+    for rel in sources_for(gate, project_root, ep):
+        spec, stable = (rel[:-len("#stable")], True) if rel.endswith("#stable")             else (rel, False)
+        p = _resolve_source(project_root, spec, ep)
         h.update(rel.encode("utf-8"))
         if p.exists():
             try:
-                h.update(p.read_bytes())
+                h.update(_stable_registry_bytes(p) if stable else p.read_bytes())
             except Exception:  # noqa: BLE001
                 h.update(b"<unreadable>")
         else:
@@ -136,11 +191,26 @@ def revoke(project_root: Path, gate: str, ep: int = 1, *, by: str = "",
     _save(project_root, ep, data)
 
 
+def not_applicable(project_root: Path, gate: str, ep: int = 1):
+    """这道门在当前档位下是否**不适用**。返回理由串或 None（适用）。
+
+    ⚠️ 必须是"响亮的不适用"而不是 `return True, "OK"`：前者让人知道这道门没把关，
+    后者会让日志全绿而保护其实不存在（本项目最忌讳的一类）。
+    """
+    if gate == "stills" and not video_needs_stills():
+        return ("不适用：这一档视频不吃静帧（SHORTDRAMA_VIDEO_REF_SOURCE=sheets），"
+                "媒体链不产静帧 ⇒ 没有可验收的静帧")
+    return None
+
+
 def check(project_root: Path, gate: str, ep: int = 1) -> tuple[bool, str]:
     """返回 (是否已批准, 原因)。**产物指纹不一致 = 视为未批准。**
 
     这是本模块最重要的一条：审批只对**当时那一版产物**有效。
     """
+    na = not_applicable(project_root, gate, ep)
+    if na:
+        return True, na
     rec = load(project_root, ep).get(gate) or {}
     if not rec.get("approved"):
         return False, "未批准"

@@ -254,7 +254,7 @@ projects/<项目名>/
 | `SHORTDRAMA_TAIL_PREGEN` | 0 | 落幅帧预生成 → 视频可平铺。**代价**：预生成落幅 ≠ 实际尾帧，承接由"事实"降为"预期"；无连续镜则零收益 |
 | `SHORTDRAMA_STILL_RATIO` | 3:4 | 静帧比例 |
 | `SHORTDRAMA_DIALOGUE_LANG` | Mandarin Chinese | 台词烘焙语言声明（纯**英文**语言名，如 `Cantonese`——含中文字形会被烧上屏幕，见 prompt.py LANG_SUFFIX 注释）。粤语项目设 `Cantonese` |
-| `SHORTDRAMA_STILL_QC` | 1 | `0` = 跳过静帧 QC |
+| `SHORTDRAMA_STILL_QC` | 1 | ⚠️ 默认档（`VIDEO_REF_SOURCE=sheets`）**不产静帧**，这道开关没有对象 —— 要挡带字的素材看 `SHORTDRAMA_SHEET_TEXT_GATE`。 `0` = 跳过静帧 QC |
 | `SHORTDRAMA_STILL_QC_MAX_REGEN` | 3 | 单镜累计重画上限（跨进程） |
 | `SHORTDRAMA_SHEET_CHECK` | 1 | **定妆照 ↔ 角色卡 对账**。`0` = 不核（回到"图错了也没人发现"的历史行为）。判据：视觉模型逐项报"图上这一项长什么样"，**判定归代码**（颜色族不相交／明确没画／断剑画成完整）；抄不出卡片原文的条目一律不算。理由：0929 成片 18 镜继承了错图（卡片`玄黑高马尾`、图上酒红发），而内容指纹只保证"卡片改了会重画"、reviewer 只作文本对文本 |
 | `SHORTDRAMA_SHEET_CHECK_MAX_REGEN` | 1 | 对账不过时重画几次（**硬上限**）。到点即保留现有图并响亮记 `sheet_residual`，不循环——视觉判据是概率性的 |
