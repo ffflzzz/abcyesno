@@ -9,6 +9,7 @@
   · 缺文件/空项目**必须不抛**（返回空结构），且**不许编**内容
 """
 import json
+import os
 import re
 import sys
 import tempfile
@@ -1092,3 +1093,53 @@ class TestProgressPerEpisode(_Base):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestCoverWithoutStills(_Base):
+    """默认档不产静帧 ⇒ 封面必须有第二条来源，否则项目列表整列空封面。"""
+
+    def _clip(self):
+        import shutil
+        import subprocess
+
+        if not shutil.which("ffmpeg"):
+            self.skipTest("本机没有 ffmpeg")
+        d = self.proj / "media" / "ep1" / "clips"
+        d.mkdir(parents=True, exist_ok=True)
+        r = subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi",
+                            "-i", "testsrc=size=320x180:duration=1:rate=10",
+                            "-pix_fmt", "yuv420p", str(d / "LN01.mp4")],
+                           capture_output=True, timeout=120)
+        self.assertEqual(r.returncode, 0, r.stderr[-200:])
+        return d
+
+    def test_no_stills_falls_back_to_a_frame_of_the_clip(self):
+        import shutil
+
+        if not shutil.which("ffmpeg"):
+            self.skipTest("本机没有 ffmpeg")
+        self._clip()
+        url = webmap._cover(self.proj, 1)
+        self.assertIn("cover.jpg", url, "没有静帧也要有封面：%r" % url)
+        self.assertTrue((self.proj / "media" / "ep1" / "cover.jpg").exists())
+
+    def test_nothing_rendered_returns_empty_not_a_fake_url(self):
+        self.assertEqual(webmap._cover(self.proj, 1), "",
+                         "没片子就返回空串 —— 编一个会 404 的地址比空更难查")
+
+    def test_cover_is_redrawn_after_the_source_changes(self):
+        import shutil
+        import time
+
+        if not shutil.which("ffmpeg"):
+            self.skipTest("本机没有 ffmpeg")
+        d = self._clip()
+        first = webmap._cover(self.proj, 1)
+        cover = self.proj / "media" / "ep1" / "cover.jpg"
+        stamp = cover.stat().st_mtime
+        # 重渲：把 clip 做得比封面新
+        time.sleep(1.1)
+        os.utime(d / "LN01.mp4", None)
+        webmap._cover(self.proj, 1)
+        self.assertGreater(cover.stat().st_mtime, stamp,
+                           "重渲过就必须换封面，否则列表页挂着上一版画面：%r" % first)

@@ -515,9 +515,15 @@ def rerender(project_root: Path, names, *, note: str = "", from_still: bool = Fa
     if not list((project_root / "media" / ("ep" + str(ep)) / "clips").glob("LN*.mp4")):
         log("[rerender] ⚠️ 盘上还没有任何 clip —— 单镜重渲**不是**整片渲染入口；"
             "若想整片出片请跑媒体链（--resume-media）。本次仍会尝试，但缺镜时不拼接。")
-    log("[rerender] 单镜重渲 %s（%s）"
-        % (",".join(names),
-           "连静帧一起重做" if from_still else "只重渲视频、复用盘上静帧"))
+    _needs_st = video_plan.VideoPlan.of().needs_stills
+    if from_still and not _needs_st:
+        _how = ("要连静帧一起重做，但**这一档视频不吃静帧** —— 见下面 media 的说明"
+                "（该重画的是资产图：手删 images/<名>.png 或 cast.ensure(force=True)）")
+    elif _needs_st:
+        _how = "连静帧一起重做" if from_still else "只重渲视频、复用盘上静帧"
+    else:
+        _how = "只重渲视频（这一档的视频输入是资产图，与静帧无关）"
+    log("[rerender] 单镜重渲 %s（%s）" % (",".join(names), _how))
     return run(project_root, ep=ep, log=log, only=names, from_still=from_still)
 
 

@@ -336,13 +336,62 @@ def parse_episode_id(eid: str) -> tuple:
 
 
 def _cover(root: Path, ep: int = 1) -> str:
-    """封面：第一张静帧的 URL（前端 `playlet-list.js:122` 的回落路径）。"""
+    """封面：有静帧就用第一张；**默认档不产静帧** ⇒ 回落成从成片抽一帧。
+
+    不补这一条就是看得见的退化：2026-10-07 起 `VIDEO_REF_SOURCE=sheets` 的默认档
+    根本不画静帧，`stills_map()` 恒空 ⇒ 项目列表整列没有封面，
+    看起来像"这一集坏了"，而它只是换了输入。
+    """
     st = stills_map(root, ep)
     for _name, info in sorted(st.items()):
         rel = _still_relpath(root, info)
         if rel:
             return media_url(root.name, rel)
-    return ""
+    rel = _cover_from_video(root, ep)
+    return media_url(root.name, rel) if rel else ""
+
+
+def _cover_from_video(root: Path, ep: int) -> str:
+    """没有静帧时从**成片（没有成片则第一条片段）抽一帧**，缓存到 `media/ep{N}/cover.jpg`。
+
+    缓存按"比源文件旧就重抽"判 —— 重渲过就必须换封面，否则列表页永远挂着上一版的画面。
+    抽不到（没片子 / 没 ffmpeg / 命令失败）返回空串，⛔ 不编一个会 404 的地址。
+    """
+    import subprocess
+
+    d = media_dir(root, ep)
+    src = d / "episode_final.mp4"
+    if not src.exists():
+        clip_dir = d / "clips"
+        clips = sorted(clip_dir.glob("*.mp4")) if clip_dir.exists() else []
+        if not clips:
+            return ""
+        src = clips[0]
+    out = d / "cover.jpg"
+    if out.exists() and out.stat().st_mtime >= src.stat().st_mtime:
+        return out.relative_to(root).as_posix()
+    def _grab(at: str) -> bool:
+        try:
+            subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", at,
+                            "-i", str(src), "-frames:v", "1", "-q:v", "2", str(out)],
+                           capture_output=True, timeout=120)
+        except Exception:  # noqa: BLE001
+            return False
+        return out.exists()
+
+    # 先删旧图再抽 —— ⚠️ "文件存在"**不是**"这次抽成功了"的证据：
+    #   抽帧失败时上一版封面还躺在原地，函数会把它当新结果返回，
+    #   于是重渲之后列表页挂着旧画面（10-07 写回归测试时正是这样暴露的）。
+    if out.exists():
+        try:
+            out.unlink()
+        except Exception:  # noqa: BLE001
+            return ""
+    # 1 秒处更像"正片"而不是黑场淡入；但**短片/测试源可能压根不到 1 秒**
+    # （同一轮测试里 1 秒的 clip 抽不到任何帧），所以退到 0 秒再试一次。
+    if not _grab("1.0") and not _grab("0"):
+        return ""
+    return out.relative_to(root).as_posix() if out.exists() else ""
 
 
 def _still_relpath(root: Path, info: dict) -> str:
