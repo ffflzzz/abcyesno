@@ -35,9 +35,15 @@ def _with_still_tail(project_root: Path, shots: list[dict]) -> list[dict]:
 
 
 def stills_dir(project_root: Path, ep: int = 1) -> Path:
-    d = project_root / "media" / ("ep" + str(ep)) / "stills"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+    """静帧目录的**路径**（纯函数，不建目录）。
+
+    ★ 原先这里带 `mkdir` —— 于是**只是查一下有没有静帧**（`webmap.stills_map`、
+      画布、进度接口都走这条路）就会留下一个空 `stills/` 目录。
+      10-07 起默认档不产静帧，这个空目录会让人分不清
+      「这一集没生成静帧」和「有人来查过一次」—— 而它每次读都会再制造一遍。
+      建目录的活交给真正要写的人：`_save()` 与 `ensure()`。
+    """
+    return project_root / "media" / ("ep" + str(ep)) / "stills"
 
 
 def _manifest(stills: Path) -> Path:
@@ -55,6 +61,7 @@ def load(stills: Path) -> dict:
 
 
 def _save(stills: Path, data: dict) -> None:
+    stills.mkdir(parents=True, exist_ok=True)
     _manifest(stills).write_text(
         json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -74,9 +81,8 @@ def _download(url: str, dest: Path) -> None:
 # （每镜一个首帧 URL）变模糊，也容易在清理时误删首帧。
 
 def tails_dir(project_root: Path, ep: int = 1) -> Path:
-    d = project_root / "media" / ("ep" + str(ep)) / "tails"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+    """落幅图目录的**路径**（同样不顺手建目录，理由见 `stills_dir`）。"""
+    return project_root / "media" / ("ep" + str(ep)) / "tails"
 
 
 def _tails_manifest(project_root: Path, ep: int = 1) -> Path:
@@ -149,6 +155,7 @@ def ensure_tails(project_root: Path, shots: list[dict], planned: list[dict],
     if not need:
         return {}
     td = tails_dir(project_root, ep)
+    td.mkdir(parents=True, exist_ok=True)      # 真要写落幅图时才建（见 stills_dir）
     data = load_tails(project_root, ep)
     plan_by_name = {p.get("name"): p for p in planned}
     changed = False
@@ -210,6 +217,7 @@ def ensure(project_root: Path, shots: list[dict], refs_by_shot: dict[str, list[s
     而不是直接丢 visual 原文——旧实现浪费了景别/角度/运镜等已解析字段。
     """
     sd = stills_dir(project_root, ep)
+    sd.mkdir(parents=True, exist_ok=True)      # 只有真要写图/写表时才建
     data = load(sd)
     changed = False
     plan_by_name = {p.get("name"): p for p in (planned or [])}
