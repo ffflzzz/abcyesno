@@ -182,11 +182,13 @@ class NeedsStills(unittest.TestCase):
     pack 少掉「本组首镜静帧」这张场景实现，mixed 的承接镜拿到 `first=None` 直接判失败。
     """
 
-    def test_only_pure_reference_drops_stills(self):
+    def test_only_mixed_and_keyframe_still_need_stills(self):
+        # 2026-10-07：reference 与 pack 都不再吃静帧；只有 mixed 的 keyframe 那半边
+        # 与 keyframe 档还把静帧当 first_frame。
         for mode, (sheets, needs) in {
                 "reference": (True, False),
-                "pack": (False, True),        # 图序自带设定表，但仍要首镜静帧
-                "mixed": (True, True),        # 逐镜分流：keyframe 那半边吃静帧
+                "pack": (True, False),        # 图序：设定表→场景→上一段末帧→道具
+                "mixed": (True, True),        # 承接镜走 keyframe，首帧=本镜静帧
                 "keyframe": (False, True)}.items():
             p = video_plan.VideoPlan.of(mode)
             self.assertEqual((p.from_sheets, p.needs_stills), (sheets, needs), mode)
@@ -206,3 +208,37 @@ class NeedsStills(unittest.TestCase):
             del os.environ["SHORTDRAMA_VIDEO_REF_SOURCE"]
             importlib.reload(config)
             importlib.reload(video_plan)
+
+
+class PackDropsStills(unittest.TestCase):
+    """pack 档 2026-10-07 起同样不吃静帧：图 = 设定表 + 场景空镜 + 道具 + 上一段**成片末帧**。"""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix="packsheets_"))
+        _mk_project(self.root)
+
+    def tearDown(self):
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def test_no_still_url_and_scene_comes_from_the_table_column(self):
+        from v5.media import video
+        group = [{"name": "LN01", "scene": "断剑坪·坪内", "scene_col": "断剑坪·坪内",
+                  "visual": "@云笳（玄青劲装）持@断刃·赤纹 落下", "dialogue": "",
+                  "shot_type": "中景", "seconds": 6},
+                 {"name": "LN02", "scene": "断剑坪·坪内", "scene_col": "断剑坪·坪内",
+                  "visual": "@沈砚 抬@青霜双鞭 相迎", "dialogue": "",
+                  "shot_type": "中景", "seconds": 6}]
+        urls, roles = video.pack_ref_images(self.root, group, ep=1)
+        kinds = [k for k, _l in roles]
+        self.assertNotIn("shot", kinds, "「本组首镜静帧」这一格必须已经没了")
+        self.assertIn("location", kinds, "场景按表列无条件取（不再只绑宽景）")
+        for u in urls:
+            self.assertNotIn("/stills/", u, "pack 的图里不许出现静帧地址")
+        self.assertLessEqual(len(urls), 5)
+
+    def test_seam_anchor_has_no_still_fallback(self):
+        import inspect
+        from v5.media import video
+        params = list(inspect.signature(video.seam_anchor).parameters)
+        self.assertEqual(params, ["clip_dir", "prev_pname"],
+                         "锚帧只有一来源（上一组成片末帧）；参数里再出现 stills 就是回退了")

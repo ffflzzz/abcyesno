@@ -542,73 +542,6 @@ def submit_all(project_root: Path, shots: list[dict], stills: dict, planned: lis
 # 产物是**组级** clip（clips/packNN.mp4，一个文件含该组全部镜），
 # `expand_packs` 负责把组级结果展开成"每镜→其组成片"，下游缺镜判定零改动。
 
-def _seam_preview(out_dir: Path, groups: list, stills: dict, log=print) -> Path | None:
-    """相邻组交界静帧并排预检图（修法①，默认档：纯拼图、零模型调用）。
-
-    组内接戏由打包内部保证；**跨组接缝**才是剩余风险点 —— 每对相邻组拼一行：
-    左=上一组末镜静帧，右=下一组首镜静帧。人眼 30 秒扫完全部组对（21 对 vs
-    2.7h 渲染 <3% 成本），把"渲完才发现接不上"的返工挪到提交前。
-    返回拼图路径；无 PIL 或组数 <2 时返回 None（不阻断）。
-    """
-    try:
-        from PIL import Image, ImageDraw
-    except ImportError:  # noqa: BLE001
-        log("[video] 无 PIL，跳过接缝预检图")
-        return None
-    pairs = []
-    for k in range(len(groups) - 1):
-        pairs.append((k + 1, groups[k][0][-1],        # 上一组末镜
-                      k + 2, groups[k + 1][0][0]))    # 下一组首镜
-    if not pairs:
-        return None
-
-    def _open(name: str):
-        rec = stills.get(name) or {}
-        for key in ("path", "local", "file"):       # 本地字段优先（url 是图床地址）
-            p = rec.get(key)
-            if p and Path(p).exists():
-                try:
-                    return Image.open(p).convert("RGB")
-                except Exception:  # noqa: BLE001
-                    break
-        return None
-
-    THUMB_H, LABEL_W, GAP = 256, 240, 8
-    rows: list = []
-    for pk, ls, nk, rs in pairs:
-        li, ri = _open(ls["name"]), _open(rs["name"])
-        w_l = int(li.width * THUMB_H / li.height) if li else THUMB_H
-        w_r = int(ri.width * THUMB_H / ri.height) if ri else THUMB_H
-        row_w = LABEL_W + w_l + GAP + w_r + 20
-        row = Image.new("RGB", (row_w, THUMB_H + 8), (24, 24, 24))
-        d = ImageDraw.Draw(row)
-        d.text((8, THUMB_H // 2 - 20),
-               "pack%02d -> pack%02d\n%s | %s" % (pk, nk, ls["name"], rs["name"]),
-               fill=(230, 230, 230))
-        x = LABEL_W
-        for im, w in ((li, w_l), (ri, w_r)):
-            if im:
-                row.paste(im.resize((w, THUMB_H)), (x, 4))
-            else:
-                d.rectangle([x, 4, x + w, 4 + THUMB_H], fill=(60, 60, 60))
-                d.text((x + 8, THUMB_H // 2), "缺静帧", fill=(255, 120, 120))
-            x += w + GAP
-        rows.append(row)
-    total_w = max(r.width for r in rows)
-    canvas = Image.new("RGB", (total_w, sum(r.height + 6 for r in rows)), (12, 12, 12))
-    y = 0
-    for r in rows:
-        canvas.paste(r, (0, y))
-        y += r.height + 6
-    out_dir.mkdir(parents=True, exist_ok=True)
-    p = out_dir / "seam_preview.jpg"
-    canvas.save(p, "JPEG", quality=85)
-    log("[video] 接缝预检图已生成：%s（%d 对相邻组，人眼 30 秒扫一遍 —— "
-        "看交界两侧人物/服装/场景是否接得上；发现问题先修静帧再提交，省 2.7h 渲染）"
-        % (p, len(pairs)))
-    return p
-
-
 def rate_limit_should_retry(q_try: int, n_keys: int) -> bool:
     """撞 429 后，**同一组内**要不要换 key 再试一次。
 
@@ -622,7 +555,7 @@ def rate_limit_should_retry(q_try: int, n_keys: int) -> bool:
     return q_try + 1 < max(1, n_keys)
 
 
-def pack_ref_images(project_root: Path, group: list[dict], own: dict[str, str],
+def pack_ref_images(project_root: Path, group: list[dict],
                     prev_url: str | None = None, ep=None) -> tuple[list[str], list[tuple[str, str]]]:
     """A 臂图序（2026-09-28 实测）：**身份由人物设定表锁，静帧只当场景实现与接续锚**。
 
@@ -672,10 +605,32 @@ def pack_ref_images(project_root: Path, group: list[dict], own: dict[str, str],
 
     for u, nm in chars[:video_plan.PACK_REF_MAX_CHARS]:
         add(u, "character", "角色「%s」的人物设定表" % nm)
+    # 场景图：`bind()` 只在**宽景**绑 location（那条律是给静帧构图定的 —— 场景图自带
+    # 固定机位会把静帧拉回大 Wide）。pack 档不吃这条律：这里的声明写明"只锁建筑与地貌、
+    # 机位听文字"，所以按**表列**无条件取，与 `assets.sheets_for_shot` 同一口径
+    # —— 两处判据不一样，就会出现"逐镜档能拿到场景、打包档拿不到"的怪事。
+    if not locs:
+        reg = assets.auto_sync(project_root)
+        for g0 in group:
+            a, nm = assets.scene_asset_for_shot(reg, g0)
+            if a:
+                for u in assets._safe_ref_urls(a, project_root):
+                    if u:
+                        locs.append((u, nm))
+                break
     for u, nm in locs[:video_plan.PACK_REF_MAX_LOCS]:
-        add(u, "location", "场景「%s」的空镜" % nm)
-    add(own.get(group[0]["name"]), "shot",
-        "本片段**第一拍的画面实现**（只取它的场景地貌、光线与人物站位）")
+        add(u, "location", "场景「%s」的空镜（只锁建筑与地貌，不锁机位）" % nm)
+    # ★ 2026-10-07：**去掉「本组首镜静帧」这一格**（用户决定，与 reference 档同口径）。
+    #   原先占这一格的理由是 09-28 那次实测（"完全去掉静帧，同一处场景在相邻两组里
+    #   长成两种样子"），但那次实验之后绑图侧改了三件事，前提已经不成立：
+    #     · 10-05/10-06 道具与场景的**简称也能绑上**、场景按关键词兜底
+    #       （`assets.hits_for_text` / `scene_asset_for_shot`）—— 当年场景空镜常常
+    #       一张都进不来，等于让静帧替它上班；
+    #     · 10-07 逐镜档两轮实跑（命案 15 镜、仙侠 6 镜）证明"场景空镜 + 文字锚点"
+    #       撑得住地貌一致；
+    #   ⇒ 这一格让给道具与更多设定表。**跨组接缝另有正确的来源**：`seam_anchor`
+    #     抽上一组成片的真实末帧当下一段的起帧锚（那是"结束画面"，静帧是"起幅画面"，
+    #     拿静帧接下一段本来就是 09-28 记过的那句假话）。
     if prev_url:
         add(prev_url, "prev",
             "**上一片段的结束画面**（只取它的场景连续性与人物站位）")
@@ -684,32 +639,25 @@ def pack_ref_images(project_root: Path, group: list[dict], own: dict[str, str],
     return urls, roles
 
 
-def seam_anchor(clip_dir: Path, prev_pname: str | None, stills: dict,
-                prev_shot_name: str | None) -> tuple[str | None, str]:
-    """跨组接续锚帧 = **上一组成片的真实末帧**；抽不到才退回前组末镜静帧。
+def seam_anchor(clip_dir: Path, prev_pname: str | None) -> tuple[str | None, str]:
+    """跨组接续锚帧 = **上一组成片的真实末帧**。抽不到就没有锚帧（不再拿静帧凑数）。
 
-    ★ 2026-09-28 实测修（用户反馈"镜头之间割裂感严重"）：原先这里直接用
-    `stills[前组末镜]`，但静帧是该镜的**第一拍=起幅画面**，而提示词把它声明成
-    "上一片段的结束画面——用于衔接人物姿态、道具位置与场景连续性"。并排对照
-    （`tmp/ANCHOR_wrong.png`）：pack08 的锚帧是"两人远景站立"、真实末帧是"两人近景
-    剑已相交"；pack07 的锚帧里还画着**第三人**。⇒ 每次交接都在对模型说一句假话，
-    它只能忽略锚帧，组与组各拍各的。keyframe 档早就有 `extract_last_frame` 这条
-    正确通道，pack 档当时"跳过落幅帧预生成"，于是拿静帧凑了个数。
-
-    返回 `(url_or_data_uri, 来源标记)`，来源只用于日志。
+    ★ 2026-09-28 实测修：原先这里退回用 `stills[前组末镜]`，但静帧是该镜的**第一拍
+    = 起幅画面**，而提示词把它声明成"上一片段的结束画面"。并排对照（`tmp/ANCHOR_wrong.png`）：
+    pack08 的锚帧是"两人远景站立"、真实末帧是"两人近景剑已相交"；pack07 的锚帧里还画着
+    **第三人**。⇒ 每次交接都在对模型说一句假话。
+    ★ 2026-10-07 进一步：**静帧整条退出 pack 的输入**，所以连"兜底"这层也删掉 ——
+    留着它，媒体链就得继续为 pack 画静帧（`VideoPlan.needs_stills`）。第一组本来也没有
+    前段可接，行为一致。
     """
     if prev_pname:
         u = extract_last_frame(clip_dir / (prev_pname + ".mp4"))
         if u:
             return u, "末帧"
-    if prev_shot_name:
-        u = (stills.get(prev_shot_name) or {}).get("url")
-        if u:
-            return u, "静帧兜底"
     return None, "无"
 
 
-def submit_packs(project_root: Path, shots: list[dict], stills: dict, planned: list[dict],
+def submit_packs(project_root: Path, shots: list[dict], planned: list[dict],
                  ep: int = 1, log=print, only: list[str] | None = None,
                  max_group: int | None = None) -> dict:
     """pack 档提交：相邻同场景镜 → ≤12s 的 reference 请求（一个 job = 一组）。
@@ -735,13 +683,8 @@ def submit_packs(project_root: Path, shots: list[dict], stills: dict, planned: l
     log("[video] pack 档：%d 镜 → %d 组（max_group=%d）"
         % (len(shots), len(groups), max_group or config.VIDEO_PACK_MAX_GROUP))
 
-    # 修法①（默认档预检）：提交前生成相邻组交界静帧并排图，人眼扫。
-    # 预检图是**辅助判断**，不自动阻断——但缺静帧会在下面提交层被拦。
-    _seam_preview(out_dir, groups, stills, log=log)
-
     pool = keypool.KeyPool.of()
     log("[video] 提交配速：%d 条 key × %s" % (len(pool), pool.pacing()))
-    prev_last_name = None          # 跨组接续链：上一组末镜名（锚帧优先用其**成片末帧**）
     for k, (g, declared) in enumerate(groups, 1):
         pname = "pack%02d" % k
         names = [s["name"] for s in g]
@@ -760,20 +703,20 @@ def submit_packs(project_root: Path, shots: list[dict], stills: dict, planned: l
         if rec.get("state") == "submitted" and rec.get("video_id"):
             log("[video] %s 续跑认领已提交任务（poll_all 接管）" % pname)
             continue
-        own = {n: (stills.get(n) or {}).get("url") for n in names}
-        missing = [n for n in names if not own[n]]
-        if missing:
-            log("[video] %s 缺静帧：%s → 标 failed（先补静帧）" % (pname, missing))
-            jobs_mod.mark(jobs, pname, "failed", error="缺静帧:" + ",".join(missing))
+        # ★ 跨组接续锚（2026-09-23 立、2026-10-07 收口）：**只用上一组成片的真实末帧**。
+        #   组与组独立生成互不知情（灯下棋实测：柳娘坐/站组间跳变、玉佩位置漂移），
+        #   而静帧是"起幅画面"、拿它当"上一段的结束画面"是句假话（09-28 记过）——
+        #   所以抽不到就这一组没有锚帧，⛔ 不再拿静帧兜底。
+        prev_url, prev_src = seam_anchor(
+            clip_dir, ("pack%02d" % (k - 1)) if k > 1 else None)
+        # 图序（2026-10-07 起）：设定表 → 场景空镜 → 上一段末帧 → 道具，**不含静帧**。
+        urls, roles = pack_ref_images(project_root, g, prev_url=prev_url, ep=ep)
+        if not urls:
+            log("[video] %s：%s 一张资产图都没绑上（注册表空 / 名字没对上？）"
+                "→ 标 failed（先跑资产生成，别去画静帧）" % (pname, "+".join(names)))
+            jobs_mod.mark(jobs, pname, "failed", error="无资产图")
             jobs_mod.save(out_dir, jobs)
             continue
-        # ★ 跨组静帧链（2026-09-23）：上一组末镜的静帧当**接续锚点**。组与组独立生成
-        #   互不知情（灯下棋实测：柳娘坐/站组间跳变、玉佩位置漂移）。
-        prev_url, prev_src = seam_anchor(
-            clip_dir, ("pack%02d" % (k - 1)) if k > 1 else None,
-            stills, prev_last_name)
-        # A 臂图序（2026-09-28 实测）：设定表锁身份、静帧只当场景实现与接续锚。
-        urls, roles = pack_ref_images(project_root, g, own, prev_url=prev_url, ep=ep)
         # 项目风格块（style-block / 项目 style.md）一次加载，逐组复用——
         # 2026-09-22：替换 build_pack_prompt 里硬编码的「国风古装」句（题材污染）。
         prompt = prompt_mod.build_pack_prompt(
@@ -857,7 +800,6 @@ def submit_packs(project_root: Path, shots: list[dict], stills: dict, planned: l
         # 没落盘就**保持 submitted**：`poll_all` 与补渲轮靠这个状态认领原任务继续轮询，
         # 在这里改判 expired 会把一个可能还在出的任务丢掉（并导致下一组退化成静帧兜底，
         # 那是降级不是失败）。
-        prev_last_name = names[-1]     # 下一组的状态衔接锚（无条件更新：静帧链按分镜序）
     if len(pool) > 1:
         log("[video] key 用量：%s" % pool.stats())
     jobs_mod.save(out_dir, jobs)

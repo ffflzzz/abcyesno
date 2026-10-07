@@ -4195,7 +4195,7 @@ class TestPackMode(unittest.TestCase):
         self.assertIn("一律以第 1、2 张人物设定表为准", p)
         self.assertIn("【第 0-6 秒", p, "节拍时间边界仍要保留（时间轴不靠图来标）")
 
-    def test_seam_anchor_prefers_real_last_frame_over_still(self):
+    def test_seam_anchor_uses_only_the_real_last_frame(self):
         """★ 2026-09-28 实测（用户反馈"镜头之间割裂感严重"）：跨组接续锚必须是
         **上一组成片的真实末帧**，不能是"前组末镜的静帧"。
 
@@ -4209,20 +4209,21 @@ class TestPackMode(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as td:
             d = Path(td)
-            stills = {"LN03": {"url": "http://x/LN03.jpg"}}
             # ① 上一组 clip 在盘上 → 必须用抽出来的末帧 data URI
             (d / "pack01.mp4").write_bytes(b"x")
             with mock.patch.object(video_mod, "extract_last_frame",
                                    return_value="data:image/jpeg;base64,AAA"):
-                u, src = video_mod.seam_anchor(d, "pack01", stills, "LN03")
+                u, src = video_mod.seam_anchor(d, "pack01")
             self.assertEqual(src, "末帧")
             self.assertTrue(u.startswith("data:"))
-            # ② clip 缺失（上一组失败）→ 退回静帧，但来源要在日志里看得见
+            # ② clip 缺失（上一组失败）→ **就是没有锚帧**。
+            #    旧行为是退回"前组末镜静帧"并打 `接续锚=静帧兜底` —— 2026-10-07 删掉：
+            #    静帧是起幅画面，拿它当"上一段的结束画面"是对模型说假话，而且
+            #    留着这条兜底，媒体链就得继续为 pack 画静帧。
             with mock.patch.object(video_mod, "extract_last_frame", return_value=None):
-                u2, src2 = video_mod.seam_anchor(d, "pack01", stills, "LN03")
-            self.assertEqual((u2, src2), ("http://x/LN03.jpg", "静帧兜底"))
-            # ③ 第一组没有前组 → 不得拿自己的静帧冒充"上一段结束画面"
-            self.assertEqual(video_mod.seam_anchor(d, None, stills, None), (None, "无"))
+                self.assertEqual(video_mod.seam_anchor(d, "pack01"), (None, "无"))
+            # ③ 第一组没有前组 → 无锚帧
+            self.assertEqual(video_mod.seam_anchor(d, None), (None, "无"))
 
     def test_still_prompt_takes_first_beat_only(self):
         """★ 2026-09-25/26：静帧只取**一拍**——多拍序列是「时间性描述」，
@@ -4243,6 +4244,22 @@ class TestPackMode(unittest.TestCase):
 
     # ── 提交（pack 粒度）──
 
+    @staticmethod
+    def _sheets(root):
+        """pack 档 2026-10-07 起**不吃静帧**，图全部来自资产注册表 —— 给个最小注册表。"""
+        import json as _j
+        (root / "images").mkdir(parents=True, exist_ok=True)
+        cards = [{"name": "画室", "type": "location", "keywords": ["画室"],
+                  "ref_image": "画室.png", "public_url": "", "url": ""},
+                 {"name": "夜街", "type": "location", "keywords": ["夜街"],
+                  "ref_image": "夜街.png", "public_url": "", "url": ""}]
+        for c in cards:
+            (root / "images" / c["ref_image"]).write_bytes(bytes([0x89]) + b"PNG fake")
+            io.open(root / "images" / (c["ref_image"] + ".url"), "w",
+                    encoding="utf-8").write("https://cdn/%s.png" % c["name"])
+        io.open(root / "assets.json", "w", encoding="utf-8").write(
+            _j.dumps({"assets": cards}, ensure_ascii=False))
+
     def test_submit_packs_one_job_per_group(self):
         from unittest import mock
 
@@ -4252,14 +4269,14 @@ class TestPackMode(unittest.TestCase):
                  {"name": "LN02", "scene": "画室", "seconds": 5},
                  {"name": "LN03", "scene": "夜街", "seconds": 5}]
         planned = [{"name": s["name"], "frame_plan": {}} for s in shots]
-        st = {s["name"]: {"url": "u"} for s in shots}
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
+            self._sheets(root)
             with mock.patch.object(video.config, "VIDEO_MODE", "pack"), \
                     mock.patch.object(video, "_wait_one", return_value=""), \
                     mock.patch.object(providers, "submit_video",
                                       return_value={"video_id": "v1"}) as sub:
-                jobs = video.submit_packs(root, shots, st, planned, ep=1,
+                jobs = video.submit_packs(root, shots, planned, ep=1,
                                           log=lambda *_: None)
             self.assertEqual(sub.call_count, 2, "同场景 2 镜打包 + 独立 1 组 = 2 次提交")
             ep_dir = root / "media" / "ep1"
@@ -4274,6 +4291,8 @@ class TestPackMode(unittest.TestCase):
         `seam_anchor` 从**上一组成片**抽真实末帧；而旧时序是"先把所有组提交完、
         最后统一轮询下载"⇒ 提交 pack02 时 pack01 的 mp4 还没落盘，锚帧**永远**走
         "静帧兜底"。v4 实跑日志 12 组全部 `接续锚=静帧兜底` 就是这个。
+        ★ 2026-10-07：静帧整条退出 pack，兜底分支已删 —— 抽不到末帧就是**没有锚帧**，
+        所以这条串行落盘的回归比当年更重要（它现在是锚帧的唯一来源）。
         现在提交每组后会 `_wait_one` 到落盘再进下一组。
         """
         from unittest import mock
@@ -4284,7 +4303,6 @@ class TestPackMode(unittest.TestCase):
                  {"name": "LN02", "scene": "画室", "seconds": 5},
                  {"name": "LN03", "scene": "夜街", "seconds": 5}]
         planned = [{"name": s["name"], "frame_plan": {}} for s in shots]
-        st = {s["name"]: {"url": "u"} for s in shots}
         seen = []
 
         def fake_wait(vid, dest, **kw):
@@ -4294,18 +4312,19 @@ class TestPackMode(unittest.TestCase):
 
         real_anchor = video.seam_anchor
 
-        def fake_anchor(clip_dir, prev_pname, stills, prev_shot):
+        def fake_anchor(clip_dir, prev_pname):
             seen.append(prev_pname)
-            return real_anchor(clip_dir, prev_pname, stills, prev_shot)
+            return real_anchor(clip_dir, prev_pname)
 
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
+            self._sheets(root)
             with mock.patch.object(video.config, "VIDEO_MODE", "pack"), \
                     mock.patch.object(video, "_wait_one", side_effect=fake_wait), \
                     mock.patch.object(video, "seam_anchor", side_effect=fake_anchor), \
                     mock.patch.object(providers, "submit_video",
                                       return_value={"video_id": "v1"}):
-                jobs = video.submit_packs(root, shots, st, planned, ep=1,
+                jobs = video.submit_packs(root, shots, planned, ep=1,
                                           log=lambda *_: None)
             self.assertEqual(jobs["pack01"]["state"], "completed",
                              "串行等待成功后必须标 completed（否则 poll 会重复认领）")
@@ -4320,9 +4339,9 @@ class TestPackMode(unittest.TestCase):
         shots = [{"name": "LN01", "scene": "画室", "seconds": 5},
                  {"name": "LN02", "scene": "画室", "seconds": 5}]
         planned = [{"name": s["name"], "frame_plan": {}} for s in shots]
-        st = {s["name"]: {"url": "u"} for s in shots}
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
+            self._sheets(root)
             ep_dir = root / "media" / "ep1"
             clip_dir = ep_dir / "clips"
             clip_dir.mkdir(parents=True)
@@ -4333,7 +4352,7 @@ class TestPackMode(unittest.TestCase):
                     mock.patch.object(video, "_wait_one", return_value=""), \
                     mock.patch.object(providers, "submit_video",
                                       return_value={"video_id": "v2"}) as sub:
-                video.submit_packs(root, shots, st, planned, ep=1,
+                video.submit_packs(root, shots, planned, ep=1,
                                    log=lambda *_: None, only=["LN02"])
             self.assertEqual(sub.call_count, 1, "only 镜所在组整组重渲")
             self.assertFalse((clip_dir / "pack01.mp4").exists(),

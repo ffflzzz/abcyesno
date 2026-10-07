@@ -400,7 +400,7 @@ brief.json 的 `script-craft` 列表（项目级）> pack.json 的 `script-craft
 |---|---|---|---|
 | **`reference`（★ 系统默认档）** | **2026-10-07 起默认喂本镜资产图**（定妆照 ≤2 + 场景空镜 + 道具，封顶 3 张，`assets.sheets_for_shot`），提示词首段逐张点名（`prompt.pack_ref_declaration`）；设 `SHORTDRAMA_VIDEO_REF_SOURCE=stills` 回到旧行为（静帧进 `images`、作 `<Picture 1>`）。**这一档不再画静帧**（媒体链整段跳过），除非某镜一张图都没绑上才退回画那几镜 | `images`(≤5) / `audios`(≤3) | `first_frame`、`last_frame` |
 | `keyframe`（回退档） | 静帧当首帧，构图被锁死 | `first_frame` / `last_frame` | `images`、`audios` |
-| `pack`（2026-09-22 落管线） | **相邻同场景镜打包**成一条 ≤12s 的 reference 请求；job 与产物都是**组级**（`clips/packNN.mp4`），提交前自动生成跨组接缝静帧预检图 `seam_preview.jpg`（人眼扫，不阻断）。★ **图序（2026-09-28 A 臂实测改，`video.pack_ref_images`）**：人物设定表（≤2）→ 场景空镜 → **本组首镜静帧** → 前组末镜静帧 → 道具补空位，**不再每镜一张静帧**；提示词首段由 `prompt.pack_ref_declaration` 生成，声明"人物一律以设定表为准、静帧只沿用场景与站位、其中人物与设定表冲突就忽略其人物"。理由：静帧画错的身份会被视频**忠实继承**（v2 华山实测），而完全去掉静帧又会让同一处场景在相邻两组里长成两种样子 | 同 `reference`（≤5 张/请求，但**图数不再限制组大小**——09-28 起不每镜一张图；组上限默认 12，只受总长 ≤12 秒约束） | 同 `reference` |
+| `pack`（2026-09-22 落管线） | **相邻同场景镜打包**成一条 ≤12s 的 reference 请求；job 与产物都是**组级**（`clips/packNN.mp4`）。★ **图序（2026-10-07 起，`video.pack_ref_images`）**：人物设定表（≤2）→ 场景空镜（**按表列无条件取**，不再只绑宽景）→ 上一组成片的**真实末帧** → 道具补空位，**静帧整条退出 pack**。理由：跨组接缝的正确来源本来就是"上一段结束画面"= 成片末帧（`seam_anchor`），静帧是**起幅**、拿它当结束画面是对模型说假话（09-28 记过），而"完全去掉静帧会让相邻两组长成两种地貌"那条 09-28 实测**前提已变**——10-05/10-06 起场景卡简称与关键词也绑得上、10-07 逐镜档两轮实跑证明"场景空镜 + 文字锚点"撑得住地貌一致。⛔ 抽不到末帧就**没有锚帧**，不再退回静帧 ⇒ 因此**串行落盘**（每组提交后等成片落盘）现在是锚帧的唯一来源，比当年更重要。提示词首段仍由 `prompt.pack_ref_declaration` 生成 | 同 `reference`（≤5 张/请求，图数不限制组大小；组上限默认 12，只受总长 ≤12 秒约束） | 同 `reference` |
 
 分组算法在 `media/video_plan.group_shots`（同场景相邻贪心、≤12s、压缩保台词下限）；
 打包 prompt 在 `media/prompt.build_pack_prompt`；旁路脚本 `scripts/pack_render.py`

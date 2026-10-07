@@ -247,8 +247,8 @@ class VideoPlan:
             # 前组末帧→道具），**不看 `VIDEO_REF_SOURCE`** —— 它本来就同时吃设定表和静帧。
             return cls(mode=m, use_images=True, use_keyframes=False,
                        needs_tail_extract=False, can_submit_flat=True,
-                       announce_picture=False, from_sheets=False,
-                       needs_stills=True)
+                       announce_picture=False, from_sheets=True,
+                       needs_stills=False)
 
         if m == "mixed":
             # 逐镜决策（见 `mode_for`）。串行依赖全靠"预生成落幅图"解除 ⇒ 必须平铺；

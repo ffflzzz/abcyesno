@@ -1261,8 +1261,8 @@ def _run_impl(project_root: Path, ep: int = 1, log=print, max_regen: int = 2,
         # 提交与等待解耦（与并铺式同构）：submit_packs 只提交 → poll_all 统一轮询
         # → expand_packs 把组级结果展开成 {镜名: 所在组成片}，下游缺镜判定/
         # 拼接逻辑零改动（每镜都拿得到"本镜成片"）。
-        # 跨组接缝风险在提交前由 seam_preview.jpg 静帧并排预检前置（人眼扫）。
-        jobs_d = video.submit_packs(project_root, shots, st, planned, ep=ep, log=log,
+        # 跨组接缝：锚帧 = 上一组成片的**真实末帧**（串行落盘才抽得到，见 submit_packs）。
+        jobs_d = video.submit_packs(project_root, shots, planned, ep=ep, log=log,
                                     only=only)
         _raw = video.poll_all(project_root, jobs_d, ep=ep, log=log)
         done = video.expand_packs(project_root, ep, _raw, log=log)
@@ -1299,7 +1299,7 @@ def _run_impl(project_root: Path, ep: int = 1, log=print, max_regen: int = 2,
             if vplan.mode == "pack":
                 # pack 档补渲：only 传**镜名**，submit_packs 把含目标镜的组整组重渲
                 # （打包单位不可拆；组产物作废→重提→轮询→重新展开）。
-                _jobs2 = video.submit_packs(project_root, shots, st, planned, ep=ep,
+                _jobs2 = video.submit_packs(project_root, shots, planned, ep=ep,
                                             log=log, only=_todo)
                 _raw2 = video.poll_all(project_root, _jobs2, ep=ep, log=log)
                 _done2 = video.expand_packs(project_root, ep, _raw2, log=log)
@@ -1346,11 +1346,16 @@ def _run_impl(project_root: Path, ep: int = 1, log=print, max_regen: int = 2,
     residual: list[str] = []
     if config.CLIP_QC and vplan.mode == "pack":
         # pack 档（2026-09-22）：组产物是**多镜合并**的一条视频，逐镜 clipqc 的
-        # 抽帧/判据都不适用（它按镜名找分镜）。pack 的质量闸门另有三道：
-        # 静帧 QC（上游）→ seam_preview 跨组接缝预检（提交前）→ 组级零拒绝统计。
-        # 逐镜复核在这条路径上是"检查比生成贵 10 倍"的纯开销，显式跳过。
-        log("[media] pack 档跳过逐镜成片复核（组产物多镜合并，逐镜判据不适用；"
-            "接缝风险已由 seam_preview 预检前置）")
+        # 抽帧/判据都不适用（它按镜名找分镜）。逐镜复核在这条路径上是
+        # "检查比生成贵 10 倍"的纯开销，显式跳过。
+        # ⚠️ 2026-10-07 说实话：原先这里写着"质量闸门另有三道（静帧 QC →
+        #   seam_preview 预检 → 零拒绝统计）"，而**静帧整条退出 pack、
+        #   seam_preview 也随之下线** —— 剩下能挡的只有「资产图查字闸门」（提交前）
+        #   与「上一组成片真实末帧」（接缝锚）。**组内画了什么现在没人审**，
+        #   要判只能人眼看片；不许把这句写回成"已前置预检"。
+        log("[media] pack 档跳过逐镜成片复核（组产物多镜合并，逐镜判据不适用）。"
+            "⚠️ 组内内容质量**没有自动闸门**：静帧 QC 与 seam_preview 已随静帧退出，"
+            "提交前只查了资产图有没有字。")
     elif config.CLIP_QC:
         # 崩溃恢复：上一次运行若在"暂存了旧 clip 但重渲还没回来"时被单轮上限
         # 杀掉，暂存区里会留着 clip。先全部放回——**这正是原实现永久丢片的路径**。
