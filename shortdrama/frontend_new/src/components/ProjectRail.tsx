@@ -15,6 +15,7 @@
 import { useMemo, useState } from 'react';
 import type { Project } from '../types';
 import { isRunning } from '../lib/studio';
+import { QC_LABELS, qcOn, qcToggle } from '../lib/quality';
 
 export type RailSignals = {
   running: Record<string, string>;
@@ -36,6 +37,37 @@ type Props = {
   onStop: (pid: string) => Promise<void>;
   onDelete: (pid: string) => Promise<void>;
 };
+
+/** 自动质检开关：常驻项目栏顶（它管的是**接下来那次生成**的行为，值随请求走）。
+ *
+ * ★ 为什么常驻在这里：这条路径的前提是"人看片"，而"要不要让机器替你判、
+ *   并**直接烧配额改画面**"是每次生成前才该决定的事 —— 放页面里、对话框里，
+ *   你在看别处时它就不在眼前（2026-10-07 定的纪律：控件先于它治理的动作可见）。
+ * ⚠️ 默认全关。静帧那一项在默认档（视频吃资产图、不产静帧）只有回退档才有效。
+ */
+function QcRow() {
+  const [, force] = useState(0);
+  return (
+    <div className="rail-qc" role="group" aria-label="自动质检"
+         style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center',
+                  padding: '6px 12px 10px' }}>
+      <span style={{ fontSize: 12, opacity: 0.7 }}>自动质检</span>
+      {QC_LABELS.map((c) => {
+        const on = qcOn(c.key);
+        return (
+          <button key={c.key} type="button" aria-pressed={on} title={c.hint} data-qc={c.key}
+                  onClick={() => { qcToggle(c.key); force((n) => n + 1); }}
+                  style={{ fontSize: 12, padding: '2px 10px', borderRadius: 999, cursor: 'pointer',
+                           border: '1px solid ' + (on ? '#e9c86a' : 'rgba(255,255,255,.22)'),
+                           background: on ? 'rgba(233,200,106,.18)' : 'transparent',
+                           color: 'inherit' }}>
+            {c.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 export function ProjectRail({ projects, signals, pid, onPick, onNew, packs, ratios, busy,
   runIds, onRename, onStop, onDelete }: Props) {
@@ -99,6 +131,7 @@ export function ProjectRail({ projects, signals, pid, onPick, onNew, packs, rati
         <button type="button" className="btn btn--sm btn--primary" disabled={busy}
                 onClick={() => setCreating((v) => !v)}>新建</button>
       </div>
+      <QcRow />
 
       {creating ? (
         <div style={{ padding: '0 12px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
