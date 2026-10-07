@@ -26,6 +26,7 @@ from . import keypool
 from . import prompt as prompt_mod
 from . import style as style_mod
 from . import providers
+from . import sheettext
 from . import video_plan
 
 
@@ -134,6 +135,25 @@ def _wait_one(video_id: str, dest: Path, rounds: int | None = None,
     return ""
 
 
+def drop_flagged(urls, roles, blocked, name, log=print):
+    """把带可读文字的资产图从这次请求里剔掉（`urls` 与 `roles` 同序，一起剔）。
+
+    剔完还剩几张就喂几张；全被剔光则由调用方退回静帧那条老路（见 `from_sheets` 分支）。
+    """
+    if not blocked or not urls:
+        return urls, roles
+    keep_u, keep_r = [], []
+    for i, u in enumerate(urls):
+        if u in blocked:
+            log("[video] %s 剔掉带字的资产图：%s（%s）"
+                % (name, blocked[u], (roles[i][1] if roles and i < len(roles) else "")))
+            continue
+        keep_u.append(u)
+        if roles and i < len(roles):
+            keep_r.append(roles[i])
+    return keep_u, keep_r
+
+
 # ─── 串行链式（默认；语义正确）───────────────────────────────────────────────
 
 def _tail_if_needed(clip: Path, plan: "video_plan.VideoPlan") -> str | None:
@@ -183,6 +203,7 @@ def submit_chain(project_root: Path, shots: list[dict], stills: dict, planned: l
     # 能不能平铺，都在一次 `VideoPlan.of()` 里算清。下面只读字段，不再自己 `if mode ==`。
     vplan = video_plan.VideoPlan.of()
     video_mode = vplan.mode
+    blocked = sheettext.flagged_urls(project_root, ep, log) if vplan.from_sheets else {}
     for s, p in zip(shots, planned):
         name = s["name"]
         dest = jobs_mod.local_clip(clip_dir, name)
@@ -214,6 +235,7 @@ def submit_chain(project_root: Path, shots: list[dict], stills: dict, planned: l
         if video_mode == "reference":
             if vplan.from_sheets:
                 images, ref_roles = assets.sheets_for_shot(project_root, s, ep=ep)
+                images, ref_roles = drop_flagged(images, ref_roles, blocked, name, log)
             if not images:
                 if not own:
                     log("[video] %s 既无资产图也无静帧，跳过" % name)
@@ -372,6 +394,7 @@ def submit_all(project_root: Path, shots: list[dict], stills: dict, planned: lis
     # 能不能平铺，都在一次 `VideoPlan.of()` 里算清。下面只读字段，不再自己 `if mode ==`。
     vplan = video_plan.VideoPlan.of()
     video_mode = vplan.mode
+    blocked = sheettext.flagged_urls(project_root, ep, log) if vplan.from_sheets else {}
 
     prev_name = None
     # ── 提交配速：**per-key 闸门 + key 轮转**（2026-09-16）──────────────────────
@@ -417,6 +440,8 @@ def submit_all(project_root: Path, shots: list[dict], stills: dict, planned: lis
             # 连带 `tails`（落幅预生成）在这条路径上不再有消费方。
             if vplan.from_sheets:
                 sheet_imgs, ref_roles = assets.sheets_for_shot(project_root, s, ep=ep)
+                sheet_imgs, ref_roles = drop_flagged(sheet_imgs, ref_roles,
+                                                     blocked, name, log)
             first_kind = "reference_sheets" if sheet_imgs else "reference_still"
             if sheet_imgs:
                 first = sheet_imgs[0]

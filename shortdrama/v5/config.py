@@ -335,6 +335,13 @@ if VIDEO_REF_SOURCE not in VIDEO_REF_SOURCES:
              "/".join(VIDEO_REF_SOURCES), VIDEO_REF_SOURCE_DEFAULT))
     VIDEO_REF_SOURCE = VIDEO_REF_SOURCE_DEFAULT
 
+# 喂资产图之前先查这批图**有没有可读文字**（`v5/media/sheettext.py`）。
+# ★ 为什么这是新默认档的必要配套而不是可选项：静帧那一步原本带两道保护——反烧字的
+#   提示词清洗 + 硬伤 QC 自动重画。视频直接吃资产图之后**两道都被绕过**，而 10-07
+#   实测证明"图上的字"是提示词末尾那句 `no on-screen text` 压不住的（命案集 ≥4 镜
+#   原样搬进成片）。闸门关掉的后果必须是看得见的，所以关的时候打响亮告警。
+SHEET_TEXT_GATE = os.environ.get("SHORTDRAMA_SHEET_TEXT_GATE", "1") != "0"
+
 # pack 档单组最多吞几个镜。
 # ★ 2026-10-05：默认从 **5 放开到 12**。5 这个数的依据是当年「每镜一张静帧」
 #   （一条请求最多 5 张参考图 ⇒ 5 镜 = 5 图），而 **2026-09-28 图序已改成

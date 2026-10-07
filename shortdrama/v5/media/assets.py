@@ -99,6 +99,22 @@ def _safe_ref_urls(a: dict, root: Path) -> list[str]:
     return [u for u in [_resolve_one(a, root)] if u]
 
 
+def local_ref_path(root: Path, name: str) -> Path | None:
+    """资产名 → 盘上那张参考图的本地路径（查字闸门要用像素，不能用 URL）。"""
+    reg = auto_sync(root)
+    for a in reg.get("assets", []):
+        if str(a.get("name") or "").strip() != str(name or "").strip():
+            continue
+        f = str(a.get("ref_image") or "").strip()
+        if not f:
+            return None
+        p = Path(f)
+        if not p.is_absolute():
+            p = root / "images" / p.name
+        return p if p.exists() else None
+    return None
+
+
 def _resolve_one(a: dict, root: Path) -> str | None:
     """单个参考项 → public URL / data URI（原 _safe_ref_url 逻辑）。
 
