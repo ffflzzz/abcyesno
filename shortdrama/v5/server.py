@@ -975,17 +975,26 @@ def create_app(base: str | None = None, web_root: str | None = None):
         ★ 一次调用把**右栏要渲染的全套事实**给齐 —— 前端只轮询这一个端点，
         不为 hitl / 台账各开一条轮询（`runs/{id}` 搭车 `hitl` 是同一个理由）。
         """
-        from . import hitl, inbox
+        from . import guards, hitl, inbox
         root = _resolve_pid(pid)
         ep = max(1, int(ep or 1))
+        st = wm.hitl_state(root)
         return wm.envelope({
             "messages": inbox.history(root, ep=ep, limit=80),
             "pending": inbox.pending_messages(root, ep=ep),
             "edits": inbox.live_edits(root, ep),
             "stats": inbox.status(root, ep=ep),
-            "hitl": wm.hitl_state(root),
+            "hitl": st,
             "manual_steps": bool(webchain.manual_steps_on()),
+            # `targets` = **信箱消息**能定向给谁（含 `director`，那条走 HITL 通道）
             "targets": list(inbox.KNOWN_TARGETS),
+            # ★ `idle_targets` = **链没挂起时**「让导演重做」能选谁 —— 只有 7 个被派发的
+            #   角色，⛔ 不含 `director`。打回 `director` 的语义是"重写制作规格 +
+            #   全部 7 个角色重做"（`drive_chain.redo_message`），那是**全项目重置**，
+            #   绝不能出现在一个默认会被选中的下拉里。
+            #   2026-10-07 实测事故：验收脚本点了一下重做按钮，就把一个 9 月的项目
+            #   8 份产物全挪进 `.rerun_backup/`、`phases` 清空。
+            "idle_targets": [r for r in guards.GATE_ROLES],
         })
 
     @r.post("/v1/pixa/short-drama/projects/{pid}/director/message")
@@ -1051,6 +1060,16 @@ def create_app(base: str | None = None, web_root: str | None = None):
         if not target:
             raise _bad("当前没有挂起的步骤，必须指明打回哪个角色"
                        "（target=worldbuilder/assetdesigner/…/reviewer）")
+        # ★ 链**没挂起**时不许打回 `director`。它的语义不是"重派一个角色"，而是
+        #   "重写制作规格 + 全部 7 个角色重做"（`drive_chain.redo_message`），
+        #   等于**全项目重置** —— 不该能在没有一次真实挂起、没有人明确看到那条
+        #   说明的情况下被点掉。
+        #   2026-10-07 实测：无头验收脚本误点这一下，把一个 9 月项目的 8 份产物
+        #   全挪进 `.rerun_backup/` 并清空了 `phases`（靠 `restore_stashed` +
+        #   `reconcile_manifest` 才回得来）。判据写在服务端，不指望前端下拉做对。
+        if target == "director":
+            raise _bad("链当前没有挂起，不能打回 director —— 那等于重写制作规格并"
+                       "重做全部 7 个角色（全项目重置）。要这么做请开逐步确认后重跑。")
         busy = [x for x in runner.list_runs(pid, 20)
                 if str(x.get("status") or "") not in runner.TERMINAL]
         if busy:

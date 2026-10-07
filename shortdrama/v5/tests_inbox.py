@@ -318,5 +318,36 @@ class TestRoutes(_Base):
 
 
 
+    def test_idle_redo_list_never_offers_director(self):
+        """★ 反向对照（2026-10-07 真实事故钉成测试）。
+
+        打回 `director` 的语义是「重写制作规格 + 全部 7 个角色重做」
+        （`drive_chain.redo_message` / `hitl.redo_targets_of`）—— 那是**全项目重置**。
+        第一版前端在链没挂起时把「让导演重做」的下拉回落到 `inbox.targets`
+        （那是信箱消息的定向名单，含 director），于是**默认选中的就是最毁的那一项**；
+        无头验收脚本点了一下，就把一个 9 月项目的 8 份产物全挪进 `.rerun_backup/`、
+        `phases` 清空。
+        ⇒ `idle_targets` 必须恒等于 7 个被派发的角色，且不含 director。
+        """
+        from v5 import guards
+        r = self.c.get(self._url("/director/inbox") + "?ep=1")
+        d = r.json()["data"]
+        self.assertNotIn("director", d["idle_targets"])
+        self.assertEqual(list(guards.GATE_ROLES), d["idle_targets"])
+        # 消息定向名单**仍然**可以有 director（那条走 HITL 通道，不是重置）
+        self.assertIn("director", d["targets"])
+
+    def test_redo_director_is_refused_when_nothing_is_suspended(self):
+        """判据写在**服务端**，不指望前端下拉做对。"""
+        r = self.c.post(self._url("/director/redo"),
+                        json={"target": "director", "note": "重来", "ep": 1})
+        self.assertEqual(400, r.status_code, r.text)
+        self.assertIn("director", r.json()["message"])
+        # 而且**没有**留下任何被挪走的归档、也没写任何台账
+        self.assertFalse((self.root / ".rerun_backup").exists())
+        self.assertEqual([], inbox.items(self.root, kind="edit"))
+        self.assertEqual([], inbox.pending_messages(self.root, ep=1))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
