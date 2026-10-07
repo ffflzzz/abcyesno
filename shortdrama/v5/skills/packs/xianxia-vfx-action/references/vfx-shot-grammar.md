@@ -37,7 +37,7 @@
 
 | # | 源文里的写法 | 蒸馏出的规则 | 落在本包哪里 | 为什么这样搬 |
 |---|---|---|---|---|
-| 1 | `@image1 defines S1 appearance (long brown hair with bangs, gold floral hairpin with purple gem chains, white-gold embroidered sheer-sleeve gown)` | 身份 = **一句可逐字复制的锚点串** | worldbuilder「锚点串」→ scenedesigner 每镜**第一拍** | 参考片把外形钉在 `@image` 上；本管线**没有** `@image`，等价物是「参考图 + 静帧只取第一拍」⇒ 锚点必须**写在第一拍**，否则静帧提示词里一个服装词都不剩（brawl 实测同组三张静帧两套外套） |
+| 1 | `@image1 defines S1 appearance (long brown hair with bangs, gold floral hairpin with purple gem chains, white-gold embroidered sheer-sleeve gown)` | 身份 = **一句可逐字复制的锚点串** | worldbuilder「锚点串」→ scenedesigner 每镜**第一拍** | 参考片把外形钉在 `@image` 上；本管线**没有** `@image`，等价物是「参考图 + 预览图与回退档只取第一拍」⇒ 锚点必须**写在第一拍**，否则静帧提示词里一个服装词都不剩（brawl 实测同组三张静帧两套外套） |
 | 2 | `wielding her violet crystal longsword whose blade glow burns dark-crimson` / `no pink or magenta glow anywhere` | **能量色编码**：一人一色，色随形走（剑芒/雷光/图腾/化身/地面反馈全同色） | director 的「能量色分配表」→ worldbuilder「能量色绑定」→ 分镜两列 → reviewer 第 5 条 | 这是参考片最强的一条辨识度来源，且**双人同帧**时两色互撞才形成"在对打"的读感。英文色名（`dark-crimson`）作为**锚词保留**：技术色名对渲染模型的指向性比中文近义色稳 |
 | 3 | `Exactly two fighters in every frame; afterimages translucent only` | **人数律**：每帧恰好两人；残影一律半透明 | reviewer 第 7 条 + `brief.禁忌` | 静帧 QC 有"人数清点"（多出一个一律 P0，2026-09-26 补强）。本包天然两人，**禁忌不能照抄单主角包的"无第二张清晰人脸"**；同时要防"残影被判成分身" ⇒ 分镜里必须显式写"半透明拖尾"（见 §4 已知冲突） |
 | 4 | `Every ranged attack must be a colossal complete blade-slab sword-qi … never a crescent arc, never a beam, never a disc; pillars and ring cracks only as ground feedback` | **板状剑罡形态律** + 地面反馈是"结果"不是"攻击" | 风格块一句 + scenedesigner 第 3 条 + reviewer 第 6 条（正向判、反向不写进单元格） | 这是**模型最容易自己发明**的形态（默认画月牙弧/激光束）。★ 关键处理：源文用**否定句**，本包**不在提示词里写否定**（负面提法诱发烧字/反效果，AGENTS 硬约束 6）⇒ 否定清单只留在 reviewer 判据里，分镜只写正向形 |
