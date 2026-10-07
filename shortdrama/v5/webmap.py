@@ -792,7 +792,10 @@ def _render_state(root: Path, ep: int = 1) -> dict:
     _final = media_dir(root, ep) / "episode_final.mp4"
     return {
         "expected_shots": len(sh),
+        # ⚠️ 默认档（`VIDEO_REF_SOURCE=sheets`）**不产静帧** ⇒ `stills_ready` 恒为 0，
+        #   这不是"卡在静帧那一步"。读进度的人请看下一行的 `video_inputs`。
         "stills_ready": sum(1 for v in st.values() if (v or {}).get("url")),
+        "video_inputs": getattr(config, "VIDEO_REF_SOURCE", "sheets"),
         "clips_ready": done_clips,
         "rendered": bool(ml.get("rendered")),
         "final": _final.exists(),

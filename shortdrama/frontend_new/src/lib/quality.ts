@@ -54,7 +54,7 @@ export function qcPayload(): { still_qc: number; clip_qc: number } {
 }
 
 export const QC_LABELS: { key: QcKey; label: string; hint: string }[] = [
-  { key: 'still', label: '静帧', hint: '打开：判出硬伤就自动重画静帧（最多 3 轮，烧生图配额）' },
+  { key: 'still', label: '静帧', hint: '⚠️ 2026-10-07 起默认档视频吃资产图、**不产静帧**，这个开关只在回退档（SHORTDRAMA_VIDEO_REF_SOURCE=stills）或 keyframe/mixed 承接镜时有意义。打开：判出硬伤就自动重画静帧（最多 3 轮，烧生图配额）' },
   { key: 'clip', label: '成片', hint: '打开：抽帧复核不合格就自动重拍（最多 2 轮，烧视频配额）' },
 ];
 
