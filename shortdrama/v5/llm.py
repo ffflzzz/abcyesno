@@ -176,7 +176,17 @@ class RotatingChatOpenAI(ChatOpenAI):
                     print("[llm] ℹ️ %s 上一次 429 的连坐（未真正发出请求）→ 不罚，"
                           "换下一条" % pool.label(idx), flush=True)
                 pool, idx = self._next(e)
-        raise RuntimeError("文本通道所有 key 均被拒")
+        # ★ 2026-10-07：这条报错原先只有一句"全被拒"，**不告诉你还要等多久** ——
+        #   而调用方（人或外部 agent）此刻唯一想知道的就是这个数。
+        #   另一条路（`_next` 里池子全冷）早就报"最早 N 秒后放开"，这里补上同款信息。
+        #   回归测试：tests_chatrotate 那条从 09-30 起红了 6 天的用例（它要的就是这句话）。
+        try:
+            wait = pool.earliest_free_s()
+        except Exception:                                  # noqa: BLE001
+            wait = 0.0
+        tail = ("（最早 %.0f 秒后放开）" % wait) if wait > 0             else "（此刻读不到明确的放开时间，每条的冷却窗口见上面 [llm] 日志）"
+        raise RuntimeError("文本通道 %d 条 key 本轮全被拒、都在冷却中%s → 不再原地重试。"
+                           % (len(pool), tail))
 
     async def ainvoke(self, *a, **kw):
         pool, idx = self._next(None)
