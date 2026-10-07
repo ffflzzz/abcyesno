@@ -1,8 +1,11 @@
 # -*- coding: utf-8 -*-
-"""图生视频：每镜的 first_frame / last_frame 由镜间关系决定。
+"""图生视频：一条请求吃什么素材，由**档位**决定（唯一判定点在 `video_plan.VideoPlan`）。
 
-旧架构：文字 + 参考图 → 视频（一次概率跳跃，构图不可控、镜间容易跳脱）
-新架构：静帧（已锁身份与构图）→ first_frame → 视频（只让它"动起来"）
+2026-10-07 起的默认（`reference` 档 + `VIDEO_REF_SOURCE=sheets`）：
+    资产图（定妆照 / 场景空镜 / 道具图）+ 文字 → 视频，**静帧不再是输入**。
+    依据与代价都写在 `config.VIDEO_REF_SOURCE` 与 `sheettext.py` 的文件头。
+下面的"静帧 → first_frame"描述的是 `keyframe` 回退档，以及 `pack` / `mixed`
+里仍然离不开静帧的那几处（`needs_stills`）。
 
 尾帧承接（2026-09-08 修）：
   continuous/match 关系的首帧必须是**上一镜渲染成片的真实尾帧**，不是上一镜的
@@ -174,9 +177,10 @@ def submit_chain(project_root: Path, shots: list[dict], stills: dict, planned: l
     """提交 → 等完成 →（keyframe 模式下）抽尾帧给下一镜当首帧。
 
     返回 {name: local_path}。**两种模式（见 `config.VIDEO_MODE`）**：
-      · `reference`（默认，2026-09-13 起）—— 每镜用自己的静帧当 `<Picture 1>`
-        参考图，各镜**完全独立**；"抽尾帧承接"不参与（reference 不允许
-        first_frame/last_frame）。函数名里的"chain"在此时只是历史遗留。
+      · `reference`（默认，2026-09-13 起）—— 各镜**完全独立**，"抽尾帧承接"不参与
+        （reference 不允许 first_frame/last_frame）。喂什么图看 `from_sheets`：
+        默认喂本镜资产图，设 `SHORTDRAMA_VIDEO_REF_SOURCE=stills` 才回到"静帧当
+        `<Picture 1>`"。函数名里的"chain"在此时只是历史遗留。
       · `keyframe`（回退档）—— 连续镜靠上一镜真实尾帧承接，跳切镜用自己的静帧。
 
     `only`（2026-09-13，单镜重渲）：**只提交这些镜**。非目标镜即便

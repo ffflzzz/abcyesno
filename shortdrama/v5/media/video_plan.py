@@ -185,7 +185,8 @@ class VideoPlan:
 
     mode: str
     # ── 图怎么给（两者互斥，由 mode 唯一决定）──
-    use_images: bool           # 静帧进 `images` 数组（reference）
+    use_images: bool           # 走 `images` 数组（reference/pack/mixed 的 reference 镜）
+                               # 里面装的是资产图还是静帧，看下面的 `from_sheets`
     use_keyframes: bool        # 传 `first_frame` / `last_frame`（keyframe）
     # ── 渲完之后 ──
     needs_tail_extract: bool   # 要不要抽真实尾帧（只有 keyframe 会消费它）
@@ -195,6 +196,16 @@ class VideoPlan:
     announce_picture: bool     # 是否写 `<Picture 1>` 用途声明（reference 要求）
     # ── 图的来源（2026-10-07 新默认，判据见 `config.VIDEO_REF_SOURCE`）──
     from_sheets: bool = False  # True ⇒ 逐镜喂资产图（定妆照/场景/道具），⛔不喂静帧
+    # ★ 这一条是上面那条的**必要约束**，不是同义词：`from_sheets` 说的是"逐镜请求吃什么"，
+    #   `needs_stills` 说的是"这一档**离不离得开**静帧"。两者在 pack / mixed 上**不相等**：
+    #     · pack —— `video.pack_ref_images` 仍把「本组首镜静帧」当场景实现、
+    #       `seam_anchor` 抽不到成片末帧时退回「前组末镜静帧」（09-28 实测：完全去掉静帧，
+    #       同一处场景在相邻两组里长成两种样子）。
+    #     · mixed —— 被承接关系连住的镜走 keyframe，`first_frame` 就是本镜静帧
+    #       （`video.py:432`）；只有 cut 镜走 reference。
+    #   媒体链"要不要画静帧"只看这一条。看错了的后果是**整档出不了片**：
+    #   静帧不画 → mixed 的承接镜拿到 `first=None` → 逐镜被判"无首帧，跳过"。
+    needs_stills: bool = True  # True ⇒ 这一档仍要静帧，媒体链不得跳过绘制
 
     @classmethod
     def of(cls, mode: str | None = None, *,
@@ -223,7 +234,8 @@ class VideoPlan:
             # → 平铺是唯一合理选择（串行只是白等；40 镜时差 4 倍）。
             return cls(mode=m, use_images=True, use_keyframes=False,
                        needs_tail_extract=False, can_submit_flat=True,
-                       announce_picture=True, from_sheets=sheets)
+                       announce_picture=True, from_sheets=sheets,
+                       needs_stills=not sheets)
 
         if m == "pack":
             # 打包档（2026-09-22）：本质是 reference（静帧进 images、无首帧锁定），
@@ -231,16 +243,20 @@ class VideoPlan:
             # 组与组之间互不依赖 ⇒ 照样平铺（提交与等待解耦）。
             # announce_picture=False：打包 prompt 由 `prompt.build_pack_prompt`
             # 自行做 `<Picture i>` 逐拍声明，不走单镜六段式组装器。
+            # pack 的图序由 `video.pack_ref_images` 自己定（设定表→场景→首镜静帧→
+            # 前组末帧→道具），**不看 `VIDEO_REF_SOURCE`** —— 它本来就同时吃设定表和静帧。
             return cls(mode=m, use_images=True, use_keyframes=False,
                        needs_tail_extract=False, can_submit_flat=True,
-                       announce_picture=False, from_sheets=True)
+                       announce_picture=False, from_sheets=False,
+                       needs_stills=True)
 
         if m == "mixed":
             # 逐镜决策（见 `mode_for`）。串行依赖全靠"预生成落幅图"解除 ⇒ 必须平铺；
             # 不抽真实尾帧（那是 submit_chain 的机制，mixed 不走链式）。
             return cls(mode=m, use_images=True, use_keyframes=True,
                        needs_tail_extract=False, can_submit_flat=True,
-                       announce_picture=False, from_sheets=sheets)
+                       announce_picture=False, from_sheets=sheets,
+                       needs_stills=True)
 
         # keyframe：各镜可能靠"上一镜真实尾帧"承接 → 平铺取决于依赖是否已解除。
         sc = config.STILL_CHAIN if still_chain is None else still_chain

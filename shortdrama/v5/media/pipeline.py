@@ -889,7 +889,10 @@ def _run_impl(project_root: Path, ep: int = 1, log=print, max_regen: int = 2,
     #   被绕过的两道保护（反烧字清洗 + 硬伤重画）不是消失了，是搬到**要喂出去的那批
     #   资产图**上 —— 见 `v5/media/sheettext.py`，判据与事故记录都在那儿。
     _vplan0 = video_plan.VideoPlan.of()
-    feed_sheets = _vplan0.from_sheets and not stills_only
+    # ★ 只看 `needs_stills`，不看 `from_sheets`：pack 与 mixed **仍然离不开静帧**
+    #   （pack 的「本组首镜静帧」是场景实现、mixed 的承接镜拿静帧当 `first_frame`）。
+    #   拿 `from_sheets` 当判据的后果是这两档整集出不了片 —— 见 `VideoPlan.needs_stills`。
+    feed_sheets = (not _vplan0.needs_stills) and not stills_only
     if feed_sheets and not assets.has_sheets(project_root):
         log("[media] ⚠️ 注册表里一张可用的资产图都没有（老项目/资产阶段没跑成）"
             "⇒ 本集**退回旧路径**：照旧画静帧、照旧喂静帧。"

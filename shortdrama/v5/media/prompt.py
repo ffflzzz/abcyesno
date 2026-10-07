@@ -99,7 +99,9 @@ LANG_SUFFIX = (" LANGUAGE: %s spoken dialogue only — natural "
 # 官方文档明确要求："在 `reference` 模式中，应在提示词里明确写出素材占位符及其用途，
 # 例如『以 <Picture 1> 为角色参考，并跟随 <Audio 1> 的节奏』。这比只上传素材但不
 # 解释用途更容易获得可控结果。"
-# 我们只传一张图：`<Picture 1>` = **本镜静帧**（见 `video.submit_chain` 的 images 组装）。
+# 这句只在 `VIDEO_REF_SOURCE=stills` 那条回退路上成立（`<Picture 1>` = 本镜静帧）。
+# 2026-10-07 起的默认喂的是**资产图**，那时传 `ref_roles` 走逐张点名版声明
+# （`pack_ref_declaration`）—— 继续用这句会把设定表说成"这一镜的画面"，是句假话。
 # 为什么静帧一张就够：静帧本身就是**带参考图生成**的成品图，角色外观/服装/场景
 # 已经锁在它里面了；官方示例需要单独传角色图，是因为它没有静帧阶段。
 # 放在提示词**最前面**——官方 reference 示例（"以 <Picture 1> 中的角色和美术风格

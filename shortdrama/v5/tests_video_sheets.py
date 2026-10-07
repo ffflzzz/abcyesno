@@ -173,3 +173,36 @@ class HasSheets(unittest.TestCase):
                                    "ref_image": "甲.png", "public_url": "", "url": ""}]},
                       f)
         self.assertTrue(assets.has_sheets(self.root))
+
+
+class NeedsStills(unittest.TestCase):
+    """`from_sheets`（逐镜请求吃什么）与 `needs_stills`（这档离不离得开静帧）**不等价**。
+
+    媒体链"要不要画静帧"只看后者。写错成前者的后果不是质量下降，是**整档出不了片**：
+    pack 少掉「本组首镜静帧」这张场景实现，mixed 的承接镜拿到 `first=None` 直接判失败。
+    """
+
+    def test_only_pure_reference_drops_stills(self):
+        for mode, (sheets, needs) in {
+                "reference": (True, False),
+                "pack": (False, True),        # 图序自带设定表，但仍要首镜静帧
+                "mixed": (True, True),        # 逐镜分流：keyframe 那半边吃静帧
+                "keyframe": (False, True)}.items():
+            p = video_plan.VideoPlan.of(mode)
+            self.assertEqual((p.from_sheets, p.needs_stills), (sheets, needs), mode)
+
+    def test_stills_knob_keeps_reference_needing_stills(self):
+        import importlib
+        import os
+        from v5 import config
+        os.environ["SHORTDRAMA_VIDEO_REF_SOURCE"] = "stills"
+        try:
+            importlib.reload(config)
+            importlib.reload(video_plan)
+            p = video_plan.VideoPlan.of("reference")
+            self.assertFalse(p.from_sheets)
+            self.assertTrue(p.needs_stills, "回退档必须自己把静帧要回来，否则无图可喂")
+        finally:
+            del os.environ["SHORTDRAMA_VIDEO_REF_SOURCE"]
+            importlib.reload(config)
+            importlib.reload(video_plan)
