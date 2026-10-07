@@ -99,6 +99,22 @@ def _safe_ref_urls(a: dict, root: Path) -> list[str]:
     return [u for u in [_resolve_one(a, root)] if u]
 
 
+def has_sheets(root: Path) -> bool:
+    """注册表里有没有**至少一张能解析出 URL 的**参考图。
+
+    给媒体链决定"能不能不画静帧"用：老项目、或资产阶段没跑成的项目，注册表是空的，
+    这时候退回静帧那条路是唯一有出口的走法（否则每一镜都会被判"无图可喂"，整集出不来）。
+    """
+    try:
+        reg = auto_sync(root)
+    except Exception:                                      # noqa: BLE001
+        return False
+    for a in reg.get("assets", []):
+        if _resolve_one(a, root):
+            return True
+    return False
+
+
 def local_ref_path(root: Path, name: str) -> Path | None:
     """资产名 → 盘上那张参考图的本地路径（查字闸门要用像素，不能用 URL）。"""
     reg = auto_sync(root)

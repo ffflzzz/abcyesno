@@ -139,3 +139,37 @@ class StillsFallback(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class HasSheets(unittest.TestCase):
+    """媒体链决定"能不能不画静帧"的判据：注册表里至少有一张能解析出 URL 的图。"""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix="hassheets_"))
+        (self.root / "images").mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def test_empty_registry_is_false(self):
+        with io.open(self.root / "assets.json", "w", encoding="utf-8") as f:
+            json.dump({"assets": []}, f)
+        self.assertFalse(assets.has_sheets(self.root))
+
+    def test_registered_card_without_any_image_is_false(self):
+        with io.open(self.root / "assets.json", "w", encoding="utf-8") as f:
+            json.dump({"assets": [{"name": "甲", "type": "character",
+                                   "ref_image": "甲.png", "public_url": "", "url": ""}]},
+                      f)
+        self.assertFalse(assets.has_sheets(self.root),
+                         "卡登记了但图没生成 ⇒ 喂不出东西，必须退回静帧")
+
+    def test_card_with_url_sidecar_is_true(self):
+        with io.open(self.root / "images" / "甲.png.url", "w", encoding="utf-8") as f:
+            f.write("https://cdn/x/甲.png")
+        (self.root / "images" / "甲.png").write_bytes(b"\x89PNG fake")
+        with io.open(self.root / "assets.json", "w", encoding="utf-8") as f:
+            json.dump({"assets": [{"name": "甲", "type": "character",
+                                   "ref_image": "甲.png", "public_url": "", "url": ""}]},
+                      f)
+        self.assertTrue(assets.has_sheets(self.root))

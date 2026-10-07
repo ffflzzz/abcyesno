@@ -883,23 +883,53 @@ def _run_impl(project_root: Path, ep: int = 1, log=print, max_regen: int = 2,
     planned = relations.plan_frames(shots)
     log("[media] 镜间关系: " + relations.explain(planned))
 
-    # 单镜重渲：只对作用域内的镜动手（`force=from_still` 决定要不要重画静帧）。
-    # 不传全片的理由：`stills.ensure` 的幂等是"URL 在盘就跳过"，对全片调用虽然
-    # 不额外烧配额，但会把"注册表里没有的镜"重新生成一遍 —— 重渲不该扩面。
-    st = stills.ensure(project_root, scope, refs_by_shot=refs_by_shot, ep=ep,
-                       force=from_still, planned=planned, log=log,
-                       ref_names_by_shot=ref_names,
-                       ref_types_by_shot=ref_types)
-    missing = [s["name"] for s in shots if not (st.get(s["name"]) or {}).get("url")]
-    if missing:
-        log("[media] 静帧缺失: %s" % ",".join(missing[:6]))
+    # ★ 2026-10-07：视频改吃资产图之后，**静帧不再是任何环节的输入**，这一段整趟跳过
+    #   （画静帧 = 白烧生图配额 + 每集多几分钟）。`--stills-only` 与
+    #   `SHORTDRAMA_VIDEO_REF_SOURCE=stills` 两条路照旧画，行为与改造前一字不变。
+    #   被绕过的两道保护（反烧字清洗 + 硬伤重画）不是消失了，是搬到**要喂出去的那批
+    #   资产图**上 —— 见 `v5/media/sheettext.py`，判据与事故记录都在那儿。
+    _vplan0 = video_plan.VideoPlan.of()
+    feed_sheets = _vplan0.from_sheets and not stills_only
+    if feed_sheets and not assets.has_sheets(project_root):
+        log("[media] ⚠️ 注册表里一张可用的资产图都没有（老项目/资产阶段没跑成）"
+            "⇒ 本集**退回旧路径**：照旧画静帧、照旧喂静帧。"
+            "先跑一次资产生成（`cast.ensure`）才会走新路径。")
+        feed_sheets = False
+    if feed_sheets:
+        st: dict = {}
+        missing: list[str] = []
+        log("[media] 视频喂资产图（VIDEO_REF_SOURCE=sheets）⇒ 本集不画静帧、"
+            "不跑静帧 QC；出片前先查这批图有没有可读文字")
+        # 逐镜兜底：某镜一张图都没绑上（空镜/名字没对上）时不能直接判死 ——
+        # 那几镜退回画静帧，其余照新路径走。⛔ 不接受"整集因为一镜没图就出不了片"。
+        bare = [s for s in scope if not assets.sheets_for_shot(project_root, s, ep=ep)[0]]
+        if bare:
+            log("[media] %d 镜没绑到任何资产图（%s）→ 这些镜退回画静帧"
+                % (len(bare), ",".join(s["name"] for s in bare[:8])))
+            st.update(stills.ensure(project_root, bare, refs_by_shot=refs_by_shot,
+                                    ep=ep, force=from_still, planned=planned, log=log,
+                                    ref_names_by_shot=ref_names,
+                                    ref_types_by_shot=ref_types))
+    else:
+        # 单镜重渲：只对作用域内的镜动手（`force=from_still` 决定要不要重画静帧）。
+        # 不传全片的理由：`stills.ensure` 的幂等是"URL 在盘就跳过"，对全片调用虽然
+        # 不额外烧配额，但会把"注册表里没有的镜"重新生成一遍 —— 重渲不该扩面。
+        st = stills.ensure(project_root, scope, refs_by_shot=refs_by_shot, ep=ep,
+                           force=from_still, planned=planned, log=log,
+                           ref_names_by_shot=ref_names,
+                           ref_types_by_shot=ref_types)
+        missing = [s["name"] for s in shots if not (st.get(s["name"]) or {}).get("url")]
+        if missing:
+            log("[media] 静帧缺失: %s" % ",".join(missing[:6]))
 
     # 2) 静帧硬伤 QC（审的就是成品首帧）+ 定向重生成
     #
     # 可关（SHORTDRAMA_STILL_QC=0）：18 镜一轮 QC 约 5-6 分钟，而本机环境会在
     # 长任务中途回收进程 → 每轮重启都白跑一遍 QC，视频阶段永远轮不到。
     # 静帧已人工验收（或本轮只关心视频阶段）时关掉，直取视频。
-    if not config.STILL_QC:
+    if feed_sheets:
+        log("[media] 静帧 QC 不适用（本集没画静帧）—— 保护在资产图那道查字闸门上")
+    elif not config.STILL_QC:
         log("[media] 跳过静帧 QC（SHORTDRAMA_STILL_QC=0）")
     # 单镜重渲且**没重画静帧** → 跳过静帧 QC。图没变还复审 = 概率翻判
     # （同一张图连审会给出不同结论，实测 LN12 干净/干净/有硬伤），
