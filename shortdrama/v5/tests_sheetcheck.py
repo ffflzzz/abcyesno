@@ -284,3 +284,40 @@ class TestVerifyWiring(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+from v5.media import sheetcheck  # noqa: E402
+
+
+class AssetSheetJudgement(unittest.TestCase):
+    """道具 / 场景图对账（2026-10-07 补）。三向夹具：
+    应过 / 应红（白衬衫男人那一类）/ **前提不存在也要 False**（模型答不上来时不许报红）。"""
+
+    def _reply(self, subject="半截宽刃剑", person="否", colors="深青灰的金属", notes="单件"):
+        return json.dumps({"subject": subject, "person": person,
+                           "colors": colors, "notes": notes}, ensure_ascii=False)
+
+    def test_clean_prop_passes(self):
+        card = {"name": "断刃·赤纹", "type": "prop", "prompt": "半截宽刃剑，暗赤雷纹"}
+        self.assertEqual(sheetcheck.judge_asset(card, self._reply()), [])
+
+    def test_prop_drawn_as_a_person_is_flagged(self):
+        card = {"name": "青霜双鞭", "type": "prop", "prompt": "细长青霜鞭，白霜、末端铜环"}
+        got = sheetcheck.judge_asset(
+            card, self._reply(subject="一个穿白衬衫的现代男人，两手举着蓝色绳圈",
+                              person="是", colors="白衬衫、蓝色"))
+        kinds = [k for k, _w in got]
+        self.assertIn("主体是真人", kinds, got)
+
+    def test_multi_subject_and_blank_are_flagged(self):
+        card = {"name": "验尸房", "type": "location", "prompt": "冷绿日光灯的旧验尸房"}
+        self.assertIn("多主体", [k for k, _ in sheetcheck.judge_asset(
+            card, self._reply(subject="房间", notes="图上分了三格，多件不相关主体"))])
+        self.assertIn("未画出", [k for k, _ in sheetcheck.judge_asset(
+            card, self._reply(subject="", notes="纯白背景"))])
+
+    def test_unparseable_reply_is_not_a_red(self):
+        card = {"name": "霜铃", "type": "prop", "prompt": "青白铜铃"}
+        for bad in ("", "模型今天不想说话", "{不是 JSON}", json.dumps({"foo": 1})):
+            self.assertEqual(sheetcheck.judge_asset(card, bad), [],
+                             "答不上来一律不判 —— 判据是概率性的，别每次生成都报红")

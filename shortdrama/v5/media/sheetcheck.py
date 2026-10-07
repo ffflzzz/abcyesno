@@ -178,3 +178,75 @@ def _norm(s: str) -> str:
 def ask_text(appearance: str) -> str:
     cards = items_of(appearance)
     return ASK_PROMPT % "\n".join("- %s" % c for c in cards)
+
+
+# ─── 资产图（道具 / 场景）对账（2026-10-07 加）────────────────────────────────
+# ★ 为什么必须补这一块：角色定妆照有对账（上面那一套），**道具与场景没有任何对账**。
+#   实测代价（`xianxia-zhongzhui-1007`）：「青霜双鞭」画成一个**穿白衬衫的现代男人
+#   两手举着蓝色绳圈** —— 图上主体的类型就错了，而它一路无人拦；
+#   若不是这条路线当时不喂道具图，它会被原样送进视频请求。
+#
+# 判据刻意**窄**（只抓"类型错 / 什么都没画 / 多主体"这三种明确的）：
+#   颜色深浅、款式细节这类审美差异**不判** —— 判宽了会把每次生成都变成一次赌。
+
+ASK_ASSET = """下面是一张**资产参考图**（道具或场景的空镜），以及这张卡的名称与规格。
+你的任务**只是报告你看见了什么**，不是评判画得好不好。
+
+回答四格：
+  subject  —— 图上主体是什么（一句话，照你看到的写）
+  person   —— 图上有没有**清晰可辨的真人**（是 / 否）。半身、全身、正脸侧脸都算"是"；
+              纯剪影、模糊人影不算。
+  colors   —— 主体与主要配件的颜色，照你看到的写（例："深青灰的金属，握把缠绕浅褐布条"）
+  notes    —— 有没有多件不相关的主体、有没有分格拼图、有没有可读文字（一句话）
+
+⛔ 不要照抄卡片的措辞来回答 —— 卡片写"细长青霜鞭"而图上是别的，你就写你看见的。
+
+卡片：%s（%s）
+规格（逐字）：%s
+
+只输出 JSON：{"subject": "...", "person": "是", "colors": "...", "notes": "..."}"""
+
+
+def ask_asset(card: dict) -> str:
+    return ASK_ASSET % (card.get("name") or "", card.get("type") or "",
+                        card.get("prompt") or "")
+
+
+def _reply_obj(text: str) -> dict:
+    m = re.search(r"\{.*\}", text or "", re.S)
+    if not m:
+        return {}
+    try:
+        d = json.loads(m.group(0))
+    except Exception:                                        # noqa: BLE001
+        return {}
+    return d if isinstance(d, dict) else {}
+
+
+def judge_asset(card: dict, reply: str) -> list[tuple[str, str]]:
+    """资产图 ↔ 资产卡：返回 `[(类别, 依据)]`，空 = 没抓到明确问题。
+
+    三类，每类都对应一次实测或明确的推理，⛔ **不判审美**（深浅/款式不算）：
+      · 主体是真人  —— 卡片是道具/场景，图上却画了清晰的人（白衬衫男人那次）；
+      · 未画出      —— 模型答不出主体（空白 / 纯色背景）；
+      · 多主体      —— 图上出现多件不相关主体或分格拼接（会污染视频请求）。
+    模型答不上来的（JSON 解析失败 / 关键字段缺失）一律**不算**问题 ——
+    判据是概率性的，宁可漏一次也不要每次生成都报红。
+    """
+    d = _reply_obj(reply)
+    if not d:
+        return []
+    out = []
+    if str(d.get("person") or "").strip() in ("是", "有", "yes", "true"):
+        out.append(("主体是真人", "图上画了清晰的人，而这张卡是%s「%s」"
+                    % ("道具" if card.get("type") == "prop" else "场景",
+                       card.get("name") or "")))
+    # ⚠️ 只认"**模型确实答了这一格、但答的是空**"；JSON 里根本没有 subject 这个键
+    #    = 它没按格式答 ⇒ 算"答不上来"，不判（与函数尾那句同一口径）。
+    subj = str(d.get("subject") or "").strip()
+    if "subject" in d and (not subj or subj in ("无", "空", "没有", "无主体")):
+        out.append(("未画出", "模型答不出主体：%s" % (subj or "（空）")))
+    notes = str(d.get("notes") or "")
+    if any(k in notes for k in ("多件", "分格", "拼图", "拼接", "多个主体")):
+        out.append(("多主体", notes[:80]))
+    return out

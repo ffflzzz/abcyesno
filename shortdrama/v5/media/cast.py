@@ -761,6 +761,57 @@ def _sheet_data_uri(path: Path) -> str:
     return "data:%s;base64," % mime + base64.b64encode(path.read_bytes()).decode()
 
 
+
+def verify_asset_sheets(root: Path, items: list[dict], *, log=print,
+                        llm=None, ask=None) -> dict:
+    """资产图（道具 / 场景）↔ 资产卡：只抓三类明确的错（见 `sheetcheck.judge_asset`）。
+
+    ★ 与角色那套的两点不同，都是刻意的：
+      · **不自动重画**（v1）：道具/场景的判据更粗，重画一轮的把握不如角色定妆照，
+        先用"响亮报出来 + 记进返回值"给人看，别一上来就烧配额。
+      · 判据**窄**：只报"主体是真人 / 未画出 / 多主体"，审美差异不判。
+    """
+    from . import sheetcheck
+
+    out = {"checked": 0, "flagged": []}
+    if not config.SHEET_CHECK:
+        return out
+
+    def _ask(path, card):
+        if ask is not None:
+            return ask(path, card)
+        from langchain_core.messages import HumanMessage
+        from ..llm import chat_for
+        msg = HumanMessage(content=[
+            {"type": "text", "text": sheetcheck.ask_asset(card)},
+            {"type": "image_url", "image_url": {"url": _sheet_data_uri(path)}}])
+        r = (llm or chat_for("", 900, temperature=0)).invoke([msg])
+        return getattr(r, "content", "") or ""
+
+    for a in items:
+        if (a.get("type") or "") not in ("prop", "location"):
+            continue
+        name = str(a.get("name") or "")
+        path = images_dir(root) / (name + ".png")
+        if not name or not path.exists() or path.stat().st_size < 2048:
+            continue
+        try:
+            issues = sheetcheck.judge_asset(a, _ask(path, a))
+        except Exception as e:                                 # noqa: BLE001
+            log("[sheetcheck] %s 资产图对账异常（按不判处理）：%s" % (name, str(e)[:60]))
+            continue
+        out["checked"] += 1
+        if issues:
+            out["flagged"].append(name)
+            for kind, why in issues:
+                log("[sheetcheck] ⛔ 资产图与卡片矛盾（%s）：%s —— %s "
+                    "（这张图会被喂进视频请求，成片里就是它；要重画先删 images/%s.png）"
+                    % (kind, name, why, name))
+    if out["checked"]:
+        log("[sheetcheck] 资产图对账：查了 %d 张，报出 %d 张（%s）"
+            % (out["checked"], len(out["flagged"]), "、".join(out["flagged"]) or "无"))
+    return out
+
 def verify_character_sheets(root: Path, chars: list[dict], *, log=print,
                             llm=None, ask=None) -> dict:
     """★ 定妆照 ↔ 角色卡 对账（判据与为什么需要，见 `media/sheetcheck.py` 文件头）。
@@ -1604,6 +1655,12 @@ def ensure(root: Path, *, log=print, force: bool = False,
     chk = verify_character_sheets(root, chars, log=log)
     made["sheet_checked"] = chk["checked"]
     made["sheet_residual"] = chk["residual"]
+    # 道具 / 场景图的对账（2026-10-07 补）：角色之外**原先无人过问**，
+    # 实测代价是「青霜双鞭」画成穿白衬衫的现代男人（`xianxia-zhongzhui-1007`）。
+    _assets_chk = verify_asset_sheets(
+        root, assets_mod.load_registry(root).get("assets", []), log=log)
+    made["asset_sheet_checked"] = _assets_chk["checked"]
+    made["asset_sheet_flagged"] = _assets_chk["flagged"]
 
     log("[cast] 完成：角色 %d / 资产 %d / 场景（仅登记）%d / 不生图登记 %d / 跳过 %d / 失败 %d"
         % (made["characters"], made["assets"], made.get("scenes", 0),
