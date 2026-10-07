@@ -125,6 +125,29 @@ def _inline_file(root: Path, rel: str) -> str:
     return "### %s\n%s" % (rel, body)
 
 
+def _brief_inline(root: Path, ep) -> str:
+    """注入 brief.json —— **本集该看到的那一份**（按集写的字段在 `brief_for_ep` 里解析）。
+
+    为什么不是直接 `_inline_file`：连载里有的集换了主角/场景/结局，而 `must_have` /
+    `protagonist` / `结局` 是全剧级的一份 ⇒ 那一集的分镜师与评审看到的是**别人那集的**
+    要求（实测第 5 集 `must_have` 四条全灭、三轮后 force_passed、输入门拦下、零出片）。
+
+    ⛔ 旧行为兼容：brief 里没有按集写法时，输出与 `_inline_file(root, "brief.json")`
+    **逐字相同**（同标题、同文本）——只是多走一次解析。
+    """
+    p = root / "brief.json"
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 -- 读不动/解析不了：交给下游那道门响亮报
+        return _inline_file(root, "brief.json")
+    from . import validate
+    resolved = validate.brief_for_ep(data, ep)
+    if resolved == data:
+        return _inline_file(root, "brief.json")
+    return ("### brief.json（第 %s 集视图 —— 按集写的字段已解析成这一集的）\n%s"
+            % (ep, json.dumps(resolved, ensure_ascii=False, indent=2)))
+
+
 # ─── 按集切片注入（M5，2026-09-17）──────────────────────────────────────────
 #
 # 问题（spec M5 ①）：改造后 `plotdesigner/episodes.md` 是**全剧级**产物，而
@@ -542,7 +565,9 @@ def role_input(role: str, root: Path, m: dict, reasons: list[str] | None = None)
         lines.append("【上游产物 —— 已读好，**不必再 read_file**，直接开工】"
                      "（标注了「按集切片」的那些是**目录摘录**，不是全文；"
                      "若你确实需要别集的内容，用 read_file 读原文件）")
-        lines.append(_inline_file(root, "brief.json"))
+        # ★ 注入的是**本集该看到的那一份** brief：按集写的字段（must_have / protagonist /
+        #   结局…）在这里解析掉（`validate.brief_for_ep`）。旧行为（列表式 brief）逐字不变。
+        lines.append(_brief_inline(root, ep))
         for r in _prereq.get(role, []):
             lines.append(_upstream_block(root, r, ep))
     # ★★ 剧本直出模式（2026-10-04）：两条**只在 from_script 下出现**的注入。

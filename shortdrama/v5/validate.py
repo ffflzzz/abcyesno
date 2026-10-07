@@ -666,14 +666,48 @@ def _shot_num_of(s: str) -> int:
     return int(m.group(1)) if m else 0
 
 
+#: 可以按集改写的 brief 字段（连载里换主角/换场景/换结局的集，全局值必然对不上）
+EP_FIELDS = ("must_have", "protagonist", "second_character", "结局", "key_props", "tone")
+
+
+def brief_for_ep(brief: dict | None, ep=None) -> dict:
+    """把 brief 里**按集写的字段**解析成本集该看到的那一份（浅拷贝）。
+
+    为什么需要（2026-10-07 实测 `ice-spring-bridge-duel` 第 5 集）：该集换了主角
+    （小青月 + 长枪）、换了场景（云桥寺庙）、换了法器（魔物军团 / 紫晶凤凰），
+    而 `must_have` / `protagonist` / `结局` 是**全剧级**的一份 ⇒
+    片长判、`must_have` 覆盖率（四条全灭）、评审的"角色身份未对齐"一起爆，
+    链路三轮后 `force_passed`、最后被输入门拦下、**零出片**。
+
+    写法（两种都认，向后兼容）：
+      · 列表/字符串 ⇒ 全剧通用（今天的行为，一字不变）
+      · dict ⇒ 先取 `str(ep)`；没有就取 `"*"`（全剧默认）；都没有 ⇒ 保留原 dict
+        （宁可让下游看到原样、也不静默编一份出来）。
+    """
+    if not isinstance(brief, dict):
+        return brief or {}
+    out = dict(brief)
+    for k in EP_FIELDS:
+        v = out.get(k)
+        if isinstance(v, dict):
+            if ep is not None and str(ep) in v:
+                out[k] = v[str(ep)]
+            elif "*" in v:
+                out[k] = v["*"]
+    return out
+
+
 def check_storyboard(md: str, brief: dict | None = None,
                      style_keywords: list | None = None, *,
                      ep=None) -> dict:
     """分镜表契约校验：schema / 镜序 / must_have 覆盖 / 空对白 / 画内文字 / 节奏。
 
     兼容现役分镜格式：镜头号为纯数字或 LN 前缀，允许多幕多张表（表头重复）。
-    `ep` 传入时，brief 里**点名本集**的时长（「第 2 集约 156 秒」）用于片长判据。
+    `ep` 传入时，brief 里**点名本集**的时长（「第 2 集约 156 秒」）用于片长判据；
+    **按集写的字段**（must_have / protagonist / 结局…）也在这里解析成本集那一份
+    （见 `brief_for_ep`）。
     """
+    brief = brief_for_ep(brief, ep)
     # 表头选择：取**命中契约列最多**的表头行（2026-09-11 实测：产物把 SKILL 的
     # "列契约说明表"抄在正文前，第一个含"画面描述"的表头是说明表 → 误判缺列）。
     #
