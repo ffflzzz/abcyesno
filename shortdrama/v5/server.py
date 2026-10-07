@@ -1096,6 +1096,62 @@ def create_app(base: str | None = None, web_root: str | None = None):
                             "note": "已清空 %s 及其下游的本集记账并起了新一轮创作链"
                                     % target})
 
+    # ══════════ 和导演对话（2026-10-07）：聊清楚了，再开工 ══════════
+    #
+    # 与信箱的分工：信箱是把话**投递给下一个被派发的角色**（链没跑就永远排着）；
+    # 这里是真的**跟 supervisor 本人说话** —— 一段被记住的会话，他回答你，
+    # 你满意了再点开工，生产就跑在**同一段对话**上（`runner.start(chain_thread=…)`）。
+    # 为什么能按住他不干活：见 `v5/director_chat.py` 的实测记录（消息里说明
+    # "这是对话阶段" 之后，盘上新增文件 0 个）。
+    @r.get("/v1/pixa/short-drama/projects/{pid}/director/chat")
+    def director_chat_get(pid: str, ep: int = 1):
+        """右栏的时间线 + 他这一轮答完没有。**顺带把新发言搬进时间线**（轮询端点）。"""
+        from . import director_chat
+        root = _resolve_pid(pid)
+        st = director_chat.poll(root)
+        return wm.envelope({
+            "turns": st.get("turns") or [],
+            "busy": bool(st.get("busy")),
+            "status": st.get("status") or "",
+            "thread_id": st.get("thread_id") or "",
+            "error": st.get("error") or "",
+        })
+
+    @r.post("/v1/pixa/short-drama/projects/{pid}/director/chat")
+    def director_chat_post(pid: str, payload: dict | None = None):
+        """说一句。**不等回答**（和这个应用其它地方一个节奏：提交 → 轮询）。"""
+        from . import director_chat
+        root = _resolve_pid(pid)
+        p = payload or {}
+        res = director_chat.submit(root, str(p.get("text") or ""), int(p.get("ep") or 1))
+        if not res.get("ok"):
+            raise _bad(str(res.get("error") or "发不出去"))
+        return wm.envelope(res)
+
+    @r.post("/v1/pixa/short-drama/projects/{pid}/director/start")
+    def director_start(pid: str, payload: dict | None = None):
+        """**开工**：接着刚才那段对话，跑完整条创作链。
+
+        `manual_steps`：每派一个角色前停一次等人确认（翻了要重启 dev server，
+        只对下一次生成生效 —— 所以交给 `ensure_devserver` 去判断要不要重启）。
+        """
+        from . import director_chat
+        root = _resolve_pid(pid)
+        p = payload or {}
+        ep = max(1, int(p.get("ep") or 1))
+        tid = director_chat.thread_id(root)
+        if not tid:
+            raise _bad("还没有跟导演说过话 —— 先说一句，或直接开一条新对话")
+        try:
+            webchain.ensure_devserver(pid, wait_s=120,
+                                      manual_steps=bool(p.get("manual_steps", False)))
+        except Exception as e:  # noqa: BLE001
+            raise _bad("起不了 dev server：%s" % str(e)[:160])
+        rec = runner.start(pid, "chain", ep=ep, chain_thread=tid,
+                           image_vendor=str(p.get("image_vendor") or ""),
+                           video_vendor=str(p.get("video_vendor") or ""))
+        return wm.envelope({"thread_id": tid, "run": rec})
+
     # ── 删除项目：**移到可恢复的暂存区**，不真删 ──
     @r.post("/v1/pixa/short-drama/projects/batch-delete")
     async def batch_delete(payload: dict | None = None):

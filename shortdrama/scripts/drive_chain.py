@@ -420,9 +420,18 @@ async def main() -> int:
           flush=True)
 
     c = get_client(url=url)
-    th = await c.threads.create()
-    tid = th["thread_id"]
-    print("[drive] thread = %s" % tid, flush=True)
+    # ★ `--thread`（可选，默认空）：**接着一段已有的对话**开工。
+    #   工作台右栏让人先跟导演把事聊清楚，再点开工 —— 那时生产要跑在**同一段对话**里，
+    #   否则导演对每一步的说明落在另一条时间线上，用户那头什么都看不见。
+    #   不传 = 自己建一段（原行为一字不变，CLI 与外部 agent 走的就是这条）。
+    _reuse = str(_arg("--thread", "") or "").strip()
+    if _reuse:
+        tid = _reuse
+        print("[drive] thread = %s（**复用**：用户先跟导演聊过的那一段）" % tid, flush=True)
+    else:
+        th = await c.threads.create()
+        tid = th["thread_id"]
+        print("[drive] thread = %s" % tid, flush=True)
 
     _stale_demoted = set()   # 只响一次，别每轮刷同一条
 

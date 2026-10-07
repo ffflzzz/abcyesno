@@ -823,9 +823,51 @@ node ../scripts/studio_shot.mjs <项目名>                   # 无头浏览器�
 - **桥是惰性激活的**：没收到宿主消息时一条行为都不发生 ⇒ `frontend/` 直接开 iframe 的
   旧用法不变。改 `atelier` 前先看这条，否则会把"没在用"误判成"没生效"。
 
+### ★ 和导演**直接对话**：聊清楚了再开工（2026-10-07，`v5/director_chat.py`）
+
+**它是什么**：右栏的对话**发给 supervisor 本人**，他回答你；你点「开工」，完整创作链
+就跑在**同一段对话**上 —— 他对每一步的说明（"规格已落盘"「派 scenedesigner」
+"创作链已跑完"）落在同一条时间线上，中间画布同时开始长格子。
+
+**补的是什么缺口**：在这之前机器上**没有任何东西在跟 supervisor 说话** ——
+唯一的驱动是 `drive_chain` 那个"点火器"（每次新建一次性会话、丢一句开工指令、跑完就丢）。
+HITL 是唯一能往图里塞话的口子，而它的中断只挂在 **`task`（派活）**这一个动作上
+（`orchestrator._interrupt_on()`）⇒ 链没跑时人说的话**无处可去**。
+
+**为什么他不误开工**（这条路唯一的未知项，已实测）：他的提示词是「你是监制，按依赖序派活」，
+**没有"只回答不做事"的模式**。按住他的办法是**在消息里说清这是对话阶段**
+（`CHAT_PREFIX`）—— 实测临时项目：回了一大段正经回答、**盘上新增文件 0 个**。
+⛔ **不要去改他的提示词**：那是共享的、编译期生效的东西（改了要重启 dev server）。
+
+**"按住他"和"喂饱他"是配套的两件事**：既然禁止他调用工具，他读不到 `/brief.json`、
+也读不到产物目录 ⇒ 每句话都要**附上盘上现状**（`_digest`：brief 关键字段 + 各角色落盘情况 +
+镜数）。第一版没喂，他会老实说"我还没拿到 brief"、只能给通用套话。
+
+**开工怎么接上**：`POST .../director/start` → `runner.start(kind="chain", chain_thread=<那段会话>)`
+→ `drive_chain --thread <id>`（**新增的可选参数，不传=自己建新线程，CLI 与外部 agent 的
+原行为一字不变**）。
+
+**两条容易写错的地方**（都踩过，回归测试见 `v5/tests_director_chat.py`）：
+
+1. `_pull_new` **只搬他说的，不搬我们发出去的**。两边都记 ⇒ 界面上每句话出现两次
+   （一次干净、一次带 `_digest`+前缀）。用户那一侧由 `submit` 自己记。
+2. `_poll` **必须无条件搬运**，不能只在"本模块发起的 run 收工了"时搬 ——
+   开工走的是 `runner.start`（不经过 `submit`），本模块压根不知道有 run 在跑。
+   第一版这么写的结果：角色产物全落盘了、**对话里一句话都没多**。
+
+**三条边界**：
+- 会话是**项目级**的（换集不换对话），状态在 `<项目>/.tmp/director_chat.json`；
+  dev server 被 `ensure_devserver` 归档 `.langgraph_api` 之后旧线程会 404 ⇒
+  自动换一条新的（本地时间线保留，不丢人看过的记录）。
+- 对话**不能半路插进正在跑的生产** —— 那是上面那条"中断只挂在派活那刻"决定的。
+  所以是「先说清楚 → 再点开工」，不是「边跑边聊」。
+- ⛔ 别在真项目上试这条链路（会花真实文本额度）。要试就自建临时项目，跑完删。
+
 ### 对调用方的影响
 
-- 三条新路由：`GET|POST .../projects/{pid}/director/{inbox,message}`、`POST .../director/redo`。
+- 新路由：`GET|POST .../projects/{pid}/director/{inbox,message}`、`POST .../director/redo`、
+  **`GET|POST .../projects/{pid}/director/chat`**、**`POST .../projects/{pid}/director/start`**。
+  `chat` 的 GET 是轮询端点（顺带把新发言搬进时间线），POST **不等回答**（提交即返回）。
 - `POST /segments/{sid}` 与 `POST /episodes/{eid}/segments` 多收 `source` / `by`
   （只进台账，不影响写盘）。⚠️ 调用方传了它们就要**指望服务端 pop 掉** ——
   漏了会被列进 `skipped` 并回一条"这些列不存在"的假警告（`server.py` 已处理，别退回）。

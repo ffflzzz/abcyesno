@@ -167,7 +167,7 @@ def _validate(pid: str, kind: str, shots, ep: int = 1) -> list:
 
 def start(pid: str, kind: str, ep: int = 1, shots=None, from_still: bool = False,
           image_vendor: str = "", video_vendor: str = "",
-          still_qc=None, clip_qc=None, log=print) -> dict:
+          still_qc=None, clip_qc=None, chain_thread: str = "", log=print) -> dict:
     """写台账 → spawn 子进程 → 返回台账记录。**不等任务结束**。
 
     `image_vendor` / `video_vendor`（2026-09-18）：**这一次运行**用哪个厂商。
@@ -219,6 +219,9 @@ def start(pid: str, kind: str, ep: int = 1, shots=None, from_still: bool = False
         "result": None,
         "log": log_path(rid).name,
         "note": KINDS[kind],
+        # ★ 接着一段已有对话开工（工作台右栏「先跟导演聊清楚，再点开工」）。
+        #   空串 = 让 drive_chain 自己建新线程 —— 缺省行为与改造前**一字不变**。
+        "chain_thread": str(chain_thread or ""),
         # ★ 产地记录（2026-09-18）：台账里记下**这一轮实际用哪家**。
         #   前端 `/runs/{run_id}` 轮询时因此天然能看到产地 —— 用户"自己对比"要用。
         #   注意：**不改流水线行为**，只是记账（只写不读）。
@@ -370,20 +373,20 @@ def cancel(run_id: str, log=print) -> dict | None:
 
 # ─────────────────────────────────────────────────────────── 子进程入口
 
-def _exec_keyframe(root: Path, ep: int, shots: list, log) -> dict:
+def _exec_keyframe(root: Path, ep: int, shots: list, log, rec: dict | None = None) -> dict:
     """重画静帧：`stills_only=True` → **不烧视频配额**，也不受 render 门约束。"""
     from . import pipeline
     return pipeline.run(root, ep=ep, only=shots, from_still=True,
                         stills_only=True, log=log)
 
 
-def _exec_video(root: Path, ep: int, shots: list, log) -> dict:
+def _exec_video(root: Path, ep: int, shots: list, log, rec: dict | None = None) -> dict:
     """生成视频：**受 media_gate 约束**（8 角色 complete + 评审通过），这是设计而非障碍。"""
     from . import pipeline
     return pipeline.run(root, ep=ep, only=shots, from_still=False, log=log)
 
 
-def _exec_assets(root: Path, ep: int, shots: list, log) -> dict:
+def _exec_assets(root: Path, ep: int, shots: list, log, rec: dict | None = None) -> dict:
     """生成资产参考图（可续跑：已在盘上的会跳过）。"""
     from . import cast
     cast.ensure(root, log=log, ep=ep)
@@ -425,7 +428,7 @@ def _storyboard_warnings(root: Path, ep: int, log) -> list:
     return out
 
 
-def _exec_episode(root: Path, ep: int, shots: list, log) -> dict:
+def _exec_episode(root: Path, ep: int, shots: list, log, rec: dict | None = None) -> dict:
     """**整片出片**（D，2026-09-19）：前端「生成最终视频」按钮的真实实现。
 
     它调的是 `pipeline.run(root, ep=ep)` —— **不带 `only`**，也就是媒体链唯一入口的
@@ -452,7 +455,8 @@ def _exec_episode(root: Path, ep: int, shots: list, log) -> dict:
     return res
 
 
-def _run_chain(root: Path, ep: int, shots: list, log, until: str = "") -> dict:
+def _run_chain(root: Path, ep: int, shots: list, log, until: str = "",
+               thread: str = "") -> dict:
     """跑创作链 —— **复用 `scripts/drive_chain.py`**（生产驱动）。
 
     为什么不自己写 SDK 调用（2026-09-15 的决定）：那个脚本已经处理了三件容易错的事 ——
@@ -496,6 +500,10 @@ def _run_chain(root: Path, ep: int, shots: list, log, until: str = "") -> dict:
     # 这正是本项目最忌的「选了 A 实际跑 B」——只是这次的"B"是另一集。
     _cmd = [py, "-u", str(driver), root.name,
             "--ep", str(int(ep or 1)), "--timeout", "5400"]
+    if thread:
+        # ★ 接着用户跟导演聊过的那一段对话开工（工作台右栏「聊完再点开工」）。
+        #   不传时 drive_chain 自己建新线程 —— 原行为一字不变。
+        _cmd += ["--thread", str(thread)]
     if until:
         # ★ 2026-09-19：**只跑到某角色为止**（`drive_chain --until`）。
         #   那条路径下 `drive_chain` 会在目标角色落盘后**取消当前 run** 并收工，
@@ -550,12 +558,19 @@ def _run_chain(root: Path, ep: int, shots: list, log, until: str = "") -> dict:
             "warnings": [] if until else _storyboard_warnings(root, ep, log)}
 
 
-def _exec_chain(root: Path, ep: int, shots: list, log) -> dict:
-    """跑**完整**创作链（7 个角色 → 分镜）。"""
-    return _run_chain(root, ep, shots, log)
+def _exec_chain(root: Path, ep: int, shots: list, log, rec: dict | None = None) -> dict:
+    """跑**完整**创作链（7 个角色 → 分镜）。
+
+    `rec.chain_thread`（可选）：**接着一段已有的对话**开工。
+    用户在工作台右栏先跟导演聊清楚、再点开工 ⇒ 生产就跑在**同一段对话**里，
+    导演对每一步的说明落在同一个时间线上（前端那栏直接读得到）。
+    不传 = 新建一段（原行为一字不变）。
+    """
+    return _run_chain(root, ep, shots, log,
+                      thread=str((rec or {}).get("chain_thread") or ""))
 
 
-def _exec_script(root: Path, ep: int, shots: list, log) -> dict:
+def _exec_script(root: Path, ep: int, shots: list, log, rec: dict | None = None) -> dict:
     """只跑到 **scriptwriter（剧本正文）** 为止。
 
     前端「确认简介 → 生成剧本内容」用它（2026-09-19）。为什么不是"跑完整条链再等正文"：
@@ -585,7 +600,7 @@ def execute(run_id: str) -> int:
         log("[runner] 开始 %s %s ep=%s shots=%s" % (kind, rec["pid"], rec["ep"],
                                                   rec["shots"] or "—"))
         t0 = time.time()
-        res = _EXEC[kind](root, int(rec.get("ep") or 1), rec.get("shots") or [], log)
+        res = _EXEC[kind](root, int(rec.get("ep") or 1), rec.get("shots") or [], log, rec)
         rec["result"] = res
         # 把 pipeline 的 status 直接映射过来（ok / incomplete / failed / blocked）
         st = str((res or {}).get("status") or "ok")
