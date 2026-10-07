@@ -495,14 +495,19 @@ class TestStillBeatClaimMatchesPipeline(unittest.TestCase):
         covered = []
         for f in self._skills():
             body = f.read_text(encoding="utf-8").replace("*", "")
-            if "静帧取" not in body and "静帧只取" not in body:
+            # 2026-10-07：默认档不产静帧，契约里那句改成「预览图与回退档只取第一拍」。
+            # 判据跟着放宽到**两种说法都算写了消费点**，但"必须写第一拍"这条不变
+            # —— 这条测试锁的是"说了取哪一拍，就得说对"，不是某个词必须出现。
+            if not any(m in body for m in ("静帧取", "静帧只取", "回退档取", "回退档只取")):
                 continue
-            self.assertTrue("静帧取第一拍" in body or "静帧只取第一拍" in body,
-                            "%s 写了静帧取哪一拍，却没写第一拍" % f.parts[-3])
+            self.assertTrue(any(m in body for m in
+                                ("静帧取第一拍", "静帧只取第一拍",
+                                 "回退档取第一拍", "回退档只取第一拍")),
+                            "%s 写了取哪一拍，却没写第一拍" % f.parts[-3])
             covered.append(f.parts[-3])
         self.assertGreaterEqual(
             len(covered), 4,
-            "讲清「静帧取第一拍」的包只剩 %s —— 契约不能靠删语句来合规" % covered)
+            "讲清「取第一拍」这件事的包只剩 %s —— 契约不能靠删语句来合规" % covered)
 
     def test_pipeline_still_takes_the_first_beat(self):
         """代码侧的锚：判据变了要同时改文档，不许只改一边。"""
