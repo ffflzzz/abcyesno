@@ -1517,7 +1517,7 @@ def scene_asset_for_shot(reg: dict, shot: dict) -> tuple:
 
 
 def sheets_for_shot(root: Path, shot: dict, ep=None,
-                    max_n: int = 3) -> tuple[list[str], list[tuple[str, str]]]:
+                    max_n: int | None = None) -> tuple[list[str], list[tuple[str, str]]]:
     """这一镜喂给视频的资产图。返回 `(urls, roles)`，`roles` 与 `urls` 同序。
 
     槽位：角色设定表（≤2，双人戏两张脸）→ 本镜场景空镜（1）→ 道具图补位，
@@ -1529,6 +1529,8 @@ def sheets_for_shot(root: Path, shot: dict, ep=None,
         大 Wide）；这里场景图**无条件给**，因为提示词里明说它只锁地貌、机位听文字。
       · `bind()` 谁先被 @ 谁进请求；这里按 脸→场景→道具 的固定优先级排。
     """
+    from . import video_plan as _vp
+    max_n = max_n or _vp.SHEET_SLOTS
     reg = auto_sync(root)
     hits, _unresolved = hits_for_shot(reg, shot, max_n=max_n)
     if not any(h.get("type") == "character" for h in hits):

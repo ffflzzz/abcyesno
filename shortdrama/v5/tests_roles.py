@@ -306,9 +306,9 @@ class TestContainerFactsInjected(unittest.TestCase):
         self.assertNotIn("每镜最短", s, "旧措辞会随 PACK_MIN_SHOT_SECONDS=0 变成「每镜最短 0 秒」的假话")
         self.assertIn("最多 %d 张参考图" % vp.REF_SLOTS, s)
         self.assertIn("第三个人没有定妆照", s)
-        self.assertIn("不是每镜一张静帧", s)
+        self.assertIn("静帧不进这条请求", s)   # 2026-10-07：连"每镜一张"也不再提静帧
         self.assertIn("等比压进", s, "秒数会被压缩必须预告，否则分镜师以为声明会原样落地")
-        self.assertIn("静帧取第一拍", s)
+        self.assertIn("第一拍要写全身份锚点", s)
 
     def test_reference_mode_does_not_claim_packing(self):
         """非 pack 档没有"并组"这件事 ⇒ 不许照抄 pack 的说法。"""
@@ -321,8 +321,13 @@ class TestContainerFactsInjected(unittest.TestCase):
         self.assertIn("一个镜头一条请求", s)
         self.assertNotIn("并进同一条", s, "reference 档说并组 = 对模型撒谎")
         self.assertIn("最长 %d 秒" % vp.PACK_MAX_SECONDS, s)
-        self.assertIn("封顶 %d 张" % A.REF_CAP_SOLO, s)
-        self.assertIn("封顶 %d 张" % A.REF_CAP_MULTI, s)
+        self.assertIn("封顶 %d 张" % vp.SHEET_SLOTS, s,
+                      "非 pack 档的封顶要说的是**素材图**的张数")
+        self.assertIn("静帧不进这条请求", s)
+        self.assertNotIn("先满足人脸", s,
+                         "stills 档的措辞不该出现在默认档里"
+                         "（⛔ 别改成比数字：REF_CAP_MULTI 与 SHEET_SLOTS 都是 3，"
+                         "比数字会自己撞车）")
 
     def test_numbers_come_from_code_not_from_prose(self):
         """★ 反向锁：只改常量、不改文案 ⇒ 文案必须跟着变。
@@ -892,3 +897,54 @@ class TestEveryPackDeclaresVerdictBlock(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestContainerFactsMatchPipeline(unittest.TestCase):
+    """「出片容器事实」是**直接喂给分镜师的模型**的话 —— 它说错一句，分镜就照着错的方向写。
+
+    2026-10-07 静帧退出视频输入后，这段里有三句会变成假的（本镜静帧 + 定妆照、
+    本组第一镜静帧、静帧取第一拍）。这里逐条对账到代码，不靠人记。
+    """
+
+    def _text(self, mode=None, ref_source=None):
+        import importlib
+        import os
+        from v5 import config
+        from v5.media import video_plan as vp
+        saved = dict(os.environ)
+        try:
+            if mode:
+                os.environ["SHORTDRAMA_VIDEO_MODE"] = mode
+            if ref_source:
+                os.environ["SHORTDRAMA_VIDEO_REF_SOURCE"] = ref_source
+            elif "SHORTDRAMA_VIDEO_REF_SOURCE" in os.environ:
+                del os.environ["SHORTDRAMA_VIDEO_REF_SOURCE"]
+            importlib.reload(config)
+            importlib.reload(vp)
+            importlib.reload(sys.modules["v5.roles"] if "v5.roles" in sys.modules
+                             else importlib.import_module("v5.roles"))
+            from v5 import roles
+            return roles._container_facts(vp), vp
+        finally:
+            os.environ.clear()
+            os.environ.update(saved)
+            importlib.reload(config)
+            importlib.reload(vp)
+
+    def test_sheets_mode_says_no_still_and_the_real_cap(self):
+        text, vp = self._text("reference")
+        self.assertIn("静帧不进这条请求", text)
+        self.assertNotIn("本镜静帧 + 人物定妆照", text, "旧描述还留着 = 分镜会照旧写")
+        self.assertIn("图的张数超过本镜人数", text)
+        self.assertIn(str(vp.SHEET_SLOTS), text)
+
+    def test_pack_mode_drops_the_first_shot_still(self):
+        text, _vp = self._text("pack")
+        self.assertIn("上一组成片的**真实末帧**", text)
+        self.assertNotIn("第一镜**的静帧", text)
+        self.assertIn("不分景别", text, "场景现在按表列无条件取")
+
+    def test_stills_fallback_keeps_the_old_words(self):
+        text, _vp = self._text("reference", "stills")
+        self.assertIn("本镜静帧 + 人物定妆照", text)
+        self.assertIn("静帧取第一拍", text)
