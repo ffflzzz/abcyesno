@@ -120,6 +120,16 @@
   padding: 6px 9px; border-radius: 9px; border: 0; background: #17171d; color: inherit; font: inherit;
 }
 
+/* 投递：折成一行，默认不展开 —— ⛔ 它不是聊天（链没跑时永远排着队） */
+.chat-inbox { margin: 0 18px 6px; font-size: 12px; color: #6d6d7a; }
+.chat-inbox > summary { cursor: pointer; padding: 4px 0; list-style: none; }
+.chat-inbox > summary::-webkit-details-marker { display: none; }
+.chat-inbox > summary::before { content: '▸ '; }
+.chat-inbox[open] > summary::before { content: '▾ '; }
+.chat-inbox-body { display: flex; flex-direction: column; gap: 6px; padding: 6px 0 2px; }
+.chat-inbox-row { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
+.chat-inbox-row .chip { flex: none; }
+
 /* ── 通用 ─────────────────────────────────────────────────────── */
 .btn {
   padding: 6px 13px; border-radius: 9px; border: 0;

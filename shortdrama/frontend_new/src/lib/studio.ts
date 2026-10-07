@@ -128,15 +128,37 @@ export function onCanvasEvent(fn: (ev: CanvasEvent) => void): () => void {
   return () => window.removeEventListener('message', h);
 }
 
-/* ─────────────────────────────── 起链 ─────────────────────────────── */
+/* ─────────────────────────────── 和导演对话 ─────────────────────────────── */
 
-/** 起创作链（7 个角色 + 评审）。`manual_steps` = 每派一个角色停一次等人确认 ——
- *  右栏的「继续 / 打回」按钮**只有在这条开着的时候**有对象可点（链不挂起就没有
- *  决定可下，`hitl.decide` 会直接 400）。信箱那条不受它限制。 */
-export function startChain(eid: string, manualSteps: boolean): Promise<unknown> {
-  return http<unknown>('POST', `${P}/episodes/batch/storyboard/generate`,
-    { episode_ids: [eid], manual_steps: manualSteps });
+export type ChatTurn = { role: 'user' | 'director'; text: string; at?: string; ep?: number };
+
+export type ChatState = {
+  turns: ChatTurn[];
+  busy: boolean;
+  status: string;
+  thread_id: string;
+  error?: string;
+};
+
+export function getChat(pid: string, ep: number): Promise<ChatState> {
+  return http<ChatState>('GET',
+    `${P}/projects/${encodeURIComponent(pid)}/director/chat?ep=${ep}`);
 }
+
+export function askDirector(pid: string, text: string, ep: number): Promise<{ ok: boolean }> {
+  return http<{ ok: boolean }>('POST',
+    `${P}/projects/${encodeURIComponent(pid)}/director/chat`, { text, ep });
+}
+
+/** **开工**：接着刚才那段对话跑完整条创作链（生产与聊天同一条时间线）。 */
+export function startProduction(pid: string, ep: number, manualSteps: boolean,
+                                imageVendor = '', videoVendor = ''): Promise<unknown> {
+  return http<unknown>('POST',
+    `${P}/projects/${encodeURIComponent(pid)}/director/start`,
+    { ep, manual_steps: manualSteps, image_vendor: imageVendor, video_vendor: videoVendor });
+}
+
+/* ─────────────────────────────── 起链 ─────────────────────────────── */
 
 export function approveHitl(pid: string, body: Record<string, unknown>): Promise<unknown> {
   return http<unknown>('POST', `${P}/projects/${encodeURIComponent(pid)}/hitl`, body);

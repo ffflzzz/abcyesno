@@ -1,115 +1,118 @@
 /* ==========================================================================
-   components/DirectorChat.tsx —— 右栏：与 supervisor / director 对话
+   components/DirectorChat.tsx —— 右栏：**和导演本人对话**，聊清楚了再开工
    --------------------------------------------------------------------------
-   ★ 两条通道，**按链此刻的状态自动选**（这是设计要点，不是兜底）：
-     · 链**正挂在步级门上**（`hitl.pending`）→ 「继续 / 打回 / 中止」，走
-       `hitl.decide`，立刻生效，能带自由文字理由；
-     · 链**在跑或没跑** → 信箱，落盘排队，下一个被派发的角色读到（`v5/inbox.py`）。
-   ⛔ 界面不许说"已发送给导演"而实际只是排进队列 —— 每条自己的消息显示真实状态
-      （`排队中` / `已送达 分镜`），读的是盘上 `delivered_to`，不是猜的。
+   这是真对话，不是投递槽：右栏说的话发给 **supervisor 本人**，他回答你；
+   你满意了点「开工」，完整创作链就跑在**同一段对话**上 —— 他对每一步的说明
+   （"规格已落盘" "派 scenedesigner" "创作链已跑完"）落在同一条时间线上，
+   中间画布同时开始长格子。
 
-   ★ 文案砍到名词级（2026-10-06 对着参考图量过）：第一版这里最长一句 39 字、
-     空态是一段 33 字的说明。参考图右栏全部文案最长 12 字。
-     ⇒ 解释一律进 `title`，界面只留名词和状态。
+   ## 三块东西，别混
+
+   | 块 | 是什么 | 什么时候有用 |
+   |---|---|---|
+   | **对话**（主体） | 跟导演本人一来一回 | 随时。这是这栏的主业 |
+   | **投递**（折叠在下面） | 把一句话塞给**下一个被派发的角色** | 链在跑、你想微调某个角色时 |
+   | **步级确认**（挂起时才出现） | 继续 / 打回 / 中止 | 开了「逐步确认」、链停在派活前时 |
+
+   ⛔ 投递那条**不是**聊天（链没跑时它永远"排队中"，因为没人来收）—— 所以它被
+     折进一行，默认不展开，免得再被当成对话框用。
+
+   ## 为什么对话阶段他不动手
+
+   导演的提示词是「你是监制，按依赖序派活」，没有"只回答不做事"的模式。
+   按住他的办法写在 `v5/director_chat.py` 的消息前缀里（实测：盘上新增文件 0 个），
+   并且**每次都会把项目 brief + 盘上现状附上去** —— 因为他不能用工具，不喂就只能空谈。
    ========================================================================== */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { InboxState } from '../lib/studio';
+import type { ChatState, InboxState } from '../lib/studio';
 import { ROLE_ZH, hhmm } from '../lib/studio';
 
 type Props = {
+  chat: ChatState | null;
+  chatError: string;
   inbox: InboxState | null;
-  error: string;
+  inboxError: string;
   busy: boolean;
-  /** 返回 `{err, id}`：`id` 是后端给的信箱编号，宿主用它把这条认成「我说的」。
-   *  ⛔ 不能靠 `by` 判断 —— 那是显示名，换个标签同一条消息就会跑到对面去。 */
-  onSend: (text: string, to: string) => Promise<{ err: string | null; id?: number }>;
-  onDecide: (decision: string, target: string, note: string) => Promise<string | null>;
-  onRedo: (target: string, note: string) => Promise<string | null>;
   mine: number[];
   manualSteps: boolean;
   onManualSteps: (v: boolean) => void;
+  onAsk: (text: string) => Promise<string | null>;
+  onStart: () => Promise<string | null>;
+  onSend: (text: string, to: string) => Promise<{ err: string | null; id?: number }>;
+  onDecide: (decision: string, target: string, note: string) => Promise<string | null>;
+  onRedo: (target: string, note: string) => Promise<string | null>;
 };
 
-export function DirectorChat({ inbox, error, busy, onSend, onDecide, onRedo, mine,
-  manualSteps, onManualSteps }: Props) {
+export function DirectorChat(p: Props) {
   const [text, setText] = useState('');
-  const [to, setTo] = useState('');
-  const [note, setNote] = useState('');
   const [msg, setMsg] = useState<string | null>(null);
   const scroller = useRef<HTMLDivElement | null>(null);
 
-  const h = inbox?.hitl;
+  const turns = p.chat?.turns || [];
+  const h = p.inbox?.hitl;
   const pending = !!h?.pending;
-  /** ★ 两个下拉是**两份不同的名单**，不许合并：
-   *    · 挂起时的「打回」目标 = `hitl.redo_targets`（链落盘的那份，含 `director`，
-   *      因为第一停时唯一能审的就是制作规格）
-   *    · 没挂起时的「让导演重做」目标 = `idle_targets`（7 个被派发的角色，
-   *      ⛔ 不含 `director` —— 打回它 = 重写规格 + 全部 7 个角色重做，是全项目重置）
-   *  第一版这里回落到 `inbox.targets`（那是**信箱消息**的定向名单，含 director），
-   *  于是重做按钮的**默认值就是最毁的那一项**。2026-10-07 验收脚本点了一下，
-   *  就把一个 9 月项目的 8 份产物全挪进 `.rerun_backup/`。 */
   const gateTargets = useMemo(() => (h?.redo_targets || []).filter(Boolean), [h]);
-  const idleTargets = useMemo(() => (inbox?.idle_targets || []).filter(Boolean), [inbox]);
-  const [target, setTarget] = useState('');
+  const idleTargets = useMemo(() => (p.inbox?.idle_targets || []).filter(Boolean), [p.inbox]);
   const [gateTarget, setGateTarget] = useState('');
+  const [note, setNote] = useState('');
+  const [to, setTo] = useState('');
+  const [redoTo, setRedoTo] = useState('');
 
   useEffect(() => {
     if (pending && !gateTargets.includes(gateTarget)) setGateTarget(String(gateTargets[0] || ''));
   }, [pending, gateTargets, gateTarget]);
 
-  const stream = useMemo(
-    () => [...(inbox?.messages || []), ...(inbox?.edits || [])].sort((a, b) => a.id - b.id),
-    [inbox]);
+  useEffect(() => {
+    const el = scroller.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [turns.length, p.chat?.busy]);
 
-  useEffect(() => { const el = scroller.current; if (el) el.scrollTop = el.scrollHeight; }, [stream.length]);
-
-  const send = async () => {
+  const ask = async () => {
     const t = text.trim();
-    if (!t) return;
+    if (!t || p.chat?.busy) return;
     setMsg(null);
-    const r = await onSend(t, to);
-    if (r.err) { setMsg(r.err); return; }
+    const err = await p.onAsk(t);
+    if (err) { setMsg(err); return; }
     setText('');
   };
+
+  const queued = p.inbox?.stats?.pending || 0;
 
   return (
     <aside className="chat">
       <div className="chat-head">
         <span className="rail-title">导演</span>
         <span className="chat-state">
-          {pending ? '等你确认' : inbox ? (manualSteps ? '逐步停' : '一路跑') : ''}
+          {p.chat?.busy ? (p.chat.status === 'interrupted' ? '等你确认' : '在想 / 干活中')
+            : turns.length ? '可以说话' : ''}
         </span>
         <span className="stage-spacer" />
         <label className="chat-state" title="每派一个角色前停一次，等人点继续 / 打回。翻了要重启 dev server、只对下一次生成生效">
-          <input type="checkbox" checked={manualSteps}
-                 onChange={(e) => onManualSteps(e.target.checked)} /> 逐步确认
+          <input type="checkbox" checked={p.manualSteps}
+                 onChange={(e) => p.onManualSteps(e.target.checked)} /> 逐步确认
         </label>
       </div>
 
       <div className="chat-body" ref={scroller}>
-        {!stream.length ? (
+        {!turns.length ? (
           <div className="chat-hero">
-            <h3>导演在跑这条链</h3>
-            <p>留言排队，打回才重做</p>
+            <h3>先跟导演聊聊</h3>
+            <p>聊清楚了再点下面的「开工」</p>
           </div>
         ) : null}
-        {stream.map((m) => (
-          <div key={m.kind + m.id}
-               className={m.kind === 'edit' ? 'msg msg--edit'
-                            : (mine.includes(m.id) || m.by ? 'msg msg--me' : 'msg msg--sys')}>
-            {m.text}
-            <span className="msg-meta">
-              {hhmm(m.at)}
-              {m.kind === 'message'
-                ? (m.delivered_to
-                    ? ' · 已送达 ' + (ROLE_ZH[m.delivered_to] || m.delivered_to)
-                    : ' · 排队中' + (m.to ? ' → ' + (ROLE_ZH[m.to] || m.to) : ''))
-                : ' · 台账'}
-            </span>
+
+        {turns.map((t, i) => (
+          <div key={i} className={'msg ' + (t.role === 'user' ? 'msg--me' : 'msg--sys')}>
+            {t.text}
+            <span className="msg-meta">{hhmm(t.at)}</span>
           </div>
         ))}
-        {error ? <div className="msg msg--sys err">{error}</div> : null}
+
+        {p.chat?.busy ? (
+          <div className="msg msg--sys"><span className="spin" /> {p.chat.status === 'interrupted' ? '停下来等你确认' : '……'}</div>
+        ) : null}
+        {p.chatError ? <div className="msg msg--sys err">{p.chatError}</div> : null}
       </div>
 
       {pending ? (
@@ -124,46 +127,74 @@ export function DirectorChat({ inbox, error, busy, onSend, onDecide, onRedo, min
                       onChange={(e) => setNote(e.target.value)} />
           </div>
           <div className="chat-gate-row">
-            <button type="button" className="btn btn--sm btn--primary" disabled={busy}
-                    onClick={async () => setMsg(await onDecide('approve', '', note))}>继续</button>
+            <button type="button" className="btn btn--sm btn--primary" disabled={p.busy}
+                    onClick={async () => setMsg(await p.onDecide('approve', '', note))}>继续</button>
             <select value={gateTarget} onChange={(e) => setGateTarget(e.target.value)}>
               {gateTargets.map((t) => <option key={t} value={t}>{ROLE_ZH[t] || t}</option>)}
             </select>
-            <button type="button" className="btn btn--sm" disabled={busy} data-danger="1"
+            <button type="button" className="btn btn--sm" disabled={p.busy} data-danger="1"
                     title="重跑该角色及其全部下游"
-                    onClick={async () => setMsg(await onDecide('redo', gateTarget, note))}>打回</button>
-            <button type="button" className="btn btn--sm btn--danger" disabled={busy} data-danger="1"
-                    onClick={async () => setMsg(await onDecide('reject', '', note))}>中止</button>
+                    onClick={async () => setMsg(await p.onDecide('redo', gateTarget, note))}>打回</button>
+            <button type="button" className="btn btn--sm btn--danger" disabled={p.busy} data-danger="1"
+                    onClick={async () => setMsg(await p.onDecide('reject', '', note))}>中止</button>
           </div>
         </div>
       ) : null}
 
+      {/* 投递：折叠成一行。⛔ 它不是聊天（链没跑时永远排着队，没人来收） */}
+      <details className="chat-inbox">
+        <summary>投递给角色{queued ? ` · ${queued} 条排队中` : ''}</summary>
+        <div className="chat-inbox-body">
+          <div className="chat-input-row">
+            <select value={to} onChange={(e) => setTo(e.target.value)}>
+              <option value="">任意角色（下一个被派发的收）</option>
+              {(p.inbox?.targets || []).filter(Boolean).map((t) => (
+                <option key={t} value={t}>{ROLE_ZH[t] || t}</option>
+              ))}
+            </select>
+            <select value={redoTo} onChange={(e) => setRedoTo(e.target.value)} title="重做哪个角色（含下游）">
+              <option value="">重做…</option>
+              {idleTargets.map((t) => <option key={t} value={t}>{ROLE_ZH[t] || t}</option>)}
+            </select>
+            <button type="button" className="btn btn--sm" disabled={p.busy || !redoTo} data-danger="1"
+                    title="回退该角色及其全部下游并重跑 —— 整表重派实测约 95 分钟"
+                    onClick={async () => setMsg(await p.onRedo(redoTo, text.trim() || note.trim()))}>
+              让导演重做
+            </button>
+          </div>
+          {(p.inbox?.messages || []).slice(-6).map((m) => (
+            <div key={m.id} className="chat-inbox-row">
+              <span className="muted">{hhmm(m.at)}</span>
+              <span className={'chip' + (m.delivered_to ? ' chip--good' : '')}>
+                {m.delivered_to ? '已送达 ' + (ROLE_ZH[m.delivered_to] || m.delivered_to) : '排队中'}
+                {m.to ? ' → ' + (ROLE_ZH[m.to] || m.to) : ''}
+              </span>
+              {m.text}
+            </div>
+          ))}
+          {!p.inbox?.messages?.length ? <div className="chat-inbox-row muted">还没投递过</div> : null}
+          {p.inboxError ? <div className="chat-inbox-row err">{p.inboxError}</div> : null}
+          <div className="chat-inbox-row muted">
+            链没在跑时"排队中"不会变成"已送达" —— 要立刻说上话，用上面的对话。
+          </div>
+        </div>
+      </details>
+
       <div className="chat-input">
-        <textarea value={text} placeholder="对导演说…"
+        <textarea value={text} placeholder={p.chat?.busy ? '他还在忙…' : '对导演说…'}
                   onChange={(e) => setText(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void send(); }} />
+                  onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void ask(); }} />
         <div className="chat-input-row">
-          <select value={to} onChange={(e) => setTo(e.target.value)} title="定向给某个角色，留空=下一个被派发的">
-            <option value="">任意角色</option>
-            {(inbox?.targets || []).filter(Boolean).map((t) => (
-              <option key={t} value={t}>{ROLE_ZH[t] || t}</option>
-            ))}
-          </select>
-          <select value={target} onChange={(e) => setTarget(e.target.value)}
-                  title="重做哪个角色（含它的下游）">
-            <option value="">选角色…</option>
-            {idleTargets.map((t) => <option key={t} value={t}>{ROLE_ZH[t] || t}</option>)}
-          </select>
-          {/* ⛔ 必须人**先选一个角色**才允许按下 —— 不给默认值。
-              `data-danger` 是给无头验收脚本看的：它见到这个属性就拒绝点击。 */}
-          <button type="button" className="btn btn--sm" disabled={busy || !target} data-danger="1"
-                  title="回退该角色及其全部下游并重跑 —— 整表重派实测约 95 分钟"
-                  onClick={async () => setMsg(await onRedo(target, text.trim() || note.trim()))}>
-            让导演重做
-          </button>
+          <button type="button" className="btn btn--sm btn--primary" disabled={p.busy || !text.trim() || !!p.chat?.busy}
+                  title="Ctrl / ⌘ + Enter" onClick={() => void ask()}>发送</button>
           <span className="stage-spacer" />
-          <button type="button" className="btn btn--sm btn--primary" disabled={busy || !text.trim()}
-                  title="Ctrl / ⌘ + Enter" onClick={() => void send()}>发送</button>
+          <button type="button" className="btn btn--sm btn--primary"
+                  data-danger="1"
+                  title="接着这段对话跑完整条创作链（7 个角色 → 分镜）。跑起来后每一步都会出现在上面这段对话里。"
+                  disabled={p.busy || !!p.chat?.busy || turns.length === 0}
+                  onClick={async () => setMsg(await p.onStart())}>
+            {p.chat?.status === 'running' ? '开工中…' : '开工'}
+          </button>
         </div>
         {msg ? <div className="inspector-log err">{msg}</div> : null}
       </div>

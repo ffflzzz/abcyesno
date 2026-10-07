@@ -16,8 +16,8 @@ import { ProjectRail, type RailSignals } from '../components/ProjectRail';
 import { CanvasPane } from '../components/CanvasPane';
 import { DirectorChat } from '../components/DirectorChat';
 import {
-  askRedo, approveHitl, editShot, fetchCanvas, getInbox, isRunning, sendToDirector,
-  startChain, type CanvasDoc, type InboxState,
+  askDirector, askRedo, approveHitl, editShot, fetchCanvas, getChat, getInbox, isRunning,
+  sendToDirector, startProduction, type CanvasDoc, type ChatState, type InboxState,
 } from '../lib/studio';
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -36,6 +36,9 @@ export function Studio() {
   const [shot, setShot] = useState('');
   const [inbox, setInbox] = useState<InboxState | null>(null);
   const [inboxError, setInboxError] = useState('');
+  /** 和导演本人的对话（右栏主体）。**这是主表面，轮询给最快的 3 秒一档。** */
+  const [chat, setChat] = useState<ChatState | null>(null);
+  const [chatError, setChatError] = useState('');
   const [busy, setBusy] = useState(false);
   const [toasts, setToasts] = useState<{ id: number; text: string; bad?: boolean }[]>([]);
   const [manualSteps, setManualSteps] = useState(true);
@@ -100,6 +103,22 @@ export function Studio() {
     };
     void pull();
     const t = setInterval(pull, 4000);
+    return () => { stop = true; clearInterval(t); };
+  }, [pid, ep]);
+
+  /* ── 和导演的对话（右栏主体，最快一档）───────────────────────── */
+  useEffect(() => {
+    if (!pid) return;
+    let stop = false;
+    const pull = async () => {
+      try {
+        const d = await getChat(pid, ep);
+        if (stop) return;
+        setChat(d); setChatError('');
+      } catch (e) { if (!stop) setChatError(errText(e)); }
+    };
+    void pull();
+    const t = setInterval(pull, 3000);
     return () => { stop = true; clearInterval(t); };
   }, [pid, ep]);
 
@@ -183,12 +202,23 @@ export function Studio() {
     } catch (e) { toast('删除失败：' + errText(e), true); }
   };
 
-  const beginProduction = async () => {
+  const beginProduction = async (): Promise<string | null> => {
     setBusy(true);
     try {
-      await startChain(`${pid}-ep${ep}`, manualSteps);
-      toast(manualSteps ? '已起创作链（逐步确认开）' : '已起创作链（一路跑到底，留言排队）');
-    } catch (e) { toast('起链失败：' + errText(e), true); } finally { setBusy(false); }
+      await startProduction(pid, ep, manualSteps);
+      toast('已开工 —— 接着刚才那段对话跑，每一步都会出现在右栏里');
+      await refreshChat();
+      return null;
+    } catch (e) { return errText(e); } finally { setBusy(false); }
+  };
+
+  const ask = async (text: string): Promise<string | null> => {
+    try { await askDirector(pid, text, ep); await refreshChat(); return null; }
+    catch (e) { return errText(e); }
+  };
+
+  const refreshChat = async () => {
+    try { setChat(await getChat(pid, ep)); } catch { /* 下一轮轮询补上 */ }
   };
 
   const saveShot = async (s: string, patch: Record<string, unknown>): Promise<string | null> => {
@@ -267,22 +297,19 @@ export function Studio() {
                   segments={segments} shot={shot} onShot={setShot}
                   onSave={saveShot} running={running}
                   toolbar={
-                    <>
-                      <select value={ep} onChange={(e) => { setEp(Number(e.target.value)); setShot(''); }}
-                              style={{ padding: '5px 9px', borderRadius: 9, border: 0, background: '#17171d', color: 'inherit', font: 'inherit' }}>
-                        {(projects.find((x) => x.id === pid)?.episodes || []).map((e) => (
-                          <option key={e.id} value={e.no}>第 {e.no} 集</option>
-                        ))}
-                      </select>
-                      <button type="button" className="btn btn--sm btn--primary" disabled={busy || !pid}
-                              title={manualSteps ? '每派一个角色前停一次等你确认' : '一路跑到底；留言会排队到下一个派发口'}
-                              onClick={() => void beginProduction()}>开始生产</button>
-                    </>
+                    <select value={ep} onChange={(e) => { setEp(Number(e.target.value)); setShot(''); }}
+                            style={{ padding: '5px 9px', borderRadius: 9, border: 0, background: '#17171d', color: 'inherit', font: 'inherit' }}>
+                      {(projects.find((x) => x.id === pid)?.episodes || []).map((e) => (
+                        <option key={e.id} value={e.no}>第 {e.no} 集</option>
+                      ))}
+                    </select>
                   } />
 
-      <DirectorChat inbox={inbox} error={inboxError} busy={busy} mine={mineIds}
-                    onSend={send} onDecide={decide} onRedo={redo}
-                    manualSteps={manualSteps} onManualSteps={setManualSteps} />
+      <DirectorChat chat={chat} chatError={chatError}
+                    inbox={inbox} inboxError={inboxError} busy={busy} mine={mineIds}
+                    manualSteps={manualSteps} onManualSteps={setManualSteps}
+                    onAsk={ask} onStart={beginProduction}
+                    onSend={send} onDecide={decide} onRedo={redo} />
 
       <div className="toast">
         {toasts.map((t) => <div key={t.id} data-t={t.bad ? 'bad' : 'ok'}>{t.text}</div>)}
