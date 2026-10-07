@@ -64,7 +64,10 @@ export type InboxState = {
     redo_targets?: string[]; manual_steps?: boolean | null; stale_decision?: unknown;
   };
   manual_steps: boolean;
+  /** 信箱消息可定向的角色（含 director）*/
   targets: string[];
+  /** 链没挂起时「让导演重做」可选的角色 —— 7 个被派发的角色，不含 director */
+  idle_targets?: string[];
 };
 
 export function getInbox(pid: string, ep: number): Promise<InboxState> {

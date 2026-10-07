@@ -17,7 +17,10 @@ const OUT = path.join(HERE, '..', '.tmp-studio-shot');
 fs.mkdirSync(OUT, { recursive: true });
 
 const PID = process.argv[2] || 'bumengshi-0922';
-const URL = 'http://127.0.0.1:8787/studio/';
+// 端口可覆盖：8787 常常被**别人的** shim 占着（启动台的 findFreePort 会让口），
+// 而验收要测的是刚改过的后端代码 —— 自己起一个 8790 打它，⛔ 不去杀 8787。
+const PORT = process.env.SHIM_PORT || '8787';
+const URL = `http://127.0.0.1:${PORT}/studio/`;
 
 const browser = await chromium.launch({
   executablePath: process.env.PW_CHROMIUM || undefined,
@@ -129,16 +132,27 @@ if (canvasFrame) {
 await page.screenshot({ path: path.join(OUT, '03-inspector.png') });
 
 // 右栏发一条信箱（真发，验完由 smoke 的清理或手动删）
+// ★★ 只点 `button:not([data-danger])`。2026-10-07 实测事故：这一句原本写的是
+//    `.chat-input button` + hasText '发送'，结果点到了「让导演重做」——
+//    把一个 9 月项目的 8 份产物全挪进 `.rerun_backup/`、`phases` 清空
+//    （`reset_from('director')` 的语义就是"重写制作规格 + 全部 7 个角色重做"）。
+//    凡是会改盘上产物或起链的按钮都标 `data-danger="1"`，验收脚本一律不许点；
+//    那条路径改由 `studio_smoke.py` 在自建夹具上测。
+const sendBtn = page.locator(".chat-input button:not([data-danger])", { hasText: '发送' }).first();
 const ta = page.locator('.chat-input textarea').first();
-if (await ta.count()) {
+if (await ta.count() && await sendBtn.count()) {
   await ta.fill('浏览器验收：这条来自 studio_shot.mjs');
-  await page.locator('.chat-input button', { hasText: '发送' }).first().click();
+  await sendBtn.click();
   await page.waitForTimeout(6000);   // 轮询型页面没有 networkidle，只能定点等
   const msgs = await page.locator('.msg--me').count();
   console.log('右栏自己的消息条数 =', msgs, msgs ? 'PASS 发送回路通' : '!! 发送没生效');
   const last = await page.locator('.msg--me').last().innerText().catch(() => '');
   console.log('最后一条 =', JSON.stringify(last));
+  const dangers = await page.locator('[data-danger]').count();
+  console.log(`界面上标了 data-danger 的按钮 ${dangers} 个 —— 本脚本一律未点击`);
   await page.screenshot({ path: path.join(OUT, '04-chat.png') });
+} else {
+  console.log('!! 没找到可点的发送按钮（右栏结构变了？先看清 DOM 再改脚本）');
 }
 
 // 收尾：把这条验收消息从真项目上抹掉 —— 验收不该在别人的信箱里留话，

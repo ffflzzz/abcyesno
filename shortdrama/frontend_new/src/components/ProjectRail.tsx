@@ -1,22 +1,25 @@
 /* ==========================================================================
    components/ProjectRail.tsx —— 左栏：并行生产 + 历史项目的会话管理
    --------------------------------------------------------------------------
-   分三组，判据全是**盘上事实**（不是前端自己猜的）：
+   分三组，判据全是**盘上事实**：
      · 正在生产 —— `GET /runs?pid=` 里有非终态 run
-     · 等你确认 —— `hitl.pending`（链挂在步级门上）
+     · 等你确认 —— `hitl.pending`
      · 历史项目 —— 其余
-   ⚠️ 为什么"正在生产"不能看 `progress.status`：那个字段是 `completed|draft`
-   （有没有出过片），跟"这一分钟有没有在跑"是两件事。
+   ⚠️ "正在生产"不能看 `progress.status`：那是 `completed|draft`（有没有出过片），
+   跟"这一分钟有没有在跑"是两件事。
+
+   ★ 每项**只占一行**（pid）。参考图那栏行距 33–36px，我们第一版两行字 = 46–48px，
+     一屏少看四分之一的项目。片名挪到副位：只在选中项上出现。
    ========================================================================== */
 
 import { useMemo, useState } from 'react';
 import type { Project } from '../types';
-import { ROLE_ZH, hhmm, isRunning } from '../lib/studio';
+import { isRunning } from '../lib/studio';
 
 export type RailSignals = {
-  running: Record<string, string>;      // pid → run status
-  pending: Record<string, boolean>;     // pid → hitl 挂起
-  nextRole: Record<string, string>;     // pid → 下一步派谁
+  running: Record<string, string>;
+  pending: Record<string, boolean>;
+  nextRole: Record<string, string>;
 };
 
 type Props = {
@@ -28,7 +31,6 @@ type Props = {
   packs: string[];
   ratios: string[];
   busy: boolean;
-  /** 管理动作。「管理并行生产」这句话里"管理"指的就是这三个：改名、停跑、删。 */
   runIds: Record<string, string>;
   onRename: (pid: string, name: string) => Promise<void>;
   onStop: (pid: string) => Promise<void>;
@@ -61,37 +63,33 @@ export function ProjectRail({ projects, signals, pid, onPick, onNew, packs, rati
               className={'rail-item' + (p.id === pid ? ' rail-item--on' : '')}
               onClick={() => onPick(p.id)}>
         <span className={'dot' + (kind === 'run' ? ' dot--run' : kind === 'wait' ? ' dot--wait' : '')} />
-        <span className="rail-item-main">
-          {/* ★ 主标签用 **pid**（目录名），副标签才是中文片名。
-              理由与截图一致，且是有用处的：pid 才是接口参数、产物目录名、
-              命令行里要敲的那个串；片名（`brief.topic`）可以随便改也会撞名，
-              把它放主位会让人照着它去敲 CLI 而失败。 */}
-          <span className="rail-item-name">{p.id}</span>
-          <span className="rail-item-sub">
-            {kind === 'run' ? '正在生产'
-              : kind === 'wait' ? '等你确认 · ' + (ROLE_ZH[signals.nextRole[p.id] || ''] || signals.nextRole[p.id] || '')
-              : ([p.name, p.style?.name].filter(Boolean).join(' · ') || '（无片名）')
-                + (p.created_at ? ' · ' + hhmm(p.created_at) : '')}
-          </span>
-        </span>
+        <span className="rail-item-name">{p.id}</span>
+        {p.id === pid && p.name ? <span className="rail-item-sub">{p.name}</span> : null}
       </button>
       {p.id === pid ? (
-        <div style={{ display: 'flex', gap: 6, padding: '0 10px 6px 26px', flexWrap: 'wrap' }}>
+        <div className="rail-acts">
           <button type="button" className="btn btn--sm" disabled={busy}
+                  title="写进 brief.topic；目录名不动"
                   onClick={() => {
-                    const v = window.prompt('改片名（写进 brief.topic，目录名不动）', p.name || p.id);
+                    const v = window.prompt('改片名（目录名不动）', p.name || p.id);
                     if (v && v.trim()) void onRename(p.id, v.trim());
                   }}>改名</button>
           {kind === 'run' ? (
-            <button type="button" className="btn btn--sm btn--danger" disabled={busy || !runIds[p.id]}
-                    onClick={() => void onStop(p.id)}>停掉这次跑</button>
+            <button type="button" className="btn btn--sm" disabled={busy || !runIds[p.id]}
+                    title={'停掉 ' + runIds[p.id]}
+                    onClick={() => void onStop(p.id)} data-danger="1">停跑</button>
           ) : null}
-          <button type="button" className="btn btn--sm btn--danger" disabled={busy}
+          <button type="button" className="btn btn--sm btn--danger" disabled={busy} data-danger="1"
+                  title="移到 .tmp/_deleted/，可恢复"
                   onClick={() => void onDelete(p.id)}>删除</button>
         </div>
       ) : null}
     </div>
   );
+
+  const group = (label: string, list: Project[], kind: 'run' | 'wait' | 'idle') =>
+    list.length ? <><div className="rail-group">{label} {list.length}</div>
+      {list.map((p) => row(p, kind))}</> : null;
 
   return (
     <aside className="rail">
@@ -99,21 +97,22 @@ export function ProjectRail({ projects, signals, pid, onPick, onNew, packs, rati
         <span className="rail-title">项目</span>
         <span className="stage-spacer" />
         <button type="button" className="btn btn--sm btn--primary" disabled={busy}
-                onClick={() => setCreating((v) => !v)}>＋ 新建</button>
+                onClick={() => setCreating((v) => !v)}>新建</button>
       </div>
 
       {creating ? (
-        <div style={{ padding: '0 12px 10px', display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <input placeholder="项目名（英文标识）" value={topic} onChange={(e) => setTopic(e.target.value)} />
-          <div className="field--row" style={{ display: 'flex', gap: 6 }}>
-            <select value={pack} onChange={(e) => setPack(e.target.value)} style={{ flex: 1 }}>
+        <div style={{ padding: '0 12px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <input className="rail-new" placeholder="项目名（英文标识）" value={topic}
+                 style={inputStyle} onChange={(e) => setTopic(e.target.value)} />
+          <div style={{ display: 'flex', gap: 6 }}>
+            <select value={pack} style={inputStyle} onChange={(e) => setPack(e.target.value)}>
               {(packs.length ? packs : ['shortdrama']).map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
-            <select value={ratio} onChange={(e) => setRatio(e.target.value)}>
+            <select value={ratio} style={inputStyle} onChange={(e) => setRatio(e.target.value)}>
               {(ratios.length ? ratios : ['9:16']).map((r) => <option key={r} value={r}>{r}</option>)}
             </select>
-            <input type="number" min={1} max={12} value={eps} style={{ width: 54 }}
-                   onChange={(e) => setEps(Math.max(1, Number(e.target.value) || 1))} />
+            <input type="number" min={1} max={12} value={eps} style={{ ...inputStyle, width: 56 }}
+                   title="集数" onChange={(e) => setEps(Math.max(1, Number(e.target.value) || 1))} />
           </div>
           <div style={{ display: 'flex', gap: 6 }}>
             <button type="button" className="btn btn--sm btn--primary" disabled={busy || !topic.trim()}
@@ -123,8 +122,6 @@ export function ProjectRail({ projects, signals, pid, onPick, onNew, packs, rati
                     }}>{busy ? <span className="spin" /> : '创建'}</button>
             <button type="button" className="btn btn--sm" onClick={() => setCreating(false)}>取消</button>
           </div>
-          <span className="inspector-hint">建项目会调一次 LLM 提炼 brief（约 10–40 秒）。
-            建完到中间那栏点「开始生产」。</span>
         </div>
       ) : null}
 
@@ -133,20 +130,22 @@ export function ProjectRail({ projects, signals, pid, onPick, onNew, packs, rati
       </div>
 
       <div className="rail-body">
-        {running.length ? <><div className="rail-group"><span>正在生产</span><span>{running.length}</span></div>
-          {running.map((p) => row(p, 'run'))}</> : null}
-        {waiting.length ? <><div className="rail-group"><span>等你确认</span><span>{waiting.length}</span></div>
-          {waiting.map((p) => row(p, 'wait'))}</> : null}
-        <div className="rail-group"><span>历史项目</span><span>{history.length}</span></div>
-        {history.map((p) => row(p, 'idle'))}
-        {!shown.length ? <div className="inspector-hint" style={{ padding: 10 }}>没有匹配的项目</div> : null}
+        {group('正在生产', running, 'run')}
+        {group('等你确认', waiting, 'wait')}
+        {group('历史项目', history, 'idle')}
+        {!shown.length ? <div className="rail-group">没有匹配的项目</div> : null}
       </div>
 
       <div className="rail-foot">
-        <a className="btn btn--sm" href="./" target="_blank" rel="noreferrer">旧工作台</a>
+        <a className="muted" style={{ textDecoration: 'none' }} href="./" target="_blank" rel="noreferrer">旧工作台</a>
         <span className="stage-spacer" />
-        <span className="chat-state">{projects.length} 个</span>
+        <span>{projects.length} 个</span>
       </div>
     </aside>
   );
 }
+
+const inputStyle: React.CSSProperties = {
+  flex: 1, minWidth: 0, padding: '7px 10px', borderRadius: 9, border: 0,
+  background: '#17171d', color: 'inherit', font: 'inherit',
+};

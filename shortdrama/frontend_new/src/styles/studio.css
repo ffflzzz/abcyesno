@@ -1,132 +1,140 @@
 /* ==========================================================================
    styles/studio.css —— 三栏工作室（项目栏 / 画布 / 导演对话）
    --------------------------------------------------------------------------
-   暗色、按截图的三栏形状。**不复用 app.css 的 `.sider` / `.main`** —— 那套是
-   旧工作台的亮色布局，混用会让两边互相覆盖（`tokens.css` 仍复用，变量是共用的）。
+   ## 这一版为什么把边框和文字都删了（2026-10-06 对着参考图量出来的）
+
+   第一版被指"臃肿拥挤"。量过之后原因不在列宽（我们的中栏 925px，参考图 857px，
+   反而更宽），在这四条：
+
+     · 我画了 **18 条 1px 实线**，参考图整屏只有 3 竖 3 横长边 —— 它分栏靠
+       **背景色阶 + 留白**，不靠线。线一多，眼睛找不到安静的地方。
+     · 界面里最长的句子 **50 字**（"在画布上点一格静帧…导演下一轮派发时读得到。"），
+       参考图右栏全部文案最长 **12 字**。我写的是文档，不是 UI。
+     · **14 处 11–12px 灰字**，参考图基本一档 14px。
+     · 左栏每项两行文字 → 行高 46–48px vs 参考图 33–36px，一屏少看四分之一。
+
+   ⇒ 这一版：**分栏只用色阶**（#08 / #0b / #10 / #16 四档），边框只留**浮层**
+   （它们本来就该有边界）；文案砍到名词级，解释一律进 `title`；
+   左栏一行；12px 以下只留给"次要到不需要读"的东西。
    ========================================================================== */
 
 .studio {
   display: grid;
-  grid-template-columns: 268px minmax(0, 1fr) 400px;
+  grid-template-columns: 268px minmax(0, 1fr) 420px;
   height: 100vh;
-  background: var(--sd-bg, #0b0b0d);
-  color: var(--sd-fg, #e8e8ea);
-  font: 14px/1.55 var(--sd-font, system-ui, "PingFang SC", "Microsoft YaHei", sans-serif);
+  background: #0b0b0d;
+  color: #e6e6ea;
+  font: 14px/1.6 var(--sd-font, system-ui, "PingFang SC", "Microsoft YaHei", sans-serif);
   overflow: hidden;
 }
-.studio--collapsed { grid-template-columns: 56px minmax(0, 1fr) 400px; }
-.studio--nochat { grid-template-columns: 268px minmax(0, 1fr) 0; }
 
-/* ── 左栏：历史会话 / 并行生产的项目 ─────────────────────────────── */
-.rail { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid #1e1e24; background: #0e0e11; }
-.rail-head { display: flex; align-items: center; gap: 8px; padding: 14px 12px 10px; }
-.rail-title { font-weight: 600; letter-spacing: .2px; }
-.rail-search { margin: 0 12px 10px; }
+/* ── 左栏 ─────────────────────────────────────────────────────── */
+.rail { display: flex; flex-direction: column; min-height: 0; background: #0e0e11; }
+.rail-head { display: flex; align-items: center; padding: 18px 16px 12px; }
+.rail-title { font-size: 15px; font-weight: 600; }
+.rail-search { padding: 0 12px 10px; }
 .rail-search input {
-  width: 100%; padding: 7px 10px; border-radius: 8px;
-  border: 1px solid #26262e; background: #141419; color: inherit; outline: none;
+  width: 100%; padding: 8px 12px; border-radius: 10px; border: 0;
+  background: #17171d; color: inherit; outline: none; font: inherit;
 }
-.rail-search input:focus { border-color: #4a4a58; }
+.rail-search input::placeholder { color: #5c5c68; }
 .rail-body { flex: 1; min-height: 0; overflow: auto; padding: 0 8px 12px; }
-.rail-group { margin: 12px 4px 6px; font-size: 12px; color: #7d7d8a; display: flex; justify-content: space-between; }
+.rail-group { margin: 16px 8px 6px; font-size: 12px; color: #63636f; }
 .rail-item {
-  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
-  padding: 8px 10px; margin-bottom: 2px; border: 0; border-radius: 8px;
-  background: transparent; color: inherit; cursor: pointer;
+  display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
+  /* ★ 一行一项：padding 6 + 行高 22 ≈ 34px，对齐参考图的 33–36px 行距 */
+  padding: 6px 9px; border: 0; border-radius: 9px;
+  background: transparent; color: inherit; cursor: pointer; font: inherit;
 }
-.rail-item:hover { background: #17171d; }
-.rail-item--on { background: #1d1d27; box-shadow: inset 2px 0 0 #6c5ce7; }
-.rail-item-main { flex: 1; min-width: 0; }
-.rail-item-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rail-item-sub { display: block; font-size: 11px; color: #6f6f7c; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dot { width: 7px; height: 7px; border-radius: 50%; background: #3f3f4a; flex: none; }
-.dot--run { background: #22c55e; box-shadow: 0 0 0 3px rgba(34,199,94,.16); animation: sd-pulse 1.6s infinite; }
-.dot--wait { background: #f59e0b; box-shadow: 0 0 0 3px rgba(245,158,11,.16); }
-@keyframes sd-pulse { 50% { opacity: .35; } }
-.rail-foot { padding: 10px 12px; border-top: 1px solid #1e1e24; display: flex; gap: 8px; }
+.rail-item:hover { background: #16161c; }
+.rail-item--on { background: #1d1d26; }
+.rail-item-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rail-item-sub { font-size: 12px; color: #63636f; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 116px; }
+.rail-acts { display: flex; gap: 4px; padding: 2px 9px 8px 27px; }
+.dot { width: 6px; height: 6px; border-radius: 50%; background: #35353f; flex: none; }
+.dot--run { background: #2fd06a; animation: sd-pulse 1.6s infinite; }
+.dot--wait { background: #f0b429; }
+@keyframes sd-pulse { 50% { opacity: .3; } }
+.rail-foot { padding: 12px 16px; display: flex; align-items: center; gap: 10px; font-size: 12px; color: #63636f; }
 
-/* ── 中栏：画布 ─────────────────────────────────────────────────── */
-.stage { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-.stage-bar {
-  display: flex; align-items: center; gap: 10px; padding: 10px 14px;
-  border-bottom: 1px solid #1e1e24; background: #0e0e11; flex: none;
-}
+/* ── 中栏 ─────────────────────────────────────────────────────── */
+.stage { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: #08080a; }
+.stage-bar { display: flex; align-items: center; gap: 10px; padding: 12px 16px; flex: none; }
 .stage-title { font-weight: 600; }
-.stage-meta { font-size: 12px; color: #7d7d8a; }
+.stage-meta { font-size: 12px; color: #63636f; }
 .stage-spacer { flex: 1; }
-.stage-canvas { position: relative; flex: 1; min-height: 0; background: #08080a; }
+.stage-canvas { position: relative; flex: 1; min-height: 0; }
 .stage-canvas iframe { width: 100%; height: 100%; border: 0; display: block; }
 .stage-empty {
   position: absolute; inset: 0; display: flex; flex-direction: column;
-  align-items: center; justify-content: center; gap: 10px; color: #6f6f7c; text-align: center; padding: 24px;
-}
-.stage-note {
-  position: absolute; left: 14px; bottom: 14px; max-width: 60%;
-  padding: 8px 11px; border-radius: 9px; font-size: 12px;
-  background: rgba(20,20,26,.92); border: 1px solid #2a2a34; color: #b9b9c6;
+  align-items: center; justify-content: center; gap: 10px; color: #5c5c68; text-align: center; padding: 24px;
 }
 
-/* 镜头检查器：画布上选中一格 ⇒ 这里改，改完入表 */
+/* 镜头检查器：**选中才出现的浮层**，不再常驻吃掉 145px 画布高度 */
 .inspector {
-  flex: none; max-height: 46%; overflow: auto; border-top: 1px solid #1e1e24;
-  background: #0e0e11; padding: 12px 14px;
+  position: absolute; right: 16px; bottom: 16px; width: 400px; max-height: 62%;
+  overflow: auto; padding: 14px 16px; border-radius: 14px;
+  background: rgba(16,16,20,.96); border: 1px solid #23232c;
+  box-shadow: 0 12px 40px rgba(0,0,0,.5);
 }
-.inspector h4 { margin: 0 0 4px; font-size: 13px; }
-.inspector-hint { color: #7d7d8a; font-size: 12px; margin: 0 0 10px; }
-.field { margin-bottom: 9px; }
-.field label { display: block; font-size: 11px; color: #8b8b98; margin-bottom: 3px; }
+.inspector h4 { margin: 0 0 12px; font-size: 14px; display: flex; align-items: center; gap: 8px; }
+.field { margin-bottom: 10px; }
+.field label { display: block; font-size: 12px; color: #6d6d7a; margin-bottom: 4px; }
 .field textarea, .field input {
-  width: 100%; box-sizing: border-box; padding: 7px 9px; border-radius: 7px;
-  border: 1px solid #26262e; background: #141419; color: inherit; font: inherit; resize: vertical;
+  width: 100%; box-sizing: border-box; padding: 7px 10px; border-radius: 9px; border: 0;
+  background: #17171d; color: inherit; font: inherit; outline: none; resize: vertical;
 }
-.field--row { display: flex; gap: 8px; }
-.field--row > div { flex: 1; min-width: 0; }
-.inspector-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.inspector-log { font-size: 12px; color: #8b8b98; margin-top: 8px; }
-.chip { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11px; background: #1d1d27; color: #a9a9b8; }
-.chip--warn { background: #2a1f0b; color: #f0b429; }
-.chip--bad { background: #2a1010; color: #f87171; }
-.chip--good { background: #0e2417; color: #4ade80; }
+.field-row { display: flex; gap: 8px; }
+.field-row > div { flex: 1; min-width: 0; }
+.inspector-actions { display: flex; gap: 8px; align-items: center; margin-top: 4px; }
+.inspector-log { font-size: 12px; color: #6d6d7a; margin-top: 10px; }
+.chip { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 12px; background: #1d1d26; color: #9a9aa8; }
+.chip--warn { background: #241a08; color: #e8b45a; }
+.chip--bad { background: #241010; color: #f08080; }
+.chip--good { background: #0e2016; color: #55c977; }
 
-/* ── 右栏：导演对话 ─────────────────────────────────────────────── */
-.chat { display: flex; flex-direction: column; min-height: 0; border-left: 1px solid #1e1e24; background: #0e0e11; }
-.chat-head { display: flex; align-items: center; gap: 8px; padding: 14px; border-bottom: 1px solid #1e1e24; }
-.chat-state { font-size: 12px; color: #7d7d8a; }
-.chat-body { flex: 1; min-height: 0; overflow: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
-.msg { max-width: 88%; padding: 9px 12px; border-radius: 12px; white-space: pre-wrap; word-break: break-word; }
-.msg--me { align-self: flex-end; background: #2b2540; border: 1px solid #3d3560; }
-.msg--sys { align-self: flex-start; background: #15151b; border: 1px solid #23232c; color: #b0b0bd; font-size: 13px; }
-.msg--edit { align-self: flex-start; background: #101820; border: 1px solid #1e2f3d; color: #9ec5dd; font-size: 12px; }
-.msg-meta { display: block; margin-top: 4px; font-size: 11px; color: #6f6f7c; }
-.chat-gate { margin: 0 14px; padding: 10px 12px; border-radius: 10px; background: #1a1508; border: 1px solid #3a2e10; font-size: 12px; }
-.chat-gate-row { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
-.chat-input { padding: 12px 14px 14px; border-top: 1px solid #1e1e24; }
+/* ── 右栏 ─────────────────────────────────────────────────────── */
+.chat { display: flex; flex-direction: column; min-height: 0; background: #0e0e11; }
+.chat-head { display: flex; align-items: baseline; gap: 10px; padding: 18px 18px 12px; }
+.chat-state { font-size: 12px; color: #63636f; }
+.chat-body { flex: 1; min-height: 0; overflow: auto; padding: 6px 18px 14px; display: flex; flex-direction: column; gap: 10px; }
+.chat-hero { padding: 18px 4px 8px; }
+.chat-hero h3 { margin: 0; font-size: 19px; font-weight: 600; }
+.chat-hero p { margin: 6px 0 0; color: #77778a; }
+.msg { max-width: 86%; padding: 9px 12px; border-radius: 13px; white-space: pre-wrap; word-break: break-word; }
+.msg--me { align-self: flex-end; background: #2b2540; }
+.msg--sys { align-self: flex-start; background: #17171d; color: #b6b6c2; }
+.msg--edit { align-self: flex-start; background: #101a22; color: #93bdd8; font-size: 13px; }
+.msg-meta { display: block; margin-top: 3px; font-size: 12px; color: #5c5c68; }
+.chat-gate { margin: 0 18px 10px; padding: 12px 14px; border-radius: 13px; background: #1a1508; }
+.chat-gate-row { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; align-items: center; }
+.chat-input { padding: 12px 18px 18px; }
 .chat-input textarea {
-  width: 100%; box-sizing: border-box; min-height: 62px; padding: 9px 11px;
-  border-radius: 10px; border: 1px solid #26262e; background: #141419; color: inherit;
-  font: inherit; resize: vertical; outline: none;
+  width: 100%; box-sizing: border-box; min-height: 74px; padding: 11px 13px;
+  border-radius: 13px; border: 0; background: #17171d; color: inherit; font: inherit;
+  resize: vertical; outline: none;
 }
-.chat-input textarea:focus { border-color: #4a4a58; }
-.chat-input-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.chat-input textarea::placeholder { color: #5c5c68; }
+.chat-input-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
 .chat-input-row select {
-  padding: 5px 8px; border-radius: 7px; border: 1px solid #26262e;
-  background: #141419; color: inherit; font: inherit;
+  padding: 6px 9px; border-radius: 9px; border: 0; background: #17171d; color: inherit; font: inherit;
 }
 
-/* ── 通用小件 ───────────────────────────────────────────────────── */
+/* ── 通用 ─────────────────────────────────────────────────────── */
 .btn {
-  padding: 6px 12px; border-radius: 8px; border: 1px solid #2c2c36;
-  background: #17171d; color: inherit; cursor: pointer; font: inherit;
+  padding: 6px 13px; border-radius: 9px; border: 0;
+  background: #1d1d26; color: inherit; cursor: pointer; font: inherit;
 }
-.btn:hover { background: #1f1f27; }
-.btn:disabled { opacity: .45; cursor: not-allowed; }
-.btn--primary { background: #6c5ce7; border-color: #6c5ce7; color: #fff; }
+.btn:hover { background: #26262f; }
+.btn:disabled { opacity: .4; cursor: not-allowed; }
+.btn--primary { background: #6c5ce7; color: #fff; }
 .btn--primary:hover:not(:disabled) { background: #7d6ef0; }
-.btn--danger { border-color: #4a1f1f; background: #221010; color: #f87171; }
-.btn--sm { padding: 4px 9px; font-size: 12px; }
-.spin { width: 13px; height: 13px; border: 2px solid #3a3a46; border-top-color: #6c5ce7; border-radius: 50%; animation: sd-spin .8s linear infinite; display: inline-block; }
+.btn--danger { background: #241010; color: #f08080; }
+.btn--sm { padding: 4px 10px; font-size: 12px; }
+.spin { width: 13px; height: 13px; border: 2px solid #35353f; border-top-color: #6c5ce7; border-radius: 50%; animation: sd-spin .8s linear infinite; display: inline-block; }
 @keyframes sd-spin { to { transform: rotate(360deg); } }
-.err { color: #f87171; font-size: 12px; }
-.toast { position: fixed; right: 18px; bottom: 18px; z-index: 50; display: flex; flex-direction: column; gap: 8px; }
-.toast div { padding: 10px 13px; border-radius: 9px; background: #17171d; border: 1px solid #2c2c36; font-size: 13px; max-width: 380px; }
-.toast div[data-t="bad"] { border-color: #4a1f1f; color: #fca5a5; }
+.err { color: #f08080; }
+.muted { color: #63636f; }
+.toast { position: fixed; right: 20px; bottom: 20px; z-index: 50; display: flex; flex-direction: column; gap: 8px; }
+.toast div { padding: 10px 14px; border-radius: 11px; background: #17171d; font-size: 13px; max-width: 380px; box-shadow: 0 8px 28px rgba(0,0,0,.45); }
+.toast div[data-t="bad"] { background: #241010; color: #f0a0a0; }

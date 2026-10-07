@@ -243,7 +243,7 @@ export function Studio() {
       <div className="studio" style={{ display: 'block' }}>
         <div className="stage-empty" style={{ height: '100vh' }}>
           <strong>联系不上后端</strong>
-          <span className="inspector-hint">
+          <span className="muted">
             工作室由 shortdrama 后端同源托管（<code>/studio</code>）。
             从启动台点「短剧工作室」会自动起后端；直接开这个地址需要先跑
             <code>python -m v5.server</code>。
@@ -262,31 +262,27 @@ export function Studio() {
                    runIds={runIds} onRename={renameProject}
                    onStop={stopRun} onDelete={deleteProject} />
 
-      <CanvasPane pid={pid || '-'} ep={ep} doc={doc} docError={docError}
+      <CanvasPane pid={pid || '-'} name={projects.find((x) => x.id === pid)?.name}
+                  ep={ep} doc={doc} docError={docError}
                   segments={segments} shot={shot} onShot={setShot}
                   onSave={saveShot} running={running}
-                  nodeCount={(inbox as unknown as { canvas_nodes?: number })?.canvas_nodes || 0}
                   toolbar={
                     <>
-                      <select value={ep} onChange={(e) => { setEp(Number(e.target.value)); setShot(''); }}>
+                      <select value={ep} onChange={(e) => { setEp(Number(e.target.value)); setShot(''); }}
+                              style={{ padding: '5px 9px', borderRadius: 9, border: 0, background: '#17171d', color: 'inherit', font: 'inherit' }}>
                         {(projects.find((x) => x.id === pid)?.episodes || []).map((e) => (
                           <option key={e.id} value={e.no}>第 {e.no} 集</option>
                         ))}
                       </select>
                       <button type="button" className="btn btn--sm btn--primary" disabled={busy || !pid}
+                              title={manualSteps ? '每派一个角色前停一次等你确认' : '一路跑到底；留言会排队到下一个派发口'}
                               onClick={() => void beginProduction()}>开始生产</button>
-                      <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: '#8b8b98' }}>
-                        <input type="checkbox" checked={manualSteps}
-                               onChange={(e) => setManualSteps(e.target.checked)} />
-                        逐步确认
-                      </label>
                     </>
                   } />
 
-      <div style={{ display: 'contents' }}>
-        <DirectorChat inbox={inbox} error={inboxError} busy={busy} mine={mineIds}
-                      onSend={send} onDecide={decide} onRedo={redo} />
-      </div>
+      <DirectorChat inbox={inbox} error={inboxError} busy={busy} mine={mineIds}
+                    onSend={send} onDecide={decide} onRedo={redo}
+                    manualSteps={manualSteps} onManualSteps={setManualSteps} />
 
       <div className="toast">
         {toasts.map((t) => <div key={t.id} data-t={t.bad ? 'bad' : 'ok'}>{t.text}</div>)}
