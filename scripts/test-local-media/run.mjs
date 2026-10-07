@@ -85,6 +85,17 @@ try {
   check('没查过之前不谎称状态',
     (await card.innerText()).includes('还没查'), await card.innerText());
 
+  // ①b 1.5.9 起本地出片服务**默认折成一行**（设置面板里点「展开」才摊开）——
+  //     不先展开的话下面那句 getByRole('一键探测') 会等满 30 秒超时。
+  //     顺带钉住「默认折叠」这个行为：卡片在但探测按钮不在。
+  check('默认折成一行（探测按钮此刻不可见）',
+    await card.getByRole('button', { name: '一键探测' }).count() === 0
+    || !(await card.getByRole('button', { name: '一键探测' }).isVisible()),
+    await card.innerText());
+  await page.getByRole('button', { name: '展开' }).click();
+  check('点「展开」后探测按钮出现',
+    await card.getByRole('button', { name: '一键探测' }).isVisible(), await card.innerText());
+
   // ② 一键探测：活的摊开、死的带原因（不许合成一句「没探到」）
   await card.getByRole('button', { name: '一键探测' }).click();
   await page.waitForSelector('.lmc-item');
