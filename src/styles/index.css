@@ -9823,9 +9823,10 @@ body[--resizing="1"] .result-panel-resize-handle::before {
 }
 
 /* ── 更新提醒卡（无边框置顶小窗 index.html?panel=update）────────────────────
-   主进程在新版下载安装完成时弹这一张卡。窗口 380×246、frame:false，所以
-   顶部条必须是 drag 区（否则用户挪不动它），按钮要逐个标 no-drag。
-   配色只用现有 token：深色下 --accent 是浅字色做按钮底，浅色下自动翻成深色。 */
+   主进程在「查到新版本」时弹这一张卡，之后一张卡随状态换内容（下载中/已就绪/
+   失败）。窗口 380×236、frame:false，所以顶部条必须是 drag 区（否则用户挪不动
+   它），按钮要逐个标 no-drag。配色只用现有 token：深色下 --accent 是浅字色做
+   按钮底，浅色下自动翻成深色。 */
 .up-card {
   height: 100vh;
   display: flex;
@@ -9890,6 +9891,8 @@ body[--resizing="1"] .result-panel-resize-handle::before {
   flex: 1;
   min-height: 0;
   padding: 14px 16px 0;
+  /* 失败态可能带一段错误消息，宁可让它滚，也不要把「立即安装」那个按钮挤没了。 */
+  overflow-y: auto;
 }
 
 .up-title {
@@ -9932,6 +9935,28 @@ body[--resizing="1"] .result-panel-resize-handle::before {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.65;
+}
+
+.up-progress {
+  margin-top: 12px;
+  height: 6px;
+  border-radius: var(--radius-xs);
+  background: var(--panel-2);
+  overflow: hidden;
+}
+
+.up-progress-fill {
+  height: 100%;
+  border-radius: var(--radius-xs);
+  background: var(--accent);
+  transition: width 0.3s ease;
+}
+
+.up-size {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 
 .up-foot {

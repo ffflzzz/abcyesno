@@ -643,11 +643,12 @@ const NODES = [
         ['electron/main.js',107,'pendingWechatApprovals + 4 分钟 TTL']],
  links:['hitl','ipc']},
 
-{id:'updater', layer:'shell', name:'自动更新', d:'只在 NSIS 构建下活着',
- files:[['electron/updater.js',37,'前置条件：resources/app-update.yml 存在'],
-        ['electron/updater.js',64,'electron-updater 接线 · autoDownload'],
-        ['electron/updater.js',118,'installUpdate() → 300ms 后 quitAndInstall（绝不自动重启）'],
-        ['electron/updater.js',136,'注册 updater-check / install + 30s 静默自检']],
+{id:'updater', layer:'shell', name:'自动更新', d:'只在 NSIS 构建下活着 · 查到新版先问再下',
+ files:[['electron/updater.js',57,'前置条件：resources/app-update.yml 存在'],
+        ['electron/updater.js',184,'autoDownload=false：查到新版只弹左下角提醒卡，不自己下'],
+        ['electron/updater.js',239,'startDownload()：用户在卡上点了「下载并更新」才 downloadUpdate'],
+        ['electron/updater.js',267,'installUpdate() → 300ms 后 quitAndInstall（绝不自动重启）'],
+        ['electron/updater.js',326,'注册 updater-check / download / install + 30s 静默自检']],
  links:['ipc']},
 
 {id:'diag', layer:'shell', name:'自检三件套', d:'静态扫描 + 真跑一遍 CDP',

@@ -133,7 +133,8 @@ export default function SettingsPanel({ apiKeys = null, keyStatus = "", model = 
   }
 
   // 检查更新：
-  // - NSIS 安装版（updater.supported=true）→ 应用内检查 + 后台下载 + 应用内重启安装；
+  // - NSIS 安装版（updater.supported=true）→ 应用内检查；查到新版**不自动下载**，
+  //   弹左下角提醒卡，用户点「下载并更新」才下，下完再点一下才重启安装；
   // - dev/绿色解压版 → 保持旧行为：打开 GitHub Releases 页（系统浏览器），手动下载覆盖。
   function handleCheckUpdate() {
     if (updater && updater.supported) {
@@ -145,6 +146,13 @@ export default function SettingsPanel({ apiKeys = null, keyStatus = "", model = 
       window.hermes.openExternal(url);
     } else {
       window.open(url, "_blank", "noopener");
+    }
+  }
+
+  // 「下载新版本」：查到新版之后由用户点头才开始下载（提醒卡关了也能在这儿下）。
+  function handleDownloadUpdate() {
+    if (window.hermes && window.hermes.downloadUpdate) {
+      window.hermes.downloadUpdate().catch(() => {});
     }
   }
 
@@ -164,6 +172,7 @@ export default function SettingsPanel({ apiKeys = null, keyStatus = "", model = 
     switch (u.status) {
       case "checking": return "正在检查更新…";
       case "uptodate": return `${base} · 已是最新`;
+      case "available": return `发现 ${newV}，等你点「下载新版本」`;
       case "downloading":
         return u.progress
           ? `正在下载 ${newV}… ${u.progress.percent}%`
@@ -421,15 +430,17 @@ export default function SettingsPanel({ apiKeys = null, keyStatus = "", model = 
       control: (
         updater && updater.supported && updater.status === "downloaded"
           ? <button className="primary settings-inline-btn" onClick={handleInstallUpdate}>重启更新</button>
-          : (
-            <button
-              className="ghost settings-inline-btn"
-              onClick={handleCheckUpdate}
-              disabled={updater && updater.supported && (updater.status === "checking" || updater.status === "downloading")}
-            >
-              {updater && updater.supported && updater.status === "error" ? "重试" : "检查更新"}
-            </button>
-          )
+          : updater && updater.supported && updater.status === "available"
+            ? <button className="primary settings-inline-btn" onClick={handleDownloadUpdate}>下载新版本</button>
+            : (
+              <button
+                className="ghost settings-inline-btn"
+                onClick={handleCheckUpdate}
+                disabled={updater && updater.supported && (updater.status === "checking" || updater.status === "downloading")}
+              >
+                {updater && updater.supported && updater.status === "error" ? "重试" : "检查更新"}
+              </button>
+            )
       ),
       after: updater && updater.supported && updater.status === "downloading" && updater.progress ? (
         <div className="settings-progress">

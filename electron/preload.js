@@ -54,10 +54,11 @@ contextBridge.exposeInMainWorld('hermes', {
   // Auto-update（NSIS 安装版可用；dev/绿色版 supported=false，UI 降级为打开 Releases 页）
   getUpdaterState: () => ipcRenderer.invoke('updater-get-state'),
   checkForUpdate: () => ipcRenderer.invoke('updater-check'),
+  downloadUpdate: () => ipcRenderer.invoke('updater-download'),
   installUpdate: () => ipcRenderer.invoke('updater-install'),
   onUpdaterState: (cb) => on('updater-state', cb),
   offUpdaterState: (cb) => off('updater-state', cb),
-  // 更新提醒卡（独立无边框小窗）的三个动作：install / details / later
+  // 更新提醒卡（独立无边框小窗）的动作：download / install / retry / details / later
   updaterPopupAction: (action) => ipcRenderer.invoke('updater-popup-action', action),
 
   // Static platform string so the renderer can branch mac/win chrome.
