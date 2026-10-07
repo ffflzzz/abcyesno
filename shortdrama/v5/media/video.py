@@ -327,7 +327,8 @@ def submit_chain(project_root: Path, shots: list[dict], stills: dict, planned: l
         # 记账里的 `first_frame` 字段语义随模式变（两模式都必须有"驱动图"）：
         #   reference → 记静帧 URL（它进的是 images，不是 first_frame）
         #   keyframe  → 记真正的首帧（可能是上一镜尾帧）
-        anchor = (images[0] if (video_mode == "reference" and images) else own)             if video_mode == "reference" else first
+        anchor = ((images[0] if images else own) if video_mode == "reference"
+                  else first)
         jobs_mod.submitted(
             jobs, name, vid,
             first_frame_kind=("reference_sheets" if (video_mode == "reference"
@@ -335,7 +336,11 @@ def submit_chain(project_root: Path, shots: list[dict], stills: dict, planned: l
                               else ("reference_still" if video_mode == "reference"
                                     else ("prev_tail" if use_tail else "own_still"))),
             has_last_frame=bool(last),
-            first_frame=anchor[:120] + ("..." if len(anchor) > 120 else ""),
+            first_frame=(anchor or "")[:120]
+            + ("..." if anchor and len(anchor) > 120 else ""),
+            # `first_frame` 这个名字是 keyframe 档留下的；sheets 档真正发出去的是
+            # 下面这批图 —— 整批记下来，读账的人不必猜那个字段现在装的是什么。
+            input_images=[u[:120] for u in images] if images else None,
             seconds=s.get("seconds") or 8)
         jobs_mod.save(out_dir, jobs)
         log("[video] %s submitted (%s, %s%s)"
@@ -518,6 +523,8 @@ def submit_all(project_root: Path, shots: list[dict], stills: dict, planned: lis
         jobs_mod.submitted(jobs, name, r.get("video_id") or r.get("task_id"),
                            first_frame_kind=first_kind, first_frame=first[:120],
                            has_last_frame=bool(last),
+                           input_images=[u[:120]
+                                         for u in (sheet_imgs or [first])],
                            seconds=s.get("seconds") or 8, key=key)
         jobs_mod.save(out_dir, jobs)
         log("[video] %s submitted (%s, first=%s%s, %s)"
