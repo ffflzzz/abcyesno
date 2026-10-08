@@ -182,6 +182,12 @@ WIDE_WORDS = ("大全景", "全景", "远景", "空镜")
 CAM_MOVE_WORDS = ("推", "拉", "摇", "横移", "移镜", "跟", "甩", "升", "降", "环绕", "轨")
 #: 出现任一项 = 这条运镜写清了"去哪、多快、什么时候停"。
 CAM_SPEC_WORDS = ("m/s", "米/秒", "速度", "行程", "终点", "停在", "静止", "不动", "保持")
+#: ★ 下面两组只服务「锁定机位」与「方向去重」两条判据（2026-10-08，用户原话
+#:   「运镜太少，连基本的流畅对打都没有」）。**故意不复用 `CAM_MOVE_WORDS`**：
+#:   那张表还挂着"写了位移就得带数值"那条，往里加字会让一批原本合格的运镜
+#:   突然被点名（实测 `180 度绕到左侧` 只有「绕」没有「环绕」）。
+CAM_DIR_WORDS = ("推", "拉", "摇", "环绕", "绕", "跟", "移", "升", "降", "甩", "轨")
+CAM_LOCK_WORDS = ("定住", "锁定", "固定", "静止", "不动")
 #: 光落点词表（物理描述，不是画质参数）。⚠️ 故意不收 `4K`/`fps`/`无噪点` 那一类——
 #: 它们与类型包风格块方向相反（写实风格块有意保留轻微噪点与真实光学瑕疵）。
 LIGHT_WORDS = ("高光", "亮边", "反光", "光斑", "轮廓光", "透光", "受光", "背光",
@@ -194,6 +200,9 @@ def countable(shots: list[dict], target_seconds: int = 0,
               audio_mode: str = "dialogue-led",
               camera_light: bool = False,
               single_at_law: bool = False,
+              min_scenes: int = 0,
+              max_locked: int = -1,
+              min_dirs: int = 0,
               markdown: str = "") -> list[dict]:
     """能数的判据。返回 `[{name, check, detail}]`，空列表 = 全过。
 
@@ -201,6 +210,11 @@ def countable(shots: list[dict], target_seconds: int = 0,
       第 1 集为了"一拍一镜"这类可数律，分镜角色逐镜自查自改，
       一条链白跑 2 小时（撞满 9000 秒预算、rc=0 静默收工）。
       这些判据从这里开始由代码出，角色的提示词里相应条款同时删掉。
+
+    三条**按 brief 声明才判**的要求（都来自 1008 用户看片的感性意见，逐条量成数）：
+      · `min_scenes`  = 每集空间数下限（0 = 不判）；
+      · `max_locked`  = 允许几镜"定住且无位移"（-1 = 不判；0 = 一镜都不许）；
+      · `min_dirs`    = 运镜位移方向去重下限（0 = 不判）。
     """
     out = []
     n = len(shots) or 1
@@ -299,6 +313,49 @@ def countable(shots: list[dict], target_seconds: int = 0,
              "命中 %d 镜 —— 在原四要素后追加一句、约 60 字内；只写物理不写画质参数"
              "（4K/fps/无噪点 与风格块方向相反），也不要写负面句" % len(nolight),
              names=nolight)
+
+    # ★ 下面两条**不挂在 `camera_light` 上**（第一版挂错过，被 `test_static_camera_not_flagged`
+    #   当场抓住）：那份技法讲的是"写了位移就得带数值"，它**允许**静止机位并把"静止要写到秒"
+    #   当成要求；而"不许太多锁定镜"是**另一件事**（用户 1008 看片：「运镜太少」）。
+    #   两码事挂同一个开关，等于偷偷改了那个开关的契约 ⇒ 各自要 brief 明说才判。
+    #
+    # 实测依据：第 2 集 9 镜里 **3 镜**的「运镜」列只有「定住／仅 0.1 秒微震」
+    # （LN02/LN04/LN07），第 1 集 22 镜里 3 镜 ⇒ 数值都写了（`camera_light` 那条全过），
+    # 但**数值不等于镜头在动**。
+    if max_locked >= 0:
+        locked = [s["name"] for s in shots
+                  if any(w in (s.get("camera") or "") for w in CAM_LOCK_WORDS)
+                  and not any(w in (s.get("camera") or "") for w in CAM_DIR_WORDS)]
+        need(len(locked) <= max_locked,
+             "「运镜」写「定住/锁定/静止」而**没有任何位移方向**的镜 ≤ %d 个" % max_locked,
+             "命中 %d 镜 —— 收势镜可以定住，但打斗镜要写机位往哪走、走多远、什么时候停"
+             % len(locked), names=locked)
+    if min_dirs:
+        dirs = sorted({w for w in CAM_DIR_WORDS
+                       for s in shots if w in (s.get("camera") or "")})
+        need(len(dirs) >= min_dirs, "本集「运镜」的位移方向去重 ≥ %d 种" % min_dirs,
+             "实测只有 %d 种：%s —— 推／拉／环绕／跟／升降／横移／甩 里至少凑够这个数"
+             % (len(dirs), "、".join(dirs) or "（一格都没写）"))
+
+    # ★ 每集空间数（2026-10-08，用户看片：「场景太少」）。判据取**分镜自己的「场景」列**
+    #   去重，因为这是盘上事实；`min_scenes` 由调用方从 brief 的「每集空间数下限」读，
+    #   **没声明就一条不判**（与 `camera_light` 同一生效方式）。
+    #   实测两集都是**全集一个场景名**：第 1 集 22/22「云海石台」、第 2 集 9/9「雨竹林」
+    #   ⇒ brief 的「空间数要求」按**卷**列（一卷一处），分镜师照抄 ⇒ 一集一张背景板。
+    if min_scenes:
+        cnt: dict = {}
+        for s in shots:
+            k = (s.get("scene") or "").strip()
+            cnt[k] = cnt.get(k, 0) + 1
+        named = {k: v for k, v in cnt.items() if k}
+        need(len(named) >= min_scenes,
+             "本集「场景」列去重后必须 ≥ %d 个**视觉上明显可区分**的空间"
+             "（不同地点／不同光色，不是同一处的换机位）" % min_scenes,
+             "实测只有 %d 个：%s" % (len(named),
+                                    "、".join("%s %d 镜" % (k, v)
+                                              for k, v in sorted(named.items(),
+                                                                 key=lambda kv: -kv[1]))
+                                    or "（「场景」列整列为空）"))
 
     # —— 打戏密度类 ——
     # ★ 「兵刃接触 ≥8 镜」这条**已删**（2026-09-29 16:9 六臂探针 + 官方范例逐帧全量）：
@@ -497,6 +554,9 @@ def punch_list(shots: list[dict], *, target_seconds: int = 0, use_judge: bool = 
                audio_mode: str = "dialogue-led",
                camera_light: bool = False,
                single_at_law: bool = False,
+               min_scenes: int = 0,
+               max_locked: int = -1,
+               min_dirs: int = 0,
                markdown: str = "") -> list[str]:
     """给角色看的**退回清单**（一镜一行，带镜号与逐字原文）。
 
@@ -505,7 +565,8 @@ def punch_list(shots: list[dict], *, target_seconds: int = 0, use_judge: bool = 
     """
     hard = countable(shots, target_seconds, chars, target_shots, audio_mode,
                      camera_light=camera_light, single_at_law=single_at_law,
-                     markdown=markdown)
+                     min_scenes=min_scenes, max_locked=max_locked,
+                     min_dirs=min_dirs, markdown=markdown)
     out = []
     for h in hard:
         out.append("【%s】%s（%s）" % (h["check"], h["name"] or "全表", h["detail"]))
@@ -620,7 +681,10 @@ def check(shots: list[dict], *, target_seconds: int = 0, use_judge: bool = True,
           target_shots: tuple[int, int] | None = None,
           audio_mode: str = "dialogue-led",
           camera_light: bool = False,
-          single_at_law: bool = False) -> dict:
+          single_at_law: bool = False,
+          min_scenes: int = 0,
+          max_locked: int = -1,
+          min_dirs: int = 0) -> dict:
     """两层体检的总入口。返回 `{countable, semantic, unverifiable, errors, blocking}`。
 
     `llm` 可注入（离线单测用）—— 缺省才去建真实客户端。
@@ -628,7 +692,9 @@ def check(shots: list[dict], *, target_seconds: int = 0, use_judge: bool = True,
     `media.style.script_craft_of(root)` 判），关掉时摄影/光学两条**一条不判**。
     """
     hard = countable(shots, target_seconds, chars, target_shots, audio_mode,
-                     camera_light=camera_light, single_at_law=single_at_law)
+                     camera_light=camera_light, single_at_law=single_at_law,
+                     min_scenes=min_scenes, max_locked=max_locked,
+                     min_dirs=min_dirs)
     for h in hard:
         log("[shotcheck] ❌ %s —— %s%s"
             % (h["check"], h["detail"], ("（%s）" % h["name"]) if h["name"] else ""))

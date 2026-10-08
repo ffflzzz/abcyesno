@@ -489,6 +489,51 @@ def _duration_gap(seconds_total: float, brief: dict | None, ep=None) -> dict:
                        "会超出镜头数上限被截断成半成品"))}
 
 
+def camera_reqs(brief: dict | None) -> tuple[int, int]:
+    """brief 声明的「锁定机位上限」与「运镜方向下限」⇒ 返回 `(max_locked, min_dirs)`。
+
+    没写的该项 ⇒ `-1` / `0` = **程序不判**（行为与改造前一字不变）。
+    ★ 为什么各要一个字段、不挂在 `camera-light-physics` 那个技法开关上：
+      那份技法讲的是"**写了**位移就得带速度/行程/终点"，它**允许**静止机位
+      （"静止要写到秒"正是它的一条要求）；而"不许这么多镜定住"是用户 1008 看片后的
+      **另一件事**。两码事共用一个开关等于偷偷改了那个开关的契约
+      —— 第一版就挂错在这里，被既有的 `test_static_camera_not_flagged` 当场抓住。
+    """
+    b = brief or {}
+
+    def _n(*keys):
+        for k in keys:
+            v = b.get(k)
+            if v is None or str(v).strip() == "":
+                continue
+            m = re.search(r"\d+", str(v))
+            if m:
+                return int(m.group(0))
+        return None
+
+    locked = _n("锁定机位上限", "max-locked-shots")
+    dirs = _n("运镜方向下限", "min-camera-directions")
+    return (-1 if locked is None else locked), (0 if dirs is None else dirs)
+
+
+def min_scenes_per_episode(brief: dict | None) -> int:
+    """brief 声明的**每集空间数下限**（没声明 ⇒ 返回 0 = 程序不判）。
+
+    ⚠️ 为什么不从既有的「空间数要求」推出来：那个字段按**卷**列（本项目五条 = 五集各一处），
+      数出来是 5，而一集只需要 2–3 处 ⇒ 拿它当每集下限会让**每一集都不合格**（误杀）。
+      所以另开一个字段，语义是"这一集里要出现几个视觉上明显可区分的空间"。
+    ★ 为什么要这个字段（2026-10-08 实测）：用户连看两集都判「场景太少」，
+      而盘上事实是**全集一个场景名**（第 1 集 22/22「云海石台」、第 2 集 9/9「雨竹林」）——
+      分镜师照抄了 brief 里"一卷一处"的口径。可数的东西不该靠人反复提。
+    """
+    v = (brief or {}).get("每集空间数下限") or (brief or {}).get("min-scenes-per-episode") or ""
+    m = re.search(r"\d+", str(v))
+    if not m:
+        return 0
+    n = int(m.group(0))
+    return n if n >= 2 else 0        # 1 个空间 = 现状本身，判它没有意义
+
+
 def audio_mode_of(brief: dict | None) -> str:
     """归一化 brief 的音频模式（缺省 dialogue-led——默认要台词，别再默默无声）。"""
     b = brief or {}

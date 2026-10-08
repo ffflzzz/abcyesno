@@ -17,7 +17,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from . import config, roles, shotcheck
+from . import config, roles, shotcheck, validate
 
 # 列名必须与真实分镜表**一字不差**：`storyboard.parse` 按列名取字段，
 # 少一列就解析出 0 镜 —— 那样测试会"全过"却什么都没测到（本项目最忌的假绿）。
@@ -680,3 +680,79 @@ class TestTableLevelDefects(unittest.TestCase):
         self.assertEqual("", shotcheck.table_truncated(good))
         cut = head + "| 1 | 近景 | 平视 | 推 | 6 | 云海 | 风格 | 内容 | 落幅 | （无声，环境音） | 声 | 否 | 镜头10落幅："
         self.assertIn("写断", shotcheck.table_truncated(cut))
+
+
+class TestPerEpisodeVisualReqs(unittest.TestCase):
+    """三条「brief 声明了才判」的视觉要求（2026-10-08 用户看片：场景太少、运镜太少）。
+
+    实测依据：第 1 集 22/22 镜同一个「场景」、第 2 集 9/9 同一个，
+    且第 2 集 9 镜里 3 镜的「运镜」列只有「定住／仅 0.1 秒微震」。
+    """
+
+    def _rows(self, n, scenes=None, cameras=None):
+        scenes = scenes or ["石台"]
+        cameras = cameras or ["缓推 1 米、终点停在她手边"]
+        return [_shot("LN%02d" % i,
+                      "@裴烛 蹬地前冲三步劈下，@谢潮生 侧身避开后横移两步、手腕被格开",
+                      seconds=4, scene=scenes[i % len(scenes)],
+                      camera=cameras[i % len(cameras)])
+                for i in range(1, n + 1)]
+
+    def _hits(self, shots, **kw):
+        return [h["check"] for h in shotcheck.countable(shots, len(shots) * 4, **kw)]
+
+    def test_single_scene_fires_when_declared(self):
+        hits = self._hits(self._rows(9), min_scenes=3)
+        one = [c for c in hits if "空间" in c]
+        self.assertEqual(len(one), 1, hits)
+        d = [h for h in shotcheck.countable(self._rows(9), 36, min_scenes=3)
+             if "空间" in h["check"]][0]
+        self.assertIn("石台 9 镜", d["detail"], "退回清单必须报**镜数分布**，否则角色不知道差在哪")
+
+    def test_three_scenes_pass(self):
+        """反向对照：三个可辨空间 ⇒ 不判。"""
+        hits = self._hits(self._rows(9, scenes=["石台", "丹房", "断桥"]), min_scenes=3)
+        self.assertEqual([c for c in hits if "空间" in c], [], hits)
+
+    def test_undeclared_never_judges(self):
+        """前提不存在：brief 没声明 ⇒ 一集一个空间也不报（行为与改造前一字不变）。"""
+        self.assertEqual([c for c in self._hits(self._rows(9)) if "空间" in c], [])
+
+    def test_locked_cameras_capped_only_when_declared(self):
+        shots = self._rows(9)
+        for i, s in enumerate(shots):        # 前 3 镜"定住且无位移"，后 6 镜有位移
+            s["camera"] = ("贴地定住、仅 0.1 秒微震" if i < 3
+                           else "缓推 1 米、终点停在她手边")
+        hits = [h for h in shotcheck.countable(shots, 36, max_locked=2) if "定住" in h["check"]]
+        self.assertEqual(len(hits), 1, hits)
+        self.assertEqual(hits[0]["name"], "LN01、LN02、LN03", "必须**列全**被点名的镜")
+        self.assertEqual([c for c in self._hits(shots, max_locked=-1) if "定住" in c], [],
+                         "没声明就不许判")
+
+    def test_locked_word_with_movement_is_not_flagged(self):
+        """「跟移 2 米后定住」有位移方向 ⇒ 不算锁定镜。"""
+        shots = self._rows(9, cameras=["跟移 2 米后定住、0.2 秒微震"])
+        self.assertEqual([c for c in self._hits(shots, max_locked=0) if "定住" in c], [])
+
+    def test_direction_diversity(self):
+        two = self._rows(9, cameras=["缓推 1 米", "拉远 2 米"])
+        self.assertEqual(len([c for c in self._hits(two, min_dirs=4) if "方向去重" in c]), 1)
+        four = self._rows(9, cameras=["缓推 1 米", "拉远 2 米", "环绕半圈", "横移两步"])
+        self.assertEqual([c for c in self._hits(four, min_dirs=4) if "方向去重" in c], [])
+
+
+class TestBriefVisualFields(unittest.TestCase):
+    """两个新 brief 字段的读法：认散文里的数，读不到就**不判**。"""
+
+    def test_min_scenes(self):
+        self.assertEqual(validate.min_scenes_per_episode({"每集空间数下限": "至少 3 个"}), 3)
+        self.assertEqual(validate.min_scenes_per_episode({}), 0)
+        self.assertEqual(validate.min_scenes_per_episode({"每集空间数下限": 1}), 0,
+                         "1 个空间就是现状本身，判它没有意义")
+
+    def test_camera_reqs(self):
+        self.assertEqual(validate.camera_reqs({"锁定机位上限": "≤2 镜", "运镜方向下限": "4 种"}),
+                         (2, 4))
+        self.assertEqual(validate.camera_reqs({}), (-1, 0),
+                         "没写 = -1（不判），不是 0（一镜都不许）")
+        self.assertEqual(validate.camera_reqs({"锁定机位上限": 0}), (0, 0))

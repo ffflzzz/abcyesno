@@ -962,6 +962,14 @@ def role_input(role: str, root: Path, m: dict, reasons: list[str] | None = None)
                                            #   谁写进自己的分镜契约才对谁判（1003d 误伤实测）
                                            single_at_law=shotcheck.pack_requires_single_at(root),
                                            audio_mode=validate.audio_mode_of(_brief),
+                                           # ★ 每集空间数 / 锁定机位上限 / 运镜方向下限：
+                                           #   brief 声明了才判（没声明 = 不判，行为一字不变）。
+                                           #   三条都来自 1008 用户看片的感性意见，逐条量成数：
+                                           #   两集实测都是"全集一个场景名"（22/22、9/9），
+                                           #   第 2 集 9 镜里 3 镜的「运镜」只有"定住＋微震"。
+                                           min_scenes=validate.min_scenes_per_episode(_brief),
+                                           max_locked=validate.camera_reqs(_brief)[0],
+                                           min_dirs=validate.camera_reqs(_brief)[1],
                                            log=lambda *a: None)
                 _pl = drop_solo_opponent_items(_pl, _shots)
                 if _pl:
