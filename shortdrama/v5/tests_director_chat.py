@@ -213,6 +213,45 @@ class TestConcurrentWrites(_Base):
         #    拿排序后的列表去比会假红（刚踩过）。
         self.assertEqual({"第%d条" % i for i in range(24)}, set(got))
 
+    def test_readers_never_see_a_broken_file_while_writers_run(self):
+        """**这条才是复现真实形态的**：写者不断替换文件，读者同时在读。
+
+        ⚠️ 教训：我一度用"8 个线程狂打 HTTP GET"来验修复，2468 次零错误 —— 但那次
+        POST 因为 2024 端口被别人的 dev server 占着而失败了，**根本没有对话、
+        写路径一次都没走到**。绿灯是假的。读数干净不等于这条路被走过。
+        """
+        import threading
+        stop = [False]
+        errs = []
+
+        def writer(i):
+            n = 0
+            while not stop[0]:
+                try:
+                    director_chat._append(self.root, "director", "w%d-%d" % (i, n))
+                    n += 1
+                except Exception as e:  # noqa: BLE001
+                    errs.append("写:" + repr(e))
+
+        def reader():
+            while not stop[0]:
+                try:
+                    director_chat.turns(self.root)     # 半截 JSON 会在这里炸
+                except Exception as e:  # noqa: BLE001
+                    errs.append("读:" + repr(e))
+
+        ws = [threading.Thread(target=writer, args=(i,)) for i in range(4)]
+        rs = [threading.Thread(target=reader) for _ in range(4)]
+        for t in ws + rs:
+            t.start()
+        import time as _t
+        _t.sleep(1.2)
+        stop[0] = True
+        for t in ws + rs:
+            t.join()
+        self.assertEqual([], errs[:4], "读写互踩：%s" % errs[:4])
+        self.assertTrue(len(director_chat.turns(self.root)) > 0)
+
     def test_no_temp_files_left_behind(self):
         for i in range(3):
             director_chat._append(self.root, "user", "x%d" % i)
