@@ -756,3 +756,30 @@ class TestBriefVisualFields(unittest.TestCase):
         self.assertEqual(validate.camera_reqs({}), (-1, 0),
                          "没写 = -1（不判），不是 0（一镜都不许）")
         self.assertEqual(validate.camera_reqs({"锁定机位上限": 0}), (0, 0))
+
+
+class TestDurationAdvice(unittest.TestCase):
+    """片长不合格时，退回清单得说"**每镜写几秒**"，不能只报总数（1008 第 3 集）。"""
+
+    def _rows(self, n, sec):
+        return [_shot("LN%02d" % i,
+                      "@裴烛 蹬地前冲三步劈下，@谢潮生 侧身避开后横移两步、手腕被格开",
+                      seconds=sec) for i in range(1, n + 1)]
+
+    def _detail(self, shots, target):
+        hits = [h for h in shotcheck.countable(shots, target) if "片长" in h["check"]]
+        return hits[0]["detail"] if hits else ""
+
+    def test_over_length_says_seconds_per_shot(self):
+        d = self._detail(self._rows(10, 12), 72)        # 10 镜 × 12 秒 = 120 秒
+        self.assertIn("每镜平均 ≤ 9.7 秒", d, d)        # 72×1.35 ÷ 10 = 9.72
+        self.assertIn("别只减镜数", d, d)
+
+    def test_under_length_says_the_other_direction(self):
+        d = self._detail(self._rows(10, 4), 72)         # 10 镜 × 4 秒 = 40 秒
+        self.assertIn("每镜平均 ≥ 6.1 秒", d, d)         # 72×0.85 ÷ 10 = 6.12
+
+    def test_in_band_gets_no_advice(self):
+        """反向对照：合格的表不多嘴（旧 detail 一字不变）。"""
+        d = self._detail(self._rows(10, 8), 72)
+        self.assertEqual(d, "", d)

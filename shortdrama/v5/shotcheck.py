@@ -492,6 +492,20 @@ def countable(shots: list[dict], target_seconds: int = 0,
             ok_n = lo <= n <= hi
             detail = "%d 镜 / %d 秒（brief 明写 %d-%d 镜，目标 %ds）" % (
                 n, total, lo, hi, target_seconds)
+        if target_seconds:
+            # ★ 报"差多少"之外要报**该改成几秒**（1008 第 3 集实测：表是 10 镜 / 120 秒，
+            #   旧 detail 只有「10 镜 / 120 秒（目标 72s，镜数下限 9）」——
+            #   它说了不合格，却没说这 10 镜每镜该写几秒；而"减镜数"与"减秒数"是两条
+            #   完全不同的改法，减镜数正好撞上同一条里的镜数下限）。
+            _hi = target_seconds * 1.35
+            _lo = target_seconds * 0.85
+            if total > _hi:
+                detail += " —— 要落进带内：本集 %d 镜 ⇒ **每镜平均 ≤ %.1f 秒**" \
+                          "（现在平均 %.1f 秒；⛔ 别只减镜数不改秒数）" % (
+                              n, _hi / max(1, n), total / max(1, n))
+            elif total < _lo:
+                detail += " —— 要落进带内：%d 镜 ⇒ 每镜平均 ≥ %.1f 秒" \
+                          "（现在平均 %.1f 秒）" % (n, _lo / max(1, n), total / max(1, n))
         need(total >= target_seconds * 0.85 and total <= target_seconds * 1.35
              and ok_n, "片长与镜数达 brief 要求", detail)
     return out
