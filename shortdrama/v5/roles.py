@@ -572,6 +572,29 @@ def role_input(role: str, root: Path, m: dict, reasons: list[str] | None = None)
         "写到别的集的文件上会**静默覆盖**那一集，是严重事故。）"
         % (ep, "/" + out_path(role, ep)))
     lines.append("你的任务描述可能不完整，**一律以 brief.json 为准**。")
+    # ★★ 2026-10-08：**全剧级角色要紧接着收到一句纠正**。
+    #   上面那行「本项目当前跑的是**第 N 集**」说的是**本次运行的集号**，
+    #   对全剧级产物（director / worldbuilder / assetdesigner / plotdesigner）不是产物范围。
+    #   实测（`yuxuan-duanfeng-1007`，五集 brief）：plotdesigner 据此**只写了第 1 集
+    #   的目录条目**（标题还自己加了「（本集）」），而后置体检每次都说"缺第 2-5 集" ⇒
+    #   一条链跑了 67 分钟、目录一个字没动。错误的元信息比没有更糟（这是第二次栽在这）。
+    from .guards import OUTPUTS as _OUT
+    if "{N}" not in (_OUT.get(role) or out_path(role, ep)):
+        lines.append(
+            "⚠️ 纠正上一条：你的产物是**全剧级**的（一次锁定、全剧复用），"
+            "路径里没有集号 —— ⛔ 不要加集号后缀，也**不要只写「本集」那一份**。")
+        if role == "plotdesigner":
+            try:
+                from .guards import load_brief as _lb
+                _n = int(((_lb(root) or {}).get("episodes")) or 1)
+            except Exception:                              # noqa: BLE001
+                _n = 1
+            if _n > 1:
+                lines.append(
+                    "★ 本次 brief 是 **%d 集**：目录**集集要有条目**（每集一个 "
+                    "`### 第 N 集：<标题>`，N 用阿拉伯数字），%d 集就写 %d 条 —— "
+                    "缺哪集会被门当场退回并点名集号（实测：只写第 1 集 ⇒ 媒体链被拦、"
+                    "整条链白跑）。" % (_n, _n, _n))
     if config.INLINE_UPSTREAM:
         lines.append("")
         # ★ M5：标题从"上游产物**全文**"改为"上游产物"——**全剧级长目录会按集切片**

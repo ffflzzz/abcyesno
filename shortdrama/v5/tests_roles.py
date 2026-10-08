@@ -953,3 +953,36 @@ class TestContainerFactsMatchPipeline(unittest.TestCase):
         text, _vp = self._text("reference", "stills")
         self.assertIn("本镜静帧 + 人物定妆照", text)
         self.assertIn("静帧取第一拍", text)
+
+
+class TestWholeSeriesRolesGetAScopeCorrection(unittest.TestCase):
+    """全剧级角色**不能只收到"本集"框架** —— 实测代价是一条链白跑 67 分钟。
+
+    `yuxuan-duanfeng-1007`（五集 brief）：plotdesigner 拿到「本项目当前跑的是第 1 集」
+    之后**只写了第 1 集的目录条目**（标题还自加「（本集）」），
+    而后置体检每次都说"缺第 2-5 集"；前一条指令还在说"本集"，角色就一直只交一份。
+    """
+
+    def _mk(self, episodes=5):
+        import json as _j
+        import tempfile
+        d = tempfile.mkdtemp()
+        self.addCleanup(lambda: __import__("shutil").rmtree(d, ignore_errors=True))
+        root = Path(d)
+        (root / "brief.json").write_text(_j.dumps(
+            {"topic": "线", "pack": "shortdrama", "episodes": episodes,
+             "target_duration": "约 180 秒"}, ensure_ascii=False), encoding="utf-8")
+        return root
+
+    def test_plotdesigner_is_told_to_write_every_episode(self):
+        from v5 import roles
+        txt = roles.role_input("plotdesigner", self._mk(5), {"episode_index": 1})
+        self.assertIn("全剧级", txt)
+        self.assertIn("集集要有条目", txt)
+        self.assertIn("5 集就写 5 条", txt)
+
+    def test_episode_level_role_is_untouched(self):
+        from v5 import roles
+        txt = roles.role_input("scenedesigner", self._mk(5), {"episode_index": 1})
+        self.assertIn("本项目当前跑的是", txt)
+        self.assertNotIn("纠正上一条", txt, "集级角色不该收到全剧级那套纠正")
