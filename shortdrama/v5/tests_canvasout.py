@@ -112,12 +112,22 @@ class TestShape(_Case):
         self.assertEqual(self._kinds(c)["资产"], 4,
                          "2 条资产 × 2 条带 = 4 根线；出现条数说明又退回逐镜连了")
 
-    def test_open_viewport_fits_width_with_readable_floor(self):
+    def test_open_viewport_is_full_resolution_even_when_wide(self):
+        """★ 病样本：旧实现按"可视区宽 ÷ 整图宽"适配，30 镜的项目被压到 **0.58**，
+        而画布是把整层 DOM `transform: scale()` 下去的 ⇒ 格子上的字与静帧一起缩，
+        用户原话「模模糊糊的，要放很大才行」。通览交给横向滚动 + 左下角缩放尺。
+        那条 `width > 1500` 是**反向对照**：不成立的话这条断言就是空过的
+        （窄图旧公式照样给 1.0，测不出病）。"""
         _mk(self.root)
-        c = self.build()
-        k = c["viewport"]["k"]
-        self.assertTrue(canvasout._MIN_SCALE <= k <= 1.0, "打开缩放要落在可读区间：%s" % k)
-        self.assertGreaterEqual(c["viewport"]["x"], 260,
+        narrow = self.build()
+        _mk(self.root, shots=(1, 2, 3, 4, 5, 6), packs=((1, 2, 3, 4, 5, 6),))
+        wide = self.build()
+
+        self.assertGreater(wide["stats"]["width"], 1500,
+                           "夹具没造宽 —— 这条测试就退化成空过")
+        for name, c in (("窄", narrow), ("宽", wide)):
+            self.assertEqual(c["viewport"]["k"], 1.0, "%s画布打开必须是 100%%，不许压小" % name)
+        self.assertGreaterEqual(wide["viewport"]["x"], 260,
                                 "视口起点要让开画布应用那条元素栏，否则资产栏被压住")
 
 

@@ -43,11 +43,6 @@ _STEP_Y = 440
 #: 一条带最多几格。pack 组本身 ≤5 镜（`SHORTDRAMA_VIDEO_PACK_MAX_GROUP`），
 #: 这个上限只为兜住"没打包的镜"和被手工调大的组，别让一行无限长。
 _MAX_PER_BAND = 6
-#: 打开时"装进视野"用的**画布可视区宽**：1440 的窗口减去那条「画布元素」侧栏（约 260）。
-#: 按整窗宽算会把图撑到右侧出框（实测片段列被切掉）。
-_FIT_W = 1180
-#: 打开缩放的下限 —— 再小就只是色块，读不出画面
-_MIN_SCALE = 0.30
 
 
 def _read_json(path: Path) -> Any:
@@ -305,17 +300,19 @@ def build(root: Path, ep: int = 1, base: str = "") -> dict[str, Any]:
     xs = [n["position"]["x"] + n["width"] for n in nodes] or [0]
     ys_all = [n["position"]["y"] + n["height"] for n in nodes] or [0]
     w, h = max(xs) - _ASSET_X, max(ys_all)
-    #: 打开时**按宽度**适配、纵向留可读下限。
-    #: 按高度适配会把 30 镜的项目压到 0.15（实测）—— 形状看得见但格子全糊成一片，
-    #: 而"看清每一格"才是这张图存在的理由；纵向靠小地图与滚动，不靠缩小。
-    k = min(1.0, max(_MIN_SCALE, round(_FIT_W / max(w, 1), 3)))
+    #: 打开时**一律 100%**，不按宽度缩放。
+    #: 旧实现是"可视区宽 ÷ 整图宽"的装进视野，30 镜的项目被压到 **0.58** —— 而画布是把
+    #: 整层 DOM `transform: scale()` 下去的，格子上的字与静帧跟着一起缩，
+    #: 用户原话：「画布内的分辨率很奇怪，模模糊糊的，要放很大才行」。
+    #: 通览不该靠压小：横向滚、小地图、左下角那条缩放尺都在，那是人按的，不是机器替他定的。
+    k = 1.0
 
     canvas: dict[str, Any] = {
         "title": "%s · 第 %d 集" % (pid, ep),
         "nodes": nodes,
         "connections": edges,
         #: 起点让开画布应用自己那条「画布元素」侧栏（约 260px）——
-        #: 不让开的话，缩放 0.85 时整条资产栏正好压在它下面（实测看不见资产格）。
+        #: 不让开的话，整条资产栏正好压在它下面（实测看不见资产格）。
         "viewport": {"x": 280, "y": 64, "k": k},
         "backgroundMode": "lines",
         "showImageInfo": False,
