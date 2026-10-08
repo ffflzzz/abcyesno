@@ -159,7 +159,32 @@ def validate_brief(brief: dict) -> dict:
                 "（实测：180 秒只给 4 节拍 → 分镜 117 秒，被片长门拦下整条媒体链）"
                 % (len(mh), int(round(tgt)), want_beats))
 
+    # ★ brief **自相矛盾**（2026-10-08 实测 `yuxuan-duanfeng-1007` ep2）：
+    #   同一份 brief 里 `audio_mode: dialogue-led`（必须有台词）与
+    #   `禁忌: 无口型动作、无人说话（全片 silent…）` 并存。后果不是"哪条赢"，而是
+    #   **三级搬运一起交出 0 台词的表**：scriptwriter 按禁忌写全片无声、
+    #   dialogue 整篇写「须回到 scriptwriter 解决（我无权在提取层修台词）」、
+    #   scenedesigner 抄空表、reviewer 把冲突记进 advisory 后判 pass: true ——
+    #   24 分钟跑完，直到渲染才撞门。
+    #   ⚠️ 只告警**不阻断**（`_brief_gate` 的 problems 本来也只打印）：
+    #   两条互斥的要求该由人在开工前定夺，程序没有替他挑的权限；
+    #   但必须点名到**是哪一条禁忌**，否则下一个人只会去看 audio_mode。
+    _marks = [m for m in SILENT_TABOO_MARKS
+              if m in str(brief.get("禁忌") or "").lower().replace(" ", "")]
+    if audio_mode_of(brief) == "dialogue-led" and _marks:
+        problems.append(
+            "audio_mode=dialogue-led（必须有台词）与 `禁忌` 里的「%s」**直接对冲** —— "
+            "`禁忌` 同时是成片复核的硬伤判据，留着它连口型都会判成硬伤。"
+            "二选一：要台词就删掉那条禁忌，要无声就把 audio_mode 改成 silent。"
+            % "、".join(_marks[:3]))
+
     return {"ok": not problems, "missing_fields": missing, "problems": problems}
+
+
+#: `禁忌` 里表示「不许人物开口」的措辞（**归一化后**比对：转小写、去空格）。
+#: 只用于上面那条对冲告警，判的是"与 dialogue-led 能不能同时成立"，不是内容好坏。
+SILENT_TABOO_MARKS = ("无人说话", "无口型", "不说话", "不说台词", "全片silent",
+                      "零台词", "无台词", "无对白")
 
 
 # ─── 2.5 音频模式（brief.audio_mode）─────────────────────────────────────────

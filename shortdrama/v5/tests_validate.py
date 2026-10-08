@@ -107,6 +107,38 @@ class TestValidateBrief(unittest.TestCase):
         r = validate.validate_brief(_brief(must_have=["只有一幕的具体事件描述"]))
         self.assertTrue(any("四幕" in p for p in r["problems"]))
 
+    def test_silent_taboo_under_dialogue_led_is_flagged(self):
+        """★ brief 自相矛盾：要台词，又有一条禁忌禁止人物开口。
+
+        实测 1008 `yuxuan-duanfeng-1007` ep2：`audio_mode: dialogue-led` 与
+        `禁忌: 无口型动作、无人说话（全片 silent…）` 并存 ⇒ scriptwriter 照禁忌写全片无声、
+        dialogue 拒补（「我无权在提取层修台词」）、scenedesigner 抄空表、
+        reviewer 记 advisory 后判 pass ⇒ 24 分钟跑完，直到渲染才撞门。
+        """
+        r = validate.validate_brief(
+            _brief(audio_mode="dialogue-led",
+                   禁忌=["无字幕", "无口型动作、无人说话（全片 silent，声音只有兵器与雨）"]))
+        hit = [p for p in r["problems"] if "对冲" in p]
+        self.assertEqual(len(hit), 1, r["problems"])
+        self.assertIn("无口型", hit[0], "必须点名是哪条禁忌，否则下一个人只会去看 audio_mode")
+
+    def test_silent_taboo_is_not_flagged_when_brief_asks_for_silence(self):
+        """前提不存在（brief 本来就要 silent）⇒ 不许报，否则每次无声片都误报。"""
+        r = validate.validate_brief(
+            _brief(audio_mode="silent", 禁忌=["无口型动作、无人说话", "无字幕"]))
+        self.assertFalse([p for p in r["problems"] if "对冲" in p], r["problems"])
+
+    def test_normal_taboo_under_dialogue_led_changes_nothing(self):
+        """反向对照：dialogue-led + 正常禁忌（只管画面）⇒ 一条都不报。"""
+        r = validate.validate_brief(_brief(audio_mode="dialogue-led"))
+        self.assertFalse([p for p in r["problems"] if "对冲" in p], r["problems"])
+
+    def test_spacing_and_case_variants_still_match(self):
+        """「全片 Silent」这种写法也要认（比对前归一化：小写 + 去空格）。"""
+        r = validate.validate_brief(
+            _brief(audio_mode="dialogue-led", 禁忌=["全片 Silent，无人开口"]))
+        self.assertTrue([p for p in r["problems"] if "对冲" in p])
+
     def test_beat_count_vs_duration_flagged(self):
         """★ 节拍数 vs 目标时长（2026-09-14 实测新增）。
 
