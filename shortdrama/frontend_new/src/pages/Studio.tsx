@@ -94,7 +94,9 @@ export function Studio() {
         const list = r.list || [];
         if (stop) return;
         setProjects(list);
-        if (!pid && list.length) setPid(list[0].id);
+        // ★ 2026-10-08 用户原话：「为什么每次打开都是自动加载历史项目？
+        //   可以变成直接加载空白画布吗？」—— 可以。**不再自动钻进某个历史项目**，
+        //   打开就是一张白纸；要接着做哪个，从左栏点它（或跟导演开一段新对话）。
         const running: Record<string, string> = {};
         const runIds: Record<string, string> = {};
         for (const p of list) {
@@ -122,10 +124,13 @@ export function Studio() {
      删自己（`deleteProject`）那条路会主动清 pid，但**别的窗口 / 命令行删的**
      兜不到 —— 所以按"列表里还有没有它"来判，与谁删的无关。 */
   useEffect(() => {
-    if (!projects.length) return;
-    if (pid && projects.some((x) => x.id === pid)) return;
-    setPid(projects[0].id);
-    setEp(1); setShot('');
+    if (!projects.length || !pid) return;
+    if (projects.some((x) => x.id === pid)) return;
+    // ⛔ 清空，**不要顺手挑一个** —— 那又变回"自动钻进历史项目"。
+    //   （删掉的项目 / 别的窗口删的项目，都走这条：界面回到白纸，
+    //     而不是对着一个不存在的项目每几秒刷「项目不存在」。）
+    setPid(''); setEp(1); setShot('');
+    setDoc(null); setSegments([]); setChat(null);
   }, [projects, pid]);
 
   /* ── 信箱（右栏 + 左栏的"等你确认"分组都读它）───────────────── */
@@ -265,6 +270,22 @@ export function Studio() {
     } catch (e) { return errText(e); }
   };
 
+  /** 「跟导演开一段新对话」= 建一个空白项目。对话是按项目存的（brief / 线程都在项目下），
+   *  所以得先有个归属 —— 但这一步对用户应当是无感的：**你说话，系统就给你开一张白纸**。 */
+  const newChat = async (): Promise<string | null> => {
+    setBusy(true);
+    try {
+      const r = await createBlank('新项目', packOf(), 1, ratioOf());
+      const list = await Api.listProjects(1, 200);
+      setProjects(list.list);
+      setPid(r.pid); setEp(1); setShot('');
+      toast(`开了新项目 ${r.pid} —— 直接跟导演说你想拍什么`);
+      return null;
+    } catch (e) { return errText(e); } finally { setBusy(false); }
+  };
+  const packOf = () => String(health?.packs?.[0] || 'shortdrama');
+  const ratioOf = () => String(health?.ratio_default || '9:16');
+
   const newBlank = async (name: string, pack: string, episodes: number, ratio: string) => {
     setBusy(true);
     try {
@@ -393,6 +414,7 @@ export function Studio() {
                     manualSteps={manualSteps} onManualSteps={setManualSteps}
                     onAsk={ask} onStart={beginProduction}
                     onSend={send} onDecide={decide} onRedo={redo}
+                    hasProject={!!pid} onStartNew={newChat}
                     splitter={chatSplit}
                     onCollapse={() => { setChatOpen(false); lsSet('sd.chatOpen', '0'); }} />
 

@@ -158,14 +158,14 @@ export function CanvasPane(p: Props) {
           <iframe key={p.pid + ':' + p.ep} title="画布"
                   src={`/atelier/canvas?from=${encodeURIComponent(apiUrl)}`} />
         ) : null}
-        {hasPid && nodes === 0 && !p.docError ? (
+        {(!hasPid || (nodes === 0 && !p.docError)) ? (
           <iframe key={'free:' + p.pid + ':' + p.ep} title="自由画布"
                   src="/atelier/canvas" />
         ) : null}
 
-        {!hasPid ? (
-          <div className="stage-empty"><span>到左栏选一个项目</span></div>
-        ) : null}
+        {/* 还没选项目：中栏就是一张白纸（不是一句"到左栏选一个"）。
+            用户原话：「为什么每次打开都是自动加载历史项目？可以变成直接加载空白画布吗？」
+            —— 打开即白纸，然后跟导演聊、定意图、开工。 */}
         {p.docError ? (
           <div className="stage-empty">
             <strong>画布数据读不到</strong>
@@ -176,6 +176,12 @@ export function CanvasPane(p: Props) {
         {/* 空项目的提示：**说人话**，别把给维护者看的话端上来。
             ⛔ 原文是 `canvasout` 的 warnings（含 `stills.json` /
             `SHORTDRAMA_VIDEO_REF_SOURCE` 这种变量名），那是排障用的，进 title 就够。 */}
+        {!hasPid ? (
+          <div className="stage-hint" title="跟导演聊完、点开工之后，这里会一格一格长出产物">
+            这是一张白纸，可以直接画（双击空白处新建节点）。
+            想让导演按你的想法生产，去右栏跟他说 —— 聊清楚了说「开工」。
+          </div>
+        ) : null}
         {hasPid && nodes === 0 && !p.docError ? (
           <div className="stage-hint" title={(p.doc?.warnings || []).join('\n')}>
             这一集还没有产物。下面这张画布**可以直接画**（双击空白处新建节点）；

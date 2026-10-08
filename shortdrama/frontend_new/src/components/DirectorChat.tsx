@@ -45,10 +45,15 @@ type Props = {
   onRedo: (target: string, note: string) => Promise<string | null>;
   splitter?: React.ReactNode;
   onCollapse?: () => void;
+  /** 有没有选中的项目。没有 = 打开时的白纸状态，对话要先开一个归属。 */
+  hasProject: boolean;
+  /** 「跟导演开一段新对话」= 建一个空白项目（用户无感：说话就开一张白纸）。 */
+  onStartNew: () => Promise<string | null>;
 };
 
 export function DirectorChat(p: Props) {
   const { splitter, onCollapse } = p;
+  const [newErr, setNewErr] = useState<string | null>(null);
   const [text, setText] = useState('');
   const [msg, setMsg] = useState<string | null>(null);
   const scroller = useRef<HTMLDivElement | null>(null);
@@ -105,7 +110,18 @@ export function DirectorChat(p: Props) {
       </div>
 
       <div className="chat-body" ref={scroller}>
-        {!turns.length ? (
+        {!p.hasProject ? (
+          <div className="chat-hero">
+            <h3>开一段新对话</h3>
+            <p>说一句你想拍什么就行 —— 会给你开一张白纸，聊清楚了打「开工」</p>
+            <button type="button" className="btn btn--sm btn--primary" style={{ marginTop: 12 }}
+                    disabled={p.busy}
+                    onClick={async () => setNewErr(await p.onStartNew())}>
+              {p.busy ? <span className="spin" /> : '开始新对话'}
+            </button>
+            {newErr ? <div className="inspector-log err">{newErr}</div> : null}
+          </div>
+        ) : !turns.length ? (
           <div className="chat-hero">
             <h3>先跟导演聊聊</h3>
             <p>聊清楚了，直接打「开工」两个字就行</p>
@@ -193,11 +209,15 @@ export function DirectorChat(p: Props) {
       </details>
 
       <div className="chat-input">
-        <textarea value={text} placeholder={p.chat?.busy ? '他正在跑这一步…' : '对导演说… 聊好了直接打「开工」'}
+        <textarea value={text}
+                  disabled={!p.hasProject}
+                  placeholder={!p.hasProject ? '先点上面的「开始新对话」'
+                    : p.chat?.busy ? '他正在跑这一步…' : '对导演说… 聊好了直接打「开工」'}
                   onChange={(e) => setText(e.target.value)}
                   onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void ask(); }} />
         <div className="chat-input-row">
-          <button type="button" className="btn btn--sm btn--primary" disabled={p.busy || !text.trim() || !!p.chat?.busy}
+          <button type="button" className="btn btn--sm btn--primary"
+                  disabled={p.busy || !p.hasProject || !text.trim() || !!p.chat?.busy}
                   title="Ctrl / ⌘ + Enter" onClick={() => void ask()}>发送</button>
           <span className="stage-spacer" />
           <button type="button" className="btn btn--sm btn--primary"
