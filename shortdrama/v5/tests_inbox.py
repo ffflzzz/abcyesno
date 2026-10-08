@@ -337,6 +337,41 @@ class TestRoutes(_Base):
         # 消息定向名单**仍然**可以有 director（那条走 HITL 通道，不是重置）
         self.assertIn("director", d["targets"])
 
+    def test_delete_works_when_projects_live_outside_the_code_tree(self):
+        """★ 打包版的目录布局（2026-10-08 用户实测事故）。
+
+        启动器把 `SHORTDRAMA_PROJECTS` / `SHORTDRAMA_RUNTIME` 指到 **userData**，
+        也就是**应用目录之外**。而言删除响应里那句
+        `str(dest.relative_to(config.PROJECT_ROOT))` 是在**文件已经移走之后**才拼的
+        ⇒ 抛 ValueError ⇒ **删成功了，界面却报"删除失败"**。
+        用户实测 3 次全中：`abc` / `paste-0920-2103` / `paste-0920-1949`
+        三个都安安静静躺在暂存区里，屏幕上是三条红字。
+
+        ⇒ 判据：项目/运行时**都在代码树之外**时，删除也必须 200。
+        """
+        from v5 import config as _cfg
+        import tempfile as _tf
+        with _tf.TemporaryDirectory() as td:
+            proj = Path(td) / "projects"
+            rt = Path(td) / "runtime"
+            code = Path(td) / "code"
+            (proj / "p1").mkdir(parents=True)
+            (proj / "p1" / "brief.json").write_text(
+                json.dumps({"topic": "x", "pack": "shortdrama", "episodes": 1},
+                           ensure_ascii=False), encoding="utf-8")
+            rt.mkdir(); (code / "v5").mkdir(parents=True)
+            with mock.patch.object(_cfg, "PROJECTS_DIR", proj),                  mock.patch.object(_cfg, "RUNTIME_ROOT", rt),                  mock.patch.object(_cfg, "PROJECT_ROOT", code):
+                from fastapi.testclient import TestClient
+                from v5 import server as _srv
+                c = TestClient(_srv.create_app(), raise_server_exceptions=False)
+                r = c.post("/v1/pixa/short-drama/projects/batch-delete",
+                           json={"project_ids": ["p1"]})
+            self.assertEqual(200, r.status_code, r.text)
+            self.assertEqual(["p1"], r.json()["data"]["deleted"])
+            self.assertFalse((proj / "p1").exists(), "东西该真的被移走")
+            self.assertTrue(list((rt / ".tmp" / "_deleted").rglob("p1")),
+                            "且能在暂存区里找到（可恢复）")
+
     def test_blank_project_route_makes_a_shell_without_calling_a_model(self):
         """空白项目：不调模型、秒级建壳（用户问"怎么快速新建空白项目"）。"""
         import json as _json

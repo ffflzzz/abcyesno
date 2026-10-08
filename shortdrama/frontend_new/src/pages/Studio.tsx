@@ -115,6 +115,19 @@ export function Studio() {
     return () => { stop = true; clearInterval(t); };
   }, [pid]);
 
+  /* ── 选中的项目在盘上没了 ⇒ 换一个 ──────────────────────────────
+     ⛔ 不这么兜的话，界面会**一直对着一个不存在的项目轮询** ——
+     2026-10-08 实测：删掉 `abc` 之后右栏每几秒刷一条「项目不存在：abc」，
+     而左栏那个选中态还是它（pid 存在 localStorage 里，跨会话活着）。
+     删自己（`deleteProject`）那条路会主动清 pid，但**别的窗口 / 命令行删的**
+     兜不到 —— 所以按"列表里还有没有它"来判，与谁删的无关。 */
+  useEffect(() => {
+    if (!projects.length) return;
+    if (pid && projects.some((x) => x.id === pid)) return;
+    setPid(projects[0].id);
+    setEp(1); setShot('');
+  }, [projects, pid]);
+
   /* ── 信箱（右栏 + 左栏的"等你确认"分组都读它）───────────────── */
   useEffect(() => {
     if (!pid) return;

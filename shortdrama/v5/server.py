@@ -154,6 +154,20 @@ def _resolve_sid(sid: str) -> tuple:
     return pid, ep, shot
 
 
+def _is_under(p, base) -> bool:
+    """`p` 是否在 `base` 之下（含相等）。**任何情况下都不抛**。
+
+    ⚠️ 别直接用 `Path.relative_to`：不在同一棵树下（打包版把 PROJECTS_DIR /
+    RUNTIME_ROOT 指到 userData，**在应用目录之外**）它会抛 `ValueError`。
+    `resolve()` 在跨盘符时也抛 —— 一并兜住。展示用的路径判断不值当让响应崩掉。
+    """
+    try:
+        Path(p).resolve().relative_to(Path(base).resolve())
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _resolve_static(pid: str, rel: str) -> Path:
     """静态文件路径。**两重防护**：pid 白名单 + resolve 后前缀校验 + 子树白名单。"""
     root = _resolve_pid(pid)
@@ -1220,7 +1234,15 @@ def create_app(base: str | None = None, web_root: str | None = None):
         return wm.envelope({
             "deleted": moved, "skipped": skipped,
             "cancelled_runs": cancelled,
-            "trash": str(dest.relative_to(config.PROJECT_ROOT).as_posix()),
+            # ★ 2026-10-08 实测事故：这里原是 `dest.relative_to(config.PROJECT_ROOT)`，
+            #   而 `dest` 在 `RUNTIME_ROOT` 下 —— **打包版**里 PROJECTS_DIR / RUNTIME_ROOT
+            #   都指向 userData（**应用目录之外**）⇒ `relative_to` 直接抛 ValueError。
+            #   要命的是这个值是在**文件已经移走之后**才拼的 ⇒
+            #   **删成功了，界面却报"删除失败"**（用户实测 3 次全中，
+            #   三个项目都安安静静躺在暂存区里）。⇒ 拿不到相对路径就回绝对路径，
+            #   一个展示用的字符串**不值当让整个响应崩掉**。
+            "trash": str(dest.relative_to(config.PROJECT_ROOT).as_posix()
+                         if _is_under(dest, config.PROJECT_ROOT) else dest),
             "note": "已移入暂存区（**可恢复**），未真正删除",
         })
 
