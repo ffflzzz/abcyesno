@@ -142,23 +142,28 @@ export function CanvasPane(p: Props) {
       </div>
 
       <div className="stage-canvas">
-        {hasPid ? (
+        {/* ⛔ 画布**没有节点时不挂 iframe**：`from=` 接口给的是空节点集，atelier 会
+            报一句错然后**回落到它自己的「画布库」页** —— 那页从我们的空态提示下面
+            透出来（实测截图里就是 "Infinite Atelier / 画布库" 压在提示底下）。
+            没东西就没东西，我们自己说清楚，别让它的库页当背景。 */}
+        {hasPid && nodes > 0 ? (
           <iframe key={p.pid + ':' + p.ep} title="画布"
                   src={`/atelier/canvas?from=${encodeURIComponent(apiUrl)}`} />
-        ) : (
-          <div className="stage-empty"><span>选一个项目</span></div>
-        )}
+        ) : null}
+        {hasPid && (!p.doc || !nodes) && !p.docError ? (
+          <div className="stage-empty">
+            <strong>{p.doc ? '这一集还没有产物' : '正在读盘上的产物…'}</strong>
+            <span>{p.doc ? (p.doc.warnings?.[0] || '盘上没有静帧、片段、定妆照或成片。') : ''}</span>
+          </div>
+        ) : null}
 
+        {!hasPid ? (
+          <div className="stage-empty"><span>到左栏选一个项目</span></div>
+        ) : null}
         {p.docError ? (
           <div className="stage-empty">
             <strong>画布数据读不到</strong>
             <span className="err">{p.docError}</span>
-          </div>
-        ) : null}
-        {hasPid && p.doc && !nodes ? (
-          <div className="stage-empty">
-            <strong>这一集还没有产物</strong>
-            <span>{p.doc.warnings?.[0] || '盘上没有静帧、片段、定妆照或成片。'}</span>
           </div>
         ) : null}
 

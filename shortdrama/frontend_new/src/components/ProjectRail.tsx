@@ -36,6 +36,9 @@ type Props = {
   onRename: (pid: string, name: string) => Promise<void>;
   onStop: (pid: string) => Promise<void>;
   onDelete: (pid: string) => Promise<void>;
+  /** 拖拽手柄（宿主渲染，贴在本栏内侧边缘） */
+  splitter?: React.ReactNode;
+  onCollapse?: () => void;
 };
 
 /** 自动质检开关：常驻项目栏顶（它管的是**接下来那次生成**的行为，值随请求走）。
@@ -70,7 +73,7 @@ function QcRow() {
 }
 
 export function ProjectRail({ projects, signals, pid, onPick, onNew, packs, ratios, busy,
-  runIds, onRename, onStop, onDelete }: Props) {
+  runIds, onRename, onStop, onDelete, splitter, onCollapse }: Props) {
   const [q, setQ] = useState('');
   const [creating, setCreating] = useState(false);
   const [topic, setTopic] = useState('');
@@ -125,11 +128,15 @@ export function ProjectRail({ projects, signals, pid, onPick, onNew, packs, rati
 
   return (
     <aside className="rail">
+      {splitter}
       <div className="rail-head">
         <span className="rail-title">项目</span>
         <span className="stage-spacer" />
         <button type="button" className="btn btn--sm btn--primary" disabled={busy}
                 onClick={() => setCreating((v) => !v)}>新建</button>
+        {onCollapse ? (
+          <button type="button" className="panel-x" title="收起项目栏" onClick={onCollapse}>‹</button>
+        ) : null}
       </div>
       <QcRow />
 
@@ -170,9 +177,7 @@ export function ProjectRail({ projects, signals, pid, onPick, onNew, packs, rati
       </div>
 
       <div className="rail-foot">
-        <a className="muted" style={{ textDecoration: 'none' }} href="./" target="_blank" rel="noreferrer">旧工作台</a>
-        <span className="stage-spacer" />
-        <span>{projects.length} 个</span>
+        <span>{projects.length} 个项目</span>
       </div>
     </aside>
   );

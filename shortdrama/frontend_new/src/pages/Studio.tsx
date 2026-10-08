@@ -22,6 +22,32 @@ import {
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
+/* ── 两栏的宽度 / 收起状态（记在本地，刷新后还在）───────────────────────
+   为什么要有：中栏是画布，左右两栏是辅助 —— 辅到一定程度人就该能把它们让开。
+   ⚠️ 拖拽期间要给 `body` 挂 class：否则鼠标划过 iframe 时事件被画布吃掉，
+      手柄会"跟丢"（拖到一半不动了）。 */
+const RAIL_MIN = 190, RAIL_MAX = 460, CHAT_MIN = 300, CHAT_MAX = 760;
+const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+const lsGet = (k: string, d: string) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } };
+const lsSet = (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* 隐私模式 */ } };
+
+function dragColumn(axis: 'rail' | 'chat', startX: number, startW: number,
+                    apply: (w: number) => void) {
+  document.body.classList.add('is-col-resizing');
+  const move = (e: PointerEvent) => {
+    const d = e.clientX - startX;
+    apply(axis === 'rail' ? startW + d : startW - d);
+  };
+  const up = () => {
+    document.body.classList.remove('is-col-resizing');
+    window.removeEventListener('pointermove', move);
+    window.removeEventListener('pointerup', up);
+  };
+  window.addEventListener('pointermove', move);
+  window.addEventListener('pointerup', up);
+}
+
+
 export function Studio() {
   const [health, setHealth] = useState<Health | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -39,6 +65,10 @@ export function Studio() {
   /** 和导演本人的对话（右栏主体）。**这是主表面，轮询给最快的 3 秒一档。** */
   const [chat, setChat] = useState<ChatState | null>(null);
   const [chatError, setChatError] = useState('');
+  const [railW, setRailW] = useState(() => clamp(Number(lsGet('sd.railW', '268')) || 268, RAIL_MIN, RAIL_MAX));
+  const [chatW, setChatW] = useState(() => clamp(Number(lsGet('sd.chatW', '420')) || 420, CHAT_MIN, CHAT_MAX));
+  const [railOpen, setRailOpen] = useState(() => lsGet('sd.railOpen', '1') === '1');
+  const [chatOpen, setChatOpen] = useState(() => lsGet('sd.chatOpen', '1') === '1');
   const [busy, setBusy] = useState(false);
   const [toasts, setToasts] = useState<{ id: number; text: string; bad?: boolean }[]>([]);
   const [manualSteps, setManualSteps] = useState(true);
@@ -283,14 +313,38 @@ export function Studio() {
     );
   }
 
+  const cls = 'studio' + (railOpen ? '' : ' studio--no-rail') + (chatOpen ? '' : ' studio--no-chat');
+  const railSplit = (
+    <div className="split split--right" title="拖动调整宽度"
+         onPointerDown={(e) => {
+           e.preventDefault();
+           dragColumn('rail', e.clientX, railW, (w) => {
+             const n = clamp(w, RAIL_MIN, RAIL_MAX);
+             setRailW(n); lsSet('sd.railW', String(n));
+           });
+         }} />
+  );
+  const chatSplit = (
+    <div className="split split--left" title="拖动调整宽度"
+         onPointerDown={(e) => {
+           e.preventDefault();
+           dragColumn('chat', e.clientX, chatW, (w) => {
+             const n = clamp(w, CHAT_MIN, CHAT_MAX);
+             setChatW(n); lsSet('sd.chatW', String(n));
+           });
+         }} />
+  );
+
   return (
-    <div className="studio">
+    <div className={cls} style={{ '--rail-w': railW + 'px', '--chat-w': chatW + 'px' } as React.CSSProperties}>
       <ProjectRail projects={projects} signals={signals} pid={pid}
                    packs={health.packs || []} ratios={health.ratio_choices || []}
                    busy={busy} onPick={(v) => { setPid(v); setEp(1); setShot(''); }}
                    onNew={createProject}
                    runIds={runIds} onRename={renameProject}
-                   onStop={stopRun} onDelete={deleteProject} />
+                   onStop={stopRun} onDelete={deleteProject}
+                   splitter={railSplit}
+                   onCollapse={() => { setRailOpen(false); lsSet('sd.railOpen', '0'); }} />
 
       <CanvasPane pid={pid || '-'} name={projects.find((x) => x.id === pid)?.name}
                   ep={ep} doc={doc} docError={docError}
@@ -309,7 +363,19 @@ export function Studio() {
                     inbox={inbox} inboxError={inboxError} busy={busy} mine={mineIds}
                     manualSteps={manualSteps} onManualSteps={setManualSteps}
                     onAsk={ask} onStart={beginProduction}
-                    onSend={send} onDecide={decide} onRedo={redo} />
+                    onSend={send} onDecide={decide} onRedo={redo}
+                    splitter={chatSplit}
+                    onCollapse={() => { setChatOpen(false); lsSet('sd.chatOpen', '0'); }} />
+
+      {/* 收起后重新打开的小把手（贴对应边居中） */}
+      {!railOpen ? (
+        <button type="button" className="reopen reopen--left" title="展开项目栏"
+                onClick={() => { setRailOpen(true); lsSet('sd.railOpen', '1'); }}>›</button>
+      ) : null}
+      {!chatOpen ? (
+        <button type="button" className="reopen reopen--right" title="展开导演对话"
+                onClick={() => { setChatOpen(true); lsSet('sd.chatOpen', '1'); }}>‹</button>
+      ) : null}
 
       <div className="toast">
         {toasts.map((t) => <div key={t.id} data-t={t.bad ? 'bad' : 'ok'}>{t.text}</div>)}

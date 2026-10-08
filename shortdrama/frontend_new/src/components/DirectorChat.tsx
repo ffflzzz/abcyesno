@@ -27,6 +27,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ChatState, InboxState } from '../lib/studio';
 import { ROLE_ZH, hhmm } from '../lib/studio';
+import { Markdown } from '../lib/md';
 
 type Props = {
   chat: ChatState | null;
@@ -42,9 +43,12 @@ type Props = {
   onSend: (text: string, to: string) => Promise<{ err: string | null; id?: number }>;
   onDecide: (decision: string, target: string, note: string) => Promise<string | null>;
   onRedo: (target: string, note: string) => Promise<string | null>;
+  splitter?: React.ReactNode;
+  onCollapse?: () => void;
 };
 
 export function DirectorChat(p: Props) {
+  const { splitter, onCollapse } = p;
   const [text, setText] = useState('');
   const [msg, setMsg] = useState<string | null>(null);
   const scroller = useRef<HTMLDivElement | null>(null);
@@ -81,6 +85,7 @@ export function DirectorChat(p: Props) {
 
   return (
     <aside className="chat">
+      {splitter}
       <div className="chat-head">
         <span className="rail-title">导演</span>
         <span className="chat-state">
@@ -92,6 +97,9 @@ export function DirectorChat(p: Props) {
           <input type="checkbox" checked={p.manualSteps}
                  onChange={(e) => p.onManualSteps(e.target.checked)} /> 逐步确认
         </label>
+        {onCollapse ? (
+          <button type="button" className="panel-x" title="收起对话栏" onClick={onCollapse}>›</button>
+        ) : null}
       </div>
 
       <div className="chat-body" ref={scroller}>
@@ -104,7 +112,7 @@ export function DirectorChat(p: Props) {
 
         {turns.map((t, i) => (
           <div key={i} className={'msg ' + (t.role === 'user' ? 'msg--me' : 'msg--sys')}>
-            {t.text}
+            {t.role === 'user' ? t.text : <Markdown text={t.text} />}
             <span className="msg-meta">{hhmm(t.at)}</span>
           </div>
         ))}
