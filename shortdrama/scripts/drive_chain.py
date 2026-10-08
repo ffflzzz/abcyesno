@@ -606,6 +606,12 @@ async def main() -> int:
             d = _dec.parse_decision(p.read_text(encoding="utf-8"))
             if not d:
                 return None, None
+            # ★ 程序数得出来的分镜契约违规先并进判决（1008 ep2：reviewer 把
+            #   「audio_mode=dialogue-led 却 0 台词」记进 advisory 后判 pass: true ⇒
+            #   驱动器以为链已完成，直到渲染才被分镜契约门拦下）。判据只有一份，
+            #   写在 `roles.enforce_deterministic_verdict`。
+            from v5.roles import enforce_deterministic_verdict
+            d = enforce_deterministic_verdict(d, root, ep)
             return bool(_dec.normalize_pass(d)), d
         except Exception as e:  # noqa: BLE001 -- 判不了就交给门，但必须说出口
             print("[drive] ⚠️ 评审判决解析失败（%s: %s）→ 本轮不据此打回"

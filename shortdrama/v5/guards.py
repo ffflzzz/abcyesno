@@ -144,6 +144,11 @@ def reconcile_manifest(root: Path, m: dict | None = None,
             from . import decision
             dec = decision.parse_decision(rev_path.read_text(encoding="utf-8"))
             if dec:
+                # ★ 程序数得出来的分镜契约违规先并进判决（判据一份，见
+                #   `roles.enforce_deterministic_verdict`）：否则「reviewer 说 pass、
+                #   分镜 0 台词」这种组合会让媒体门放行、然后撞在渲染时的分镜契约门上。
+                from .roles import enforce_deterministic_verdict
+                dec = enforce_deterministic_verdict(dec, root, ep)
                 rev = m.setdefault("review", {})
                 rev["passed"] = decision.normalize_pass(dec)
                 rev["rerun"] = dec.get("rerun") or []

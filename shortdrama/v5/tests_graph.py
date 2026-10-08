@@ -286,11 +286,13 @@ class TestDefectGrading(unittest.TestCase):
         self.assertEqual(len(d["advisory"]), 1)
 
     def test_hard_defect_is_not_downgraded(self):
-        """顺序契约：确定性缺陷先写入 reasons，normalize_pass 不得把它放行。
+        """给定 reasons 已写入时，`normalize_pass` 不得因"只剩 advisory"而放行。
 
-        锁住 roles.py 里的调用顺序——`_audio_mode_defect` 必须在
-        `normalize_pass` **之前**执行，否则"仅有 advisory"的判定会误放行
-        一个真正违规的分镜。
+        ⚠️ 本用例**只测 normalize_pass 这一半**（它手工模拟注入）。
+        「谁把缺陷写进 reasons、`pass: true` 怎么办」的接线锁在
+        `TestDeterministicVerdictOverride` —— 这里曾经自称锁住调用顺序，
+        实际上调用点一个都没有（1008 实测：缺陷判据只接在渲染时的门上，
+        创作链照样带着 0 台词的表收工）。
         """
         d = decision.parse_decision(
             '```yaml\npass: false\nrerun: []\nadvisory:\n  - x\n```')
@@ -457,18 +459,22 @@ class TestAudioModeGate(unittest.TestCase):
     HEAD = ("| 镜头号 | 景别 | 角度 | 运镜 | 时长(秒) | 画面描述 | 对白 | 音效 |\n"
             "|---|---|---|---|---|---|---|---|\n")
 
+    @staticmethod
+    def _rows(n_line: int, n_total: int) -> str:
+        out = []
+        for i in range(1, n_total + 1):
+            dlg = "「台词%d」" % i if i <= n_line else "（无声，环境音）"
+            out.append("| %d | 中景 | 平视 | 固定 | %d | 陈默在低模出租屋里做出第%d个动作 | %s | 风声 |"
+                       % (i, 6 + i, i, dlg))
+        return "\n".join(out)
+
     def _root(self, d: str, audio_mode: str, n_line: int, n_total: int) -> Path:
         root = Path(d)
         (root / "scenedesigner").mkdir(parents=True, exist_ok=True)
         (root / "brief.json").write_text(
             json.dumps({"audio_mode": audio_mode}, ensure_ascii=False), encoding="utf-8")
-        rows = []
-        for i in range(1, n_total + 1):
-            dlg = "「台词%d」" % i if i <= n_line else "（无声，环境音）"
-            rows.append("| %d | 中景 | 平视 | 固定 | %d | 陈默在低模出租屋里做出第%d个动作 | %s | 风声 |"
-                        % (i, 6 + i, i, dlg))
         (root / "scenedesigner" / "scenedesigner.md").write_text(
-            self.HEAD + "\n".join(rows), encoding="utf-8")
+            self.HEAD + self._rows(n_line, n_total), encoding="utf-8")
         return root
 
     def test_dialogue_led_zero_lines_is_defect(self):
@@ -507,6 +513,121 @@ class TestAudioModeGate(unittest.TestCase):
     def test_no_storyboard_is_not_a_defect(self):
         with tempfile.TemporaryDirectory() as d:
             self.assertEqual(roles._audio_mode_defect(Path(d)), "")
+
+    def test_ep_is_threaded_to_the_right_table(self):
+        """★ 集号必须传到底：ep1 有台词、ep2 没台词 ⇒ 只有 ep2 判违规。
+
+        旧实现 `resolve_path(root, "scenedesigner")` 不带 ep（取 manifest 的
+        `episode_index`）⇒ 连载时数的是**别一集**的表。
+        """
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "brief.json").write_text(
+                json.dumps({"audio_mode": "dialogue-led"}, ensure_ascii=False),
+                encoding="utf-8")
+            sd = root / "scenedesigner"
+            sd.mkdir(parents=True)
+            (sd / "scenedesigner_ep1.md").write_text(
+                self.HEAD + self._rows(3, 4), encoding="utf-8")
+            (sd / "scenedesigner_ep2.md").write_text(
+                self.HEAD + self._rows(0, 4), encoding="utf-8")
+            self.assertEqual(roles._audio_mode_defect(root, ep=1), "")
+            self.assertIn("0/4", roles._audio_mode_defect(root, ep=2))
+
+
+class TestDeterministicVerdictOverride(unittest.TestCase):
+    """程序数得出来的分镜契约违规，要**并进评审判决**（而不是等渲染时撞门）。
+
+    实测 1008 `yuxuan-duanfeng-1007` ep2：brief `audio_mode=dialogue-led`、
+    分镜 **0/8 镜有台词**，`check_storyboard` 早就算出 `dialogue_short=True`，
+    可它只接在渲染时的分镜契约门上；reviewer 把冲突记进 **advisory** 判了
+    `pass: true` ⇒ 驱动器按"链已完成"收工，媒体链开跑后才被拦下（白等一整段）。
+    """
+
+    HEAD = TestAudioModeGate.HEAD
+    _rows = staticmethod(TestAudioModeGate._rows)
+
+    def _root(self, d: str, audio_mode: str, n_line: int, n_total: int) -> Path:
+        root = Path(d)
+        (root / "scenedesigner").mkdir(parents=True, exist_ok=True)
+        (root / "brief.json").write_text(
+            json.dumps({"audio_mode": audio_mode}, ensure_ascii=False), encoding="utf-8")
+        (root / "scenedesigner" / "scenedesigner_ep1.md").write_text(
+            self.HEAD + self._rows(n_line, n_total), encoding="utf-8")
+        return root
+
+    PASS_TRUE = '```yaml\npass: true\nrerun: []\nreason_owners: []\nreasons: []\n' \
+                'advisory:\n  - "audio_mode 与禁忌冲突，本集按 silent 走，brief 层需定夺"\n```'
+
+    def test_pass_true_is_overridden_and_routed_upstream(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = self._root(d, "dialogue-led", 0, 8)
+            dec = decision.parse_decision(self.PASS_TRUE)
+            self.assertTrue(decision.normalize_pass(dec), "夹具本身须复现「评审判过」")
+            out = roles.enforce_deterministic_verdict(dec, root, ep=1)
+            self.assertFalse(out["pass"], "0 台词却没翻下 pass ⇒ 驱动器照样不会打回")
+            self.assertFalse(decision.normalize_pass(out))
+            self.assertIn("音频模式违规", "；".join(out["reasons"]))
+            # 只有 scriptwriter 能创造台词（dialogue 是搬运器、scenedesigner 抄表）
+            self.assertIn("scriptwriter", out["rerun"])
+            self.assertEqual(decision.resolve_target(out), "scriptwriter")
+
+    def test_enough_dialogue_changes_nothing(self):
+        """反向对照：台词达标 ⇒ 判决对象**一字不变**（连对象都是同一个）。"""
+        with tempfile.TemporaryDirectory() as d:
+            root = self._root(d, "dialogue-led", 3, 4)
+            dec = decision.parse_decision(self.PASS_TRUE)
+            self.assertIs(roles.enforce_deterministic_verdict(dec, root, ep=1), dec)
+
+    def test_silent_project_is_not_touched(self):
+        """前提不存在（本就要无声）⇒ 不改判决，否则会拦住所有无声片。"""
+        with tempfile.TemporaryDirectory() as d:
+            root = self._root(d, "silent", 0, 4)
+            dec = decision.parse_decision(self.PASS_TRUE)
+            self.assertIs(roles.enforce_deterministic_verdict(dec, root, ep=1), dec)
+
+    def test_reviewer_upstream_target_still_wins(self):
+        """评审若点名更上游（plotdesigner），照旧取上游 —— 补的条目不抢方向。"""
+        with tempfile.TemporaryDirectory() as d:
+            root = self._root(d, "dialogue-led", 0, 8)
+            dec = decision.parse_decision(
+                '```yaml\npass: false\nrerun: [plotdesigner]\nreasons:\n  - 四幕缺转折\n```')
+            out = roles.enforce_deterministic_verdict(dec, root, ep=1)
+            self.assertEqual(decision.resolve_target(out), "plotdesigner")
+            self.assertTrue(any("音频模式违规" in x for x in out["reasons"]))
+
+    def test_applying_twice_does_not_duplicate(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = self._root(d, "dialogue-led", 0, 8)
+            out = roles.enforce_deterministic_verdict(
+                decision.parse_decision(self.PASS_TRUE), root, ep=1)
+            again = roles.enforce_deterministic_verdict(out, root, ep=1)
+            self.assertEqual(len(again["reasons"]), 1)
+            self.assertEqual(again["rerun"].count("scriptwriter"), 1)
+
+    def test_original_decision_is_not_mutated(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = self._root(d, "dialogue-led", 0, 8)
+            dec = decision.parse_decision(self.PASS_TRUE)
+            roles.enforce_deterministic_verdict(dec, root, ep=1)
+            self.assertTrue(dec["pass"], "返回新 dict —— 原判决被改会让调用方读到脏值")
+
+    def test_media_gate_now_sees_the_same_verdict(self):
+        """端到端：`reconcile_manifest` 补记的 `review.passed` 与驱动器一致。
+
+        否则会出现「驱动器以为没过、门说过了」这种两头都对不上的局面。
+        """
+        with tempfile.TemporaryDirectory() as d:
+            root = self._root(d, "dialogue-led", 0, 8)
+            (root / "reviewer").mkdir(parents=True)
+            (root / "reviewer" / "review_ep1.md").write_text(self.PASS_TRUE, encoding="utf-8")
+            m = {"phases": {r: "complete" for r in guards.GATE_ROLES},
+                 "episode_index": 1}
+            guards.reconcile_manifest(root, m, ep=1)
+            self.assertFalse((m.get("review") or {}).get("passed"))
+            ok, why = guards.media_gate("render", m, ep=1, root=root)
+            self.assertFalse(ok, "0 台词的分镜照样放行进渲染 = 这条链没有闸")
+            self.assertIn("评审未通过", why)
 
 
 class TestRoleInputAudioMode(unittest.TestCase):

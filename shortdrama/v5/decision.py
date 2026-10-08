@@ -371,8 +371,12 @@ def normalize_pass(dec: dict) -> bool:
       · 无 `reasons`、有 `advisory` → **视为通过**（只有建议，不阻断）
       · 两者都空且 `pass: false`    → 仍打回（说不通过却没给理由，保守处理）
 
-    **调用约定**：必须**先**跑确定性缺陷检查（如 `graph._audio_mode_defect`）——
-    它会把问题写进 `dec["reasons"]`，于是本函数不会误放行。
+    **调用约定**：确定性缺陷检查必须在它之前，并且**必须一起把 `pass` 翻下来**。
+    只往 `dec["reasons"]` 里写一条是**无效**的（2026-10-08 更正）——本函数见
+    `pass: true` 第一行就返回 True，reasons 一个字都不读。
+    旧文档写着"它会把问题写进 reasons，于是本函数不会误放行"，实测那次
+    （`yuxuan-duanfeng-1007` ep2：reviewer 判 pass、分镜 0/8 镜有台词）正是靠
+    `pass: true` 把违规放了过去。实现见 `roles.enforce_deterministic_verdict`。
     """
     if dec.get("pass"):
         return True

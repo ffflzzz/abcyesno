@@ -209,9 +209,17 @@ brief 是外部 Agent 唯一的强杠杆——它决定"拍什么"，而画质�
    **不校验 brief 本身好不好**。烂 brief 被忠实执行 = 烂成片，门照样过
    ——质量责任在外部 Agent 一侧。
 3. **`audio_mode` 会真的生效**：开工前注入 `dialogue` / `scenedesigner` 的输入，
-   reviewer 节点按分镜对白列做**确定性**校验——`dialogue-led` 而台词镜占比 <20%
-   直接判不通过并回退 scenedesigner；`silent` 却有台词同样回退。
+   **并且**程序按分镜对白列做**确定性**校验（`roles.enforce_deterministic_verdict`；
+   调用点 `drive_chain.review_state` + `guards.reconcile_manifest`）——
+   `dialogue-led` 而台词镜占比 <20% ⇒ **把 reviewer 的 `pass: true` 翻成 false**、
+   打回 **`scriptwriter`**（唯一能创造台词的角色：`dialogue` 逐字搬运、`scenedesigner` 抄表，
+   实测两者都拒绝替上游补写）；`silent` 却有台词同样回退。
    占比 20%~50% 只警告不阻断。违规会回退，**不会静默放行**。
+   ⚠️ **brief 自己矛盾时这条拦不住**（1008 实测 `yuxuan-duanfeng-1007` ep2）：
+   `audio_mode: dialogue-led` 与 `禁忌` 里一句「无人说话（全片 silent）」并存 ⇒
+   三级搬运一起交出**空对白列**，重做也只是原样交回。
+   写 dialogue-led 时必须把 `禁忌` 里"无声/无口型"那类条目**删掉**——
+   `禁忌` 同时是**成片复核的硬伤判据**，留着它会把口型本身判成硬伤。
 
 ### 字段表
 

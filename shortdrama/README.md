@@ -194,8 +194,18 @@ python -m v5.series <项目名> --monitor --events 12     # 最多 12 次快照
 
 生效点有三处，缺一不可：
 
-1. **开工前注入**（`graph.role_input`）——给 `dialogue` / `scenedesigner` 的输入里写死硬性要求；
-2. **事后确定性校验**（`graph._audio_mode_defect`，reviewer 节点调用）——违规直接判不通过并回退 `scenedesigner`；
+1. **开工前注入**（`roles.role_input`）——给 `dialogue` / `scenedesigner` 的输入里写死硬性要求；
+2. **判决侧确定性覆盖**（`roles.enforce_deterministic_verdict`，判据是同一个
+   `roles._audio_mode_defect`）——违规时把 reviewer 的 `pass: true` **翻成 false** 并补进
+   `reasons`，回退目标 `scriptwriter`。调用点两处，读到判决的地方都必须过它，否则两头对不上：
+   · `scripts/drive_chain.review_state` ⇒ 驱动器**当场打回重做**（不等渲染）；
+   · `guards.reconcile_manifest` ⇒ 媒体门读的 `review.passed` 与判决同源。
+   ⚠️ 只往 `reasons` 里加一条是**无效**的：`decision.normalize_pass` 见 `pass: true` 直接返回
+   True、压根不看 reasons。
+   ⚠️ 为什么回退 `scriptwriter` 而不是 `scenedesigner`：`dialogue` 是逐字搬运器、
+   `scenedesigner` 抄表，实测两者都拒绝替上游补写台词
+   （1008 `yuxuan-duanfeng-1007` ep2：`dialogue_ep2.md` 整篇写着「须回到 scriptwriter 解决」，
+   而 reviewer 把冲突记进 **advisory** 后判 `pass: true` ⇒ 链以为已完成、直到渲染才被门拦下）。
 3. **续跑路径同判据**（`series._storyboard_gate`）——`STORYBOARD-REJECT` 里包含该条。
 
 > 历史教训：`audio_mode` 曾是**空转字段**（只在字段名白名单里，无人消费）。实测 paperface-2（0/19）与 umbrella（0/9）brief 写着 `dialogue-led` 却全片无声，成片被用户当场退回。

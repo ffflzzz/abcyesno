@@ -1046,14 +1046,17 @@ def role_input(role: str, root: Path, m: dict, reasons: list[str] | None = None)
 # ─── 分镜音频模式守卫（2026-09-12 从 graph.py 迁入：媒体链的 storyboard gate 依赖它）──
 
 
-def _audio_mode_defect(root: Path) -> str:
+def _audio_mode_defect(root: Path, ep: int | None = None) -> str:
     """分镜是否违反 brief 的音频模式（返回问题描述，合规则空串）。
 
     只做**确定性**判定，不看模型评审意见：
       · dialogue-led 但台词镜占比 < DIALOGUE_MIN_RATIO → 回退
       · silent 但有台词镜 → 回退（反向漏检同样会让成片跑偏）
+
+    ⚠️ `ep` 要传（2026-10-08 补）：不传时 `resolve_path` 取 manifest 的
+      `episode_index`，连载时那一格会随渲染推进变化 ⇒ 判的是**别一集**的表。
     """
-    sb = guards.resolve_path(root, "scenedesigner")   # M1：集级路径，读走兼容解析
+    sb = guards.resolve_path(root, "scenedesigner", ep)   # M1：集级路径，读走兼容解析
     if not sb.exists():
         return ""
     try:
@@ -1075,3 +1078,75 @@ def _audio_mode_defect(root: Path) -> str:
         return ("音频模式违规：brief.audio_mode=silent，但分镜有 %d 镜带台词——"
                 "对白列应统一写「（无声，环境音）」" % r["spoken_shots"])
     return ""
+
+
+#: 「全片没有台词」该打回谁 —— **只有 scriptwriter 能创造台词**。
+#: `dialogue` 是逐字搬运器、`scenedesigner` 抄表，实测两者都明确拒绝替上游补写：
+#: 1008 `yuxuan-duanfeng-1007` ep2 的 `dialogue_ep2.md` 整篇写的就是
+#: 「这是上游与 brief 的矛盾，须回到 scriptwriter 解决（我无权在提取层修台词）」。
+#: ⚠️ 为什么不「先去数上游有没有台词」（那样能少跑两个角色）：scriptwriter 是散文体，
+#: `名字：` 形式的说明行与真台词在文本层分不开 —— 实测 86 个 (项目,集) 里，
+#: `audio_mode=silent` 的项目照样数得出 33–40 行「像台词」的行。判宽了会把责任错派给
+#: `scenedesigner`，reroll 交回一张同样空的对白列 = 整轮白烧。取最上游多跑两个角色，
+#: 但一定会真的修。
+_DIALOGUE_ORIGIN = "scriptwriter"
+
+
+def deterministic_storyboard_defects(root: Path, ep: int | None = None) -> list[str]:
+    """**程序数得出来**的分镜契约违规（评审判决必须带上，判据只留这一份）。
+
+    目前只有音频模式一条。加新条目时的两条要求：
+      · 纯确定性（不送模型、不读模型意见）；
+      · 它在**独演镜 / 收势镜 / 空镜**上也成立 —— 否则会把合格的分镜钉在门外
+        （1008 实测：按「对手类」判据判无对手的独演镜，一条链空转 1 小时 42 分零出片）。
+    """
+    d = _audio_mode_defect(root, ep)
+    return [d] if d else []
+
+
+def enforce_deterministic_verdict(dec: dict, root: Path,
+                                  ep: int | None = None) -> dict:
+    """把 `deterministic_storyboard_defects` 并进评审判决。无违规 ⇒ **原对象返回**（零副作用）。
+
+    ## 为什么必须并到**判决**上，而不是只在渲染时拦（2026-10-08 实测 ep2）
+
+    `brief.audio_mode=dialogue-led`、分镜 **0/8 镜有台词**。程序判据
+    `validate.check_storyboard` 早就算出 `dialogue_short=True`，但它只接在
+    `series.storyboard_gate`（**渲染时**）上。评审侧读的是 reviewer 自己的判定块，
+    而 reviewer 把「audio_mode 与禁忌冲突」记进 **advisory** 后判了 `pass: true`
+    ⇒ 驱动器按"链已完成"收工、界面看着成功，直到媒体链开跑才被门拦下 ——
+    等待一整段渲染时间，然后零出片。
+
+    ⇒ 一条判据要么在创作链里就生效（打回重做），要么就得承认它只会在最后炸。
+      这里选前者：**能数的东西不由模型的 `pass` 定生死**。
+      （与 `shotcheck.filter_contradicted_blocks` 是同一枚硬币的两面：那里驳回
+        「模型条目与盘上事实矛盾」，这里补上「模型漏判的程序条目」。）
+
+    ⚠️ 必须一起把 `pass` 翻下来：`decision.normalize_pass` 见 `pass: true` **直接返回
+      True**、压根不看 `reasons` —— 只往 reasons 里加一条是无效的（旧文档那句
+      「先跑确定性检查写进 reasons，本函数就不会误放行」只在 `pass` 为假时成立）。
+    """
+    if not isinstance(dec, dict) or not dec:
+        return dec
+    defects = deterministic_storyboard_defects(root, ep)
+    if not defects:
+        return dec
+    out = dict(dec)
+    reasons = list(out.get("reasons") or [])
+    out["reasons"] = reasons + [d for d in defects if d not in reasons]
+    # 责任角色：rerun 与 owners 都补，`resolve_target` 取两者里**更上游**的那个，
+    # 所以评审若已点名 plotdesigner（更上游），照旧听它的。
+    for key in ("rerun", "owners"):
+        lst = list(out.get(key) or [])
+        if _DIALOGUE_ORIGIN not in lst:
+            lst.append(_DIALOGUE_ORIGIN)
+        out[key] = lst
+    if out.get("pass"):
+        out["pass"] = False
+        print("[verdict] !! 评审判 pass: true，但**程序数出来的分镜契约违规**覆盖了它：%s"
+              % "；".join(str(x)[:90] for x in defects), flush=True)
+        print("           → 按打回 `%s` 处理（它是唯一能创造台词的角色）及其下游。"
+              % _DIALOGUE_ORIGIN, flush=True)
+        print("           ⚠️ 若 brief 自身矛盾（`audio_mode` 与 `禁忌` 对冲），重做也会"
+              "原样交回空对白列 —— 先修 brief.json 再重跑。", flush=True)
+    return out
