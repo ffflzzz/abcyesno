@@ -19,7 +19,9 @@
 1. **brief 门**（`_brief_gate`）—— 缺必填字段 → `BRIEF-REJECT`
 2. **分镜契约门**（`_storyboard_gate`）—— 缺列 / 镜序错乱 / 空对白 / 要求画内文字 /
    未覆盖 `must_have` / 违反 `audio_mode` / **镜内节拍不自洽**（写了 `0-2秒：` 分段的镜
-   必须从 0 起、首尾相接、终于本镜时长）→ `STORYBOARD-REJECT`
+   必须从 0 起、首尾相接、终于本镜时长；其中「起点与上一段终点差一个数」这种**纯算术**
+   断裂由代码重排后再判，`SHORTDRAMA_BEAT_AUTOFIX=0` 可关，见 README §6）
+   → `STORYBOARD-REJECT`
 3. **资产契约门**（`_assets_gate`）—— 分镜点名的角色在资产注册表里没有身份锚点 → 阻断
    （纯道具 / 空镜项目不适用）
 

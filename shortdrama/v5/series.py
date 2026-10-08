@@ -541,7 +541,22 @@ def _storyboard_gate(root: Path, brief: dict, ep: int | None = None) -> None:
                 brief = _json.loads(bp.read_text(encoding="utf-8"))
             except Exception:  # noqa: BLE001
                 print("[storyboard] ⚠️ brief.json 解析失败 → 覆盖率与片长两条判据跳过")
-    r = validate.check_storyboard(sb.read_text(encoding="utf-8"), brief, ep=ep)
+    # ★ 镜内节拍的**算术断裂**先由代码重排（写回盘上，pack 与门读同一份）。
+    #   边界与理由见 `media.storyboard.repair_beat_continuity`；`SHORTDRAMA_BEAT_AUTOFIX=0`
+    #   时整段跳过 ⇒ 行为与改造前一字不变（照旧由下面的 beat_violations 拦）。
+    from v5.media import storyboard as _sbmod
+    _md = sb.read_text(encoding="utf-8")
+    if config.BEAT_AUTOFIX:
+        _fixed, _ch = _sbmod.repair_beat_continuity(_md)
+        if _ch:
+            sb.write_text(_fixed, encoding="utf-8")
+            _md = _fixed
+            print("[storyboard] ⚠️ 镜内节拍的算术断裂已按「起点=上一段终点」重排 %d 处"
+                  "（**只改数字，内容一字未动**；SHORTDRAMA_BEAT_AUTOFIX=0 可关）："
+                  % len(_ch))
+            for _c in _ch:
+                print("           · " + _c)
+    r = validate.check_storyboard(_md, brief, ep=ep)
 
     fatal = []
     if r["missing_cols"]:

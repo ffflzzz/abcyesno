@@ -338,3 +338,84 @@ def parse(md: str) -> list[dict]:
             "act_label": cell(i_act),
         })
     return shots
+
+
+def repair_beat_continuity(md: str) -> tuple[str, list[str]]:
+    """把**镜内节拍的首尾断裂**按算术改成"首尾相接"（只动起点数字，内容一字不改）。
+
+    ★ 为什么由代码做（2026-10-08 实测 `yuxuan-duanfeng-1007` 第 2 集）：
+      分镜要写「12 秒 / 8-12 段」，镜1 第三段写成 `2.5-4.5秒：`（上一段终点是 3）。
+      这是一处**纯算术**笔误，而时间轴是渲染层硬依赖（pack 提示词按节拍做全局
+      重映射，断链会让两镜抢同一秒）。**打回两轮都没修**：第一轮原样交回，
+      第二轮改完仍然是 2.5 ⇒ 让模型反复做加法不是契约，是空转。
+      同一条原则已在别处落地（AGENTS.md：「能由代码确定做到的事不该反复要求模型」）。
+
+    ⛔ 只修一种形状，其余一律原样交回给门判：
+      · 第 i≥1 段的起点 ≠ 上一段的终点，**且**改成上一段终点后仍满足 起点 < 本段终点；
+      · 不动第一段的起点（"必须从 0 起"是作者的决定，推不出来）；
+      · 不动任何**终点**（终点=作者给的节拍长度，动它等于改戏）；
+      · 会让本段塌缩（起点 ≥ 终点）的**不修** —— 那要挑一段来牺牲，属语义判断；
+      · 只动「画面描述」那一列（表头认不出 ⇒ 整表不动）。
+
+    返回 `(新文本, 变更说明)`；没有可修的断裂时原样返回（调用方可据此零改动）。
+    """
+    lines = md.splitlines(keepends=True)
+    headers: list[str] = []
+    vis_idx: int | None = None
+    changes: list[str] = []
+    out: list[str] = []
+    for raw in lines:
+        line = normalize_table_line(raw.strip())
+        if not line.startswith("|") or _SEP_RE.match(line):
+            out.append(raw)
+            continue
+        cells = [c.strip() for c in line.split("|")]
+        if not headers:
+            if _col(cells, "画面") is None:
+                out.append(raw)          # 不是表头，也不修（下一行再试）
+                continue
+            headers = cells
+            vis_idx = _col(headers, "画面")
+            out.append(raw)
+            continue
+        # 数据行
+        if vis_idx is None or vis_idx >= len(cells) or len(cells) < 3:
+            out.append(raw)
+            continue
+        cell = cells[vis_idx]
+        new_cell, item = _repair_cell_beats(cell, cells[1] if len(cells) > 1 else "?")
+        if item and cell in raw:
+            # ★ 只在原文里**就地替换那一段单元格**：整行重建会把模型的列间空格、
+            #   崩坏行的格数一起"修"掉 —— 那不是本次变更要碰的东西。
+            out.append(raw.replace(cell, new_cell, 1))
+            changes.append(item)
+        else:
+            out.append(raw)
+    return "".join(out), changes
+
+
+def _repair_cell_beats(cell: str, shot_id: str) -> tuple[str, str]:
+    """单个「画面描述」单元格的节拍起点重排。返回 `(新单元格, 变更说明)`（无变更则原串+空串）。"""
+    marks = list(_BEAT_RE.finditer(cell))
+    if len(marks) < 2:
+        return cell, ""
+    fixes: list[tuple[int, int, str]] = []     # (start_off, end_off, 新起点文本)
+    notes: list[str] = []
+    for i in range(1, len(marks)):
+        prev_end = _beat_num(marks[i - 1].group(2))
+        m = marks[i]
+        start = _beat_num(m.group(1))
+        end = _beat_num(m.group(2))
+        if abs(float(start) - float(prev_end)) <= _BEAT_EPS:
+            continue                          # 本来就相接
+        if float(prev_end) >= float(end) - _BEAT_EPS:
+            break                             # 会塌缩 ⇒ 后面的段一并交给门判，不猜
+        fixes.append((m.start(1), m.end(1), beat_label(prev_end)))
+        notes.append("%s 第%d段起点 %s→%s 秒" % (shot_id, i + 1,
+                                                beat_label(start), beat_label(prev_end)))
+    if not fixes:
+        return cell, ""
+    new = cell
+    for a, b, txt in reversed(fixes):
+        new = new[:a] + txt + new[b:]
+    return new, "；".join(notes)

@@ -181,3 +181,115 @@ class TestSceneColumn(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestBeatContinuityRepair(unittest.TestCase):
+    """镜内节拍的**算术断裂**由代码重排起点（2026-10-08 实测，打回两轮没修）。
+
+    真实形状取自 `yuxuan-duanfeng-1007` 第 2 集镜1（12 秒 8 段）：
+    第三段写成 `2.5-4.5秒：`，而上一段终点是 3 ⇒ 分镜契约门判「不连续」拦下整集。
+    """
+
+    ROW12 = ("| 1 | 全景 | 背后跟拍 | 跟移 | 12 | 雨竹林 | 斜雨冷青灰 | "
+             "0-1.5秒：她踏阶而上、马尾甩出小弧；1.5-3秒：她蹬地跨上第三级石阶、水花向左溅；"
+             "2.5-4.5秒：岑墨持枪追近两级、枪身横于胸前；4.5-6.5秒：枪尖擦过她右臂、青碧光起；"
+             "6.5-8.5秒：她回旋踢起、腿风扫开雨帘；8.5-10.5秒：枪尾砸地、石屑弹开；"
+             "10.5-12秒：她借势后撤半步、剑出鞘半寸 | 剑尖前点 | 追这么远？ | 雨声 | 否 | 开场 |")
+
+    def _doc(self, row: str) -> str:
+        return "# 分镜脚本\n\n" + HDR + "\n" + SEP + "\n" + row + "\n"
+
+    def test_real_shape_is_repaired_and_gate_would_pass(self):
+        from v5 import validate
+        from v5.media import storyboard
+        md = self._doc(self.ROW12)
+        self.assertEqual(len(storyboard.parse(md)), 1, "夹具本身须解析出 1 镜")
+        self.assertTrue(validate.check_storyboard(md, None)["beat_violations"],
+                        "夹具没复现出断裂 = 本用例等于没测")
+        fixed, ch = storyboard.repair_beat_continuity(md)
+        self.assertEqual(len(ch), 1, ch)
+        self.assertIn("2.5→3", ch[0])
+        self.assertIn("2.5-4.5秒", md)          # 改前确实是这样
+        self.assertIn("3-4.5秒", fixed)
+        self.assertFalse(validate.check_storyboard(fixed, None)["beat_violations"],
+                         "修完仍报不连续 = 修错了地方")
+        # 只改数字：把**整个数字**（含小数点）抹掉后，两份文本必须逐字相同
+        import re as _re
+        strip = lambda s: _re.sub(r"\d+\.\d+|\.\d+|\d", "", s)
+        self.assertEqual(strip(md), strip(fixed))
+
+    def test_contiguous_timeline_untouched(self):
+        """反向对照：本来就首尾相接 ⇒ 原文**逐字返回**、零变更。"""
+        from v5.media import storyboard
+        md = self._doc(self.ROW12.replace("2.5-4.5秒", "3-4.5秒"))
+        fixed, ch = storyboard.repair_beat_continuity(md)
+        self.assertEqual(ch, [])
+        self.assertEqual(fixed, md)
+
+    def test_collapse_is_not_repaired(self):
+        """会塌缩（起点 ≥ 终点）的不修 —— 那要挑一段牺牲，属语义判断，交给门拦。"""
+        from v5 import validate
+        from v5.media import storyboard
+        md = self._doc("| 1 | 全景 | 平视 | 固定 | 8 | 竹林 | 冷光 | "
+                       "0-5秒：她拔剑；2-4秒：他举枪；4-8秒：两人交错 | 剑前点 | 让开 | "
+                       "风声 | 否 | 开场 |")
+        fixed, ch = storyboard.repair_beat_continuity(md)
+        self.assertEqual(ch, [], "5-4 会塌缩，不该动手")
+        self.assertEqual(fixed, md)
+        self.assertTrue(validate.check_storyboard(md, None)["beat_violations"])
+
+    def test_first_beat_start_is_never_moved(self):
+        """「必须从 0 起」是作者的决定，推不出来 ⇒ 不许自动改成 0。"""
+        from v5.media import storyboard
+        md = self._doc("| 1 | 全景 | 平视 | 固定 | 10 | 竹林 | 冷光 | "
+                       "5-8秒：她拔剑；8-10秒：他举枪 | 剑前点 | 让开 | 风声 | 否 | 开场 |")
+        fixed, ch = storyboard.repair_beat_continuity(md)
+        self.assertEqual(ch, [])
+        self.assertIn("5-8秒", fixed)
+
+    def test_other_columns_are_never_touched(self):
+        """只动「画面描述」列：对白里出现同样的节拍写法也不许改。"""
+        from v5.media import storyboard
+        md = self._doc("| 1 | 全景 | 平视 | 固定 | 12 | 竹林 | 冷光 | "
+                       "0-1.5秒：她拔剑；1.5-3秒：她跨步；2.5-4.5秒：他举枪 | 剑前点 | "
+                       "2.5-4.5秒：那句台词原样 | 风声 | 否 | 开场 |")
+        fixed, ch = storyboard.repair_beat_continuity(md)
+        self.assertEqual(len(ch), 1, ch)
+        self.assertIn("2.5-4.5秒：那句台词原样", fixed, "对白列被改了")
+
+    def test_table_without_visual_column_is_left_alone(self):
+        """认不出表头 ⇒ 整表不动（不猜列）。"""
+        from v5.media import storyboard
+        body = ("| 镜 | 描述 |\n|---|---|\n"
+                "| 1 | 0-1.5秒：a；1.5-3秒：b；2.5-4.5秒：c |\n")
+        fixed, ch = storyboard.repair_beat_continuity(body)
+        self.assertEqual(ch, [])
+        self.assertEqual(fixed, body)
+
+    def test_gate_writes_the_repair_back_and_off_flag_restores_the_block(self):
+        """接线：门读表**之前**重排并写回盘；`BEAT_AUTOFIX=0` 时照旧响亮拦下。"""
+        import tempfile
+        from pathlib import Path
+        from unittest import mock
+        from v5 import config, series
+        from v5.media import storyboard
+        md = self._doc(self.ROW12)
+        for flag, expect_repaired in ((True, True), (False, False)):
+            with tempfile.TemporaryDirectory() as d:
+                root = Path(d)
+                (root / "scenedesigner").mkdir(parents=True)
+                f = root / "scenedesigner" / "scenedesigner_ep1.md"
+                f.write_text(md, encoding="utf-8")
+                with mock.patch.object(config, "BEAT_AUTOFIX", flag):
+                    try:
+                        series.storyboard_gate(root, {"target_duration": "约 12 秒"}, ep=1)
+                        raised = ""
+                    except SystemExit as e:
+                        raised = str(e.code)
+                wrote_back = ("3-4.5秒" in f.read_text(encoding="utf-8"))
+                self.assertEqual(wrote_back, expect_repaired, "flag=%s" % flag)
+                if flag:
+                    self.assertNotIn("节拍", raised, "重排后不该再为节拍拦下：%s" % raised)
+                else:
+                    self.assertIn("节拍不自洽", raised,
+                                  "关掉自愈必须由门拦下（行为与改造前一致）")
