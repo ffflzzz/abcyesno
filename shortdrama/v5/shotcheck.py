@@ -50,12 +50,17 @@ CODES = {
     "opponent_as_background":
         "这一镜里**应该出场的对手被写成了不动的背景**（例如"
         "「另一人作远景虚化剪影无动作」「站在远处没有动作」）。"
+        "⛔ 若这一镜**对手根本没有出场**（单人演武、空镜、只有一个人在动），"
+        "这条**不适用** —— 没有对手可写，就谈不上「被写成背景」。"
         "注意：「逆光剪影」「人物剪影勾边」这类**光位**描述不算；"
         "结尾拉远定格里两人都小也不算（那是构图，不是一人动一人不动）。",
     "rock_chopping_as_beat":
         "这一镜的**主要动作是破坏环境而不是打对方**（劈崖壁、斩铁索、砍山石、"
         "插进石头），整镜里对方没有被攻击、也没有应招。"
-        "注意：作为**双方交招后果**顺带写出的碎石、裂纹不算。",
+        "注意：作为**双方交招后果**顺带写出的碎石、裂纹不算。"
+        "⛔ 若这一镜**对手根本没有出场**（单人演武／练功／收势镜），这条**不适用** ——"
+        "2026-10-08 实测：一条 5 集仙侠把「第一集开场她独自演武」判成了这一条，"
+        "分镜被重写 6 次、反空转闸把整条链掐掉（35 分钟零推进）。",
     "frozen_vfx_pose":
         "这一镜把能量特效写成**定格不动的道具**（举着巨剑/剑罡定住数秒、"
         "光柱里站着不动），而不是一个会推进到对方身上的动作。",
@@ -194,9 +199,14 @@ def countable(shots: list[dict], target_seconds: int = 0,
     need(not rep, "同一角色在一镜里被 @ 了两次以上（重复会多画一个人）",
          "命中 %d 镜 —— 只在**首段**写 `@名（衣装）`，后面各段用「她／他／对方」"
          % len(rep), names=rep)
+    # ⛔ 只判**写得下两拍**的镜：一拍的镜（收势、定格、短切）里"位移动词 ≥2"是
+    #    一条**没人能满足**的条目 —— 2026-10-08 实测：第 1 集收尾镜 LN19 因此被退回，
+    #    而那条链同时被另一条误判（见 `rock_chopping_as_beat`）拖着重写了 6 次。
+    from .media import storyboard as _sb_ck
     low_move = [s["name"] for s in shots
-                if sum(1 for w in MOVE_VERBS if w in (s.get("visual") or "")) < 2]
-    need(not low_move, "每镜位移动词 ≥2",
+                if len(_sb_ck.split_beats(s.get("visual") or "")) >= 2
+                and sum(1 for w in MOVE_VERBS if w in (s.get("visual") or "")) < 2]
+    need(not low_move, "每镜位移动词 ≥2（**只判两拍以上的镜**）",
          "命中 %d 镜" % len(low_move), names=low_move)
     no_join = [s["name"] for s in shots[1:] if not (s.get("join_note") or "").strip()]
     need(not no_join, "「承接」列必填（首镜除外）",

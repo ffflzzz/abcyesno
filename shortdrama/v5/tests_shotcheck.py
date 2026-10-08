@@ -106,12 +106,25 @@ class TestQuoteGate(unittest.TestCase):
         self.assertEqual(len(res["errors"]), 1)
 
 
+    def test_single_beat_shot_is_not_judged_for_movement_verbs(self):
+        """⛔ 一拍镜（收势/定格/短切）不判「位移动词 ≥2」—— 那条要求它满足不了。
+
+        2026-10-08 实测：一条 5 集仙侠的第 1 集收尾镜因此被退回，同一条链被另一条
+        误判一起拖着把分镜重写了 6 次、35 分钟零推进，最后被反空转闸掐掉。
+        """
+        shots = [_shot("LN19", "她收剑立定，马尾与衣摆慢慢落回"),
+                 _shot("LN20", "剑尖滴下最后一滴水")]
+        names = [h["names"] for h in shotcheck.countable(shots, 120)
+                 if "位移动词" in h["check"]]
+        self.assertEqual(names, [], "一拍镜不该被这条判到：%s" % names)
+
+
 class TestCountable(unittest.TestCase):
     def test_structural_laws_fire(self):
         shots = [
             _shot("LN01", "0-3秒：蹬地前冲；3-6秒：横移两步"),        # 两拍
             _shot("LN02", "@裴烛（黑衣）出剑、@谢潮生（白衣）格开、@裴烛（黑衣）再压上"),  # @名（ x3
-            _shot("LN03", "两人对峙"),                                # 位移动词不足
+            _shot("LN03", "0-3秒：两人各自侧身相对；3-6秒：剑势都收着没出手"),  # 两拍且位移动词不足
             _shot("LN04", "@裴烛 劈向崖壁，崖壁崩落", join_note=""),   # 无承接 + 砍环境
         ]
         checks = {h["check"] for h in shotcheck.countable(shots, 120)}
@@ -297,7 +310,8 @@ class TestWiring(unittest.TestCase):
         return d
 
     def test_rerun_gets_punch_list(self):
-        root = self._root(_row("LN01", "两人隔着三身位对峙，谁都没有先出手"))
+        root = self._root(_row("LN01",
+                              "0-3秒：两人隔着三身位对峙；3-6秒：谁都没有先出手"))
         with mock.patch.object(config, "SHOTCHECK", "count"):
             txt = roles.role_input("scenedesigner", root, {"episode_index": 1})
         self.assertIn("用一次 `write_file` 交出去", txt)
@@ -340,7 +354,8 @@ class TestWiring(unittest.TestCase):
 
         没有这一步，"退回清单"在真实打回路径上永远不会注入（2026-09-29 设计漏洞）。
         """
-        root = self._root(_row("LN01", "两人隔着三身位对峙，谁都没有先出手"))
+        root = self._root(_row("LN01",
+                              "0-3秒：两人隔着三身位对峙；3-6秒：谁都没有先出手"))
         with mock.patch.object(config, "SHOTCHECK", "count"):
             txt1 = roles.role_input("scenedesigner", root, {"episode_index": 1})
         self.assertIn("用一次 `write_file` 交出去", txt1)
