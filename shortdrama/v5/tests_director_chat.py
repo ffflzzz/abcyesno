@@ -163,6 +163,64 @@ class TestDigest(_Base):
         self.assertIn("已落盘", d)
 
 
+class TestConcurrentWrites(_Base):
+    """并发写（2026-10-07 用户界面上直接弹的那个 WinError 32）。
+
+    场景是真的：前端每 3 秒轮询一次 `GET .../director/chat`，每轮都可能
+    `_pull_new` → 重写状态文件；FastAPI 的同步处理器跑在**线程池**里 ⇒ 两次轮询
+    会真的并发。第一版两个写者共用 `director_chat.json.tmp` 这个**同一个**临时名，
+    `os.replace` 直接 `[WinError 32] 另一个程序正在使用此文件`。
+    """
+
+    def test_temp_name_differs_on_every_write(self):
+        """机制层：临时名带 pid + 序号 ⇒ 不同写者永不撞名。"""
+        import os as _os
+        seen = []
+        orig = director_chat.os.replace
+
+        def spy(a, b):
+            seen.append(str(a))
+            return orig(a, b)
+
+        director_chat.os.replace = spy
+        try:
+            director_chat._write(self.root, {"turns": []})
+            director_chat._write(self.root, {"turns": []})
+        finally:
+            director_chat.os.replace = orig
+        self.assertEqual(2, len(seen))
+        self.assertNotEqual(seen[0], seen[1], "两次写用了同一个临时名 = 会 WinError 32")
+
+    def test_parallel_appends_lose_nothing_and_raise_nothing(self):
+        import threading
+        errs = []
+
+        def work(i):
+            try:
+                director_chat._append(self.root, "director", "第%d条" % i)
+            except Exception as e:  # noqa: BLE001
+                errs.append(repr(e))
+
+        ts = [threading.Thread(target=work, args=(i,)) for i in range(24)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join()
+        self.assertEqual([], errs, "并发写抛异常了：%s" % errs[:3])
+        got = [t["text"] for t in director_chat.turns(self.root)]
+        self.assertEqual(24, len(got), "有写者被别的写者覆盖掉了（丢更新）")
+        # ⚠️ 用**集合**比，别用 sorted() —— 字符串序把「第10条」排在「第2条」前面，
+        #    拿排序后的列表去比会假红（刚踩过）。
+        self.assertEqual({"第%d条" % i for i in range(24)}, set(got))
+
+    def test_no_temp_files_left_behind(self):
+        for i in range(3):
+            director_chat._append(self.root, "user", "x%d" % i)
+        left = [p.name for p in director_chat.path_of(self.root).parent.iterdir()
+                if ".tmp" in p.name or p.name.endswith(".lock")]
+        self.assertEqual([], left, "临时文件/锁没清干净：%s" % left)
+
+
 class TestRunnerThreadPlumbing(_Base):
     """`runner` 那条："接着聊过的那段对话开工"。**默认不许变**。"""
 

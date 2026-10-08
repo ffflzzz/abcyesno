@@ -31,13 +31,19 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
+import threading
 import time
 from pathlib import Path
 
 DIR_NAME = ".tmp"
 FILE = "director_chat.json"
+
+#: 临时文件名的序号（配合 pid 保证不同写者永不撞名，见 `_write`）
+_SEQ = 0
+_SEQ_LOCK = threading.Lock()
 
 #: 对话阶段的**前缀**。这一行的作用就是"按住他"：见模块文档的实测记录。
 #: ⚠️ 措辞别删这两句：① 只回话 ② 等"开工"再做。少任何一句，实测会开始动手。
@@ -120,11 +126,95 @@ def _read(root: Path) -> dict:
 
 
 def _write(root: Path, obj: dict) -> None:
+    """原子写。**临时名必须唯一，而且失败要重试**。
+
+    ★ 2026-10-07 实测事故（用户界面上直接弹红字）：
+      `[WinError 32] 另一个程序正在使用此文件… director_chat.json.tmp`
+      前端每 3 秒轮询一次 `GET .../director/chat`，而每轮都可能 `_pull_new` → 重写
+      这张状态文件；FastAPI 的同步处理器跑在**线程池**里，两次轮询会真的并发 ⇒
+      两个写者撞在**同一个临时文件名**上。第一版就是 `p.with_suffix(".json.tmp")`。
+    两层一起修：① 临时名带 pid+序号（不同写者永不撞名）；
+    ② `os.replace` 失败重试（Windows 上文件被读着的一瞬间也会拒绝替换）。
+    真正的互斥在 `_Locked` —— 见 `_edit`。
+    """
+    global _SEQ
     p = path_of(root)
     p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(obj, ensure_ascii=False, indent=1), encoding="utf-8")
-    os.replace(str(tmp), str(p))
+    with _SEQ_LOCK:
+        _SEQ += 1
+        seq = _SEQ
+    tmp = p.with_name("%s.%d.%d.tmp" % (p.name, os.getpid(), seq))
+    data = json.dumps(obj, ensure_ascii=False, indent=1)
+    for attempt in range(8):
+        try:
+            tmp.write_text(data, encoding="utf-8")
+            os.replace(str(tmp), str(p))
+            return
+        except OSError:
+            if attempt == 7:
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
+                raise
+            time.sleep(0.05 * (attempt + 1))
+
+
+class _Locked:
+    """跨**线程/进程**互斥（`mkdir`/`O_EXCL` 在 POSIX 与 Windows 上都是原子的）。
+
+    ⚠️ 与 `v5/inbox.py` 的 `_Locked` 是**同一个惯用法**（那边也是 shim 线程池 +
+    dev server 两个进程读写同一张文件）。两份都留着：谁也不比谁更"权威"，
+    而这一点点重复好过把一个只在这两处用到的锁抽成第三个模块。
+    拿不到锁时**降级为不阻塞** —— ⛔ 一条辅助信道不该把工作台卡死。
+    """
+
+    def __init__(self, root: Path, timeout: float = 3.0):
+        self.root = Path(root)
+        self.timeout = timeout
+        self.handle = None
+
+    def __enter__(self):
+        d = path_of(self.root).parent
+        d.mkdir(parents=True, exist_ok=True)
+        lock = d / (FILE + ".lock")
+        deadline = time.time() + self.timeout
+        while True:
+            try:
+                self.handle = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                return self
+            except FileExistsError:
+                try:                       # 陈旧锁：持有者崩了没删，超 10 秒就抢
+                    if time.time() - lock.stat().st_mtime > 10:
+                        lock.unlink()
+                        continue
+                except OSError:
+                    pass
+                if time.time() >= deadline:
+                    return self
+                time.sleep(0.05)
+            except OSError:
+                return self
+
+    def __exit__(self, *exc):
+        if self.handle is not None:
+            try:
+                os.close(self.handle)
+                (path_of(self.root).parent / (FILE + ".lock")).unlink()
+            except OSError:
+                pass
+            self.handle = None
+        return False
+
+
+@contextlib.contextmanager
+def _edit(root: Path):
+    """加锁读改写的唯一入口。**所有写者都必须走它**，否则并发就丢更新。"""
+    with _Locked(root):
+        obj = _read(root)
+        yield obj
+        _write(root, obj)
+
 
 
 def turns(root: Path) -> list[dict]:
@@ -132,11 +222,10 @@ def turns(root: Path) -> list[dict]:
 
 
 def _append(root: Path, role: str, text: str, ep: int = 1) -> None:
-    obj = _read(root)
-    obj["turns"].append({"role": role, "text": text,
-                         "at": time.strftime("%Y-%m-%dT%H:%M:%S"), "ep": int(ep)})
-    obj["turns"] = obj["turns"][-400:]
-    _write(root, obj)
+    with _edit(root) as obj:
+        obj["turns"].append({"role": role, "text": text,
+                             "at": time.strftime("%Y-%m-%dT%H:%M:%S"), "ep": int(ep)})
+        obj["turns"] = obj["turns"][-400:]
 
 
 # ─────────────────────────────────────────── 线程
@@ -159,9 +248,9 @@ async def _ensure_thread(root: Path, url: str) -> tuple[str, bool]:
             pass
     th = await c.threads.create()
     tid = th["thread_id"]
-    obj["thread_id"] = tid
-    obj["seen"] = 0
-    _write(root, obj)
+    with _edit(root) as o:
+        o["thread_id"] = tid
+        o["seen"] = 0
     return tid, True
 
 
@@ -179,30 +268,27 @@ async def _pull_new(root: Path, tid: str, url: str, ep: int) -> int:
       都会在会话里说话 ⇒ 这里顺手就抓到了，界面那栏因此能看到进度。
     """
     c = _client(url)
-    st = await c.threads.get_state(tid)
+    st = await c.threads.get_state(tid)          # ⚠️ await 在锁**外面**做
     msgs = ((st or {}).get("values") or {}).get("messages") or []
-    obj = _read(root)
-    seen = int(obj.get("seen") or 0)
     added = 0
-    for m in msgs[seen:]:
-        role = str(m.get("type") or m.get("role") or "")
-        txt = _text_of(m)
-        if not txt:
-            continue
-        # ★ **只搬他的话，不搬我们发出去的**。人那一侧由 `submit` 自己记（记的是
-        #   人真正打的字，不含 `_digest` / `CHAT_PREFIX` 那一大坨）。
-        #   第一版两边都记 ⇒ 每条自己的话在界面上出现两次（一次干净、一次带前缀）。
-        if "ai" in role or role == "assistant":
-            obj["turns"].append({"role": "director", "text": txt, "ep": int(ep),
-                                 "at": time.strftime("%Y-%m-%dT%H:%M:%S")})
-        elif "human" in role or role == "user":
-            continue
-        else:
-            continue
-        added += 1
-    obj["seen"] = len(msgs)
-    obj["turns"] = obj["turns"][-400:]
-    _write(root, obj)
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%S")
+    with _edit(root) as obj:
+        seen = int(obj.get("seen") or 0)
+        for m in msgs[seen:]:
+            role = str(m.get("type") or m.get("role") or "")
+            txt = _text_of(m)
+            if not txt:
+                continue
+            # ★ **只搬他的话，不搬我们发出去的**。人那一侧由 `submit` 自己记
+            #   （记的是人真正打的字，不含 `_digest` / `CHAT_PREFIX` 那一大坨）。
+            #   第一版两边都记 ⇒ 每条自己的话在界面上出现两次（一次干净、一次带前缀）。
+            if "ai" in role or role == "assistant":
+                obj["turns"].append({"role": "director", "text": txt,
+                                     "ep": int(ep), "at": stamp})
+                added += 1
+            # human / 其它类型一律跳过（`seen` 照样推到底，别把它们卡在队头）
+        obj["seen"] = len(msgs)
+        obj["turns"] = obj["turns"][-400:]
     return added
 
 
@@ -247,14 +333,14 @@ async def _submit(root: Path, body: str, ep: int) -> dict:
             tid, "supervisor",
             input={"messages": [{"role": "user",
                                  "content": head + _digest(root, ep) + CHAT_PREFIX + body}]})
-        obj = _read(root)
-        obj["run_id"] = str(run.get("run_id") or "")
-        obj["ep"] = int(ep)
-        obj["turns"].append({"role": "user", "text": body, "ep": int(ep),
-                             "at": time.strftime("%Y-%m-%dT%H:%M:%S")})
-        obj["turns"] = obj["turns"][-400:]
-        _write(root, obj)
-        return {"ok": True, "thread_id": tid, "run_id": obj["run_id"]}
+        rid = str(run.get("run_id") or "")
+        with _edit(root) as o:
+            o["run_id"] = rid
+            o["ep"] = int(ep)
+            o["turns"].append({"role": "user", "text": body, "ep": int(ep),
+                               "at": time.strftime("%Y-%m-%dT%H:%M:%S")})
+            o["turns"] = o["turns"][-400:]
+        return {"ok": True, "thread_id": tid, "run_id": rid}
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": str(e)[:200]}
 
@@ -302,9 +388,8 @@ async def _poll(root: Path) -> dict:
         except Exception:  # noqa: BLE001
             pass
     if status and status in _TERMINAL:
-        o2 = _read(root)
-        o2["run_id"] = ""
-        _write(root, o2)
+        with _edit(root) as o2:
+            o2["run_id"] = ""
     return {"busy": busy, "status": status, "added": added,
             "turns": _read(root)["turns"], "thread_id": tid}
 
@@ -316,8 +401,7 @@ def thread_id(root: Path) -> str:
 
 def reset(root: Path) -> None:
     """忘掉这段对话（下次从新线程开始）。**不删盘上任何产物。**"""
-    obj = _read(root)
-    obj["thread_id"] = ""
-    obj["run_id"] = ""
-    obj["seen"] = 0
-    _write(root, obj)
+    with _edit(root) as obj:
+        obj["thread_id"] = ""
+        obj["run_id"] = ""
+        obj["seen"] = 0
