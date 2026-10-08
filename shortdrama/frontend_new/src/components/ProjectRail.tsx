@@ -29,6 +29,8 @@ type Props = {
   pid: string;
   onPick: (pid: string) => void;
   onNew: (topic: string, pack: string, episodes: number, ratio: string) => Promise<void>;
+  /** 空白项目：不调模型，秒级建壳 */
+  onBlank: (name: string, pack: string, episodes: number, ratio: string) => Promise<void>;
   packs: string[];
   ratios: string[];
   busy: boolean;
@@ -73,7 +75,7 @@ function QcRow() {
 }
 
 export function ProjectRail({ projects, signals, pid, onPick, onNew, packs, ratios, busy,
-  runIds, onRename, onStop, onDelete, splitter, onCollapse }: Props) {
+  runIds, onRename, onStop, onDelete, splitter, onCollapse, onBlank }: Props) {
   const [q, setQ] = useState('');
   const [creating, setCreating] = useState(false);
   const [topic, setTopic] = useState('');
@@ -142,7 +144,7 @@ export function ProjectRail({ projects, signals, pid, onPick, onNew, packs, rati
 
       {creating ? (
         <div style={{ padding: '0 12px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <input className="rail-new" placeholder="项目名（英文标识）" value={topic}
+          <input className="rail-new" placeholder="片名（中文就行，目录名自动生成）" value={topic}
                  style={inputStyle} onChange={(e) => setTopic(e.target.value)} />
           <div style={{ display: 'flex', gap: 6 }}>
             <select value={pack} style={inputStyle} onChange={(e) => setPack(e.target.value)}>
@@ -155,11 +157,18 @@ export function ProjectRail({ projects, signals, pid, onPick, onNew, packs, rati
                    title="集数" onChange={(e) => setEps(Math.max(1, Number(e.target.value) || 1))} />
           </div>
           <div style={{ display: 'flex', gap: 6 }}>
-            <button type="button" className="btn btn--sm btn--primary" disabled={busy || !topic.trim()}
+            <button type="button" className="btn btn--sm btn--primary" disabled={busy || topic.trim().length < 2}
+                    title="让模型把你这句话写成完整 brief（10–40 秒）；之后还能改"
                     onClick={async () => {
                       await onNew(topic.trim(), pack, eps, ratio);
                       setCreating(false); setTopic('');
-                    }}>{busy ? <span className="spin" /> : '创建'}</button>
+                    }}>{busy ? <span className="spin" /> : 'AI 生成'}</button>
+            <button type="button" className="btn btn--sm" disabled={busy}
+                    title="不调模型，立刻建好一个空壳；创作字段留空，进去跟导演定"
+                    onClick={async () => {
+                      await onBlank(topic.trim() || '新项目', pack, eps, ratio);
+                      setCreating(false); setTopic('');
+                    }}>空白</button>
             <button type="button" className="btn btn--sm" onClick={() => setCreating(false)}>取消</button>
           </div>
         </div>

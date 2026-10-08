@@ -343,6 +343,77 @@ class TestMultiEpisodeBrief(_Base):
         self.assertEqual(seen.get("episodes"), 2)
 
 
+class TestBlankProject(_Base):
+    """空白项目：**不调模型**、秒级建壳（2026-10-08 用户问"怎么快速新建空白项目"）。
+
+    它和 `create_project(mode="idea")` 的分工：那条要先花 10–40 秒把一句话写成完整
+    brief；这条只给你一个能立刻跟导演聊起来的壳。
+    """
+
+    def test_blank_calls_no_model(self):
+        called = []
+
+        def _boom(*a, **k):          # 任何一次模型调用都算失败
+            called.append(1)
+            raise AssertionError("空白项目不该调模型")
+
+        with mock.patch.object(webchain, "_chat", _boom):
+            rec = webchain.create_blank("打工人")
+        self.assertEqual([], called)
+        self.assertTrue((self.root / rec["pid"] / "brief.json").exists())
+
+    def test_blank_keeps_the_chinese_name_and_an_ascii_dir(self):
+        rec = webchain.create_blank("打工人")
+        self.assertEqual("打工人", rec["topic"])
+        self.assertTrue(rec["pid"].isascii(), "目录名仍必须是 ASCII：%r" % rec["pid"])
+
+    def test_blank_creative_fields_are_empty_and_flagged(self):
+        """创作字段留空是**有意**的 —— 但必须留个标记，别让下游以为填过了。"""
+        rec = webchain.create_blank("打工人", episodes=3, ratio="9:16")
+        b = json.loads((self.root / rec["pid"] / "brief.json").read_text(encoding="utf-8"))
+        self.assertEqual("", b["genre"])
+        self.assertEqual("", b["protagonist"])
+        self.assertEqual("", b["tone"])
+        self.assertEqual("", b["结局"])
+        self.assertEqual([], b["must_have"])
+        self.assertTrue(b.get("_blank"), "必须标记这是个还没填的壳")
+        self.assertEqual(3, b["episodes"])
+        self.assertEqual("9:16", b["ratio"])
+
+
+class TestIdeaInputFloor(_Base):
+    """`mode="idea"` 的输入下限：8 → **2**（2026-10-08）。
+
+    用户实测被它拦下（"打工人" 4 个字建不了项目）并问"谁规定的"。
+    查证：那个 8 没有任何依据 —— 同一处的注释自己写的是「也不能是空的」。
+    它该挡的是**空输入**，不是"点子不够长"。
+    """
+
+    def _brief(self, text, mode="idea"):
+        with mock.patch.object(webchain, "_chat", lambda *a, **k: json.dumps(GOOD_BRIEF)):
+            return webchain.extract_brief(text, "shortdrama", mode=mode)
+
+    def test_four_chars_is_enough(self):
+        self.assertTrue(self._brief("打工人"))
+
+    def test_two_chars_is_enough(self):
+        self.assertTrue(self._brief("夜巡"))
+
+    def test_one_char_is_still_refused(self):
+        with self.assertRaises(ValueError):
+            self._brief("灯")
+
+    def test_blank_is_still_refused(self):
+        with self.assertRaises(ValueError):
+            self._brief("   ")
+
+    def test_script_mode_keeps_its_own_floor(self):
+        """粘贴剧本那条**没动**（40 字）—— 那是在提炼，不是在创作。"""
+        with self.assertRaises(ValueError):
+            self._brief("打工人", mode="script")
+
+
+
 class _FakeProc:
     def __init__(self, argv, **kw):
         self.argv = argv

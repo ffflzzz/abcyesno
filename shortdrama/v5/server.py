@@ -1096,6 +1096,23 @@ def create_app(base: str | None = None, web_root: str | None = None):
                             "note": "已清空 %s 及其下游的本集记账并起了新一轮创作链"
                                     % target})
 
+    # ══════════ 空白项目（2026-10-08）：不调模型，秒级建壳 ══════════
+    @r.post("/v1/pixa/short-drama/projects/blank")
+    def create_blank_project(payload: dict | None = None):
+        """建一个**空白**项目：只有名字 + 类型包 + 集数 + 画幅，brief 的创作字段留空。
+
+        与 `/projects/ai-generate` 的分工：那条要**先调一次 LLM**把一句话写成完整
+        brief（10–40 秒，且输入太短会被拦）；这条**一步到位**，给你一个可以立刻
+        跟导演聊起来的壳。创作字段由你和他定（见 `webchain.create_blank` 的说明）。
+        """
+        p = payload or {}
+        name = str(p.get("name") or p.get("topic") or "").strip()
+        if not name:
+            raise _bad("给个名字（中文就行，目录名会自动生成）")
+        return wm.envelope(webchain.create_blank(
+            name, style_code=str(p.get("style_code") or p.get("pack") or ""),
+            episodes=int(p.get("episodes") or 1), ratio=str(p.get("ratio") or "")))
+
     # ══════════ 和导演对话（2026-10-07）：聊清楚了，再开工 ══════════
     #
     # 与信箱的分工：信箱是把话**投递给下一个被派发的角色**（链没跑就永远排着）；

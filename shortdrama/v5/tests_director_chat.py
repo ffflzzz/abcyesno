@@ -20,6 +20,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -65,8 +66,19 @@ class _Base(unittest.TestCase):
              "target_duration": "约 60 秒", "protagonist": "甲：测试用",
              "must_have": ["甲说一句话"], "key_props": [], "禁忌": [],
              "tone": "冷", "结局": "定格"}, ensure_ascii=False), encoding="utf-8")
+        # ★★ 2026-10-08：**RUNTIME_ROOT 必须打桩**（同 `tests_webchain` 里那条教训）。
+        #   不打桩的话，任何一次 `ensure_devserver` 都会写**真实**的
+        #   `.tmp/web-devserver.json`、还会真去 spawn `langgraph dev` ——
+        #   实测把共享状态文件写成了一条 `{"pid":"demo"}` 的假现场。
+        from v5 import config as _cfg
+        self._rt = mock.patch.object(_cfg, "RUNTIME_ROOT", self.root)
+        self._rt.start()
 
     def tearDown(self):
+        try:
+            self._rt.stop()
+        except Exception:  # noqa: BLE001
+            pass
         self.tmp.cleanup()
 
 
@@ -161,6 +173,77 @@ class TestDigest(_Base):
         d = director_chat._digest(self.root, 1)
         self.assertIn("worldbuilder", d)
         self.assertIn("已落盘", d)
+
+
+class TestTypedGoAhead(_Base):
+    """打字即开工（2026-10-08 用户："为什么要发送和开工这样机械分开？"）。
+
+    ⛔ 只认**短句**：长句里出现"开工"多半是在布置任务（"开工前先把空间定下来"），
+      那不该触发一路跑下去。两侧都要钉：该触发的触发、**不该触发的一个都不许**。
+    """
+
+    def setUp(self):
+        super().setUp()
+        # ★★ 2026-10-08：**必须把 `ensure_devserver` 打桩**。
+        #   `_submit` 第一件事就是起 dev server —— 不打桩它会**真的 spawn 一个
+        #   `langgraph dev`**（实测：留下了一个活着的进程占着 2024 端口，还把
+        #   `.tmp/web-devserver.json` 写成了 `{"pid":"demo"}` 这条**假现场**）。
+        #   单测不许起真进程，这是硬规矩。
+        from v5 import webchain as _wc
+        self._dev = mock.patch.object(_wc, "ensure_devserver",
+                                      lambda pid, **k: {"reused": True, "pid": pid,
+                                                        "agent_url": "http://127.0.0.1:9"})
+        self._dev.start()
+
+    def tearDown(self):
+        self._dev.stop()
+        super().tearDown()
+
+    def test_short_go_words_hit(self):
+        for t in ("开工", "开工！", "开始吧", "开拍", "动手吧", " start ", "Go"):
+            self.assertTrue(director_chat.looks_like_go(t), t)
+
+    def test_instructions_mentioning_go_do_not_hit(self):
+        for t in ("开工前先把三个空间定下来", "我们先聊清楚再开工，你觉得呢？",
+                  "我不太确定要不要开工", "开工之后能改吗？"):
+            self.assertFalse(director_chat.looks_like_go(t), t)
+
+    def test_empty_and_long_are_not_go(self):
+        self.assertFalse(director_chat.looks_like_go(""))
+        self.assertFalse(director_chat.looks_like_go("   "))
+        self.assertFalse(director_chat.looks_like_go("开工" * 20))
+
+    def test_submit_with_go_word_starts_the_chain_not_a_chat_run(self):
+        """★ 走的是 `runner.start`（驱动器），不是自己建一个 run ——
+        否则步级确认 / 打回 / 反空转那些闭环一个都不在。"""
+        started, notes = [], []
+
+        def _fake_start(pid, kind, ep=1, **kw):
+            started.append((pid, kind, kw.get("chain_thread")))
+            return {"run_id": "r-x", "status": "running"}
+
+        with mock.patch.object(director_chat, "_ensure_thread",
+                               lambda root, url: asyncio.sleep(0, result=("t-1", True))),              mock.patch.object(director_chat, "_live_chain_run", lambda root: None),              mock.patch.object(director_chat, "_digest", lambda root, ep: ""):
+            from v5.media import runner as _r
+            orig = _r.start
+            _r.start = _fake_start                     # type: ignore[assignment]
+            try:
+                r = asyncio.run(director_chat._submit(self.root, "开工", 1))
+            finally:
+                _r.start = orig                        # type: ignore[assignment]
+        self.assertTrue(r.get("ok"))
+        self.assertTrue(r.get("started"), r)
+        self.assertEqual(("demo", "chain", "t-1"), started[0] if started else None)
+        self.assertIn("开工", [t["text"] for t in director_chat.turns(self.root)])
+
+    def test_submit_with_go_word_is_refused_when_a_chain_is_already_running(self):
+        with mock.patch.object(director_chat, "_ensure_thread",
+                               lambda root, url: asyncio.sleep(0, result=("t-1", True))),              mock.patch.object(director_chat, "_live_chain_run",
+                               lambda root: {"run_id": "2026xxxx-live"}),              mock.patch.object(director_chat, "_digest", lambda root, ep: ""):
+            r = asyncio.run(director_chat._submit(self.root, "开工", 1))
+        self.assertFalse(r.get("ok"))
+        self.assertIn("已经有一条链在跑", r.get("error") or "")
+
 
 
 class TestConcurrentWrites(_Base):

@@ -34,6 +34,7 @@ import asyncio
 import contextlib
 import json
 import os
+import re
 import threading
 import time
 from pathlib import Path
@@ -58,6 +59,47 @@ CHAT_PREFIX = (
 ASK_TIMEOUT = 600.0
 
 _TERMINAL = ("success", "error", "failed", "timeout", "interrupted")
+
+#: 哪些话等于「开工」。
+#: ★ 2026-10-08 用户原话：「为什么要发送和开工这样机械分开？我和导演聊天，聊好了，
+#   我对话让他开工不行吗？」—— 对，那就让他**打字开工**。这比多一个按钮自然。
+#: ⛔ 判定**不是**"含没含这几个字"，而是**把开工词抠掉之后还剩不剩话**：
+#:   长句里出现「开工」多半是在布置任务（"开工前先把三个空间定下来"），
+#:   而真正的开工是**光秃秃一句**（"开工" / "开始吧" / "go"）。
+#:   第一版按"长度 ≤12 且含开工词"判，把上面那句布置任务判成了开工。
+GO_WORDS = ("开工", "开拍", "开始吧", "开始生产", "开始", "动手吧", "开干",
+            "开始干活", "go", "start")
+#: 抠掉开工词与标点后，剩下**这么多字以内**才算"就是在说开工"。
+GO_LEFTOVER_MAX = 2
+
+
+def looks_like_go(text: str) -> bool:
+    """这句话是不是"让他开工"。纯函数，便于测试。"""
+    t = "".join(str(text or "").split()).lower()
+    if not t or len(t) > 24:
+        return False
+    hit = False
+    # 长的先抠，免得「开始吧」被「开始」拆成「吧」
+    for w in sorted(GO_WORDS, key=len, reverse=True):
+        if w in t:
+            t = t.replace(w, "")
+            hit = True
+    if not hit:
+        return False
+    rest = re.sub(r"[\s,，。.!！?？:：;；、~～…\-—_]+", "", t)
+    return len(rest) <= GO_LEFTOVER_MAX
+
+
+def _live_chain_run(root: Path) -> dict | None:
+    """本项目有没有正在跑的创作链（⛔ 不许起第二条）。"""
+    try:
+        from .media import runner as _runner
+        live = [x for x in _runner.list_runs(Path(root).name, 5)
+                if str(x.get("kind")) in ("chain", "script")
+                and str(x.get("status")) not in _runner.TERMINAL]
+        return live[0] if live else None
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _digest(root: Path, ep: int) -> str:
@@ -326,6 +368,21 @@ async def _submit(root: Path, body: str, ep: int) -> dict:
     url = st.get("agent_url") or webchain.agent_url()
     try:
         tid, fresh = await _ensure_thread(root, url)
+
+        # ★★ 打字即开工：这句话等于「开工」就不再当成聊天。
+        #    ⛔ 不在这里自己建 run —— 必须走 `runner.start`（= drive_chain），
+        #    否则步级确认、打回、反空转那些闭环一个都不在（那是驱动器的活）。
+        if looks_like_go(body):
+            _append(root, "user", body, ep)
+            live = _live_chain_run(root)
+            if live:
+                return {"ok": False, "started": False,
+                        "error": "已经有一条链在跑了（%s）—— 别起第二条"
+                                 % str(live.get("run_id"))[-12:]}
+            from .media import runner as _runner
+            rec = _runner.start(Path(root).name, "chain", ep=int(ep), chain_thread=tid)
+            return {"ok": True, "started": True, "thread_id": tid, "run": rec}
+
         # 开场白：新线程的第一句带上"在给哪个项目干活"
         head = "" if not fresh else "【项目】%s · 第 %d 集\n\n" % (Path(root).name, int(ep))
         # ⛔ 每句都附盘上现状：他不能用工具，不喂就只能空谈（见 `_digest` 的说明）

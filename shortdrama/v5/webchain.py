@@ -379,8 +379,12 @@ def extract_brief(script_text: str, pack: str, mode: str = "script",
     """
     spec = _brief_spec(pack, mode, episodes)
     text = str(script_text or "").strip()
-    # idea 模式允许更短（一句点子），但也不能是空的
-    floor = 8 if mode == "idea" else 40
+    # idea 模式允许更短（一句点子），但也不能是空的。
+    # ★ 2026-10-08：8 → **2**。用户实测被它拦下（"打工人" 4 个字建不了项目），
+    #   问"谁规定的"—— 查下来这个 8 没有任何依据，注释自己写的就是"也不能是空的"。
+    #   它挡的应该是**空输入**，不是"点子不够长"：太短确实会让模型自己编，
+    #   但那是"AI 生成"的题中之义，不是错误。**守住非空**即可。
+    floor = 2 if mode == "idea" else 40
     if len(text) < floor:
         raise ValueError("输入太短（%d 字）—— 至少 %d 字才能%s"
                          % (len(text), floor, "创作" if mode == "idea" else "提炼"))
@@ -411,6 +415,50 @@ def extract_brief(script_text: str, pack: str, mode: str = "script",
 
 
 # ─────────────────────────────────────────────────────── 建项目
+
+def create_blank(name: str, style_code: str = "", episodes: int = 1,
+                 ratio: str = "", log=print) -> dict:
+    """**空白项目** —— 不调任何模型，立刻建好一个壳（名字 + 包 + 集数 + 画幅）。
+
+    为什么需要（2026-10-08 用户问"怎么快速新建空白项目"）：
+      另一条路 `create_project(mode="idea")` 要**先调一次 LLM 把一句话写成完整 brief**
+      （10–40 秒，且输入太短会被 floor 拦下）。而"我想先有个项目、进去跟导演聊"
+      这个用法根本不需要模型先替你决定题材。
+
+    ⚠️ **创作字段留空是有意的**：`genre` / `must_have` / `key_props` / `tone` / `结局`
+      一律写成空占位 —— 它们由**你在对话里跟导演定**，或者由他读 brief 后补。
+      空值不会被静默放过：走到媒体链前有 `_brief_gate` / `validate_brief`
+      把它**响亮**列出来（「缺必填字段」），不会出现"看着没事、渲到一半才发现"。
+    """
+    pack, _note = resolve_pack(style_code, "")
+    topic = str(name or "").strip() or ("空项目 " + time.strftime("%m%d-%H%M"))
+    brief = {
+        "topic": topic,
+        "pack": pack,
+        "genre": "",
+        "episodes": max(1, int(episodes or 1)),
+        # target_duration 留空 ⇒ 分镜侧按包默认；要指定就在对话里或回来填
+        "target_duration": "",
+        "protagonist": "",
+        "must_have": [],
+        "key_props": [],
+        "禁忌": [],
+        "tone": "",
+        "结局": "",
+        "_blank": True,
+    }
+    if ratio:
+        brief["ratio"] = str(ratio)
+
+    pid = new_pid(_slug(topic) or topic)
+    root = config.PROJECTS_DIR / pid
+    (root / "images").mkdir(parents=True, exist_ok=True)
+    (root / "brief.json").write_text(
+        json.dumps(brief, ensure_ascii=False, indent=2), encoding="utf-8")
+    log("[webchain] 已建**空白**项目 %s（pack=%s，未调模型）" % (pid, pack))
+    return {"pid": pid, "topic": topic, "pack": pack, "blank": True,
+            "episodes": brief["episodes"], "note": "空白壳：brief 的创作字段待填"}
+
 
 def create_project(script_text: str, style_code: str = "", explicit_pack: str = "",
                    name: str = "", mode: str = "script", episodes: int = 0,

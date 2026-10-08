@@ -337,6 +337,26 @@ class TestRoutes(_Base):
         # 消息定向名单**仍然**可以有 director（那条走 HITL 通道，不是重置）
         self.assertIn("director", d["targets"])
 
+    def test_blank_project_route_makes_a_shell_without_calling_a_model(self):
+        """空白项目：不调模型、秒级建壳（用户问"怎么快速新建空白项目"）。"""
+        import json as _json
+        with mock.patch("v5.webchain._chat", side_effect=AssertionError("不许调模型")):
+            r = self.c.post("/v1/pixa/short-drama/projects/blank",
+                            json={"name": "打工人", "episodes": 2, "ratio": "9:16"})
+        self.assertEqual(200, r.status_code, r.text)
+        d = r.json()["data"]
+        self.assertEqual("打工人", d["topic"])
+        brief_path = self.root.parent / d["pid"] / "brief.json"
+        self.assertTrue(brief_path.exists())
+        b = _json.loads(brief_path.read_text(encoding="utf-8"))
+        self.assertEqual("", b["genre"])          # 创作字段留空（跟导演定）
+        self.assertTrue(b.get("_blank"))
+        self.assertEqual(2, b["episodes"])
+
+    def test_blank_project_route_needs_a_name(self):
+        r = self.c.post("/v1/pixa/short-drama/projects/blank", json={"name": "  "})
+        self.assertEqual(400, r.status_code, r.text)
+
     def test_redo_director_is_refused_when_nothing_is_suspended(self):
         """判据写在**服务端**，不指望前端下拉做对。"""
         r = self.c.post(self._url("/director/redo"),

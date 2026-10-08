@@ -145,9 +145,18 @@ export function getChat(pid: string, ep: number): Promise<ChatState> {
     `${P}/projects/${encodeURIComponent(pid)}/director/chat?ep=${ep}`);
 }
 
-export function askDirector(pid: string, text: string, ep: number): Promise<{ ok: boolean }> {
-  return http<{ ok: boolean }>('POST',
+export type AskResult = { ok: boolean; started?: boolean; run?: { run_id?: string } };
+/** 说一句。`started: true` = 这句话本身就是"开工"，后端已经起链（**不用再点按钮**）。 */
+export function askDirector(pid: string, text: string, ep: number): Promise<AskResult> {
+  return http<AskResult>('POST',
     `${P}/projects/${encodeURIComponent(pid)}/director/chat`, { text, ep });
+}
+
+/** **空白项目**：不调模型、秒级建壳（名字 + 包 + 集数 + 画幅），brief 的创作字段留空。 */
+export function createBlank(name: string, pack: string, episodes: number,
+                            ratio: string): Promise<{ pid: string; topic: string }> {
+  return http<{ pid: string; topic: string }>('POST', `${P}/projects/blank`,
+    { name, pack, episodes, ratio });
 }
 
 /** **开工**：接着刚才那段对话跑完整条创作链（生产与聊天同一条时间线）。 */

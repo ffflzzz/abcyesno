@@ -16,7 +16,7 @@ import { ProjectRail, type RailSignals } from '../components/ProjectRail';
 import { CanvasPane } from '../components/CanvasPane';
 import { DirectorChat } from '../components/DirectorChat';
 import {
-  askDirector, askRedo, approveHitl, editShot, fetchCanvas, getChat, getInbox, isRunning,
+  askDirector, askRedo, approveHitl, createBlank, editShot, fetchCanvas, getChat, getInbox, isRunning,
   sendToDirector, startProduction, type CanvasDoc, type ChatState, type InboxState,
 } from '../lib/studio';
 
@@ -243,8 +243,24 @@ export function Studio() {
   };
 
   const ask = async (text: string): Promise<string | null> => {
-    try { await askDirector(pid, text, ep); await refreshChat(); return null; }
-    catch (e) { return errText(e); }
+    try {
+      const r = await askDirector(pid, text, ep);
+      await refreshChat();
+      // ★ 这句话本身是"开工" —— 后端已经起链了，界面只要说清楚
+      if (r && r.started) toast('收到，开工了 —— 每一步都会出现在右栏里');
+      return null;
+    } catch (e) { return errText(e); }
+  };
+
+  const newBlank = async (name: string, pack: string, episodes: number, ratio: string) => {
+    setBusy(true);
+    try {
+      const r = await createBlank(name, pack, episodes, ratio);
+      toast(`已建空白项目 ${r.pid} —— 直接跟导演说你想拍什么`);
+      const list = await Api.listProjects(1, 200);
+      setProjects(list.list);
+      setPid(r.pid); setEp(1); setShot('');
+    } catch (e) { toast('建空白项目失败：' + errText(e), true); } finally { setBusy(false); }
   };
 
   const refreshChat = async () => {
@@ -340,7 +356,7 @@ export function Studio() {
       <ProjectRail projects={projects} signals={signals} pid={pid}
                    packs={health.packs || []} ratios={health.ratio_choices || []}
                    busy={busy} onPick={(v) => { setPid(v); setEp(1); setShot(''); }}
-                   onNew={createProject}
+                   onNew={createProject} onBlank={newBlank}
                    runIds={runIds} onRename={renameProject}
                    onStop={stopRun} onDelete={deleteProject}
                    splitter={railSplit}

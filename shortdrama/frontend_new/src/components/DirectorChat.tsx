@@ -88,10 +88,12 @@ export function DirectorChat(p: Props) {
       {splitter}
       <div className="chat-head">
         <span className="rail-title">导演</span>
-        <span className="chat-state">
-          {p.chat?.busy ? (p.chat.status === 'interrupted' ? '等你确认' : '在想 / 干活中')
-            : turns.length ? '可以说话' : ''}
-        </span>
+        {/* ⛔ 别在没事的时候写"可以说话"—— 那是废话，用户原话："为什么有这么多废话" */}
+        {p.chat?.busy ? (
+          <span className="chat-state">
+            {p.chat.status === 'interrupted' ? '停下来等你确认' : '在想 / 干活中'}
+          </span>
+        ) : null}
         <span className="stage-spacer" />
         <label className="chat-state" title="每派一个角色前停一次，等人点继续 / 打回。翻了要重启 dev server、只对下一次生成生效">
           <input type="checkbox" checked={p.manualSteps}
@@ -106,7 +108,7 @@ export function DirectorChat(p: Props) {
         {!turns.length ? (
           <div className="chat-hero">
             <h3>先跟导演聊聊</h3>
-            <p>聊清楚了再点下面的「开工」</p>
+            <p>聊清楚了，直接打「开工」两个字就行</p>
           </div>
         ) : null}
 
@@ -151,11 +153,13 @@ export function DirectorChat(p: Props) {
 
       {/* 投递：折叠成一行。⛔ 它不是聊天（链没跑时永远排着队，没人来收） */}
       <details className="chat-inbox">
-        <summary>投递给角色{queued ? ` · ${queued} 条排队中` : ''}</summary>
+        <summary title="把一句话塞给下一个来干活的角色；他干完这轮再干下一轮">
+          {queued ? `有 ${queued} 条话在等角色来取` : '给角色留话'}
+        </summary>
         <div className="chat-inbox-body">
           <div className="chat-input-row">
             <select value={to} onChange={(e) => setTo(e.target.value)}>
-              <option value="">任意角色（下一个被派发的收）</option>
+              <option value="">谁下一个干活谁收</option>
               {(p.inbox?.targets || []).filter(Boolean).map((t) => (
                 <option key={t} value={t}>{ROLE_ZH[t] || t}</option>
               ))}
@@ -183,13 +187,13 @@ export function DirectorChat(p: Props) {
           {!p.inbox?.messages?.length ? <div className="chat-inbox-row muted">还没投递过</div> : null}
           {p.inboxError ? <div className="chat-inbox-row err">{p.inboxError}</div> : null}
           <div className="chat-inbox-row muted">
-            链没在跑时"排队中"不会变成"已送达" —— 要立刻说上话，用上面的对话。
+            链没在跑时没人来取；要立刻说上话，用上面那栏。
           </div>
         </div>
       </details>
 
       <div className="chat-input">
-        <textarea value={text} placeholder={p.chat?.busy ? '他还在忙…' : '对导演说…'}
+        <textarea value={text} placeholder={p.chat?.busy ? '他正在跑这一步…' : '对导演说… 聊好了直接打「开工」'}
                   onChange={(e) => setText(e.target.value)}
                   onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void ask(); }} />
         <div className="chat-input-row">
