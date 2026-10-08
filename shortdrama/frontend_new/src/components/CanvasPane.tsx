@@ -142,19 +142,25 @@ export function CanvasPane(p: Props) {
       </div>
 
       <div className="stage-canvas">
-        {/* ⛔ 画布**没有节点时不挂 iframe**：`from=` 接口给的是空节点集，atelier 会
-            报一句错然后**回落到它自己的「画布库」页** —— 那页从我们的空态提示下面
-            透出来（实测截图里就是 "Infinite Atelier / 画布库" 压在提示底下）。
-            没东西就没东西，我们自己说清楚，别让它的库页当背景。 */}
+        {/* 两种形态，按"这一集有没有产物"切：
+
+            · **有产物** → `?from=<接口>`：画布是产物的**实时视图**，每出一张图长一格。
+            · **没产物**（新项目/还没开工）→ **不传 `from=`，给它一块自由画布**：
+              就是 atelier 原生那块（双击空白新建节点、能出图）。
+              ★ 2026-10-08 用户问「为什么不可以新建空画布」—— 因为之前我把这一栏
+                写死成"查看器"了；而 atelier 本身是**能画的**，锁掉它是我的选择，
+                不是它的能力。空项目就该给一张能画的纸。
+
+            ⚠️ 自由画布里的东西归**画布自己**（它存在浏览器里），**不会自动进**这个
+               项目的产物目录 —— 要进项目得走"开工"那条路（角色产出 → 落盘 → 长格子）。
+               这条别糊：所以下面那行字明说了。 */}
         {hasPid && nodes > 0 ? (
           <iframe key={p.pid + ':' + p.ep} title="画布"
                   src={`/atelier/canvas?from=${encodeURIComponent(apiUrl)}`} />
         ) : null}
-        {hasPid && (!p.doc || !nodes) && !p.docError ? (
-          <div className="stage-empty">
-            <strong>{p.doc ? '这一集还没有产物' : '正在读盘上的产物…'}</strong>
-            <span>{p.doc ? (p.doc.warnings?.[0] || '盘上没有静帧、片段、定妆照或成片。') : ''}</span>
-          </div>
+        {hasPid && nodes === 0 && !p.docError ? (
+          <iframe key={'free:' + p.pid + ':' + p.ep} title="自由画布"
+                  src="/atelier/canvas" />
         ) : null}
 
         {!hasPid ? (
@@ -164,6 +170,16 @@ export function CanvasPane(p: Props) {
           <div className="stage-empty">
             <strong>画布数据读不到</strong>
             <span className="err">{p.docError}</span>
+          </div>
+        ) : null}
+
+        {/* 空项目的提示：**说人话**，别把给维护者看的话端上来。
+            ⛔ 原文是 `canvasout` 的 warnings（含 `stills.json` /
+            `SHORTDRAMA_VIDEO_REF_SOURCE` 这种变量名），那是排障用的，进 title 就够。 */}
+        {hasPid && nodes === 0 && !p.docError ? (
+          <div className="stage-hint" title={(p.doc?.warnings || []).join('\n')}>
+            这一集还没有产物。下面这张画布**可以直接画**（双击空白处新建节点）；
+            要让导演按 brief 生产，去右栏跟他说「开工」。
           </div>
         ) : null}
 
