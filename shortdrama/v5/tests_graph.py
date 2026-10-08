@@ -301,6 +301,61 @@ class TestDefectGrading(unittest.TestCase):
         self.assertFalse(decision.normalize_pass(d))
 
 
+class TestBareVerdictShapes(unittest.TestCase):
+    """**没有围栏**时那份判决的三种真实形状（2026-10-08 `yuxuan-duanfeng-1007` ep2）。
+
+    代价实测过：那一轮评审写了 4 条阻断 + `rerun: [scenedesigner]`，
+    但块写成形散落在文末（键之间夹空行、`pass` 是 `**pass: false**` 加粗），
+    旧解析器"遇空行即停"⇒ 只收到最后那组 advisory ⇒ **整份判决返回 None** ⇒
+    驱动器不重派、媒体门只报"未通过"，评审的 4 条打回一起丢掉。
+    """
+
+    def test_sparse_block_with_blank_lines_is_read(self):
+        text = ("## 四、结论\n\n"
+                "阻断 4 条（R1-R4），全部 owner 为 scenedesigner。\n\n"
+                "rerun: [scenedesigner]\n\n"
+                "reason_owners: [scenedesigner]\n\n"
+                "reasons:\n"
+                '  - "镜2 时间轴只写7段，brief 明文 8-12 段"\n\n'
+                "advisory:\n"
+                '  - "特写景别仅镜7一处"\n')
+        d = decision.parse_decision(text)
+        self.assertTrue(d, "散落多行的块必须能读回来")
+        self.assertEqual(d["rerun"], ["scenedesigner"])
+        self.assertEqual(len(d["reasons"]), 1)
+        self.assertEqual(len(d["advisory"]), 1)
+        self.assertFalse(d["pass"], "有 rerun 却没写 pass ⇒ 按不通过处理")
+        self.assertTrue(d.get("unfenced"), "漏围栏要打上标记，调用方据此如实告警")
+
+    def test_bold_pass_line_is_recognized(self):
+        """`**pass: true**` / `` `pass = false` `` 这种加粗写法（两种实测形状）。"""
+        for ln in ("**pass: true**", "`pass = true`", "- pass: true"):
+            d = decision.parse_decision("结论：\n\n%s\n\nrerun: []\n" % ln)
+            self.assertTrue(d, ln)
+            self.assertIs(d["pass"], True, ln)
+
+    def test_prose_only_tail_is_still_unparsable(self):
+        """反向对照：文末只有散文/说明 ⇒ 仍返回 None（**不许猜**）。"""
+        self.assertIsNone(decision.parse_decision(
+            "报告正文\n\n结论如下：\n整体质量不错，建议后续加强节奏。\n"))
+
+    def test_bold_non_verdict_key_is_ignored(self):
+        """白名单外的加粗键（`**注意: …**`）不得被当成键 —— 否则等于让解析器猜。"""
+        self.assertIsNone(decision.parse_decision("说明：\n\n**注意: 本段只是说明**\n"))
+
+    def test_markdown_table_above_block_does_not_join_it(self):
+        """表格行不是键行 ⇒ 扫到它就停，不许把整份报告吞进块里。"""
+        text = ("| A5 | 镜1 宽景未@雨竹林 | 至多 advisory |\n"
+                "\n"
+                "rerun: [scenedesigner]\n"
+                "reasons:\n"
+                '  - "镜2 时间轴段数不足"\n')
+        d = decision.parse_decision(text)
+        self.assertTrue(d)
+        self.assertEqual(d["reasons"], ["镜2 时间轴段数不足"])
+        self.assertNotIn("A5", str(d["raw"]))
+
+
 class TestPhaseAccounting(unittest.TestCase):
     def test_record_phase_persists(self):
         """记账必须落盘——旧版记账只在中间件里，没被调用就丢。"""

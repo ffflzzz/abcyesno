@@ -185,6 +185,31 @@ def _from_mapping(data) -> dict | None:
 _BARE_KV_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.*)$")
 _BARE_ITEM_RE = re.compile(r"^\s*-\s+(.*)$")
 
+#: 判定块里程序认识的键。**只有走"加粗/行内代码"这条宽松路径的键要在白名单内**
+#: ——散文里 `**注意: xxx**` 这种行不能被判成键，否则等于让解析器猜。
+_VERDICT_KEYS = ("pass", "rerun", "reasons", "reason_owners", "owners", "advisory",
+                 "suggestions", "notes", "verdict", "blocking", "rerun_role",
+                 "needs_revision", "revision_target", "issues")
+
+
+def _bare_kv(ln: str) -> tuple[str, str] | None:
+    """把一行"键行"归一化成 `(小写键, 值)`；认不出返回 None（**不猜**）。
+
+    两种写法（都是实测，见 `_bare_block_lines` 的事故记录）：
+      · 标准裸行 `rerun: [scenedesigner]` —— 走 `_BARE_KV_RE`，**行为与旧版一字不变**；
+      · 散文里加粗/行内代码写的键 `**pass: false**`、`` `pass = false` `` ——
+        剥掉行首项目符号与两端 `*`/反引号后再试，且**键必须在 `_VERDICT_KEYS` 白名单里**。
+    """
+    s = ln.strip()
+    m = _BARE_KV_RE.match(s)
+    if m:
+        return m.group(1).lower(), m.group(2).strip()
+    t = re.sub(r"^[-*+]\s+", "", s).strip(" `*")
+    m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*[:=]\s*(.*)$", t)
+    if not m or m.group(1).lower() not in _VERDICT_KEYS:
+        return None
+    return m.group(1).lower(), m.group(2).strip()
+
 
 def _bare_block_lines(text: str) -> list[str]:
     """收集**文末的裸 `key: value` 块行**（没有代码围栏时的兜底）。
@@ -199,21 +224,40 @@ def _bare_block_lines(text: str) -> list[str]:
     **创作链 20 分钟全绿、四道输入门全过，却不出片**，而且报告与判定自相矛盾
     （review.md 里明明写着 `pass: true`）。
 
-    从文末往上扫，遇到不属于块的行就停。**不做任何猜测**——找不到合格块仍返回空列表，
-    由 `_from_mapping` 再判一次（键不成立同样返回 None），行为与旧版一致。
+    ★ 2026-10-08 补两条（实测 `yuxuan-duanfeng-1007` ep2，代价是**丢了评审的 4 条打回**）：
+      ① **块内允许空行**。那一轮的判定写成形散落在文末：
+         `rerun: [scenedesigner]` / 空行 / `reasons:` / 空行 / `advisory:`，
+         旧实现"遇空行即停"⇒ 只收到最后那组 advisory ⇒ `_from_mapping` 里
+         pass/rerun/reasons 一个都没有 ⇒ **整份判决读不出来**（返回 None）
+         ⇒ 驱动器不重派、媒体门只报"未通过"。
+      ② **加粗/行内代码的键也认**（`**pass: false**`，同一轮里 pass 就是这么写的；
+         旧版 `huashan-duel-v4-0928` ep2 的 `**pass = false**` 同形）。
+
+    从文末往上扫。⛔ 不做任何猜测——非空且不匹配的行照旧**立即停**，
+    找不到合格块仍返回空列表，由 `_from_mapping` 再判一次（键不成立同样返回 None）。
     """
     lines = text.splitlines()
     i = len(lines)
     while i > 0 and not lines[i - 1].strip():
         i -= 1
     block: list[str] = []
+    blanks = 0
     while i > 0:
         ln = lines[i - 1]
-        if _BARE_KV_RE.match(ln) or _BARE_ITEM_RE.match(ln):
+        if not ln.strip():
+            # ★ 空行**跳过但不终止**（旧实现在这里 break，把散落多行的块砍成半截）。
+            blanks += 1
+            i -= 1
+            continue
+        if _bare_kv(ln) is not None or _BARE_ITEM_RE.match(ln):
+            block.extend([""] * blanks)      # 保住原块的相对形状（解析器忽略空行）
             block.append(ln)
+            blanks = 0
             i -= 1
             continue
         break
+    while block and not block[-1].strip():
+        block.pop()
     block.reverse()
     return block
 
@@ -227,9 +271,9 @@ def _parse_bare_kv(lines: list[str]) -> dict:
     data: dict = {}
     cur: str | None = None
     for ln in lines:
-        m = _BARE_KV_RE.match(ln)
-        if m:
-            key, val = m.group(1).lower(), m.group(2).strip()
+        kv = _bare_kv(ln)
+        if kv:
+            key, val = kv
             if val:
                 data[key] = val
                 cur = None
