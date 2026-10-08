@@ -59,7 +59,7 @@ export default function SettingsPanel({ apiKeys = null, keyStatus = "", model = 
       } else if (r.started) {
         setPoolNote("短剧后台已重启，新 Key 池已生效。");
       } else {
-        setPoolNote("短剧后台没在跑 —— 下次打开短剧工厂时就用的新 Key。");
+        setPoolNote("短剧后台没在跑 —— 下次打开短剧工作室时就用的新 Key。");
       }
     } catch (err) {
       setPoolNote(`重启失败：${err && err.message ? err.message : String(err)}`);

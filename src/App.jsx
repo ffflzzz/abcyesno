@@ -1551,24 +1551,14 @@ export default function App({ aguiPort, initialWorkflowId = "", studioEntry = fa
             });
       return { key: app.key, title: app.title, icon: app.icon, iconSrc, onClick };
     }),
-    // 短剧工厂 — vendored shortdrama pipeline (separate Python backend, opened
-    // in the built-in browser tab). Title doubles as the boot affordance: the
-    // Launcher grid has no spinner slot, so the label carries the state.
-    {
-      key: "shortdrama",
-      title:
-        sdBoot === "booting" ? "短剧启动中…"
-        : sdBoot === "error" ? "短剧启动失败"
-        : "短剧工厂",
-      icon: "clapperboard",
-      onClick: () => {
-        void openShortdrama().catch(() => {});
-      },
-    },
+    // 短剧工厂（旧版前端，shim 的 `/`）已于 2026-10-08 暂时移出启动台。
+    // 后端与 `openShortdrama()` 一字未动 —— 下面那个「短剧工作室」用的就是同
+    // 一次起服（`/studio/`）。要接回来只需在此处加回那一项，无需别的改动。
     // 短剧工作室 — the three-pane production view (project rail + live atelier
-    // canvas + director chat). Same Python backend and same origin as 短剧工厂,
-    // just mounted at /studio by v5/server.py, so this reuses the one boot.
-    // Trailing slash matters: the static mount resolves "/" for the directory.
+    // canvas + director chat). Same Python backend and same origin as the retired
+    // 短剧工厂 tile, just mounted at /studio by v5/server.py, so this reuses the
+    // one boot. Trailing slash matters: the static mount resolves "/" for the
+    // directory.
     {
       key: "shortdrama-studio",
       title:
