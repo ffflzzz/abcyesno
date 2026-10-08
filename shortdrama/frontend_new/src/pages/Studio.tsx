@@ -254,7 +254,7 @@ export function Studio() {
     setBusy(true);
     try {
       await startProduction(pid, ep, manualSteps);
-      toast('已开工 —— 接着刚才那段对话跑，每一步都会出现在右栏里');
+      toast('开工指令已送进这段对话 —— 他每走一步的话、以及这一轮的判决，都回到右栏');
       await refreshChat();
       return null;
     } catch (e) { return errText(e); } finally { setBusy(false); }
@@ -265,7 +265,7 @@ export function Studio() {
       const r = await askDirector(pid, text, ep);
       await refreshChat();
       // ★ 这句话本身是"开工" —— 后端已经起链了，界面只要说清楚
-      if (r && r.started) toast('收到，开工了 —— 每一步都会出现在右栏里');
+      if (r && r.started) toast('收到，开工指令已送出 —— 每一步的话和这一轮的判决都回到右栏');
       return null;
     } catch (e) { return errText(e); }
   };

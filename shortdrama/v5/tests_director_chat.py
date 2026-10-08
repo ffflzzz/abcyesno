@@ -155,6 +155,69 @@ class TestPullNew(_Base):
         self.assertTrue(any("规格已落盘" in t for t in texts), texts)
 
 
+class TestChainVerdict(_Base):
+    """★ 开工失败必须在对话里**响亮**，不能只躺在 `.tmp/web-runs/*.log` 里。
+
+    实测 `paste-1008-2204`（2026-10-08）：点开工 → 界面弹「已开工」→ 导演回一句反问
+    → 然后什么都没发生。真相是那一轮 21 秒、7 个角色零产物、`status=failed`，
+    而界面上从头到尾没说这一轮失败了。
+    """
+
+    _REC = {"run_id": "r-chain-1", "kind": "chain", "status": "failed",
+            "started_at": "2026-10-08 22:14:16", "ended_at": "2026-10-08 22:14:37",
+            "result": {"reason": "创作链未产出这些角色的契约产物：worldbuilder"}}
+
+    def _runs(self, rec):
+        return lambda pid=None, limit=30: [dict(rec)]
+
+    def test_failed_chain_lands_in_the_transcript(self):
+        with mock.patch.object(runner, "list_runs", self._runs(self._REC)):
+            director_chat._chain_verdict(self.root, 1)
+        sys_t = [t["text"] for t in director_chat.turns(self.root) if t["role"] == "system"]
+        self.assertEqual(1, len(sys_t), sys_t)
+        self.assertIn("failed", sys_t[0])
+        self.assertIn("worldbuilder", sys_t[0], "理由必须原样带出来，不然等于没说")
+
+    def test_reported_only_once_per_run(self):
+        with mock.patch.object(runner, "list_runs", self._runs(self._REC)):
+            director_chat._chain_verdict(self.root, 1)
+            director_chat._chain_verdict(self.root, 1)      # 前端每 3 秒就轮一次
+        self.assertEqual(1, len([t for t in director_chat.turns(self.root)
+                                 if t["role"] == "system"]),
+                         "同一个 run 报两遍 = 刷屏")
+
+    def test_a_run_that_is_still_going_reports_nothing(self):
+        """⛔ 前提不存在时不许报 —— 否则链正在跑就被判了死刑。"""
+        live = dict(self._REC, status="running", result={})
+        with mock.patch.object(runner, "list_runs", self._runs(live)):
+            director_chat._chain_verdict(self.root, 1)
+        self.assertEqual([], [t for t in director_chat.turns(self.root)
+                              if t["role"] == "system"])
+
+
+class TestChatPhaseContract(_Base):
+    """对话阶段那段律的**形状**：不派活、不写创作产物，但**必须能落 `brief.json`**。
+
+    实测代价（`paste-1008-2204`）：旧律连 `brief.json` 都不许写 ⇒ 用户在聊天里把整条
+    故事口述完、导演两次说"最终版如下"，盘上仍是出厂那份空 brief ⇒ 开工时他读到空 brief
+    就停下来反问，21 秒零产物。"聊清楚"没有出口 = 这条道白搭。
+    """
+
+    def test_brief_write_allowed_and_dispatch_still_banned(self):
+        p = director_chat.CHAT_PREFIX
+        self.assertIn("brief.json", p)
+        self.assertIn("write_file", p, "得告诉他用什么写 —— 只说'落盘'他未必动手")
+        self.assertIn("不要派发任何子代理", p)
+        for gone in ("worldbuilder", "分镜"):
+            self.assertIn(gone, p, "创作产物仍然要点名禁止")
+
+    def test_no_leftover_blanket_ban(self):
+        """反向对照：旧那句抄回来，这条道就又变成"聊完即蒸发"。"""
+        p = director_chat.CHAT_PREFIX
+        self.assertNotIn("不要调用任何工具", p)
+        self.assertNotIn("不要写任何文件", p)
+
+
 class TestDigest(_Base):
     """对话时禁止他用工具 ⇒ 必须把盘上事实喂给他，否则只能空谈。"""
 

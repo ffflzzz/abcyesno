@@ -130,7 +130,8 @@ export function onCanvasEvent(fn: (ev: CanvasEvent) => void): () => void {
 
 /* ─────────────────────────────── 和导演对话 ─────────────────────────────── */
 
-export type ChatTurn = { role: 'user' | 'director'; text: string; at?: string; ep?: number };
+/** `system` = 后端落进时间线的**盘上事实**（如"这一轮创作链收工：failed + 理由"）。 */
+export type ChatTurn = { role: 'user' | 'director' | 'system'; text: string; at?: string; ep?: number };
 
 export type ChatState = {
   turns: ChatTurn[];

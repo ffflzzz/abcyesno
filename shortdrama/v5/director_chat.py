@@ -11,13 +11,18 @@
 
     聊（`ask` / `poll`） → 满意了 → 开工（`runner.start(kind="chain", chain_thread=<这段>)`）
 
-## 为什么"聊"不会误开工（2026-10-07 实测）
+## 为什么"聊"不会误开工
 
 导演的提示词是「你是监制，按依赖序派活」，**没有"只回答不做事"的模式** ——
 所以"发一句过去他会不会直接开始写文件"是这条路上的唯一未知项。实测（临时项目
 `chatprobe-1007`，跑完即删）：消息带上 `CHAT_PREFIX` 之后，他回了一大段正经回答、
 **盘上新增文件 0 个**。所以按住他的办法就是**在消息里说清这是对话阶段**，
 ⛔ 不去改他的提示词（那是共享的、编译期生效的东西）。
+
+⚠️ **2026-10-08 改了一档**：那条律原本连 `brief.json` 都不许写，结果"聊清楚"这件事
+**没有出口** —— 用户口述完整条故事、导演两次说"最终版如下"，盘上仍是出厂那份空 brief，
+点开工时他读到空 brief 就反问、21 秒零产物收工。现在 `CHAT_PREFIX` 放开**唯一这一个文件**，
+"不派发、不写创作产物"照旧。换档后要重新验一次"他只写 brief、不动别的"（见 `v5/tests_director_chat.py`）。
 
 ## 三条边界
 
@@ -48,11 +53,23 @@ _SEQ_LOCK = threading.Lock()
 
 #: 对话阶段的**前缀**。这一行的作用就是"按住他"：见模块文档的实测记录。
 #: ⚠️ 措辞别删这两句：① 只回话 ② 等"开工"再做。少任何一句，实测会开始动手。
+#: ★ 2026-10-08 更正：这条从"什么都不许写"改成"**只许写 `brief.json`**"。
+#: 实测代价（`paste-1008-2204`）：用户在对话里把整条故事口述完了（题材/主角/冲突/
+#: 关键道具/四幕反转/禁忌/结局/片长），导演两次说"brief 最终版如下"却**一个字都落不了盘**
+#: —— 因为这条律禁止他调用任何工具。于是点开工时他读到的是出厂那份**空 brief**，
+#: 他当场停下来反问"A 还是 B"，`drive_chain` 两轮零产物被反空转闸收工：**21 秒、0 个文件**。
+#: 聊天里谈得再好，盘上没有 = 全部作废 —— 开工时生产链读的是 `brief.json`，**不读聊天**。
 CHAT_PREFIX = (
-    "【对话阶段 · 本轮只回话】\n"
+    "【对话阶段 · 只回话，外加一件事：把 brief 落盘】\n"
     "现在还不是开工的时候 —— 用户想先跟你把事聊清楚。\n"
-    "**本轮请只回答问题**：不要调用任何工具、不要写任何文件、不要派发任何子代理。\n"
-    "等用户明确说「开工」时，你才开始落规格、派活。\n\n"
+    "**本轮不要派发任何子代理**，也不要写任何创作产物"
+    "（worldbuilder / 剧本 / 台词 / 分镜 / 评审报告都不是这一步的事）。\n"
+    "★ **唯一允许你写的文件是 `/brief.json`**：你们俩谈定的题材、主角、核心冲突、\n"
+    "关键道具、`must_have`、`禁忌`、`结局`、片长、`audio_mode`，\n"
+    "**必须**用 `write_file` 落到 `/brief.json`（整份覆盖，但**保留**盘上已有的\n"
+    "`topic` / `pack` / `episodes` / `ratio`），不要只在聊天里贴一遍 ——\n"
+    "开工时生产链读的是盘上那份，读不到这段聊天。\n"
+    "还没聊定的字段就**留空**，别替用户编。\n\n"
 )
 
 #: 单轮最多等多久（秒）。超时不算失败 —— 只是这一轮还没答完，界面继续转。
@@ -105,15 +122,15 @@ def _live_chain_run(root: Path) -> dict | None:
 def _digest(root: Path, ep: int) -> str:
     """盘上现状的**速览**，随每句话喂给导演。
 
-    ★ 为什么必须给他：对话时我们**禁止他调用工具**（见 `CHAT_PREFIX`），
-      所以他读不到 `/brief.json`、也读不到产物目录。实测（2026-10-07）：
+    ★ 为什么必须给他：对话阶段他不派活、也不该自己去翻目录（见 `CHAT_PREFIX`，
+      那里只放开 `brief.json` 一个写点）。实测（2026-10-07）：
       不喂的话他会老实说"我还没拿到 brief"，只能给通用套话；喂了才答得具体。
       ⛔ 所以"按住他"和"喂饱他"是配套的两件事，缺一个这条道就不能用。
     只读，不写任何东西。
     """
     from . import guards
 
-    out = ["【开工前必读 · 盘上现状（自动附上，你不必也不能去读文件）】"]
+    out = ["【开工前必读 · 盘上现状（自动附上，不必自己去读文件）】"]
     try:
         brief = guards.load_brief(root)
         if brief:
@@ -410,6 +427,43 @@ def poll(root: Path) -> dict:
     return asyncio.run(_poll(root))
 
 
+def _chain_verdict(root: Path, ep: int) -> None:
+    """创作链**收工**后，把它的判决写进这段对话的时间线。
+
+    ★ 为什么必须有它（实测 `paste-1008-2204`，2026-10-08）：点开工 → 界面弹「已开工」
+      → 导演回一句反问 → 然后什么都没发生。真相是那一轮 **21 秒、7 个角色零产物**、
+      被 `drive_chain` 的反空转闸收工、`status=failed` —— 可这个判决**只写在日志里**，
+      对话与画布上都没露过面，用户只能问"点了开工怎么不开工"。
+      报失败必须是**响亮**的，不是等人去翻 `.tmp/web-runs/*.log`。
+    ⛔ 一个 run 只报一次（按 `run_id` 记账）：前端每 3 秒轮询一次，重复报会刷屏。
+    """
+    try:
+        from .media import runner as _runner
+        done = [x for x in _runner.list_runs(Path(root).name, 8)
+                if str(x.get("kind")) in ("chain", "script")
+                and str(x.get("status")) in _runner.TERMINAL]
+        rid = str(done[0].get("run_id") or "") if done else ""
+        if not rid:
+            return
+        with _edit(root) as o:
+            if rid == str(o.get("chain_run") or ""):
+                return
+            o["chain_run"] = rid
+            rec = done[0]
+            reason = str((rec.get("result") or {}).get("reason") or "").strip()
+            o["turns"].append({
+                "role": "system", "ep": ep,
+                "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "text": ("**这一轮创作链收工：%s**（%s → %s）\n%s"
+                         % (str(rec.get("status") or ""),
+                            str(rec.get("started_at") or "")[-8:],
+                            str(rec.get("ended_at") or "")[-8:],
+                            reason or "（记录里没写理由）"))})
+            o["turns"] = o["turns"][-400:]
+    except Exception:  # noqa: BLE001 —— 报不出判决不能把轮询弄崩
+        pass
+
+
 async def _poll(root: Path) -> dict:
     from . import webchain
     obj = _read(root)
@@ -447,6 +501,10 @@ async def _poll(root: Path) -> dict:
     if status and status in _TERMINAL:
         with _edit(root) as o2:
             o2["run_id"] = ""
+
+    # ③ 创作链收工 ⇒ 把**它的判决**落进这段对话（见 `_chain_verdict`）
+    _chain_verdict(root, ep)
+
     return {"busy": busy, "status": status, "added": added,
             "turns": _read(root)["turns"], "thread_id": tid}
 
@@ -461,4 +519,5 @@ def reset(root: Path) -> None:
     with _edit(root) as obj:
         obj["thread_id"] = ""
         obj["run_id"] = ""
+        obj["chain_run"] = ""
         obj["seen"] = 0
