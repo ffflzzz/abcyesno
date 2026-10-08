@@ -947,8 +947,10 @@ def role_input(role: str, root: Path, m: dict, reasons: list[str] | None = None)
             _rng = validate.parse_shot_range(_brief.get("target_duration"))
             _pl: list[str] = []
             if _sb.exists():
-                _shots = _sbd.parse(_sb.read_text(encoding="utf-8"))
+                _md = _sb.read_text(encoding="utf-8")
+                _shots = _sbd.parse(_md)
                 _pl = shotcheck.punch_list(_shots, target_seconds=_tgt,
+                                           markdown=_md,
                                            use_judge=(config.SHOTCHECK == "full"),
                                            chars=shotcheck.character_names(root),
                                            target_shots=_rng,

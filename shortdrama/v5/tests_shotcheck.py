@@ -26,6 +26,14 @@ SB_HEAD = ("# 分镜\n\n| 镜头号 | 景别 | 角度 | 运镜 | 时长(秒) | �
            "|---|---|---|---|---|---|---|---|---|---|---|---|---|\n")
 
 
+#: 夹具用的四条**互不相同**的动作（表级"整行重复"判据按相似度 ≥0.9 判，
+#: 同句模板只换一个词仍会被判成互相抄袭 —— 那是夹具的锅）
+_ACTS = ["@裴烛 蹬地前冲劈出板状剑罡，@谢潮生 侧身避开后横移反手格开",
+         "@谢潮生 踏碎台面石阶腾起半空，@裴烛 抬剑上撩把剑罡弹向云海",
+         "@裴烛 收剑换肩撞进半步，@谢潮生 双臂交叉架住后退三寸",
+         "@谢潮生 反手甩出半圈剑光，@裴烛 低头躲过随后踢起一地碎石"]
+
+
 def _row(name, visual, seconds=3, dialogue="裴烛：接住。", join="承接上镜"):
     # ⚠️ `storyboard.parse` 会把**画面描述少于 15 字**的行当占位符丢掉
     #   （`if len(visual) < 15: continue`）。测试里如果图省事写"两人对峙"，
@@ -137,9 +145,7 @@ class TestCountable(unittest.TestCase):
         self.assertTrue(any("片长" in c for c in checks), checks)
 
     def test_good_table_passes(self):
-        shots = [_shot("LN%02d" % i,
-                       "@裴烛 蹬地前冲劈出板状剑罡，@谢潮生 侧身避开后横移反手格开")
-                 for i in range(1, 33)]
+        shots = [_shot("LN%02d" % i, _ACTS[(i - 1) % 4] + "，收势落在第 %d 处台阶" % i) for i in range(1, 33)]
         for s in shots:
             s["seconds"] = 4
         hard = shotcheck.countable(shots, 120)
@@ -225,9 +231,8 @@ class TestCountable(unittest.TestCase):
 
     def test_shot_floor_follows_target_not_a_hardcoded_25(self):
         """60 秒 / 17 镜的片子不许被"写死 25 镜"误判（2026-09-29 实错）。"""
-        shots = [_shot("LN%02d" % i,
-                       "@裴烛 蹬地前冲劈出板状剑罡，@谢潮生 侧身避开后横移反手格开",
-                       seconds=4) for i in range(1, 18)]
+        shots = [_shot("LN%02d" % i, _ACTS[(i - 1) % 4], seconds=4)
+                 for i in range(1, 18)]
         hard = shotcheck.countable(shots, 60)
         self.assertEqual([h["check"] for h in hard if "片长" in h["check"]], [], hard)
 
@@ -323,9 +328,8 @@ class TestWiring(unittest.TestCase):
         self.assertIn("位移动词", txt, "该镜的具体判据要能看见")
 
     def test_clean_table_says_do_not_rewrite(self):
-        rows = "".join(_row("LN%02d" % i,
-                            "@裴烛 蹬地前冲劈出板状剑罡，@谢潮生 侧身避开后横移反手格开",
-                            seconds=4) for i in range(1, 33))
+        rows = "".join(_row("LN%02d" % i, _ACTS[(i - 1) % 4] + "，收势落在第 %d 处台阶" % i, seconds=4)
+                       for i in range(1, 33))
         root = self._root(rows)
         with mock.patch.object(config, "SHOTCHECK", "count"):
             txt = roles.role_input("scenedesigner", root, {"episode_index": 1})
@@ -372,9 +376,8 @@ class TestWiring(unittest.TestCase):
         self.assertIn("位移动词", txt2)
         # 合格表要清掉清单，否则过期结论会一直喂给角色
         # （fixture 的 brief 目标 120 秒 ⇒ 要 32 镜 × 4 秒才落在 85%-130% 里）
-        good = "".join(_row("LN%02d" % i,
-                            "@裴烛 蹬地前冲劈出板状剑罡，对方侧身避开后横移反手格开",
-                            seconds=4) for i in range(1, 33))
+        good = "".join(_row("LN%02d" % i, _ACTS[(i - 1) % 4] + "，收势落在第 %d 处台阶" % i, seconds=4)
+                       for i in range(1, 33))
         sb.write_text(SB_HEAD + good, encoding="utf-8")
         with mock.patch.object(config, "SHOTCHECK", "count"):
             txt3 = roles.role_input("scenedesigner", root, {"episode_index": 1})
@@ -650,3 +653,30 @@ class TestSceneLaws(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTableLevelDefects(unittest.TestCase):
+    """表级两条（2026-10-08）：两镜成段重复 / 表写断了。
+
+    起因：一条 5 集仙侠的表被模型重写 5 遍，**每遍后半段都在抄自己开头**，
+    而当时没有任何判据抓这两件事 ⇒ 每轮打回的理由都是别的条目 ⇒ 迭代到上限收工。
+    """
+
+    def test_duplicate_prose_is_flagged_but_anchor_reuse_is_not(self):
+        _body = ("右脚前撑成低桩、左腿由高起处沿一条直线弹起、脚尖先过对方肩线、"
+                 "青碧火星沿直线拖成剑芒弧、肩背线条压到极低、落地时单腿前落踩住台面石缝")
+        dup = [{"name": "LN01", "visual": "@顾青猗（青碧短打）" + _body},
+               {"name": "LN02", "visual": "@岑墨（黯金劲装）" + _body}]
+        self.assertEqual([("LN01", "LN02")], shotcheck.duplicate_prose(dup))
+        ok = [{"name": "LN01", "visual": "@顾青猗（青碧短打）右脚前撑成低桩、左腿弹起"},
+              {"name": "LN02", "visual": "@顾青猗（青碧短打）横移半步、枪尖斜指、肩线压低"}]
+        self.assertEqual([], shotcheck.duplicate_prose(ok),
+                         "锚点复述是契约要求，不能被判成重复")
+
+    def test_truncated_table_is_flagged(self):
+        head = ("| 镜头号 | 景别 | 角度 | 运镜 | 时长(秒) | 场景 | 视觉风格 | 画面描述 | 落幅 | 对白 | 音效 | 文字镜 | 承接 |\n"
+                "|---|---|---|---|---|---|---|---|---|---|---|---|---|\n")
+        good = head + "| 1 | 近景 | 平视 | 推 | 6 | 云海 | 风格 | 内容 | 落幅 | （无声，环境音） | 声 | 否 | 开场镜 |"
+        self.assertEqual("", shotcheck.table_truncated(good))
+        cut = head + "| 1 | 近景 | 平视 | 推 | 6 | 云海 | 风格 | 内容 | 落幅 | （无声，环境音） | 声 | 否 | 镜头10落幅："
+        self.assertIn("写断", shotcheck.table_truncated(cut))

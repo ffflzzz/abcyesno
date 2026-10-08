@@ -46,6 +46,65 @@ ENV_VERB = ("劈", "斩", "犁", "削", "击碎", "崩落", "掀翻", "插下", 
 SILENT_MARK = ("（无声", "(无声", "环境音", "无台词")
 
 # ── 语义判据（模型判，必须逐字引用）──────────────────────────────────────────
+
+def duplicate_prose(shots: list, threshold: float = 0.95) -> list:
+    """两镜的正文**几乎整行一样**（同一段话被抄了两遍）。返回 `[(先出现的镜, 重复的镜)]`。
+
+    ★ 2026-10-08 实测（`yuxuan-duanfeng-1007`）：一次重写里 LN02..LN11 的开头
+    **与 LN01 一字不差**（模型一口气写 5 万字长表，写到后半段开始抄自己开头），
+    而当时**没有任何判据抓这件事** ⇒ 每轮打回的理由都是别的条目 ⇒ 每轮整表重写、
+    每轮在同一个地方犯同样的错，迭代到上限收工。判据必须**点名重复**，
+    检查员才有"只改这几行"的可执行修法。
+
+    ⚠️ 两条都按实测定：
+      · 先剥 `@名（衣装…）` 锚点再比 —— 锚点复述是**契约要求**，不比就等于诬告合规写法；
+      · 阈值 **0.95**（2026-10-08 定，按真实样本量出来的）：实测"整行照抄"= 0.99；
+        "同一招式换目标重演"= 0.59~0.72；"同一句式只换一个词"≈ 0.88~0.92。
+        后两类是**质量口味**（他看片判），不是抄错 —— 判在 0.95 才只抓真抄，
+        否则连合规的套路化写法都会被打回。
+    """
+    import difflib
+    import re as _re
+
+    def _norm(v: str) -> str:
+        v = _re.sub(r"@[^（(\s]{1,10}[（(][^）)]{0,120}[）)]", "", v or "")
+        return _re.sub(r"[\s。，、；：,.;:!？?]", "", v)
+
+    seen: list = []
+    out = []
+    for s in shots:
+        v = _norm(str(s.get("visual") or ""))
+        # ⚠️ 短正文不比：30 来个字里只差一个字，相似度也有 0.97 ——
+        #   那是个**句子模板**，不是抄（真实分镜每镜 100~300 字，远超这个门槛）。
+        if len(v) < 40:
+            continue
+        for name, prev in seen:
+            if difflib.SequenceMatcher(None, v, prev).ratio() >= threshold:
+                out.append((name, s.get("name")))
+                break
+        else:
+            seen.append((s.get("name"), v))
+    return out
+
+
+def table_truncated(md: str) -> str:
+    """表是不是**写断了**（末行不闭合）。返回原因串，空 = 没问题。
+
+    判据只取可数的两条：① 最后一行表格行必须以 `|` 收尾（闭合）；② 末镜的单元格里
+    不能以「：」结尾（那是半句话）。实测那次末行停在「镜头10落幅：」。
+    """
+    lines = [l for l in (md or "").splitlines()
+             if l.strip().startswith("|") and not set(l.strip()) <= set("|-: ")]
+    if not lines:
+        return ""
+    last = lines[-1].rstrip()
+    if not last.endswith("|"):
+        return "最后一行没闭合（表格行必须以 | 收尾）—— 表被写断了"
+    tail = last.rstrip("|").split("|")[-1].strip()
+    if tail.endswith(("：", ":")) or (tail and tail[-1] in "，、；,"):
+        return "末镜最后一个单元格停在半句（…%s）—— 表被写断了" % tail[-12:]
+    return ""
+
 CODES = {
     "opponent_as_background":
         "这一镜里**应该出场的对手被写成了不动的背景**（例如"
@@ -134,7 +193,8 @@ def countable(shots: list[dict], target_seconds: int = 0,
               target_shots: tuple[int, int] | None = None,
               audio_mode: str = "dialogue-led",
               camera_light: bool = False,
-              single_at_law: bool = False) -> list[dict]:
+              single_at_law: bool = False,
+              markdown: str = "") -> list[dict]:
     """能数的判据。返回 `[{name, check, detail}]`，空列表 = 全过。
 
     ★ 这一层的存在意义（2026-09-29）：**凡程序能确定的，就别写进提示词让模型自觉**。
@@ -203,6 +263,16 @@ def countable(shots: list[dict], target_seconds: int = 0,
     #    一条**没人能满足**的条目 —— 2026-10-08 实测：第 1 集收尾镜 LN19 因此被退回，
     #    而那条链同时被另一条误判（见 `rock_chopping_as_beat`）拖着重写了 6 次。
     from .media import storyboard as _sb_ck
+    # ── 表级两条（2026-10-08）：重复 / 写断 ──────────────────────────────
+    _dup = duplicate_prose(shots)
+    if _dup:
+        need(False, "两镜正文成段重复（多半是表太长、写到后面抄了自己开头）",
+             "重复对：%s —— 修法：**只重写后出现的那些镜**，其余原样保留"
+             % "、".join("%s→%s" % (a, b2) for a, b2 in _dup[:6]),
+             names=[b2 for _a, b2 in _dup[:12]])
+    _tr = table_truncated(markdown)
+    if _tr:
+        need(False, "分镜表写断了", _tr)
     low_move = [s["name"] for s in shots
                 if len(_sb_ck.split_beats(s.get("visual") or "")) >= 2
                 and sum(1 for w in MOVE_VERBS if w in (s.get("visual") or "")) < 2]
@@ -426,14 +496,16 @@ def punch_list(shots: list[dict], *, target_seconds: int = 0, use_judge: bool = 
                target_shots: tuple[int, int] | None = None,
                audio_mode: str = "dialogue-led",
                camera_light: bool = False,
-               single_at_law: bool = False) -> list[str]:
+               single_at_law: bool = False,
+               markdown: str = "") -> list[str]:
     """给角色看的**退回清单**（一镜一行，带镜号与逐字原文）。
 
     为什么要有这个形状：分镜角色拿到的如果是"你自己检查一遍"，它会逐镜重读整张表
     （实测 2 小时）；拿到"这 5 镜、这几条、原文在此"，它只需要改那 5 镜。
     """
     hard = countable(shots, target_seconds, chars, target_shots, audio_mode,
-                     camera_light=camera_light, single_at_law=single_at_law)
+                     camera_light=camera_light, single_at_law=single_at_law,
+                     markdown=markdown)
     out = []
     for h in hard:
         out.append("【%s】%s（%s）" % (h["check"], h["name"] or "全表", h["detail"]))
