@@ -283,7 +283,8 @@ NO_PROGRESS_SECONDS = 2700.0
 def thrash_stop(rewrites: dict, rounds_without_new: int,
                 max_rewrites: int = 3, max_stall: int = 2,
                 since_new_seconds: float = 0.0,
-                stall_seconds: float = NO_PROGRESS_SECONDS) -> str:
+                stall_seconds: float = NO_PROGRESS_SECONDS,
+                converged: bool = False) -> str:
     """工头自己乒乓重派的停机判据（**纯函数**，可单测）。返回停因，空串 = 继续跑。
 
     ★ 为什么必须有它（2026-10-03 实测 `yoga-affair-1003f`）：驱动器原先只对
@@ -306,6 +307,17 @@ def thrash_stop(rewrites: dict, rounds_without_new: int,
       **进出盘**（新增和消失都算进展——打回时 `reset_from()` 先把旧的挪走，那也算进展，
       所以不会把合法的"打回重做"一起掐掉）。
 
+    ★★★ 2026-10-08 第三次误杀后补的第三条前提：**这张表已经合格了就不许停**
+      （`converged`）。当天第 3 集：分镜被重派 6 次，每次数值都在往前走
+      （120 秒 → 90 秒、方向 3 种 → 4 种、三空间齐），20:16 那张表**程序体检 0 条**，
+      而工头还没轮到派 reviewer —— 闸在 20:22 掐掉整轮，`run_new_project` 报
+      「缺 reviewer → 不启动媒体链」，**只差一步的合格产物变成零出片**。
+      根因是 ② 用的是"**产物集合**变没变"，而一个角色反复改**同一份**文件时集合恒不变 ⇒
+      ①② 这对条件实际等价于"某个角色一直在改自己的稿"，**改到合格也算乒乓**。
+      ⇒ 判据得看盘上事实：`converged=True`（本集分镜已过可数判据）时**不停**。
+      ⚠️ 只豁免第一条：`rounds_without_new`（连续 N 轮**整盘**无新产物）照旧会停 ——
+      1003f 那种"9 次重派始终不合格"的形态不受影响。
+
     判据只看**磁盘事实**（本项目一贯的验收口径）：
       · `rewrites[角色]` = 该产物在本轮 run 里被**独立重写**的次数
         （分段写盘已由 `write_bursts` 折成一次）；上限沿用门那一份预算，不新造数字：
@@ -315,7 +327,7 @@ def thrash_stop(rewrites: dict, rounds_without_new: int,
       · `rounds_without_new` = 连续多少轮轮询没有任何新产物出现。
     """
     hot = sorted(r for r, n in (rewrites or {}).items() if n > max_rewrites)
-    if hot and since_new_seconds >= stall_seconds:
+    if hot and since_new_seconds >= stall_seconds and not converged:
         return ("已经 %d 分钟没有任何角色产物进出盘，而这段时间里 %s 被独立重写了 %d 次"
                 "（工头在原地乒乓重派，不往前推进）"
                 % (int(since_new_seconds // 60), "、".join(hot),
@@ -809,8 +821,27 @@ async def main() -> int:
                               "的分段保存（本角色已并入 %d 次），不计乒乓"
                               % (_r, int(WRITE_BURST_GAP // 60), _merged[_r]), flush=True)
             _since_new = time.time() - _t_new
+            # ★ 「表已经改合格了」不许当乒乓掐掉（2026-10-08 第 3 集误杀：
+            #   20:16 那张表程序体检 0 条、只差 reviewer，闸在 20:22 收工 ⇒ 零出片）。
+            #   判据与退回清单**同一份参数**（`roles.storyboard_check_args`），零额度。
+            try:
+                from v5.roles import storyboard_is_compliant
+                _conv = bool(storyboard_is_compliant(root, ep))
+            except Exception as e:      # noqa: BLE001 -- 判不动就照旧允许停
+                print("[drive] ⚠️ 收敛判据读不动（%s: %s）→ 按未收敛处理"
+                      % (type(e).__name__, str(e)[:80]), flush=True)
+                _conv = False
             _why = thrash_stop(_rewrites, 0, max_rewrites=_MAX_RW,
-                               since_new_seconds=_since_new)
+                               since_new_seconds=_since_new, converged=_conv)
+            if _conv and _why == "" and any(n > _MAX_RW for n in _rewrites.values()) \
+                    and _since_new >= NO_PROGRESS_SECONDS and time.time() - _warned_at > 300:
+                # 空转满 45 分钟、重写也超预算，**但表已合格** ⇒ 不停，只把这件事说清楚
+                _warned_at = time.time()
+                print("[drive]    ⚠️ %s 已重写超 %d 次且 %d 分钟没有新产物出现，"
+                      "但盘上第 %d 集分镜表**已通过程序体检** ⇒ 判为「角色在往合格方向改、"
+                      "工头还没派 reviewer」，**不停**（停了就是零出片）。"
+                      % ("、".join(sorted(k for k, n in _rewrites.items() if n > _MAX_RW)),
+                         _MAX_RW, int(_since_new // 60), ep), flush=True)
             if not _why and any(n > _MAX_RW for n in _rewrites.values()) \
                     and time.time() - _warned_at > 300:
                 # 重写超预算**但链还在往前走** ⇒ 只报不停（停错了就是零出片，

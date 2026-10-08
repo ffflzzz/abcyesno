@@ -931,47 +931,24 @@ def role_input(role: str, root: Path, m: dict, reasons: list[str] | None = None)
     #     · 全部合格 → 明令**不要重写**，直接结束本轮（这才是省下 2 小时的那一支）。
     if (role == "scenedesigner" and config.SHOTCHECK != "off"
             and not config.FAST and not config.LOOSE_STORYBOARD):
-        _sb = root / out_path("scenedesigner", ep)
         try:
             from . import shotcheck
-            from .media import storyboard as _sbd
-            try:
-                _brief = guards.load_brief(root)
-                _tgt = int(validate.parse_target_seconds(
-                    _brief.get("target_duration"), ep=ep) or 0)
-            except Exception:  # noqa: BLE001 -- 片长这条可缺，不该挡住其余判据
-                _tgt = 0
-                _brief = {}
-            # ★ brief 明写"共 15-18 镜"时按**区间**判，不只用"目标秒÷8"的派生下限
-            #   （2026-09-29 实测：一条链交 12 镜 / 54 秒仍"镜数合格"= 漏检）
-            _rng = validate.parse_shot_range(_brief.get("target_duration"))
+            # ★ 参数装配只有一份（`storyboard_check_args`）：派发时的退回清单与
+            #   反空转闸的"已收敛"判据必须跑**同一组**判据，各自拼参数的话，
+            #   新加一条判据就会只接进一处 —— 1008 那天「判据接错位置」的同型病。
+            _kw = storyboard_check_args(root, ep)
+            _had_table = bool(_kw)          # 表在不在盘上（**与"解析出几镜"无关**：
+                                            #   解析出 0 镜的坏表也算"在"，下面那条
+                                            #   "改哪些"的指令照样要给 —— 旧判据是
+                                            #   `_sb.exists()`，换成 `_shots` 会把它弄丢）
+            _shots = _kw.pop("shots", [])
+            _md = _kw.pop("markdown", "")
             _pl: list[str] = []
-            if _sb.exists():
-                _md = _sb.read_text(encoding="utf-8")
-                _shots = _sbd.parse(_md)
-                _pl = shotcheck.punch_list(_shots, target_seconds=_tgt,
-                                           markdown=_md,
-                                           use_judge=(config.SHOTCHECK == "full"),
-                                           chars=shotcheck.character_names(root),
-                                           target_shots=_rng,
-                                           # ★ 摄影/光学两条只在**本项目声明了那份技法**时才判
-                                           #   （反质量包要的是僵硬锁定机位，判了就是误报）
-                                           camera_light=("camera-light-physics"
-                                                         in _craft_refs(root)),
-                                           # ★ 10b「非宽景只能 @ 一个角色」是**包内**律，
-                                           #   谁写进自己的分镜契约才对谁判（1003d 误伤实测）
-                                           single_at_law=shotcheck.pack_requires_single_at(root),
-                                           audio_mode=validate.audio_mode_of(_brief),
-                                           # ★ 每集空间数 / 锁定机位上限 / 运镜方向下限：
-                                           #   brief 声明了才判（没声明 = 不判，行为一字不变）。
-                                           #   三条都来自 1008 用户看片的感性意见，逐条量成数：
-                                           #   两集实测都是"全集一个场景名"（22/22、9/9），
-                                           #   第 2 集 9 镜里 3 镜的「运镜」只有"定住＋微震"。
-                                           min_scenes=validate.min_scenes_per_episode(_brief),
-                                           max_locked=validate.camera_reqs(_brief)[0],
-                                           min_dirs=validate.camera_reqs(_brief)[1],
-                                           log=lambda *a: None)
-                _pl = drop_solo_opponent_items(_pl, _shots)
+            if _had_table:
+                _pl = drop_solo_opponent_items(
+                    shotcheck.punch_list(_shots, markdown=_md,
+                                         use_judge=(config.SHOTCHECK == "full"),
+                                         log=lambda *a: None, **_kw), _shots)
                 if _pl:
                     # 钉在盘上：正规"打回重做"会把旧表移进 `.rerun_backup/`，
                     # 下一轮就没有表可读，只有这个文件还在。
@@ -992,7 +969,7 @@ def role_input(role: str, root: Path, m: dict, reasons: list[str] | None = None)
                         "检查由程序做，你**不必逐镜自查**。这些是上一版真实踩中的坑，"
                         "同型问题不要再写出来。" % len(_pl))
                     lines.extend("- " + x for x in _pl[:24])
-            if _pl and _sb.exists():
+            if _pl and _had_table:
                 # ★★ 2026-10-03 实测事故（`yoga-affair-1003b`，26 镜）：原来这里写的是
                 #   「只改列出的那几镜、没列出的一律不要动」。模型**照做了**——于是它用
                 #   `edit_file` 逐镜外科式改、每改一镜再 `read_file` 整表确认。从 checkpointer
@@ -1158,3 +1135,71 @@ def enforce_deterministic_verdict(dec: dict, root: Path,
         print("           ⚠️ 若 brief 自身矛盾（`audio_mode` 与 `禁忌` 对冲），重做也会"
               "原样交回空对白列 —— 先修 brief.json 再重跑。", flush=True)
     return out
+
+
+# ─── 分镜判据的参数装配（退回清单与反空转闸**共用**，2026-10-08）──────────────
+
+
+def storyboard_check_args(root: Path, ep: int | None = None) -> dict:
+    """本集分镜表要跑的那组判据参数。**表不在 / 读不动 ⇒ 返回 {}**。
+
+    为什么单独抽出来：派发时的退回清单（`role_input`）与反空转闸的"这张表已经
+    改合格了没有"必须用**同一组**参数。两处各自拼参数，加一条判据就会只接进一处
+    —— 1008 那天「台词判据只接在渲染门上」就是同一个病的另一种形态。
+    """
+    if ep is None:
+        ep = int(guards.load_manifest(root).get("episode_index", 1) or 1)
+    sb = root / out_path("scenedesigner", ep)
+    if not sb.exists():
+        return {}
+    try:
+        md = sb.read_text(encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        return {}
+    try:
+        brief = guards.load_brief(root)
+    except Exception:  # noqa: BLE001 -- 片长这条可缺，不该挡住其余判据
+        brief = {}
+    try:
+        tgt = int(validate.parse_target_seconds(brief.get("target_duration"), ep=ep) or 0)
+    except Exception:  # noqa: BLE001
+        tgt = 0
+    from . import shotcheck
+    from .media import storyboard as _sbd
+    _locked = validate.camera_reqs(brief)
+    return {
+        "shots": _sbd.parse(md),
+        "markdown": md,
+        "target_seconds": tgt,
+        "chars": shotcheck.character_names(root),
+        # ★ brief 明写"共 15-18 镜"时按**区间**判，不只用"目标秒÷8"的派生下限
+        #   （2026-09-29 实测：一条链交 12 镜 / 54 秒仍"镜数合格"= 漏检）
+        "target_shots": validate.parse_shot_range(brief.get("target_duration")),
+        "audio_mode": validate.audio_mode_of(brief),
+        # ★ 摄影/光学与"锁定机位／方向去重"几条只在**声明了才判**
+        #   （反质量包要的是僵硬锁定机位，判了就是误报）
+        "camera_light": ("camera-light-physics" in _craft_refs(root)),
+        # ★ 10b「非宽景只能 @ 一个角色」是**包内**律，谁写进自己的分镜契约才对谁判
+        "single_at_law": shotcheck.pack_requires_single_at(root),
+        "min_scenes": validate.min_scenes_per_episode(brief),
+        "max_locked": _locked[0],
+        "min_dirs": _locked[1],
+    }
+
+
+def storyboard_is_compliant(root: Path, ep: int | None = None) -> bool | None:
+    """盘上本集分镜表是否**已通过可数判据**。`None` = 表不在/读不动（不据此判）。
+
+    只跑**可数**那一层（零额度、每 20 秒轮询也跑得动）；语义判据（要送模型的那层）
+    仍归评审与 `punch_list` 管。
+    """
+    kw = storyboard_check_args(root, ep)
+    shots = kw.pop("shots", [])
+    kw.pop("markdown", "")
+    if not shots:
+        return None
+    from . import shotcheck
+    try:
+        return not shotcheck.countable(shots, **kw)
+    except Exception:  # noqa: BLE001 -- 判据自己坏了不该把链判死，按"不知道"处理
+        return None

@@ -582,6 +582,27 @@ class TestThrashStop(unittest.TestCase):
         self.assertIn("scenedesigner", stop)
         self.assertIn("4 次", stop, "要报得出实际次数，不能只说「超了」")
         self.assertIn("45 分钟", stop, "要报得出空转了多久，人才看得出这不是限流")
+
+    def test_converged_table_is_never_killed(self):
+        """★ 表**已经改合格了**就不许停（2026-10-08 第 3 集误杀）。
+
+        当天 20:16 那张分镜表程序体检 0 条（120 秒→90 秒、三空间齐、方向 4 种），
+        只差 reviewer 没被派到，闸在 20:22 掐掉整轮 ⇒ `run_new_project` 报
+        「缺 reviewer → 不进媒体链」，**只差一步的合格产物变成零出片**。
+        根因：② 数的是"产物**集合**变没变"，一个角色反复改同一份文件时集合恒不变
+        ⇒ ①② 这对条件实际等价于"某角色一直在改自己的稿"，**改到合格也算乒乓**。
+        """
+        f = self.mod.thrash_stop
+        stalled = self.mod.NO_PROGRESS_SECONDS
+        self.assertEqual(f({"scenedesigner": 6}, 0, max_rewrites=3,
+                           since_new_seconds=stalled, converged=True), "",
+                         "表已合格 ⇒ 不许停（停了就是零出片）")
+        # 反向对照 1：没收敛（1003f 那种始终不合格）照旧停
+        self.assertIn("scenedesigner", f({"scenedesigner": 6}, 0, max_rewrites=3,
+                                         since_new_seconds=stalled, converged=False))
+        # 反向对照 2：收敛只豁免第一条；连续 N 轮**整盘**无新产物照旧停
+        self.assertIn("连续 2 轮", f({"scenedesigner": 6}, 2, max_rewrites=3,
+                                   since_new_seconds=stalled, converged=True))
         self.assertEqual(f({"scenedesigner": 4}, 0, max_rewrites=3,
                            since_new_seconds=self.mod.NO_PROGRESS_SECONDS - 1), "",
                          "差一秒不许停（边界要钉死，否则正常长跑随时被判打转）")

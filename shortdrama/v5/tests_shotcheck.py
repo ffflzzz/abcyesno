@@ -783,3 +783,60 @@ class TestDurationAdvice(unittest.TestCase):
         """反向对照：合格的表不多嘴（旧 detail 一字不变）。"""
         d = self._detail(self._rows(10, 8), 72)
         self.assertEqual(d, "", d)
+
+
+class TestStoryboardComplianceProbe(unittest.TestCase):
+    """`roles.storyboard_is_compliant` —— 反空转闸的"这张表已经合格了"判据。
+
+    必须是**零额度**（只跑可数那层）且与退回清单**同一组参数**，
+    否则驱动器每 20 秒轮询一次就会去送模型、或者两处判据各说一套。
+    """
+
+    HDR = ("| 镜头号 | 景别 | 角度 | 运镜 | 时长(秒) | 场景 | 视觉风格 | 画面描述 "
+           "| 落幅 | 对白 | 音效 | 文字镜 | 承接 |")
+    SEP = "|---|" * 13
+    ACTS = ("@裴烛 蹬地前冲三步劈下，@谢潮生 侧身避开后横移两步",
+            "@谢潮生 反手格开，@裴烛 拧身跃起落下，石板被踩碎",
+            "@裴烛 甩剑划出整圈光弧，@谢潮生 仰身后倒滑步躲开",
+            "@谢潮生 压上逼退两步，@裴烛 旋身横移把剑尖挑向他手腕")
+
+    def _root(self, d, extra=None):
+        root = Path(d)
+        (root / "scenedesigner").mkdir(parents=True, exist_ok=True)
+        b = {"topic": "t", "pack": "shortdrama", "genre": "悬疑", "episodes": 1,
+             "target_duration": "约 120 秒", "protagonist": "裴烛",
+             "must_have": ["甲乙在崖顶交手三次"], "key_props": ["旧刀"],
+             "禁忌": ["无可读文字"], "tone": "冷", "结局": "定格"}
+        b.update(extra or {})
+        (root / "brief.json").write_text(json.dumps(b, ensure_ascii=False), encoding="utf-8")
+        rows = [self.HDR, self.SEP]
+        for i in range(1, 33):
+            rows.append("| LN%02d | 中景 | 平视 | 固定 | 4 | 崖顶 | 逆光高光在剑脊 | %s，"
+                        "收势落在第 %d 处台阶 | 剑尖前点 | 裴烛：接住。 | 风声 | 否 | 承接上一镜 |"
+                        % (i, self.ACTS[(i - 1) % 4], i))
+        (root / "scenedesigner" / "scenedesigner_ep1.md").write_text(
+            "\n".join(rows) + "\n", encoding="utf-8")
+        return root
+
+    def test_compliant_table_returns_true(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertIs(roles.storyboard_is_compliant(self._root(d), 1), True)
+
+    def test_declared_requirements_make_it_false(self):
+        """同一张表，brief 一声明三条 ⇒ 立刻不合格（单场景 + 32 镜全"固定"）。"""
+        with tempfile.TemporaryDirectory() as d:
+            root = self._root(d, extra={"每集空间数下限": 3, "锁定机位上限": 2,
+                                        "运镜方向下限": 4})
+            self.assertIs(roles.storyboard_is_compliant(root, 1), False)
+            kw = roles.storyboard_check_args(root, 1)
+            self.assertEqual((kw["min_scenes"], kw["max_locked"], kw["min_dirs"]), (3, 2, 4),
+                             "参数没从 brief 传进来 ⇒ 闸与退回清单就会各说一套")
+            self.assertEqual(kw["target_seconds"], 120)
+
+    def test_no_table_is_not_a_verdict(self):
+        """表不在 ⇒ None（**不许**当成"已合格"，也不许当成"没合格"）。"""
+        with tempfile.TemporaryDirectory() as d:
+            root = self._root(d)
+            (root / "scenedesigner" / "scenedesigner_ep1.md").unlink()
+            self.assertIsNone(roles.storyboard_is_compliant(root, 1))
+            self.assertEqual(roles.storyboard_check_args(root, 1), {})
