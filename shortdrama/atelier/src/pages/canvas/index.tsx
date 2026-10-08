@@ -53,6 +53,31 @@ export default function CanvasPage() {
             })
             .catch((err: unknown) => message.error(`画布导入失败：${err instanceof Error ? err.message : String(err)}`));
     }, [hydrated, importProject, message, navigate]);
+
+    /**
+     * 直接进画布：`?go=last` ⇒ **跳过这个库页**，开最近一张画布；一张都没有就新建一张。
+     *
+     * 为什么需要（2026-10-08 用户原话：「不要进第一个截图这个页面，而是直接进第二个
+     * 截图的这个页面」）：shortdrama 的宿主那栏要的是一张**能直接画**的纸，
+     * 而 `/canvas` 是**库**页、`/canvas/<id>` 才是画布 —— 把人先丢到库页、
+     * 再让他点「新建画布」是多余的一步。
+     *
+     * 为什么是"最近一张"而不是"每次都新建"：宿主每切一次项目就会重挂 iframe，
+     * 每次新建会攒出一堆空画布（实测已经有"创作画布 1／2"）。要新的一张，
+     * 库页上那个「新建画布」按钮一直都在。
+     * 不带这个参数时行为与改造前**一字不变**。
+     */
+    const autoOpened = useRef(false);
+    useEffect(() => {
+        const go = new URLSearchParams(window.location.search).get("go");
+        if (go !== "last" || !hydrated || autoOpened.current) return;
+        autoOpened.current = true;
+        const latest = [...projects].sort((a, b) =>
+            String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")))[0];
+        const id = latest ? latest.id : createProject(t("canvas.defaultTitle", { count: projects.length + 1 }));
+        navigate(`/canvas/${id}`, { replace: true });
+    }, [hydrated, projects, createProject, navigate, t]);
+
     const importCanvas = async (file?: File) => {
         if (!file) return;
         try {

@@ -160,7 +160,7 @@ export function CanvasPane(p: Props) {
         ) : null}
         {(!hasPid || (nodes === 0 && !p.docError)) ? (
           <iframe key={'free:' + p.pid + ':' + p.ep} title="自由画布"
-                  src="/atelier/canvas" />
+                  src="/atelier/canvas?go=last" />
         ) : null}
 
         {/* 还没选项目：中栏就是一张白纸（不是一句"到左栏选一个"）。
