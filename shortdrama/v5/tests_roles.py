@@ -986,3 +986,39 @@ class TestWholeSeriesRolesGetAScopeCorrection(unittest.TestCase):
         txt = roles.role_input("scenedesigner", self._mk(5), {"episode_index": 1})
         self.assertIn("本项目当前跑的是", txt)
         self.assertNotIn("纠正上一条", txt, "集级角色不该收到全剧级那套纠正")
+
+
+class TestSoloShotItemsAndLengthConstraint(unittest.TestCase):
+    """2026-10-08：两条都实测撞过 —— 提示词里写了豁免，模型照报；指令没写"不许减"，它照减。"""
+
+    def test_solo_shot_items_are_dropped_by_code(self):
+        from v5 import roles
+        shots = [{"name": "LN08", "visual": "@岑墨 收枪立定、枪缨在风里停住"},
+                 {"name": "LN09", "visual": "@顾青猗 与 @岑墨 相击、枪尖被荡开"}]
+        items = ["【主要动作是砍环境而不是打对方】镜 LN08：「…」",
+                 "【主要动作是砍环境而不是打对方】镜 LN09：「…」"]
+        kept = roles.drop_solo_opponent_items(items, shots)
+        self.assertEqual(len(kept), 1)
+        self.assertIn("LN09", kept[0])
+        self.assertNotIn("LN08", kept[0], "单人镜上不存在「对方没被攻击」这件事")
+
+    def test_length_item_brings_an_only_grow_rule(self):
+        import json as _j
+        import tempfile
+        from v5 import roles
+        d = tempfile.mkdtemp()
+        self.addCleanup(lambda: __import__("shutil").rmtree(d, ignore_errors=True))
+        root = Path(d)
+        (root / "brief.json").write_text(_j.dumps(
+            {"topic": "线", "pack": "shortdrama", "episodes": 1,
+             "target_duration": "约 180 秒"}, ensure_ascii=False), encoding="utf-8")
+        (root / "scenedesigner").mkdir()
+        (root / "scenedesigner" / "shotcheck_ep1.json").write_text(_j.dumps(
+            {"items": ["【片长与镜数达 brief 要求】全表（12 镜 / 92 秒（目标 180s，镜数下限 22））"]},
+            ensure_ascii=False), encoding="utf-8")
+        (root / "scenedesigner" / "scenedesigner_ep1.md").write_text(
+            "| 12 | 特写 | 平视 | 定住 | 5 | 云海 | 风格 | 内容 | 落幅 | （无声，环境音） | 音 | 否 | 承接 |\n",
+            encoding="utf-8")
+        txt = roles.role_input("scenedesigner", root, {"episode_index": 1})
+        self.assertIn("只许加、不许减", txt,
+                      "片长不合格时**必须**告诉它只能加不能减（否则它会整表重写并压缩）")

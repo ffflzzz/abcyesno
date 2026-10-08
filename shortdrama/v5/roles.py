@@ -177,6 +177,38 @@ def _brief_episodes(root: Path) -> int:
         return 1
 
 
+
+def drop_solo_opponent_items(items: list, shots: list) -> list:
+    """把**对手类**语义条目从「单人镜」上剔掉（判据由程序核，不靠模型自觉）。
+
+    2026-10-08 实测两处都撞上：提示词里明明写了"无对手出场时这条不适用"，
+    模型**照报**（LN18 独演镜、LN08 单人收势镜各一次）。语义判据要靠程序核验 ——
+    单人镜（本镜只 @ 到一个名字）上不存在"对方没被攻击""对手被写成背景"这两件事。
+    """
+    import re as _re
+    try:
+        from . import shotcheck as _sc
+        labels = [v for k, v in _sc.CODE_LABELS.items()
+                  if k in ("opponent_as_background", "rock_chopping_as_beat")]
+    except Exception:                                          # noqa: BLE001
+        return items
+    by_name = {s.get("name"): s for s in shots}
+    out = []
+    for it in items:
+        if not any(l in it for l in labels):
+            out.append(it)
+            continue
+        m = _re.search(r"(LN\d+)", it)
+        shot = by_name.get(m.group(1)) if m else None
+        if shot is not None:
+            ats = set(_re.findall(r"@([一-龥A-Za-z0-9_]{1,8})",
+                                  shot.get("visual") or ""))
+            if len(ats) <= 1:
+                continue          # 单人镜 ⇒ 这条不成立
+        out.append(it)
+    return out
+
+
 def catalog_missing_episodes(text: str, episodes: int) -> list[int]:
     """全剧目录里**缺哪几集**（**纯函数**，可单测）。`episodes <= 1` 恒返回空。
 
@@ -929,6 +961,7 @@ def role_input(role: str, root: Path, m: dict, reasons: list[str] | None = None)
                                            single_at_law=shotcheck.pack_requires_single_at(root),
                                            audio_mode=validate.audio_mode_of(_brief),
                                            log=lambda *a: None)
+                _pl = drop_solo_opponent_items(_pl, _shots)
                 if _pl:
                     # 钉在盘上：正规"打回重做"会把旧表移进 `.rerun_backup/`，
                     # 下一轮就没有表可读，只有这个文件还在。
@@ -970,6 +1003,15 @@ def role_input(role: str, root: Path, m: dict, reasons: list[str] | None = None)
                     "（实测 111 次工具调用 ⇒ 递归上限 ⇒ 零出片）。\n"
                     "改的**范围**仍然只限下面列出的这些条目，没列出的镜头内容原样保留。"
                     % (ep, len(_pl)))
+                if any("片长" in x for x in _pl):
+                    # ★ 2026-10-08 实测：只说"没列出的原样保留"，模型会在改片长时**整表重写并压缩**
+                    #   （24 镜 140 秒 ⇒ 12 镜 92 秒，离门槛更远）。片长这条**必须动全表**，
+                    #   所以给一条可数的硬话：只许加、不许减。
+                    lines.append(
+                        "★ 涉及**片长**时，上面那句「原样保留」这样理解：**只许加、不许减** ——"
+                        "可以补镜、可以把镜写长；⛔ 不许删镜、不许把几镜并成一镜、"
+                        "不许把某镜的秒数改小。**新表总时长必须 ≥ 现在这一版**"
+                        "（上一轮有角色把 24 镜 140 秒压成 12 镜 92 秒，离门槛更远）。")
                 lines.extend("- " + x for x in _pl[:24])
         except Exception as e:  # noqa: BLE001 -- 体检失败不能伪装成"合格"
             lines.append("\n【⚠️ 分镜体检未能执行（%s）—— 本轮请自行逐镜核对】"
