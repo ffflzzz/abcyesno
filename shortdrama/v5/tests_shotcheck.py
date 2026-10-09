@@ -229,6 +229,21 @@ class TestCountable(unittest.TestCase):
                           if "非宽景" in h["check"]], [],
                          "10b 是包内律，没声明就不许判")
 
+    def test_10b_counts_explicit_reverse_shots_separately(self):
+        cases = [
+            ('0-4秒：过肩拍@沈砚抬头；4-8秒：反打@阮青回应', False),
+            ('0-4秒：正反打甲·过肩拍@沈砚；4-8秒：正反打乙·反打@阮青', False),
+            ('0-4秒：@沈砚抬头；4-8秒：@阮青回应', True),
+            ('0-4秒：@沈砚抬头；4-8秒：没有切镜，@阮青回应', True),
+            ('0-4秒：过肩拍@沈砚与@阮青；4-8秒：反打对方', True),
+            ('正反打@沈砚和@阮青', True),
+        ]
+        for text, blocked in cases:
+            with self.subTest(text=text):
+                hits = [h for h in shotcheck.countable([_shot('LN04',text)],60,
+                         ['沈砚','阮青'],single_at_law=True) if '非宽景' in h['check']]
+                self.assertEqual(bool(hits), blocked)
+
     def test_shot_floor_follows_target_not_a_hardcoded_25(self):
         """60 秒 / 17 镜的片子不许被"写死 25 镜"误判（2026-09-29 实错）。"""
         shots = [_shot("LN%02d" % i, _ACTS[(i - 1) % 4], seconds=4)

@@ -424,11 +424,24 @@ def countable(shots: list[dict], target_seconds: int = 0,
     #   全被点名为"会多画人"，评审据此把 `yoga-affair-1003d` 判停（48 分钟零出片）。
     #   ⇒ 谁写了这条律才对谁判（判据 = 该包分镜契约里有没有那句话）。
     if chars and single_at_law:
+        def simultaneous_at(visual):
+            # 包契约允许复合镜正反打，每个子镜各 @ 一人。
+            # 只有明确时间段开头的切镜指令才重置计数，普通动作节拍不算切镜。
+            beats = list(re.finditer(r"\d+(?:\.\d+)?\s*[-–—~至]\s*\d+(?:\.\d+)?\s*秒(?:（[^）]*）)?\s*[:：]", visual))
+            cuts = [0]
+            for i, b in enumerate(beats):
+                end = beats[i + 1].start() if i + 1 < len(beats) else len(visual)
+                prefix = visual[b.end():end].split('@', 1)[0]
+                if b.start() > 0 and re.search(r"^\s*(?:正反打[甲乙AB一二]?[·、：:\s]*)?(?:反打|切至|切到|切镜|换镜|硬切|\bcut\b)", prefix, re.I):
+                    cuts.append(b.start())
+            cuts.append(len(visual))
+            return any(len({n for n in chars if '@' + n in visual[a:b]}) >= 2
+                       for a, b in zip(cuts, cuts[1:]))
         both_at = [s["name"] for s in shots
                    if not any(w in (s.get("shot_type") or "") for w in WIDE_WORDS)
-                   and len({n for n in chars if ("@" + n) in (s.get("visual") or "")}) >= 2]
+                   and simultaneous_at(s.get("visual") or "")]
         need(not both_at, "非宽景不许双人同时 @（会多画一个人）",
-             "命中 %d 镜 —— 修法：**这一镜只 @ 一个人**，另一个用「他／对方／她」写"
+             "命中 %d 镜 —— 修法：**同一个子镜只 @ 一个人**，另一个用「他／对方／她」写"
              "（两人都要在动是内容要求，不等于两个都要 @）" % len(both_at),
              names=both_at)
     env_only = [s["name"] for s in shots
