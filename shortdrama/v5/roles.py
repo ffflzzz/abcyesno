@@ -41,7 +41,11 @@ TOOL_NOTE = """
 角色卡/资产卡**确定性生成**——所以卡片里的外貌与用途描述就是出图提示词：
 只写**外形与材质**，不要写人物关系、剧情动作、文字水印要求（这些会污染出图）。
 你唯一的交付物是**用 write_file 写出的产物文件**。
-只输出文本不算完成。"""
+只输出文本不算完成。
+【交付顺序】输入资料已内联且足够时，直接调用 write_file；确有缺失才 read_file。
+不要在聊天回复中输出规划草稿、逐项自查、镜数试算或产物正文，避免耗尽输出额度却没有文件。
+把完整产物放进文件工具的 content 参数，语言遵守 brief，完成后只回复产物路径与一句结果。
+工具报错时按错误修正，不用聊天正文替代落盘。"""
 
 
 def _role_skill(pack: str, role: str) -> str:
@@ -80,7 +84,11 @@ def role_system_prompt(pack: str, role: str, ep: int = 1) -> str:
     else:
         _scope = ("本角色的产物是**全剧级的**（一次锁定、全剧复用），路径**固定**为 /%s —— "
                   "**不要**给文件名加集号后缀。" % tmpl)
-    return (_role_skill(pack, role) or ("你是 " + role + "。")) + TOOL_NOTE + (
+    skill = _role_skill(pack, role)
+    if role == "assetdesigner" and "assets.contract.json" in skill:
+        _scope += ("同时用第二次 write_file 写独立 /assetdesigner/assets.contract.json，"
+                   "它不是 assets.md 内的代码块，两份文件都必须交付。")
+    return (skill or ("你是 " + role + "。")) + TOOL_NOTE + (
         "\n\n【本角色产物路径】" + _scope
         + "**确切路径以本条消息之后的《本集产物路径》一行为准**"
           "—— 那一行是**运行期**给定的。不要自己推集号，也不要去写别的集的文件。")
@@ -665,6 +673,10 @@ def role_input(role: str, root: Path, m: dict, reasons: list[str] | None = None)
         lines.append(_brief_inline(root, ep))
         for r in _prereq.get(role, []):
             lines.append(_upstream_block(root, r, ep))
+        if role == "reviewer" and (root / "assetdesigner" / "assets.contract.json").exists():
+            lines.append("【磁盘事实】独立 /assetdesigner/assets.contract.json 已存在，"
+                         "正文如下；不要从 assets.md 中的嵌入章节推断独立文件缺失。")
+            lines.append(_inline_file(root, "assetdesigner/assets.contract.json"))
     # ★★ 剧本直出模式（2026-10-04）：两条**只在 from_script 下出现**的注入。
     #
     # 为什么必须在这里注入、而不是只写进包 SKILL：

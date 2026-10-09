@@ -55,6 +55,19 @@ class TestInlineUpstream(unittest.TestCase):
             s = role_input("dialogue", self.root, {"episode_index": 1})
         self.assertIn("读不到", s)
 
+    def test_reviewer_receives_independent_asset_contract_when_present(self):
+        contract = self.root / "assetdesigner" / "assets.contract.json"
+        contract.write_text('{"assets":[{"name":"合同专属场景","type":"location"}]}',
+                            encoding="utf-8")
+        with mock.patch.object(config, "INLINE_UPSTREAM", True):
+            text = role_input("reviewer", self.root, {"episode_index": 1})
+        self.assertIn("合同专属场景", text)
+        self.assertIn("独立 /assetdesigner/assets.contract.json 已存在", text)
+        contract.unlink()
+        with mock.patch.object(config, "INLINE_UPSTREAM", True):
+            text = role_input("reviewer", self.root, {"episode_index": 1})
+        self.assertNotIn("assets.contract.json 已存在", text)
+
 
 class TestWorldbuilderIsDispatched(unittest.TestCase):
     """★★ 2026-09-19：**方案 D 撤销** —— worldbuilder 回到子代理清单，director 不再兼任。

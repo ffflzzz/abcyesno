@@ -283,6 +283,13 @@ def _build_role_graph(role: str, pack: str):
         res = await agent.ainvoke(
             {"messages": [HumanMessage(content=user)]},
             config={"recursion_limit": ROLE_RECURSION_LIMIT})
+        messages = res.get("messages") or []
+        last_meta = getattr(messages[-1], "response_metadata", {}) if messages else {}
+        if last_meta.get("finish_reason") == "length":
+            print("[orchestrator] ⚠️ %s 输出达到模型上限（%s tokens）；"
+                  "按实际文件记账，不能把聊天草稿当产物"
+                  % (role, (last_meta.get("token_usage") or {}).get("completion_tokens", "?")),
+                  flush=True)
         # 记账（复用 guards 同一套）：物化对账 → phases——supervisor 架构
         # 由此产出标准 manifest，media_gate / --resume-media 直接可用。
         try:
