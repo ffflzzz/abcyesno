@@ -766,7 +766,7 @@ def post_validate(role: str, m: dict, root: Path,
                     and artifact_fresh(p, since)):
                 return True, "", w
         except UnicodeDecodeError:
-            if artifact_fresh(p, since):
+            if p.suffix.lower() not in {".md", ".json", ".txt"} and artifact_fresh(p, since):
                 return True, "", w          # 二进制产物：存在即算（但仍要本轮写的）
         except Exception:  # noqa: BLE001
             continue
@@ -813,7 +813,7 @@ def post_validate(role: str, m: dict, root: Path,
         if len(p.read_text(encoding="utf-8").strip()) == 0:
             return False, "产物为空（%s）" % rel, ""
     except UnicodeDecodeError:
-        pass
+        return False, "产物不是有效UTF-8文本（%s），必须重新交付可读文件" % rel, rel
     if not artifact_fresh(p, since):
         # 判据要说清"怎么修"，不然调用方只会照着"未物化"去查一个存在的文件。
         return False, ("产物未被本轮改写（%s 的 mtime 早于本轮起点）"

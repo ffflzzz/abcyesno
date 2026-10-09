@@ -104,6 +104,18 @@ class TestMediaGate(unittest.TestCase):
 
 
 class TestPostValidate(unittest.TestCase):
+    def test_corrupt_markdown_is_not_a_binary_success(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d)
+            p=root/'scenedesigner/scenedesigner_ep1.md'
+            p.parent.mkdir(parents=True)
+            p.write_bytes('分镜正文'.encode('utf-8')+b'\x9d\xa2')
+            for wrote in (None,['scenedesigner/scenedesigner_ep1.md']):
+                ok,why,_=guards.post_validate('scenedesigner',_m(),root,wrote=wrote)
+                self.assertFalse(ok)
+                self.assertIn('UTF-8',why)
+
     def test_disk_truth_wins(self):
         """账本没记，但盘上有非空产物 → 承认（不假失败）。"""
         import tempfile

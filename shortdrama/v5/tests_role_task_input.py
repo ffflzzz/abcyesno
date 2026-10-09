@@ -44,7 +44,10 @@ class TestRoleDelivery(unittest.IsolatedAsyncioTestCase):
             if artifact is not None:
                 target=root/orchestrator.out_path('scriptwriter',ep)
                 target.parent.mkdir(parents=True,exist_ok=True)
-                target.write_text(artifact,encoding='utf-8')
+                if isinstance(artifact,bytes):
+                    target.write_bytes(artifact)
+                else:
+                    target.write_text(artifact,encoding='utf-8')
             with patch.object(orchestrator,'_root',root),patch.object(orchestrator,'_EP',1),patch.object(orchestrator,'role_chat',return_value=object()),patch.object(orchestrator,'create_agent',return_value=FakeAgent()),patch.object(orchestrator,'load_manifest',return_value={'episode_index':2}),patch.object(orchestrator,'record_phase'):
                 result=await orchestrator._build_role_graph('scriptwriter','shortdrama').ainvoke({'brief':'写本集剧本'})
                 return result['messages'][-1].content
@@ -58,5 +61,8 @@ class TestRoleDelivery(unittest.IsolatedAsyncioTestCase):
 
     async def test_current_nonempty_file_preserves_reply(self):
         self.assertEqual('已经交付，可以继续',await self._run('当前集剧本',ep=2))
+
+    async def test_corrupt_text_returns_failure_instead_of_crashing(self):
+        self.assertIn('【未交付】',await self._run(b'valid prefix\xff',ep=2))
 
 if __name__=='__main__':unittest.main()

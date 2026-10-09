@@ -315,11 +315,14 @@ def _build_role_graph(role: str, pack: str):
         target = _root / out_path(role, _live_ep)
 
         def _delivered() -> bool:
-            return target.is_file() and bool(target.read_text(encoding="utf-8").strip())
+            try:
+                return target.is_file() and bool(target.read_text(encoding="utf-8").strip())
+            except (OSError, UnicodeError):
+                return False
 
         if not await asyncio.to_thread(_delivered):
             reason = last_meta.get("finish_reason") or "unknown"
-            note = ("【未交付】%s 第%d集的文件 /%s 缺失或为空；"
+            note = ("【未交付】%s 第%d集的文件 /%s 缺失、为空或无法读取；"
                     "本轮模型结束原因=%s。聊天回复不能作为产物，"
                     "先完成该角色文件交付再派下游。"
                     % (role, _live_ep, out_path(role, _live_ep), reason))
