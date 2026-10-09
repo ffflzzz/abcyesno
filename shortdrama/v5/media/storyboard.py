@@ -207,6 +207,14 @@ def _act_num(raw: str) -> int:
 NO_HUMAN_MARKS = ("【无人像】",)
 
 
+def shot_number_match(cells: list[str], headers: list[str], line: str):
+    """Shared shot-ID lookup for media parsing and input validation."""
+    shot_col = _col(headers, "镜头号", "镜号", "shot_id")
+    number_line = ("| " + cells[shot_col] + " |"
+                   if shot_col is not None and shot_col < len(cells) else line)
+    return _ROW_RE.match(number_line)
+
+
 def parse(md: str) -> list[dict]:
     shots: list[dict] = []
     headers: list[str] = []
@@ -225,6 +233,9 @@ def parse(md: str) -> list[dict]:
         if _SEP_RE.match(line):
             continue
         cells = [c.strip() for c in line.split("|")]
+        # Scene labels may precede the numeric shot ID. Check the declared
+        # ID before treating words inside a visual description as a header.
+        m = shot_number_match(cells, headers, line)
         # ★ 崩坏行检测（2026-09-18 实测；只为**可见性**，不改变解析结果）。
         #
         # 模型在长输出后期会把「表头前若干列的列名」与「数据后若干列的内容」挤成
@@ -237,7 +248,7 @@ def parse(md: str) -> list[dict]:
         #   （实测 8 行只报出 5 行）。这里改成独立判断，覆盖全部崩坏行。
         # ★ 不会对正常表头误报：表头只有短列名，不存在 >=20 字的内容单元格；
         #   每场重复表头（本仓库的既有合法形态）同样只有短列名。
-        if not _ROW_RE.match(line):
+        if not m:
             _hit = [k for k in HEADER_KEYS if any(k in c for c in cells)]
             if len(_hit) >= 3 and any(len(c) >= 20 for c in cells):
                 print("[storyboard] !! 第 %d 行疑似「表头与数据混排」（命中列名：%s）"
@@ -246,15 +257,11 @@ def parse(md: str) -> list[dict]:
                       % (lineno + 1, "/".join(_hit[:6])))
         # 表头判定用**结构**而不是关键词：数据行以「| 数字 |」开头，表头不是。
         # （占位符里出现"对白/音效"等词曾让数据行被误判成表头——措辞不可靠。）
-        if _col(cells, "画面") is not None and not _ROW_RE.match(line):
+        if _col(cells, "画面") is not None and not m:
             headers = cells
             continue
         # Read the declared shot-number column, not the first numeric cell.
         # A leading scene number otherwise collapses all shots in that scene.
-        shot_col = _col(headers, "镜头号", "镜号", "shot_id")
-        number_line = ("| " + cells[shot_col] + " |"
-                       if shot_col is not None and shot_col < len(cells) else line)
-        m = _ROW_RE.match(number_line)
         if not m or not headers:
             continue
         # ★ **按镜头号去重，保留首次出现**（2026-09-14 实测三次事故）。

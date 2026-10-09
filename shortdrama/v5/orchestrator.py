@@ -134,6 +134,25 @@ MEDIA_RERENDER_NAME = rerender_agent.NODE_NAME
 
 
 # ── per-role 专用图（角色 SKILL/模型/项目目录**全部编译期固定**）──────────────
+class RoleTaskState(MessagesState):
+    brief: str
+
+
+def _role_task_brief(state: dict) -> str:
+    """Accept explicit role briefs and native subagent HumanMessage input."""
+    brief = state.get("brief")
+    if isinstance(brief, str) and brief.strip():
+        return brief
+    for message in reversed(state.get("messages") or []):
+        if isinstance(message, HumanMessage):
+            content = message.content
+            if isinstance(content, str):
+                return content
+            return "\n".join(part.get("text", "") if isinstance(part, dict) else part
+                             for part in content if isinstance(part, (str, dict)))
+    return ""
+
+
 def _build_role_graph(role: str, pack: str):
     """单角色图：零运行时参数——input 只剩自然语言任务简报。
 
@@ -153,7 +172,7 @@ def _build_role_graph(role: str, pack: str):
         name=role,
     )
 
-    async def node(state: MessagesState) -> dict:
+    async def node(state: RoleTaskState) -> dict:
         # 可观测：**落盘一行"本角色节点确实跑了"的证据**（2026-09-11 起，2026-09-17 加强）。
         #
         # ★ 为什么改成 append 一行 + 失败要响：
@@ -196,7 +215,7 @@ def _build_role_graph(role: str, pack: str):
             m = load_manifest(_root)
         except Exception:
             m = {}
-        brief = state.get("brief") or ""
+        brief = _role_task_brief(state)
         # ★ M3（2026-09-17）：**集号自检已降级**。
         #   原先它是"响亮告警"：集号编译期固化 ⇒ system prompt 绑的集与 manifest 不一致
         #   就必然串集。现在产物路径**由每次开工的 `role_input` 给出**（运行期真相），
@@ -292,7 +311,7 @@ def _build_role_graph(role: str, pack: str):
     # 当前（subagent-as-tool + `checkpointer=None`）下节点名不参与命名空间分配，
     # 所以重复名**无害** —— 但一旦要用 `get_state(subgraphs=True)` 看子代理内部状态、
     # 或在 HITL resume 时定位到具体子代理，**唯一名就是前提**。趁零成本先改掉。
-    g = StateGraph(MessagesState)
+    g = StateGraph(RoleTaskState)
     g.add_node(role, node)
     g.add_edge(START, role)
     g.add_edge(role, END)

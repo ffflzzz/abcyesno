@@ -32,6 +32,8 @@
 
 默认镜头组织：pack 档按剧情编写同场多个镜头，由现有媒体链合并为一条 reference 请求。`SHORTDRAMA_SHOT_COVERAGE` 默认 1，设 0 回退旧创作口径；仅 pack 且并组上限至少2时生效。说明见 [v5/SHOT_COVERAGE.md](v5/SHOT_COVERAGE.md)，其它输入门保留。
 
+角色图任务输入支持 `messages` 中的用户任务文本，以及显式 `brief` 字段（优先）。具体派工／返工意见会附在完整 `role_input` 后，不能替代项目 `brief.json` 或上游契约。仙侠包的镜头时长限制按请求计，不再强制单镜4秒或长镜配额。
+
 多智能体 AI 短剧生成工厂，实现在 **`v5/`**。
 **创作链** = supervisor 架构（LLM 编排，按依赖序派发角色图）；
 **媒体链** = 确定性流水线，**在图外**，唯一入口 `v5.media.pipeline.run`

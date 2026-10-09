@@ -785,8 +785,9 @@ def check_storyboard(md: str, brief: dict | None = None,
     #   而这里原先要求 `line.strip().startswith("|")` → 一个表头都认不出 →
     #   **所有列判"缺列"**（诊断还是错的：列都在，破的是表格语法）。
     #   同一个东西两份实现 → 必然漂移。
-    from .media.storyboard import _ROW_RE as _SB_ROW_RE
+    from .media.storyboard import _col as _sb_col
     from .media.storyboard import normalize_table_line as _norm_row
+    from .media.storyboard import shot_number_match as _shot_match
 
     headers: list[str] = []
     best_hits = -1
@@ -805,6 +806,8 @@ def check_storyboard(md: str, brief: dict | None = None,
     # （如"对白分布核验"只有 4 列）也会被当成数据行，污染镜序判定
     # （2026-09-10 实测：辅助表 [1,3,4,5] 拼在主表 [1,1,1,2,...] 前 → 误判"镜序错乱"）。
     _min_cols = len(headers) if headers else 6
+    _shot_col = _sb_col(headers, "镜头号", "镜号", "shot_id")
+    _shot_col = 1 if _shot_col is None else _shot_col
     # ★ 镜头号行格式**与媒体链共用同一个正则**（2026-09-14 实测事故）。
     #
     # 原实现写死 `^(?:LN)?\d+` —— **不认 `S` 前缀**（`| S01 |`）；而媒体链的
@@ -824,7 +827,7 @@ def check_storyboard(md: str, brief: dict | None = None,
     _seen_ids: set = set()
     deduped_rows = 0
     for _l in (_norm_row(x) for x in md.splitlines()):
-        _m = _SB_ROW_RE.match(_l)
+        _m = _shot_match([x.strip() for x in _l.split("|")], headers, _l)
         if not _m or len([x.strip() for x in _l.split("|")]) < _min_cols:
             continue
         _k = (_m.group(1), _m.group(2))
@@ -835,7 +838,7 @@ def check_storyboard(md: str, brief: dict | None = None,
         shots.append(_l)
     scenes: list[int] = []
     for l in shots:
-        m = _SB_ROW_RE.match(l.strip())
+        m = _shot_match([x.strip() for x in l.split("|")], headers, l)
         if m:
             scenes.append(_shot_num_of(m.group(1)))
     order_ok = scenes == sorted(scenes)
@@ -899,7 +902,7 @@ def check_storyboard(md: str, brief: dict | None = None,
             cells = [x.strip() for x in l.split("|")]
             cell = cells[dur_idx] if dur_idx < len(cells) else ""
             if not re.search(r"\d", cell):
-                missing_dur.append(cells[1] if len(cells) > 1 else "?")
+                missing_dur.append(cells[_shot_col] if len(cells) > _shot_col else "?")
     row_violations: list[str] = []
     if missing_dur:
         row_violations.append(
@@ -918,7 +921,7 @@ def check_storyboard(md: str, brief: dict | None = None,
     durations: list[float] = []
     for l in shots:
         cells = [x.strip() for x in l.split("|")]
-        shot_id = cells[1] if len(cells) > 1 else "?"
+        shot_id = cells[_shot_col] if len(cells) > _shot_col else "?"
         sec = 0.0
         if dur_idx is not None and dur_idx < len(cells):
             m = re.search(r"(\d+(?:\.\d+)?)", cells[dur_idx])
@@ -973,7 +976,7 @@ def check_storyboard(md: str, brief: dict | None = None,
                 continue
             if (not _has_line(dv) and not vo) or dv.startswith("（无声"):
                 continue
-            sid = cells[1] if len(cells) > 1 else "?"
+            sid = cells[_shot_col] if len(cells) > _shot_col else "?"
             sec = 0.0
             if dur_idx is not None and dur_idx < len(cells):
                 m = re.search(r"\d+(?:\.\d+)?", cells[dur_idx])

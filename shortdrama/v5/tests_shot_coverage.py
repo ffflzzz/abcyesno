@@ -1,10 +1,30 @@
 import json,tempfile,unittest
 from pathlib import Path
 from unittest.mock import patch
-from v5 import config,roles
+from v5 import config,roles,validate
 from v5.media import storyboard,video_plan,prompt,assets
 
 class TestCoverage(unittest.TestCase):
+    def test_named_scene_prefix_and_repeated_header_preserve_both_groups(self):
+        header='| 场次 | 镜头号 | 场景 | 景别 | 角度 | 运镜 | 时长(秒) | 画面描述 | 对白 | 音效 |\n'
+        sep='|---|---|---|---|---|---|---|---|---|---|\n'
+        text=''
+        for scene in [1,2]:
+            text+=header+sep
+            for i in range(1,4):
+                text+=f'| 场次{scene} | {(scene-1)*3+i} | 月亭 | 全景 | 平视 | 跟拍 | 4 | 0-4秒：甲在画面左侧持玉向门口走去。 | （无声，环境音） | 风 |\n'
+        shots=storyboard.parse(text)
+        self.assertEqual([s['index'] for s in shots],list(range(1,7)))
+        self.assertEqual([s['act'] for s in shots],[1,1,1,2,2,2])
+        groups=video_plan.group_shots(shots,max_group=12)
+        self.assertEqual([[s['index'] for s in g] for g,d in groups],[[1,2,3],[4,5,6]])
+        checked=validate.check_storyboard(text,{'target_duration':'约24秒','audio_mode':'silent'})
+        self.assertEqual(checked['n_shots'],6)
+        self.assertEqual(checked['seconds_total'],24)
+        self.assertEqual(checked['deduped_rows'],0)
+        self.assertTrue(checked['order_ok'])
+        shuffled=text.replace('| 场次2 | 5 |','| 场次2 | 7 |')
+        self.assertFalse(validate.check_storyboard(shuffled)['order_ok'])
     def input(self,enabled,role='scenedesigner',mode='pack',limit=6):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
@@ -21,6 +41,8 @@ class TestCoverage(unittest.TestCase):
         self.assertIn('台词字数 ÷ 4',new)
     def test_review_and_unsupported_modes(self):
         self.assertIn('【叙事镜头组织】',self.input(True,'reviewer'))
+        self.assertIn('全片首镜没有上一镜',self.input(True,'reviewer'))
+        self.assertIn('后续镜头（含下一组首镜）必须写上一镜末态到本镜起态',self.input(True,'reviewer'))
         for mode,limit in [('reference',6),('keyframe',6),('pack',1)]:
             self.assertNotIn('【叙事镜头组织】',self.input(True,mode=mode,limit=limit))
     def test_scene_column_does_not_collapse_camera_rows(self):
