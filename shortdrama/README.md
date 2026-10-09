@@ -460,7 +460,7 @@ v5/
 ├── guards.py               # 记账 / 物化对账 / TokenBreaker / media_gate
 ├── validate.py             # brief 完备性 / 产物忠实度 / 分镜契约（另有 pack_brief 工具函数，**生产路径未调用**）
 ├── config.py  llm.py       # 配置与 LLM 供应商
-├── media/                  # 静态画面先行管线（28 个模块，不含 __init__） ← 2026-10-07 起视频默认改喂资产图，"静帧先行"这段正在拆
+├── media/                  # 静态画面先行管线（29 个模块，不含 __init__） ← 2026-10-07 起视频默认改喂资产图，"静帧先行"这段正在拆
 │   ├── pipeline.py         #   **媒体链唯一入口**（media_gate + 审批门 + 记账都收在这里）
 │   ├── jobs.py             #   video_jobs 显式状态机
 │   ├── storyboard.py       #   分镜解析
@@ -472,6 +472,7 @@ v5/
 │   ├── variants.py         #   从本集分镜的 `@名（括注）` 派生分龄变体卡与漏登记的新角色卡
 │   ├── stills.py  qc.py    #   静帧生成 / 硬伤 QC
 │   ├── video.py  clipqc.py #   图生视频 / 成片抽帧复核
+│   ├── packqc.py           #   pack按组首中尾+前组末帧，一组一次检查，记录残留、不自动重拍
 │   ├── compose.py          #   ffmpeg 拼接
 │   ├── approvals.py        #   三道审批门 + 产物指纹 + version-aware 闩锁
 │   ├── model_profile.py    #   模型怪癖档案（按模型归档，组装器零改动）

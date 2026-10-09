@@ -23,7 +23,7 @@ from .. import validate
 from ..guards import load_brief
 from .. import vendors
 from . import (approvals, assets, cast, clipqc, compose, prompt, qc, relations,
-               stills, storyboard, style, video, video_plan)
+               stills, storyboard, style, video, video_plan, packqc)
 
 # 判据已**收敛到 `qc.py` 一处**（2026-09-13）：原先 pipeline 与 clipqc 各有一份，
 # 而 clipqc 那份**少了 10 个词**（五官/无脸/面具/真人脸/面部特征/漂移/窗外/纯黑/
@@ -1393,18 +1393,14 @@ def _run_impl(project_root: Path, ep: int = 1, log=print, max_regen: int = 2,
     #      自愈环路必须有收敛判定：每轮重拍后再审，直到通过或达 CLIP_QC_ROUNDS。
     requeued: list[str] = []
     residual: list[str] = []
+    pack_qc = None
     if config.CLIP_QC and vplan.mode == "pack":
-        # pack 档（2026-09-22）：组产物是**多镜合并**的一条视频，逐镜 clipqc 的
-        # 抽帧/判据都不适用（它按镜名找分镜）。逐镜复核在这条路径上是
-        # "检查比生成贵 10 倍"的纯开销，显式跳过。
-        # ⚠️ 2026-10-07 说实话：原先这里写着"质量闸门另有三道（静帧 QC →
-        #   seam_preview 预检 → 零拒绝统计）"，而**静帧整条退出 pack、
-        #   seam_preview 也随之下线** —— 剩下能挡的只有「资产图查字闸门」（提交前）
-        #   与「上一组成片真实末帧」（接缝锚）。**组内画了什么现在没人审**，
-        #   要判只能人眼看片；不许把这句写回成"已前置预检"。
-        log("[media] pack 档跳过逐镜成片复核（组产物多镜合并，逐镜判据不适用）。"
-            "⚠️ 组内内容质量**没有自动闸门**：静帧 QC 与 seam_preview 已随静帧退出，"
-            "提交前只查了资产图有没有字。")
+        # 每个物理组一次调用，带上一组真实末帧；不是按镜重复审同一视频。
+        # 先记录证据与残留，不让尚未验证的概率检测器自动烧重拍配额。
+        pack_qc = packqc.audit(project_root, ok, shots, ep=ep, only=only, log=log)
+        residual = sorted({name for report in pack_qc["groups"].values()
+                           if report["status"] != "pass" for name in report["shots"]})
+        log("[media] pack 抽帧复核已记录；未自动重拍，抽帧通过不代表整片验收通过")
     elif config.CLIP_QC:
         # 崩溃恢复：上一次运行若在"暂存了旧 clip 但重渲还没回来"时被单轮上限
         # 杀掉，暂存区里会留着 clip。先全部放回——**这正是原实现永久丢片的路径**。
@@ -1548,5 +1544,5 @@ def _run_impl(project_root: Path, ep: int = 1, log=print, max_regen: int = 2,
     return {"status": "ok", "shots": len(ok), "expected": len(shots),
             "seconds": round(compose.duration(out), 1) if out.exists() else 0.0,
             "final": str(out), "clips": n, "requeued": requeued,
-            "residual": residual, "still_residual": still_residual,
+            "residual": residual, "still_residual": still_residual, "pack_qc": pack_qc,
             "clips_done": sorted(ok)}
