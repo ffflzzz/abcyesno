@@ -670,7 +670,7 @@ def seam_anchor(clip_dir: Path, prev_pname: str | None) -> tuple[str | None, str
 
 def submit_packs(project_root: Path, shots: list[dict], planned: list[dict],
                  ep: int = 1, log=print, only: list[str] | None = None,
-                 max_group: int | None = None) -> dict:
+                 max_group: int | None = None, *, invalidate: bool = True) -> dict:
     """pack 档提交：相邻同场景镜 → ≤12s 的 reference 请求（一个 job = 一组）。
 
     job name = `pack01`/`pack02`…（组级）；产物 = `clips/packNN.mp4`（组级）。
@@ -691,6 +691,16 @@ def submit_packs(project_root: Path, shots: list[dict], planned: list[dict],
     _only = set(only) if only else None
     shots = prompt_mod.resolve_styles(shots)
     groups = video_plan.group_shots(shots, max_group)
+    if _only is not None and invalidate:
+        # 一次作废所有目标组，避免前组超窗后把尚未重做的旧后组当成本轮成片。
+        for k, (g, _declared) in enumerate(groups, 1):
+            if _only.intersection(s["name"] for s in g):
+                pname = "pack%02d" % k
+                dest = clip_dir / (pname + ".mp4")
+                if dest.exists():
+                    dest.unlink()
+                jobs_mod.mark(jobs, pname, "pending", error="", video_id=None)
+        jobs_mod.save(out_dir, jobs)
     log("[video] pack 档：%d 镜 → %d 组（max_group=%d）"
         % (len(shots), len(groups), max_group or config.VIDEO_PACK_MAX_GROUP))
 
@@ -703,23 +713,23 @@ def submit_packs(project_root: Path, shots: list[dict], planned: list[dict],
         dest = clip_dir / (pname + ".mp4")
         if _only is not None and not (set(names) & _only):
             continue                      # 补渲：只动包含目标镜的组
-        if _only is None and jobs_mod.done(jobs, pname, clip_dir):
+        if (_only is None or not invalidate) and jobs_mod.done(jobs, pname, clip_dir):
             continue                      # 幂等：组产物在盘且状态 completed
-        if _only is not None:
-            # 重渲该组：作废旧产物（防 jobs_mod.done 因文件在盘而跳过提交）
-            if dest.exists():
-                dest.unlink()
-            jobs_mod.mark(jobs, pname, "pending", error="")
         rec = jobs.setdefault(pname, {"state": "pending", "attempts": 0})
+        if not invalidate and rec.get("state") in ("failed", "expired"):
+            break  # 失败交给既有补渲预算；接续循环不重提。
         if rec.get("state") == "submitted" and rec.get("video_id"):
             log("[video] %s 续跑认领已提交任务（poll_all 接管）" % pname)
-            continue
+            break  # 等原任务落盘后再提交依赖它的下一组。
         # ★ 跨组接续锚（2026-09-23 立、2026-10-07 收口）：**只用上一组成片的真实末帧**。
         #   组与组独立生成互不知情（灯下棋实测：柳娘坐/站组间跳变、玉佩位置漂移），
         #   而静帧是"起幅画面"、拿它当"上一段的结束画面"是句假话（09-28 记过）——
         #   所以抽不到就这一组没有锚帧，⛔ 不再拿静帧兜底。
         prev_url, prev_src = seam_anchor(
             clip_dir, ("pack%02d" % (k - 1)) if k > 1 else None)
+        if k > 1 and not prev_url:
+            log("[video] %s 暂缓：上一组真实末帧不可用，保留任务等待接续" % pname)
+            break
         # 图序（2026-10-07 起）：设定表 → 场景空镜 → 上一段末帧 → 道具，**不含静帧**。
         urls, roles = pack_ref_images(project_root, g, prev_url=prev_url, ep=ep)
         if not urls:
@@ -808,6 +818,9 @@ def submit_packs(project_root: Path, shots: list[dict], planned: list[dict],
             jobs_mod.mark(jobs, pname, "completed", local=str(dest))
             jobs_mod.save(out_dir, jobs)
             log("[video] %s done（串行落盘，供下一组抽末帧锚）" % pname)
+        else:
+            log("[video] %s 尚未落盘，后续组暂缓；继续轮询原任务" % pname)
+            break
         # 没落盘就**保持 submitted**：`poll_all` 与补渲轮靠这个状态认领原任务继续轮询，
         # 在这里改判 expired 会把一个可能还在出的任务丢掉（并导致下一组退化成静帧兜底，
         # 那是降级不是失败）。
@@ -815,6 +828,37 @@ def submit_packs(project_root: Path, shots: list[dict], planned: list[dict],
         log("[video] key 用量：%s" % pool.stats())
     jobs_mod.save(out_dir, jobs)
     return jobs
+
+
+def run_packs(project_root: Path, shots: list[dict], planned: list[dict],
+              ep: int = 1, log=print, only: list[str] | None = None) -> tuple[dict, dict]:
+    """串行提交并轮询；超窗后落盘的前组完成，才继续提交后组。
+
+    重渲只在第一次作废目标组，接续循环复用已完成/已提交任务。
+    没有进展就返回缺镜，不无限等待，也不提交缺少接续图的后段。
+    """
+    jobs = submit_packs(project_root, shots, planned, ep=ep, log=log, only=only)
+    done = poll_all(project_root, jobs, ep=ep, log=log)
+    groups = video_plan.group_shots(prompt_mod.resolve_styles(shots))
+    targets = {"pack%02d" % k for k, (g, _d) in enumerate(groups, 1)
+               if not only or set(only).intersection(s["name"] for s in g)}
+    for _ in range(len(targets)):
+        missing = targets.difference(done)
+        if not missing:
+            break
+        # 只有前组已经落盘、后组从未提交时才继续；失败留给流水线的一轮补渲。
+        ready = any(not jobs.get(n, {}).get("video_id")
+                    and (n == "pack01" or "pack%02d" % (int(n[4:]) - 1) in done)
+                    for n in missing)
+        if not ready:
+            break
+        before = set(done)
+        jobs = submit_packs(project_root, shots, planned, ep=ep, log=log,
+                            only=only, invalidate=False)
+        done = poll_all(project_root, jobs, ep=ep, log=log)
+        if not set(done).difference(before):
+            break
+    return jobs, done
 
 
 def expand_packs(project_root: Path, ep: int, done: dict, log=print) -> dict:

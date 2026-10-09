@@ -1279,9 +1279,8 @@ def _run_impl(project_root: Path, ep: int = 1, log=print, max_regen: int = 2,
         # → expand_packs 把组级结果展开成 {镜名: 所在组成片}，下游缺镜判定/
         # 拼接逻辑零改动（每镜都拿得到"本镜成片"）。
         # 跨组接缝：锚帧 = 上一组成片的**真实末帧**（串行落盘才抽得到，见 submit_packs）。
-        jobs_d = video.submit_packs(project_root, shots, planned, ep=ep, log=log,
-                                    only=only)
-        _raw = video.poll_all(project_root, jobs_d, ep=ep, log=log)
+        jobs_d, _raw = video.run_packs(project_root, shots, planned, ep=ep, log=log,
+                                       only=only)
         done = video.expand_packs(project_root, ep, _raw, log=log)
         jobs = len(jobs_d)
     elif parallel:
@@ -1316,9 +1315,8 @@ def _run_impl(project_root: Path, ep: int = 1, log=print, max_regen: int = 2,
             if vplan.mode == "pack":
                 # pack 档补渲：only 传**镜名**，submit_packs 把含目标镜的组整组重渲
                 # （打包单位不可拆；组产物作废→重提→轮询→重新展开）。
-                _jobs2 = video.submit_packs(project_root, shots, planned, ep=ep,
-                                            log=log, only=_todo)
-                _raw2 = video.poll_all(project_root, _jobs2, ep=ep, log=log)
+                _jobs2, _raw2 = video.run_packs(project_root, shots, planned, ep=ep,
+                                                log=log, only=_todo)
                 _done2 = video.expand_packs(project_root, ep, _raw2, log=log)
             elif parallel:
                 _jobs2 = video.submit_all(project_root, shots, st, planned, ep=ep,

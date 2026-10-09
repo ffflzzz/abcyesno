@@ -853,6 +853,11 @@ def role_input(role: str, root: Path, m: dict, reasons: list[str] | None = None)
             "（伞未收就一直写在手边）。状态发生变化时（起身 / 收伞 / 拿起 / 放下）"
             "**必须显式写出那个变化动作**，绝不许默认模型记得上一镜——"
             "**每一段视频是独立生成的，它不知道上一镜发生了什么。**")
+        lines.append(
+            "【空间动作】跨门、上下楼或进出同一空间时，用起点→终点说明走位（如门内→门外石阶），"
+            "镜头左右只说明构图，不能替代出入方向。先交代人物转向目的地，再沿同一路径移动；"
+            "机位在哪一侧、门槛前后与落幅所在侧必须一致。并肩牵手用两人相邻的空手，"
+            "持物手不能同时牵手；下一镜延续这组手和所在侧。只写必要动作，不堆细碎口令。")
         tgt = validate.parse_target_seconds(guards.load_brief(root), ep=ep)
         if tgt:
             cap = int(getattr(config, "VIDEO_MAX_SHOTS", 0) or 0)

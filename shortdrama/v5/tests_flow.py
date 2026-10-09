@@ -4346,10 +4346,10 @@ class TestPackMode(unittest.TestCase):
                                       return_value={"video_id": "v1"}) as sub:
                 jobs = video.submit_packs(root, shots, planned, ep=1,
                                           log=lambda *_: None)
-            self.assertEqual(sub.call_count, 2, "同场景 2 镜打包 + 独立 1 组 = 2 次提交")
+            self.assertEqual(sub.call_count, 1, "前组超窗，不能提交没有末帧的后组")
             ep_dir = root / "media" / "ep1"
             self.assertEqual(jobs["pack01"]["shots"], ["LN01", "LN02"])
-            self.assertEqual(jobs["pack02"]["shots"], ["LN03"])
+            self.assertNotIn("pack02", jobs)
             self.assertEqual(jobs["pack01"]["state"], "submitted")
             self.assertEqual(sub.call_args_list[0].kwargs.get("seconds"), 10)
 
@@ -4378,11 +4378,12 @@ class TestPackMode(unittest.TestCase):
             dest.write_bytes(b"mp4")          # 假装落盘成功
             return str(dest)
 
-        real_anchor = video.seam_anchor
-
         def fake_anchor(clip_dir, prev_pname):
             seen.append(prev_pname)
-            return real_anchor(clip_dir, prev_pname)
+            if prev_pname:
+                self.assertTrue((clip_dir / (prev_pname + ".mp4")).exists())
+                return "https://cdn/tail.png", "末帧"
+            return None, "无"
 
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
@@ -4398,6 +4399,90 @@ class TestPackMode(unittest.TestCase):
                              "串行等待成功后必须标 completed（否则 poll 会重复认领）")
             self.assertEqual(seen, [None, "pack01"], "第二组提交时必须已知道上一组是谁")
             self.assertEqual(jobs["pack02"]["state"], "completed")
+
+    def test_pack_timeout_then_download_continues_without_resubmitting(self):
+        from unittest import mock
+        from v5.media import jobs as jm, providers, video
+
+        shots = [{"name": "LN01", "scene": "画室", "seconds": 10},
+                 {"name": "LN02", "scene": "夜街", "seconds": 10}]
+        planned = [{"name": s["name"], "frame_plan": {}} for s in shots]
+        for selected in (None, ["LN01", "LN02"]):
+            with self.subTest(only=selected), tempfile.TemporaryDirectory() as d:
+                root = Path(d)
+                self._sheets(root)
+                if selected:
+                    cd = root / "media" / "ep1" / "clips"
+                    cd.mkdir(parents=True)
+                    for name in ("pack01", "pack02"):
+                        (cd / (name + ".mp4")).write_bytes(b"old")
+                    jm.save(cd.parent, {n: {"state": "completed", "video_id": "old"}
+                                        for n in ("pack01", "pack02")})
+                waited = []
+                def wait(vid, dest, **kw):
+                    waited.append(vid)
+                    if vid == "v1":
+                        return ""  # 首次串行等待超窗。
+                    dest.write_bytes(b"new")
+                    return str(dest)
+                def poll(project, jobs, ep=1, **kw):
+                    cd = project / "media" / "ep1" / "clips"
+                    for name, rec in jobs.items():
+                        if rec.get("state") == "submitted":
+                            (cd / (name + ".mp4")).write_bytes(b"new")
+                            jm.mark(jobs, name, "completed")
+                    jm.save(cd.parent, jobs)
+                    return {n: str(cd / (n + ".mp4")) for n in jobs
+                            if jm.done(jobs, n, cd)}
+                def anchor(cd, prev):
+                    if prev:
+                        self.assertTrue((cd / (prev + ".mp4")).exists())
+                        return "https://cdn/tail.png", "末帧"
+                    return None, "无"
+                with mock.patch.object(video, "_wait_one", side_effect=wait), \
+                        mock.patch.object(video, "poll_all", side_effect=poll), \
+                        mock.patch.object(video, "seam_anchor", side_effect=anchor), \
+                        mock.patch.object(providers, "submit_video", side_effect=[
+                            {"video_id": "v1"}, {"video_id": "v2"}]) as sub:
+                    jobs, done = video.run_packs(root, shots, planned, log=lambda *_: None,
+                                                  only=selected)
+                self.assertEqual(sub.call_count, 2)
+                self.assertEqual(waited, ["v1", "v2"])
+                self.assertEqual(set(done), {"pack01", "pack02"})
+                self.assertEqual(jobs["pack01"]["attempts"], 1)
+
+    def test_resume_submitted_pack_waits_without_submitting_successor(self):
+        from unittest import mock
+        from v5.media import jobs as jm, providers, video
+        shots = [{"name": "LN01", "scene": "画室", "seconds": 10},
+                 {"name": "LN02", "scene": "夜街", "seconds": 10}]
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            self._sheets(root)
+            jm.save(root / "media" / "ep1", {"pack01": {
+                "state": "submitted", "video_id": "existing", "attempts": 1}})
+            with mock.patch.object(providers, "submit_video") as sub:
+                jobs = video.submit_packs(root, shots, [], log=lambda *_: None)
+            sub.assert_not_called()
+            self.assertEqual(jobs["pack01"]["video_id"], "existing")
+            self.assertNotIn("pack02", jobs)
+
+    def test_missing_real_tail_does_not_submit_successor(self):
+        from unittest import mock
+        from v5.media import jobs as jm, providers, video
+        shots = [{"name": "LN01", "scene": "画室", "seconds": 10},
+                 {"name": "LN02", "scene": "夜街", "seconds": 10}]
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            self._sheets(root)
+            cd = root / "media" / "ep1" / "clips"
+            cd.mkdir(parents=True)
+            (cd / "pack01.mp4").write_bytes(b"unreadable")
+            jm.save(cd.parent, {"pack01": {"state": "completed"}})
+            with mock.patch.object(video, "seam_anchor", return_value=(None, "无")), \
+                    mock.patch.object(providers, "submit_video") as sub:
+                video.submit_packs(root, shots, [], log=lambda *_: None)
+            sub.assert_not_called()
 
     def test_submit_packs_only_rerenders_containing_group(self):
         from unittest import mock
