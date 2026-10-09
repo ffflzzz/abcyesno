@@ -926,16 +926,18 @@ _ASSET_BAD_WORDS = ("主角", "分身", "店员", "顾客", "人物", "同框", 
                     "两件", "两人", "人影", "人", "手部",
                     "文字", "字符", "字形", "字母", "英文", "水印", "标签",
                     "字迹", "可读", "数字")
+_ASSET_USAGE_WORDS = ("左手", "右手", "衣袖", "指尖", "提住", "提着", "递给", "握住", "拿着")
 
 
-def _scene_prompt(a: dict) -> str:
+def _scene_prompt(a: dict, *, character_names=(), legacy=False) -> str:
     """场景参考图提示词：**环境全景空镜**——与 _asset_prompt（单一物件、竖版、
     浅灰背景）完全不同。无人物、无文字；画幅不写在文字里（由 ratio 参数控制，
     与项目静帧同画幅）。"""
     chunks = []
     for cl in re.split(r"[。；，、]", a.get("prompt") or a.get("appearance") or ""):
         cl = cl.strip()
-        if not cl or any(w in cl for w in _ASSET_BAD_WORDS):
+        excludes = _ASSET_BAD_WORDS + (() if legacy else _ASSET_USAGE_WORDS + tuple(character_names))
+        if not cl or any(w in cl for w in excludes):
             continue
         chunks.append(cl)
     desc = "，".join(chunks)
@@ -947,12 +949,13 @@ def _scene_prompt(a: dict) -> str:
             "可作为同场景所有镜头的视觉基准。%s" % (body, _ASSET_NO_PERSON))
 
 
-def _asset_prompt(a: dict) -> str:
+def _asset_prompt(a: dict, *, character_names=(), legacy=False) -> str:
     """资产参考图提示词：单一物件 + 无人物 + 无文字。"""
     chunks = []
     for cl in re.split(r"[。；，、]", a.get("prompt") or ""):
         cl = cl.strip()
-        if not cl or any(w in cl for w in _ASSET_BAD_WORDS):
+        excludes = _ASSET_BAD_WORDS + (() if legacy else _ASSET_USAGE_WORDS + tuple(character_names))
+        if not cl or any(w in cl for w in excludes):
             continue
         chunks.append(cl)
     desc = "，".join(chunks)
@@ -1024,6 +1027,8 @@ def _register(root: Path, item: dict, ref_name: str, *,
         "ref_image": (ref_name + ".png") if with_image else "",
         "ref_ver": REF_VERSION,
     }
+    if item.get("_image_prompt"):
+        rec["image_prompt_fp"] = _fp_of(item["_image_prompt"])
     if ident:
         rec["identity"] = ident
     # ★ 分龄变体**必须落进注册表**：绑定层（`assets.hits_for_shot`）要靠它把
@@ -1070,7 +1075,7 @@ def _fp_of(text: str) -> str:
 
 
 def _ref_is_current(reg: dict, name: str, dest: Path, src_text: str = "",
-                    log=print) -> bool:
+                    log=print, *, image_prompt="", legacy_prompt="") -> bool:
     """参考图能否复用 = **规则版本对** 且 **出图输入没变过**。
 
     ★ 第二条是 2026-09-29 补的（实测事故）：`huashan-duel-v4-0928` 的定妆照生成于
@@ -1086,6 +1091,12 @@ def _ref_is_current(reg: dict, name: str, dest: Path, src_text: str = "",
     if not dest.exists():
         return False
     rec = reg.get(name) or {}
+    if image_prompt:
+        stored_prompt = rec.get("image_prompt_fp")
+        previous_prompt = stored_prompt or (_fp_of(legacy_prompt) if legacy_prompt else "")
+        if previous_prompt != _fp_of(image_prompt):
+            log("[cast] %s 的资产图编译提示已变 → 重画该资产，其他图继续复用" % name)
+            return False
     try:
         if int(rec.get("ref_ver") or 0) < REF_VERSION:
             return False
@@ -1584,6 +1595,9 @@ def ensure(root: Path, *, log=print, force: bool = False,
             % (len(_rest), max_assets, max_assets,
                "、".join(str(x.get("name")) for x in _rest[max_assets:])[:140]))
     for a in _locs + _rest[:max_assets]:
+        compile_ref = _scene_prompt if str(a.get("type") or "") == "location" else _asset_prompt
+        a["_image_prompt"] = compile_ref(a, character_names=char_names)
+        legacy_image_prompt = compile_ref(a, legacy=True)
         # ★ **location 只登记、不生图**（2026-09-14）
         #
         # 为什么（两条都是既定事实，不是我新加的判断）：
@@ -1610,7 +1624,8 @@ def ensure(root: Path, *, log=print, force: bool = False,
             #   质量）保持旧路径（仅登记）；生图失败 → 回落文字锚点，不挡链。
             rec = reg.get(a["name"]) or {}
             dest_s = images_dir(root) / (a["name"] + ".png")
-            if (not force) and _ref_is_current(reg, a["name"], dest_s, _src_text(a), log=log):
+            if (not force) and _ref_is_current(reg, a["name"], dest_s, _src_text(a), log=log,
+                                              image_prompt=a["_image_prompt"], legacy_prompt=legacy_image_prompt):
                 made["skipped"] += 1
                 continue
             # ★ 2026-09-25：补回 `scenes` 计数 —— 09-23 新写的这个分支漏了它，
@@ -1623,7 +1638,7 @@ def ensure(root: Path, *, log=print, force: bool = False,
                 log("[cast] 登记场景（不生图）：%s —— pack 关闭参考图" % a["name"])
                 continue
             log("[cast] 生成场景参考图：%s（location）" % a["name"])
-            if _single(root, a["name"], _scene_prompt(a), ratio, log=log):
+            if _single(root, a["name"], a["_image_prompt"], ratio, log=log):
                 _register(root, a, a["name"])
                 made["scenes_img"] = made.get("scenes_img", 0) + 1
             else:
@@ -1638,11 +1653,12 @@ def ensure(root: Path, *, log=print, force: bool = False,
             made["noimg"] += 1
             log("[cast] 登记资产（不生图）：%s（%s）—— pack 关闭参考图" % (a["name"], a["type"]))
             continue
-        if (not force) and _ref_is_current(reg, a["name"], dest, _src_text(a), log=log):
+        if (not force) and _ref_is_current(reg, a["name"], dest, _src_text(a), log=log,
+                                          image_prompt=a["_image_prompt"], legacy_prompt=legacy_image_prompt):
             made["skipped"] += 1
             continue
         log("[cast] 生成资产参考图：%s（%s）" % (a["name"], a["type"]))
-        if _single(root, a["name"], _asset_prompt(a), ratio, log=log):
+        if _single(root, a["name"], a["_image_prompt"], ratio, log=log):
             _register(root, a, a["name"])
             made["assets"] += 1
         else:

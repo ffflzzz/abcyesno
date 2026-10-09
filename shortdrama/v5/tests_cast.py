@@ -705,6 +705,33 @@ class TestAssetPromptNoPollution(unittest.TestCase):
         self.assertTrue(p.startswith("塑料工牌"), p)
         self.assertIn("单一主体", p)
 
+    def test_scene_and_prop_exclude_holder_instructions(self):
+        card = self._asset('铜灯', '方形铜框灯，顶部拱形提柄。顾川右手提住铜灯。只照亮顾川右侧。手掌大小。')
+        p = cast._asset_prompt(card, character_names=['顾川'])
+        self.assertIn('方形铜框灯',p)
+        self.assertIn('拱形提柄',p)
+        self.assertIn('手掌大小',p)
+        self.assertNotIn('顾川',p)
+        self.assertNotIn('右手',p)
+        scene = cast._scene_prompt(self._asset('避风亭','木柱与横梁，唯一主光源来自顾川右手提灯。暖黄色光照亮木柱。'),character_names=['顾川'])
+        self.assertIn('木柱与横梁',scene)
+        self.assertIn('暖黄色光照亮木柱',scene)
+        self.assertNotIn('顾川',scene)
+
+    def test_compiler_change_invalidates_only_affected_asset_reference(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            dest = Path(td)/'ref.png'
+            dest.write_bytes(b'old')
+            clean = self._asset('铜灯','方形铜框，拱形提柄')
+            dirty = self._asset('铜灯','方形铜框，顾川右手提住')
+            reg = {'铜灯':{'ref_ver':cast.REF_VERSION,'src_fp':cast._fp_of(clean['prompt'])}}
+            self.assertTrue(cast._ref_is_current(reg,'铜灯',dest,clean['prompt'],log=lambda *_:None,
+                image_prompt=cast._asset_prompt(clean),legacy_prompt=cast._asset_prompt(clean,legacy=True)))
+            reg['铜灯']['src_fp']=cast._fp_of(dirty['prompt'])
+            self.assertFalse(cast._ref_is_current(reg,'铜灯',dest,dirty['prompt'],log=lambda *_:None,
+                image_prompt=cast._asset_prompt(dirty),legacy_prompt=cast._asset_prompt(dirty,legacy=True)))
+
 
 class TestBindSingleCharacterRef(unittest.TestCase):
     """每镜最多绑 1 张人物参考图（2026-09-09 实测）。
