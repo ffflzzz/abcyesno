@@ -713,8 +713,13 @@ def submit_packs(project_root: Path, shots: list[dict], planned: list[dict],
         dest = clip_dir / (pname + ".mp4")
         if _only is not None and not (set(names) & _only):
             continue                      # 补渲：只动包含目标镜的组
-        if (_only is None or not invalidate) and jobs_mod.done(jobs, pname, clip_dir):
+        rec = jobs.get(pname) or {}
+        same_group = rec.get("shots") == names and rec.get("declared_seconds") == declared
+        if (_only is None or not invalidate) and same_group and jobs_mod.done(jobs, pname, clip_dir):
             continue                      # 幂等：组产物在盘且状态 completed
+        if jobs_mod.done(jobs, pname, clip_dir) and not same_group:
+            log("[video] %s 分组成员/时长已变，旧组不复用" % pname)
+            jobs_mod.mark(jobs, pname, "pending", video_id=None, error="分组契约变化")
         rec = jobs.setdefault(pname, {"state": "pending", "attempts": 0})
         if not invalidate and rec.get("state") in ("failed", "expired"):
             break  # 失败交给既有补渲预算；接续循环不重提。
@@ -858,6 +863,12 @@ def run_packs(project_root: Path, shots: list[dict], planned: list[dict],
         done = poll_all(project_root, jobs, ep=ep, log=log)
         if not set(done).difference(before):
             break
+    # 历史组可保留在任务表与磁盘，但不能覆盖当前镜或冒充本轮完整。
+    expected = {"pack%02d" % k: ([s["name"] for s in g], d)
+                for k, (g, d) in enumerate(groups, 1)}
+    done = {n: p for n, p in done.items() if n in expected
+            and jobs.get(n, {}).get("shots") == expected[n][0]
+            and jobs.get(n, {}).get("declared_seconds") == expected[n][1]}
     return jobs, done
 
 

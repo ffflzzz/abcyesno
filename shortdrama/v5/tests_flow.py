@@ -440,7 +440,7 @@ class TestClipQcReauditLoop(unittest.TestCase):
             def fake_chain(pr, ss, st, planned, ep=1, log=print, only=None):
                 return {n: str(root / "clips" / (n + ".mp4")) for n in pick}
 
-            def fake_concat(clip_dir, out):
+            def fake_concat(clip_dir, out, **kwargs):
                 out.parent.mkdir(parents=True, exist_ok=True)
                 out.write_bytes(b"fake")
                 return len(pick)
@@ -875,7 +875,7 @@ class TestSingleShotRerender(unittest.TestCase):
                 calls["audit"].append(sorted(clips))
                 return {}
 
-            def fake_concat(cd, o):
+            def fake_concat(cd, o, **kwargs):
                 o.parent.mkdir(parents=True, exist_ok=True)
                 o.write_bytes(b"FILM")
                 return len(sorted(cd.glob("LN*.mp4")))
@@ -4486,7 +4486,8 @@ class TestPackMode(unittest.TestCase):
             cd = root / "media" / "ep1" / "clips"
             cd.mkdir(parents=True)
             (cd / "pack01.mp4").write_bytes(b"unreadable")
-            jm.save(cd.parent, {"pack01": {"state": "completed"}})
+            jm.save(cd.parent, {"pack01": {"state": "completed", "shots": ["LN01"],
+                                          "declared_seconds": [10]}})
             with mock.patch.object(video, "seam_anchor", return_value=(None, "无")), \
                     mock.patch.object(providers, "submit_video") as sub:
                 video.submit_packs(root, shots, [], log=lambda *_: None)
@@ -4574,6 +4575,19 @@ class TestPackMode(unittest.TestCase):
                                      log=lambda *_: None)
             self.assertEqual(out, {"LN01": "/x/pack01.mp4", "LN02": "/x/pack01.mp4"})
 
+    def test_run_packs_excludes_obsolete_and_incompatible_groups(self):
+        from unittest import mock
+        from v5.media import video
+        shots = [{"name": "LN01", "scene": "A", "seconds": 10},
+                 {"name": "LN02", "scene": "B", "seconds": 10}]
+        records = {"pack01": {"shots": ["LN01"], "declared_seconds": [10]},
+                   "pack02": {"shots": ["LN03"], "declared_seconds": [10], "video_id": "old"},
+                   "pack03": {"shots": ["LN02"], "declared_seconds": [10]}}
+        with mock.patch.object(video, "submit_packs", return_value=records), \
+                mock.patch.object(video, "poll_all", return_value={n: n + '.mp4' for n in records}):
+            _jobs, done = video.run_packs(Path('.'), shots, [], log=lambda *_: None)
+        self.assertEqual(done, {"pack01": "pack01.mp4"})
+
     # ── 拼接识别 ──
 
     def test_concat_glob_prefers_pack_clips(self):
@@ -4601,6 +4615,23 @@ class TestPackMode(unittest.TestCase):
                 self.assertEqual(compose.concat(clip_dir, clip_dir / "out.mp4"), 2,
                                  "pack 模式的 clips/ 必须能被 concat 识别并拼接")
             self.assertTrue((clip_dir / "out.mp4").exists())
+
+    def test_concat_explicit_clips_ignores_old_group_and_preserves_order(self):
+        from unittest import mock
+        from v5.media import compose
+        with tempfile.TemporaryDirectory() as d:
+            cd = Path(d)
+            for n in ('pack01', 'pack02', 'pack03'):
+                (cd / (n + '.mp4')).write_bytes(n.encode())
+            chosen = [cd / 'pack02.mp4', cd / 'pack01.mp4', cd / 'pack02.mp4']
+            with mock.patch.object(compose, '_audio_note'), \
+                    mock.patch.object(compose, '_probe', return_value={'w':64,'h':64,'fps':30}), \
+                    mock.patch.object(compose, 'TRIM', 0), \
+                    mock.patch.object(compose, 'XFADE', 0), \
+                    mock.patch.object(compose, '_copy_concat', return_value=2) as cc:
+                self.assertEqual(compose.concat(cd, cd/'out.mp4', clips=chosen), 2)
+            self.assertEqual(cc.call_args.args[0], chosen[:2])
+            self.assertEqual((cd/'pack03.mp4').read_bytes(), b'pack03')
 
 
     def test_compose_default_is_hard_cut(self):

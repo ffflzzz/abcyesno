@@ -1526,7 +1526,9 @@ def _run_impl(project_root: Path, ep: int = 1, log=print, max_regen: int = 2,
                     "final": str(out) if out.exists() else ""}
         log("[approvals] media 门通过：%s" % m_why)
 
-    n = compose.concat(Path(ok[next(iter(ok))]).parent, out)
+    # 只拼本轮已验明的镜级结果，按分镜顺序去重组路径；旧组留盘也不混入。
+    selected_clips = list(dict.fromkeys(Path(ok[s["name"]]) for s in shots))
+    n = compose.concat(selected_clips[0].parent, out, clips=selected_clips)
     # ★ 旁白音轨（2026-09-23，half-narrated-live-action 包）：audio_mode=narration-led
     #   时按真实时间轴生成旁白配音并混入成片（edge-tts + ffmpeg amix）。
     #   失败不挡链（保留原声成片）；audio_mode 从 brief 现读。

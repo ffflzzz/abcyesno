@@ -14,7 +14,7 @@
     理由见下方 XFADE 处的实测记录；要淡入淡出自己填秒数。
 
 兼容与兜底哲学：
-  - concat() 签名不动（pipeline.py 调用点零改动）。
+  - concat() 兼容原两参数调用；流水线显式给出本轮素材清单，目录旧片不参与。
   - 规格全一致且三开关全关 → 走原 `-c copy` 快路径，行为与旧版逐字节一致。
   - 新路径任何一步失败 → 降级回 `-c copy` 直拼：宁要完整不要缺镜，拼接失败绝不能炸整条链。
 """
@@ -83,14 +83,19 @@ def _audio_note(clips: list[Path]) -> None:
               " ⇒ 无法确认成片有没有声" % len(unknown), flush=True)
 
 
-def concat(clip_dir: Path, out: Path) -> int:
+def concat(clip_dir: Path, out: Path, *, clips: list[Path] | None = None) -> int:
     # 产物识别（2026-09-22 起 pack 档）：clips/ 下若存在 `pack*.mp4`（组级产物，
     # 一个文件含该组全部镜），按组编号顺序拼 —— pack 模式的 clips/ 里不会有
     # LN*.mp4（submit_packs 不产单镜文件），两者互斥、pack 优先。
     # pack%02d 两位编号保证字典序 = 组序；旁路脚本产物 `pack01_LN01-LN03.mp4`
     # 若被手动放入 clips/，字典序同样按编号排，兼容。
-    clips = (sorted(clip_dir.glob("pack*.mp4"), key=lambda p: p.stem)
-             or sorted(clip_dir.glob("LN*.mp4"), key=lambda p: p.stem))
+    if clips is None:
+        clips = (sorted(clip_dir.glob("pack*.mp4"), key=lambda p: p.stem)
+                 or sorted(clip_dir.glob("LN*.mp4"), key=lambda p: p.stem))
+    else:
+        clips = list(dict.fromkeys(Path(p) for p in clips))
+        if any(p.parent.resolve() != clip_dir.resolve() or not p.is_file() for p in clips):
+            return 0
     if not clips:
         return 0
     _audio_note(clips)
