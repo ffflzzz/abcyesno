@@ -674,6 +674,18 @@ def role_input(role: str, root: Path, m: dict, reasons: list[str] | None = None)
     #
     # ⚠️ 放在 `INLINE_UPSTREAM` **之外** —— 这两条不是"上游产物全文"，
     # 是**本模式的契约**，与是否全文注入上游无关。
+    if role in {"scriptwriter", "scenedesigner", "reviewer"}:
+        lines.append(
+            "【动作因果与可见结果】普通递接按伸手接触、接收方握稳、交出方松手的顺序写，"
+            "每一步明确持物者和所用手；只有剧情明确要求法术、抛接或掉落时才让道具离手。"
+            "行走、进出与追随用场景中的门槛、路径等可见地标写清起点和终点，"
+            "严格对齐剧本与brief的结局：到门口、跨过门槛、走远是不同结果，不擅自升级。"
+            "落幅必须在该镜动作中实际发生，不能仅在落幅列宣布完成。"
+            "完成关键动作前保持相关手、身体与地标可辨，再拉远；"
+            "人物缩成小点的远景不能同时承担手部道具细节的证明。"
+            "保留镜头变化与剧情节奏，不逐只脚或逐根手指编排无关细节。"
+            "评审据此核对具体动作矛盾，不另设固定镜数或逐步人工审批。"
+        )
     _mode_name = chain_mode.mode_of(guards.load_brief(root))
     if _mode_name == "from_script":
         # ⚠️ ★ 2026-10-04 实测补上的**真缺口**：`prereq_for` 把 `scriptwriter`
