@@ -14,15 +14,15 @@ class TestCoverage(unittest.TestCase):
     def test_legacy_and_trial_do_not_conflict(self):
         old=self.input(False);new=self.input(True)
         self.assertIn('一次生成只包含一镜',old)
-        self.assertNotIn('【试验·叙事镜头组织】',old)
+        self.assertNotIn('【叙事镜头组织】',old)
         self.assertNotIn('一次生成只包含一镜',new)
-        self.assertIn('【试验·叙事镜头组织】',new)
+        self.assertIn('【叙事镜头组织】',new)
         self.assertIn('85%',new)
         self.assertIn('台词字数 ÷ 4',new)
     def test_review_and_unsupported_modes(self):
-        self.assertIn('【试验·叙事镜头组织】',self.input(True,'reviewer'))
+        self.assertIn('【叙事镜头组织】',self.input(True,'reviewer'))
         for mode,limit in [('reference',6),('keyframe',6),('pack',1)]:
-            self.assertNotIn('【试验·叙事镜头组织】',self.input(True,mode=mode,limit=limit))
+            self.assertNotIn('【叙事镜头组织】',self.input(True,mode=mode,limit=limit))
     def test_scene_column_does_not_collapse_camera_rows(self):
         text='| 场次 | 镜头号 | 景别 | 角度 | 运镜 | 时长(秒) | 场景 | 画面描述 | 对白 | 音效 |\n|---|---|---|---|---|---|---|---|---|---|\n'
         for i,camera in enumerate(['跟住交玉右手','靠近接玉者','拉开看转身'],1):

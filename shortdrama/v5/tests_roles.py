@@ -218,7 +218,8 @@ class TestDurationDirectiveInjected(unittest.TestCase):
         self.assertIn("85", s, "必须给出会被门拦下的下限")
         self.assertIn("加一遍", s, "要要求它自己把时长列加一遍")
         self.assertIn("4–12 秒", s, "供应商硬区间要写出来")
-        self.assertIn("用满 12 秒", s, "同一场景并成一镜的口径要写出来")
+        self.assertIn("【叙事镜头组织】", s, "默认同场多镜口径必须注入")
+        self.assertNotIn("一次生成只包含一镜", s, "默认不得再要求一镜到底")
         self.assertIn("镜内时间轴", s, "≥8 秒的镜必须写时间轴（程序会查）")
         self.assertIn("台词字数 ÷ 4", s, "口播物理保留 —— 它不是镜数机制")
         # ⛔ 被废弃的除法权威不许从任何地方爬回来

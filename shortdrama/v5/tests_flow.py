@@ -552,6 +552,13 @@ class TestClipStashNeverLosesClips(unittest.TestCase):
     契约：**任何时刻被打断，clip 数都不会比循环开始时更少**。
     """
 
+    def setUp(self):
+        # These tests mock per-shot submission; select that path explicitly.
+        from v5 import config
+        mode = mock.patch.object(config, "VIDEO_MODE", "reference")
+        mode.start()
+        self.addCleanup(mode.stop)
+
     def _root(self, names=("LN01", "LN02")):
         d = tempfile.TemporaryDirectory()
         root = Path(d.name)
@@ -1263,6 +1270,13 @@ class TestVideoFailureRetryPass(unittest.TestCase):
       ② 补渲成功才拼接（`status=ok` + `concat` 被调）；
       ③ **单镜重渲（调用方已给 `only`）不得触发补渲** —— 那是受限调用，不该扩面。
     """
+
+    def setUp(self):
+        # These tests mock per-shot submission; select that path explicitly.
+        from v5 import config
+        mode = mock.patch.object(config, "VIDEO_MODE", "reference")
+        mode.start()
+        self.addCleanup(mode.stop)
 
     def _run(self, pass1_ok, pass2_ok, only=None, n=3):
         """返回 (result, submits, concat)。`submits` = 每次提交的 only（None=全量）。"""

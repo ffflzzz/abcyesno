@@ -4,7 +4,7 @@
 
 > 外部 Agent 调用规范见 **[AGENTS.md](AGENTS.md)**（写 brief.json → 调 CLI → 验收产物）。本文件说明系统本身。
 
-镜头组织试验：`SHORTDRAMA_SHOT_COVERAGE=1` 配合 pack 档，让分镜师安排同场多个镜头，现有媒体链合并为一条请求。默认关闭，见 [v5/SHOT_COVERAGE.md](v5/SHOT_COVERAGE.md)。
+默认采用 pack 镜头组织：分镜师安排同场多个镜头，媒体链合为一条 reference 请求。`SHORTDRAMA_SHOT_COVERAGE=0` 可回退旧创作口径，见 [v5/SHOT_COVERAGE.md](v5/SHOT_COVERAGE.md)。
 
 ## 1. 两条链路
 
@@ -287,7 +287,7 @@ projects/<项目名>/
 | `SHORTDRAMA_V5_EPISODE` | 1 | **本项目跑第几集**（多集连载）。M3 起产物路径由**每次开工注入**（`role_input` 的【本集产物路径】），故**一个 dev server 可连续跑 N 集**（`run_new_project.py --episodes 1-4`）；本变量只作起服时的默认值/调试固定用。取值优先级：env > manifest 的 `episode_index` > 1 |
 | `SHORTDRAMA_SLICE_THRESHOLD` | 4000 | **按集切片注入**的阈值（字符）：全剧级目录（`plotdesigner/episodes.md`）超过它就只注入「本集 ±1 + 本卷摘要」而非全文。**给真机验证用**，生产别设 |
 | `SHORTDRAMA_SLICE_SOFT` | 0 | 切片失败时的降级开关：默认（0）**响亮终止**；设 1 则「告警 + 注入全文」（应急用） |
-| `SHORTDRAMA_VIDEO_MODE` | reference | **系统默认档**。参考图当**素材**（各镜独立、可用 `audios`；默认喂的是资产图，见下一行 `VIDEO_REF_SOURCE`）vs `keyframe`（静帧当**首帧**，支持镜间承接但拿不到 `audios`）vs `pack`（**12s 打包**：相邻同场景镜合成一条 ≤12s 的 reference 请求，接戏变单请求内部问题；2026-10-07 起图序=设定表→场景空镜→**上一组成片末帧**→道具，静帧整条退出，原先的 `seam_preview.jpg` 预检图随之取消）vs `mixed`（逐镜在 reference/keyframe 间选）。前三者官方互斥关系同上。**拼错不报错**，会回落 `reference` 并告警 |
+| `SHORTDRAMA_VIDEO_MODE` | pack | **系统默认为 pack**。逐镜 reference：参考图当**素材**（各镜独立、可用 `audios`；默认喂的是资产图，见下一行 `VIDEO_REF_SOURCE`）vs `keyframe`（静帧当**首帧**，支持镜间承接但拿不到 `audios`）vs `pack`（**12s 打包**：相邻同场景镜合成一条 ≤12s 的 reference 请求，接戏变单请求内部问题；2026-10-07 起图序=设定表→场景空镜→**上一组成片末帧**→道具，静帧整条退出，原先的 `seam_preview.jpg` 预检图随之取消）vs `mixed`（逐镜在 reference/keyframe 间选）。前三者官方互斥关系同上。**拼错不报错**，会回落 `pack` 并告警 |
 | `SHORTDRAMA_VIDEO_REF_SOURCE` | sheets | **视频请求喂什么图**（2026-10-07 新默认）。`sheets` = 本镜的角色定妆照（≤2）+ 场景空镜 + 道具图，**静帧退出输入**，槽位封顶 3（图数 > 分镜人数会多画一个人，10-06 实测）；`stills` = 旧行为，只喂本镜静帧那一张。依据：`madfate-abc-1005-nostill` 15 镜与 `xianxia-zhongzhui-1007-nostill` 6 镜两轮实跑——场景地貌从"每镜自己发明一遍"变成照场景卡一致，代价是**场景卡自带的字会原样进成片**（那栋天台卡带一排红字 ⇒ 4 镜有字；仙侠那批图干净 ⇒ 一帧无字）。**拼错不报错**会回落 `sheets`，故与 `VIDEO_MODE` 同样做响亮校验。回归测试：`v5/tests_video_sheets.py` |
 | `SHORTDRAMA_BEAT_AUTOFIX` | 1 | `1` = 分镜契约门读表**之前**，把「画面描述」里镜内节拍的**算术断裂**按 `起点 = 上一段终点` 重排并写回盘（`v5/media/storyboard.py` 的 `repair_beat_continuity`，**只改数字、内容一字不动**；判据会打一行带镜号与原数值的说明）。边界很窄：⛔ 不动终点、⛔ 不动第一段起点（"必须从 0 起"是作者决定，推不出来）、⛔ 改完会塌缩（起点 ≥ 终点）的不修、认不出表头整表不动。★ 为什么是代码而不是契约（1008 实测 `yuxuan-duanfeng-1007` ep2）：12 秒 8 段里第三段被写成 `2.5-4.5秒：`（上一段终点 3），**打回两轮都没修**——第一轮原样交回、第二轮改完还是 2.5，而时间轴是 pack 全局重映射的硬依赖 ⇒ 让模型反复做加法不是契约，是空转。设 `0` 时行为与改造前一字不变（照旧由分镜契约门 `STORYBOARD-REJECT` 拦下）|
 | `SHORTDRAMA_SHEET_TEXT_GATE` | 1 | `1` = 视频喂资产图之前先查这批图**有没有可读文字**（`v5/media/sheettext.py`：逐张过一遍视觉模型，判据复用 `qc.is_hard_issue`，按文件指纹缓存）。命中就把那张图**剔出本次请求**并响亮报资产名与依据句。★ 为什么是 `sheets` 档的必要配套：静帧那一步原本的反烧字清洗与硬伤重画被整段绕过，而 10-07 实测证明提示词末尾那句 `no on-screen text` **压不过图上的字**（命案集场景卡带一排红字 ⇒ ≥4 镜成片有字）。设 `0` 时打一行"这批图没查过"的告警，不静默 |

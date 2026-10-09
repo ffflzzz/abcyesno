@@ -30,7 +30,7 @@
 
 ## 这个项目是什么
 
-可选镜头组织试验：`SHORTDRAMA_SHOT_COVERAGE=1`，仅 pack 档且并组上限至少2时生效。默认关闭，以现有分镜表和媒体并组逻辑实现，不新增门或调用入口。说明见 [v5/SHOT_COVERAGE.md](v5/SHOT_COVERAGE.md)；试验替代下文“一次生成只含一镜／单镜至少4秒”的旧创作口径，其它输入门和调用契约保留。
+默认镜头组织：pack 档按剧情编写同场多个镜头，由现有媒体链合并为一条 reference 请求。`SHORTDRAMA_SHOT_COVERAGE` 默认 1，设 0 回退旧创作口径；仅 pack 且并组上限至少2时生效。说明见 [v5/SHOT_COVERAGE.md](v5/SHOT_COVERAGE.md)，其它输入门保留。
 
 多智能体 AI 短剧生成工厂，实现在 **`v5/`**。
 **创作链** = supervisor 架构（LLM 编排，按依赖序派发角色图）；
@@ -432,10 +432,10 @@ pack 档**跳过**逐镜 clipqc（组产物多镜
 **★ 档位是「拼错就静默换档」的高危开关**（2026-10-04 已加响亮告警）：
 `config.VIDEO_MODE` 是唯一真相源，合法值只有 4 个
 （`reference` / `keyframe` / `pack` / `mixed`，见 `config.VIDEO_MODES`）。
-**拼错（`packk`）不报错**，会回落到 `reference` 并打印告警。
+**拼错（`packk`）不报错**，会回落到 `pack` 并打印告警。
 ⚠️ 打包版只读 `shortdrama/settings.env`、**不带 `.env`**，所以出厂档位那一行
-`SHORTDRAMA_VIDEO_MODE=reference` 已写死在 `settings.env` 里（真实环境变量仍优先）。
-换 `pack` 档要显式设 `SHORTDRAMA_VIDEO_MODE=pack`（真实 env 或改 `settings.env`），
+`SHORTDRAMA_VIDEO_MODE=pack` 已同步到 `settings.env`（真实环境变量仍优先）。
+换逐镜档要显式设 `SHORTDRAMA_VIDEO_MODE=reference`（真实 env 或改 `settings.env`），
 别指望改别的地方能顺带切档。
 
 **渲染放行条件**：媒体链**不在图内**；supervisor 图跑完后由 `series` 调
@@ -618,7 +618,7 @@ v1 **不自动重画**（角色那套会重画一次）：先响亮报出来，�
 | `AGNES_VIDEO_MAX_SHOTS` | 20 | **超过 20 镜的项目必须调大**，否则按上限**截断**（会打印醒目警告）|
 | `AGNES_VIDEO_MAX_SECONDS` | 12 | 单镜秒数**上限**（供应商硬约束 `seconds ∈ [4,12]`；下限 4 固定）。★ 设成小于 12 会让超长的镜被**静默压短**——2026-09-16 曾因误设 `10` 压短 620 镜中的 9 镜 |
 | `SHORTDRAMA_VIDEO_BGM` | 1 | 类型包禁忌 BGM 时设 `0` |
-| `SHORTDRAMA_VIDEO_MODE` | reference | `keyframe` 为回退档；`pack` 为 12s 打包档（见上文模式表）|
+| `SHORTDRAMA_VIDEO_MODE` | pack | `keyframe` 为回退档；`pack` 为 12s 打包档（见上文模式表）|
 | `SHORTDRAMA_VIDEO_REF_SOURCE` | **sheets** | **视频请求喂什么图**（2026-10-07 起的新默认，改的是"吃什么"不是"怎么提交"）。`sheets` = 本镜的定妆照（≤2）+ 场景空镜 + 道具图，**静帧不再是输入**（封顶 3 张：图数 > 分镜人数就多画人）；`stills` = 旧行为（只喂本镜静帧）。两轮实跑定案：`madfate-abc-1005-nostill` 15 镜、`xianxia-zhongzhui-1007-nostill` 6 镜。**红利取决于资产图干不干净**——场景卡自带可读文字时会原样进成片（命案集实测 4 镜），所以喂之前先人眼扫一遍图。判据在 `v5/media/assets.sheets_for_shot`，回归测试 `v5/tests_video_sheets.py` |
 | `SHORTDRAMA_SHEET_TEXT_GATE` | 1 | 上面那条的**必要配套**：出片前用视觉模型查这批资产图有没有可读文字（按文件指纹缓存，判据复用 `qc.is_hard_issue`）。命中 ⇒ 那张图**剔出请求** + 响亮报资产名；闸门关掉 ⇒ 打一行"这批图没查过"的告警。别把它和 `SHORTDRAMA_STILL_QC` 当成一回事：静帧 QC 查的是"这一镜画得对不对"，这道查的是"我要喂出去的图会不会把字带进成片" |
 | `SHORTDRAMA_VIDEO_PACK_MAX_GROUP` | 12 | `pack` 模式单组最多镜数（2026-10-05 从 5 放开；5 的依据「每镜一张静帧」已随 09-28 图序失效。同 README §6）|
