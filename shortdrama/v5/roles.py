@@ -810,6 +810,10 @@ def role_input(role: str, root: Path, m: dict, reasons: list[str] | None = None)
     #   资产卡只做搬运，不做"合理化改写"。配套：reviewer 通用门新增第 13 条交叉校验。
     if role == "assetdesigner":
         lines.append(
+            "【相连空间】同一建筑的外景、入口和内景共享材质、柱梁、门口结构及路径方向；"
+            "这些固定特征在相关场景卡中一致写出，光色可随内外变化。"
+            "不能只写同一地点的名字，却让独立参考图各自发明不同建筑。")
+        lines.append(
             "【硬性要求·道具形制逐字复制】brief.json 的 `key_props` 里每件道具的形制描述"
             "（材质 / 形状 / 颜色 / **佩戴或放置方式**）必须**逐字复制**进资产卡条目——"
             "一字不改、不增删限定词、不省略佩戴方式。"
