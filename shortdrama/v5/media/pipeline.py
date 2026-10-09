@@ -770,9 +770,9 @@ def _run_impl(project_root: Path, ep: int = 1, log=print, max_regen: int = 2,
             "再决定是补进 `cast.parse_characters` 的措辞表还是改包契约。")
 
     # 1) 类型包风格块：逐镜注入（否则模型退回默认审美：写实照片/精致低模）
-    block = style.wrap(style.load(project_root))
+    block = style.visual_block(project_root)
+    shots = style.prepare_shots(project_root, shots)
     if block:
-        shots = [{**s, "_style_block": block} for s in shots]
         log("[media] 风格块 %d 字（pack=%s）"
             % (len(block), style.pack_of(project_root) or "项目 style.md"))
     else:

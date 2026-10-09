@@ -4,6 +4,8 @@
 
 > 外部 Agent 调用规范见 **[AGENTS.md](AGENTS.md)**（写 brief.json → 调 CLI → 验收产物）。本文件说明系统本身。
 
+镜头组织试验：`SHORTDRAMA_SHOT_COVERAGE=1` 配合 pack 档，让分镜师安排同场多个镜头，现有媒体链合并为一条请求。默认关闭，见 [v5/SHOT_COVERAGE.md](v5/SHOT_COVERAGE.md)。
+
 ## 1. 两条链路
 
 ```

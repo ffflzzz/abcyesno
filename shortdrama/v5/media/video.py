@@ -727,8 +727,8 @@ def submit_packs(project_root: Path, shots: list[dict], planned: list[dict],
         # 项目风格块（style-block / 项目 style.md）一次加载，逐组复用——
         # 2026-09-22：替换 build_pack_prompt 里硬编码的「国风古装」句（题材污染）。
         prompt = prompt_mod.build_pack_prompt(
-            g, declared, total,
-            style_block=style_mod.wrap(style_mod.load(project_root)),
+            style_mod.prepare_shots(project_root, g), declared, total,
+            style_block=style_mod.visual_block(project_root),
             ref_roles=roles)
         log("[video] %s：%s 合计 %ds，prompt=%d 字，images=%d（%s）接续锚=%s"
             % (pname, "+".join(names), total, len(prompt), len(urls),

@@ -12,6 +12,10 @@
   1. 项目 brief.json 的 "pack" 字段 → skills/packs/<pack>/style-block.md
   2. 项目根 style.md（项目自带风格块，优先级最高，覆盖包级）
   3. 都没有 → 空串（提示词朴素，行为与之前一致）
+
+类型包可用 `# [combat]` 分开通用外观与战斗效果：媒体入口通过
+prepare_shots 按画面动作选择后段，visual_block 只取通用外观。
+没有该标记的既有类型包和项目 style.md 保持原行为。
 """
 from __future__ import annotations
 
@@ -333,3 +337,36 @@ def wrap(block: str) -> str:
     # Markdown 强调标记是给人读的，进提示词只是噪声
     s = s.replace("**", "")
     return s.strip()
+
+
+def visual_block(root: Path) -> str:
+    """Common appearance only; opt-in combat section is scoped to shot actions."""
+    return wrap(load(root).split('# [combat]', 1)[0])
+
+
+def has_combat_action(shot: dict) -> bool:
+    """Conservative action cues, not a weapon in a costume or a style label."""
+    text = re.sub(r'@[^（(\s]+[（(][^）)]*[）)]', '', shot.get('visual') or '')
+    cue = (r'挥剑|挥刀|挥刃|劈斩|劈砍|刺向|斩向|砍向|格挡|交锋|互搏|对攻|'
+           r'外摆踢|扫堂|踢向|踢出|枪杆竖挡|挥出.{0,8}剑罡|释放.{0,8}(?:剑罡|雷电)|'
+           r'(?:剑|枪|刀|刃|鞭).{0,8}(?:横扫|劈下|刺出|斩出|相击|交击)|'
+           r'(?:sword\s+strike|parry|duel)')
+    for clause in re.split(r'[，,。；;！!\n]|而是', text):
+        # A prohibition is not an action instruction.
+        for match in re.finditer(cue, clause, re.I):
+            prefix = clause[:match.start()]
+            if re.search(r'禁止|不得|没有|并未|避免', prefix):
+                continue
+            if re.search(r'(?:不(?:要|再|曾)?|未|无(?:需|须)?|no|not|without)\s*(?:进行|再次|任何|\s)*$', prefix, re.I):
+                continue
+            return True
+    return False
+
+
+def prepare_shots(root: Path, shots: list[dict]) -> list[dict]:
+    """Unsectioned packs/project overrides retain their existing behavior."""
+    base, marker, combat = load(root).partition('# [combat]')
+    base, combat = wrap(base), wrap(combat) if marker else ''
+    return [{**s, '_style_block': base,
+             '_combat_style_block': combat if has_combat_action(s) else ''}
+            for s in shots]

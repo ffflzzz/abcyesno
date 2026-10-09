@@ -12,20 +12,20 @@ from v5.media import assets  # noqa: E402
 
 
 def _mk(root: Path, name: str, w: int = 64, h: int = 64, pad: int = 0) -> None:
-    """造一张最小合法 PNG（不依赖 PIL）。
+    """造满足视频尺寸下限、像素内容可区分的 PNG（不依赖 PIL）。
 
-    pad：在 IEND 之后追加 N 个填充字节。PNG 解码器忽略 IEND 之后的数据，
-    但字节流因此唯一——**必须给同批资产传不同的 pad**，否则两个资产转出的
-    data URI 完全相同，会被 bind() 的 `u not in urls` 去重逻辑合并，
-    导致"角色+道具应绑 2 张"的断言失败（曾误判为代码 bug）。
+    pad 保留调用契约，但用于像素颜色；仅靠尾部填充区分的 1x1 同色图
+    经输入尺寸规范化后会完全相同，无法验证多资产绑定。
     """
-    import base64
-    # 1x1 透明 PNG，尺寸靠 metadata 不重要——这里只验证绑定逻辑
-    png = base64.b64decode(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8AAAwAB/AF+9Q0AAAAASUVORK5CYII="
-    )
+    import struct,zlib
+    w,h=max(256,w),max(256,h)
+    def chunk(kind,data):
+        return struct.pack('>I',len(data))+kind+data+struct.pack('>I',zlib.crc32(kind+data)&0xffffffff)
+    pixel=bytes((pad%256,(pad//256)%256,128))
+    png=(b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('>IIBBBBB',w,h,8,2,0,0,0))
+         +chunk(b'IDAT',zlib.compress((b'\x00'+pixel*w)*h))+chunk(b'IEND',b''))
     (root / "images").mkdir(parents=True, exist_ok=True)
-    (root / "images" / name).write_bytes(png + b"\x00" * pad)
+    (root / "images" / name).write_bytes(png)
 
 
 class TestAssets(unittest.TestCase):

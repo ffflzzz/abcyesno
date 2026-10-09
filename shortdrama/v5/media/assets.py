@@ -180,7 +180,7 @@ def _safe_ref_url(a: dict, root: Path) -> str | None:
     return urls[0] if urls else None
 
 
-MAX_REF_PX = 768   # 参考图长边上限：原图 130KB × 5 张 ≈ 900KB/请求，降采样后 ~1/6
+MAX_REF_PX = 768   # 参考图长边压缩目标；供应商边长和宽高比下限优先
 
 
 def _data_uri(path: Path) -> str | None:
@@ -192,9 +192,25 @@ def _data_uri(path: Path) -> str | None:
             import io
             im = Image.open(io.BytesIO(raw))
             im.load()
-            if max(im.size) > MAX_REF_PX:
-                ratio = MAX_REF_PX / float(max(im.size))
-                im = im.resize((int(im.width * ratio), int(im.height * ratio)))
+            # MAX_REF_PX is a payload-size preference. Agnes video requires
+            # both edges >=256: a wide 4-view card at 768x251 is rejected.
+            import math
+            ratio = max(256 / float(min(im.size)),
+                        min(1.0, MAX_REF_PX / float(max(im.size))))
+            ratio = min(ratio, 5760 / float(max(im.size)))
+            size = (min(5760, math.ceil(im.width * ratio)),
+                    min(5760, math.ceil(im.height * ratio)))
+            aspect = size[0] / float(size[1])
+            if size != im.size or min(size) < 256 or not 0.4 <= aspect <= 2.5:
+                im = im.convert("RGB").resize(size, Image.Resampling.LANCZOS)
+                padded = (max(256, im.width, math.ceil(im.height * 0.4)),
+                          max(256, im.height, math.ceil(im.width / 2.5)))
+                if padded != im.size:
+                    # Keep every view: padding satisfies video aspect limits
+                    # without cropping a face, costume, or weapon.
+                    canvas = Image.new("RGB", padded, "white")
+                    canvas.paste(im, ((canvas.width-im.width)//2, (canvas.height-im.height)//2))
+                    im = canvas
                 buf = io.BytesIO()
                 im.save(buf, format="JPEG", quality=85)
                 raw = buf.getvalue()

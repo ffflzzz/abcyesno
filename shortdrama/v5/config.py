@@ -714,6 +714,9 @@ SHOTCHECK = os.environ.get("SHORTDRAMA_SHOTCHECK", "full").strip().lower()
 # 不能靠"看起来更自由"就永久删掉。对照实验：`scripts/ab_loose_storyboard.py`。
 LOOSE_STORYBOARD = os.environ.get("SHORTDRAMA_LOOSE_STORYBOARD", "0") != "0"
 
+# Opt-in authoring of several camera views in the existing pack pipeline.
+SHOT_COVERAGE = os.environ.get("SHORTDRAMA_SHOT_COVERAGE", "0") == "1"
+
 # 成片复核的重拍轮数。**FAST 时归零**（不再自动复核）。
 CLIP_QC_ROUNDS = 0 if FAST else int(os.environ.get("SHORTDRAMA_CLIP_QC_ROUNDS", "2"))
 # 队列满（503 video_queue_full）时的退避重试次数。队列满是瞬时的：

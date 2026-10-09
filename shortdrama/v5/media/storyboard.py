@@ -249,7 +249,12 @@ def parse(md: str) -> list[dict]:
         if _col(cells, "画面") is not None and not _ROW_RE.match(line):
             headers = cells
             continue
-        m = _ROW_RE.match(line)
+        # Read the declared shot-number column, not the first numeric cell.
+        # A leading scene number otherwise collapses all shots in that scene.
+        shot_col = _col(headers, "镜头号", "镜号", "shot_id")
+        number_line = ("| " + cells[shot_col] + " |"
+                       if shot_col is not None and shot_col < len(cells) else line)
+        m = _ROW_RE.match(number_line)
         if not m or not headers:
             continue
         # ★ **按镜头号去重，保留首次出现**（2026-09-14 实测三次事故）。

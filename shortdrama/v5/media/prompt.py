@@ -643,7 +643,8 @@ def style_block_line(shot: dict) -> str:
     风格列只描述单镜的光线质感，撑不起类型包的整体审美；风格块是包的
     「视觉命题」，必须逐镜出现，否则模型退回默认审美（写实/精致低模）。
     """
-    return (shot.get("_style_block") or "").strip()
+    return " ".join(filter(None, ((shot.get("_style_block") or "").strip(),
+                                  (shot.get("_combat_style_block") or "").strip())))
 
 
 # 身份锚点的**源头整备**（2026-09-15 village-tractor 事故）。
@@ -1650,7 +1651,7 @@ def build_pack_prompt(group: list[dict], declared: list[int], total: int,
 
     `group` = 同场景相邻镜列表；`declared` = 每镜分配秒（≤12s 合计）；
     `total` = sum(declared)。
-    `style_block` = 本项目风格块（`style.wrap(style.load(root))`，2026-09-22 起
+    `style_block` = 本项目通用外观块（`style.visual_block(root)`，2026-09-22 起
     由调用方传入）。★ **为什么必须传**：旧实现硬编码「电影级国风古装剧照质感」
     ——任何项目走 pack 档都被注入国风风格句（非国风项目直接被污染）。
     传入后与静帧路径同源（style-block / 项目 style.md）；缺省回退**通用**
@@ -1658,6 +1659,7 @@ def build_pack_prompt(group: list[dict], declared: list[int], total: int,
     `ref_roles` = 参考图**不是**"每镜一张静帧"时的分工声明（2026-09-28 A 臂）。
     给了它就用 `pack_ref_declaration` 生成首段，**不再**逐拍打 `<Picture i>` 时间戳——
     因为此时 Picture 的序号对应的是设定表/场景图，逐拍点名会说谎。
+    战斗段来自各镜 `_combat_style_block`，放在该镜时间段内，不放进全组尾缀。
     """
     n = len(group)
     bounds, maps = [], []
@@ -1709,6 +1711,9 @@ def build_pack_prompt(group: list[dict], declared: list[int], total: int,
         join_line = "\n转场承接：%s。" % join if join else ""
         style = (s.get("visual_style") or "").strip()
         style_line = "\n视觉风格：%s" % style if style else ""
+        combat = (s.get("_combat_style_block") or "").strip()
+        if combat:
+            style_line += "\n本镜战斗特效：%s" % combat
         # ★ 镜内节拍全局重映射（2026-09-25）：镜本地 `0-2秒：` → 组内绝对时间
         segs.append(
             "%s\n%s%s%s\n台词：%s\n音效：%s\n落幅：%s"

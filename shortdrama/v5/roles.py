@@ -499,6 +499,28 @@ def _craft_block(root: Path, role: str) -> str:
             + "\n\n".join(parts))
 
 
+def _shot_coverage_directive() -> str:
+    """Use ordinary storyboard rows and the existing multi-row pack compiler."""
+    mode = (config.VIDEO_MODE or config.VIDEO_MODE_DEFAULT).lower()
+    if not config.SHOT_COVERAGE or mode != "pack" or config.VIDEO_PACK_MAX_GROUP < 2:
+        return ""
+    from .media.video_plan import PACK_MAX_SECONDS
+    return (
+        "【试验·叙事镜头组织】一条视频请求可以包含多个镜头，不等于一镜到底。"
+        "同一场连续戏按叙事需要写成多个分镜表行，每行一个镜头；"
+        "相同「场次」编号和「场景」名称连续排列，交给现有pack管线合并。"
+        "每组总长4–%d秒，最多%d行；镜数、景别、机位、镜长由剧情与台词决定，不套固定三镜模板。"
+        "每行用现有列写清主体的位置和朝向、一个主要动作、对方反应、结束时的人物与道具状态。"
+        "下一镜从该结束状态接入；同侧拍摄，保持人物左右关系。"
+        "镜内时间轴从0起到本行时长结束，全组切点由媒体层累加。"
+        "不要将整组写成全程不切镜，连续运镜只限定在本行。"
+        "本试验替代包内一次生成只含一镜及单镜至少4秒的旧口径，其它身份、道具、对白和总时长要求保留。"
+        "首镜承接写本场起始状态；近景只对主体使用@身份锚点，对方的动作或手部位置仍用名字写清，"
+        "不能为遵守@标记规则删掉接玉者或丢掉道具归属。"
+        % (PACK_MAX_SECONDS, config.VIDEO_PACK_MAX_GROUP)
+    )
+
+
 def _container_facts(vp) -> str:
     """给 scenedesigner 的**出片容器事实**（数字全部从代码读，见函数内注释）。
 
@@ -816,6 +838,14 @@ def role_input(role: str, root: Path, m: dict, reasons: list[str] | None = None)
             #   30 镜 × 4 秒，成片"一段段硬分、割裂感重"，而节奏本该由叙事决定。
             #   现在代码只保留**两条真边界**：每镜 4–12 秒（供应商硬区间）与
             #   总时长落在 85%–130%（分镜契约门校验）；镜数与镜长归分镜师。
+            coverage = _shot_coverage_directive()
+            boundary = ("每场请求 **4–12 秒**，同组内镜头可短于4秒" if coverage else
+                        "每镜 **4–12 秒**（供应商 API 的取值区间，越界会被静默改写）")
+            scene_policy = coverage or (
+                "· **★ 同一场景的连续戏优先合成一镜、用满 12 秒**：一次生成只包含一镜，"
+                "把同一场戏里的多个动作与机位变化装进同一条 12 秒，人物/光色/道具的一致性"
+                "和镜头效果都最好；⛔ 不要为了「多切镜」把一场戏拆成几条 4 秒短镜。"
+            )
             lines.append(
                 "【硬性要求·片长】brief.target_duration 的目标是 **%d 秒**："
                 "**唯一的硬门是总时长** —— 分镜总时长必须落在目标的 **85%%–130%%** 内，"
@@ -823,11 +853,9 @@ def role_input(role: str, root: Path, m: dict, reasons: list[str] | None = None)
                 "**收工前必须自己把「时长(秒)」列加一遍**，确认总秒数达标；不够就补镜。"
                 "★ **镜数与每镜秒数由你按剧情节拍决定，本系统不再给「目标秒数 ÷ 4」这类"
                 "除法基线**（2026-10-03 废弃）。硬边界只有两条："
-                "① 每镜 **4–12 秒**（供应商 API 的取值区间，越界会被静默改写）；"
+                "① %s；"
                 "② 上面那条总时长。"
-                "· **★ 同一场景的连续戏优先合成一镜、用满 12 秒**：一次生成只包含一镜，"
-                "把同一场戏里的多个动作与机位变化装进同一条 12 秒，人物/光色/道具的一致性"
-                "和镜头效果都最好；⛔ 不要为了「多切镜」把一场戏拆成几条 4 秒短镜。"
+                "%s"
                 "· **≥8 秒的镜必须写满镜内时间轴**（`0-3秒：…；3-6秒：…；6-9秒：…；"
                 "9-12秒：…`，每段换一个事件：位移／物件易手／人物进出画／机位变化）——"
                 "程序会按镜长检查这条，不合格会退回。"
@@ -836,7 +864,7 @@ def role_input(role: str, root: Path, m: dict, reasons: list[str] | None = None)
                 "**宁可把这一镜排长，也不要把台词砍短**。"
                 "· **短镜照样合法**：一个反应、一个道具特写该 4 秒就 4 秒；"
                 "**避免全表等长** —— 真实节拍有呼吸。"
-                % (round(tgt), round(tgt * 0.85)))
+                % (round(tgt), round(tgt * 0.85), boundary, scene_policy))
             # ⚠️ 配额上限：镜数超过它会被**静默截断**，必须提前说（按 4–12 秒的区间给出
             #   镜数范围，而不是替分镜师决定镜数）。
             if cap:
@@ -857,6 +885,8 @@ def role_input(role: str, root: Path, m: dict, reasons: list[str] | None = None)
         # 一定会漂）改由这里注入，且数字**从代码里读**，不许在文案里再抄一份。
         from .media import video_plan as _vp
         lines.append(_container_facts(_vp))
+        if not tgt and _shot_coverage_directive():
+            lines.append(_shot_coverage_directive())
         # 「景别」列会被 `qc.review_shot_type` **原样**送进构图校验提示词
         # （`景别：{shot_type}`）→ 括注会把判据冲淡。shortdrama 契约里本来就规定了
         # 词表（远景/全景/中景/近景/特写），但同样的"per-pack 才有的规则"问题
@@ -1022,6 +1052,8 @@ def role_input(role: str, root: Path, m: dict, reasons: list[str] | None = None)
     # 打回清单是上一轮的程序结论，人的改动是**这一轮**的新事实，后者覆盖前者。
     #
     # 无条目时 `render_block` 返回空串 ⇒ **一行都不加**，既有链路行为零变化。
+    if role == "reviewer" and not config.LOOSE_STORYBOARD and _shot_coverage_directive():
+        lines.append(_shot_coverage_directive())
     _ib = inbox.render_block(root, role, ep)
     if _ib:
         lines.append(_ib)
