@@ -48,7 +48,7 @@ def extract_last_frame(clip: Path, max_side: int = 512) -> str | None:
     try:
         r = subprocess.run(
             ["ffmpeg", "-y", "-v", "error", "-sseof", "-1", "-i", str(clip),
-             "-frames:v", "1", "-q:v", "2", str(frame)],
+             "-vf", "reverse", "-frames:v", "1", "-q:v", "2", str(frame)],
             capture_output=True, timeout=120)
     except Exception:  # noqa: BLE001
         return None

@@ -1,6 +1,10 @@
 """Reuse must follow actual input changes, without widening scoped renders."""
 import tempfile
 import unittest
+import base64
+import io
+import shutil
+import subprocess
 from pathlib import Path
 from unittest import mock
 
@@ -9,6 +13,21 @@ from v5.media import jobs
 
 
 class TestPackInputs(unittest.TestCase):
+    @unittest.skipUnless(shutil.which('ffmpeg'), 'ffmpeg required')
+    def test_seam_anchor_is_final_frame_not_first_frame_of_final_second(self):
+        from PIL import Image
+        with tempfile.TemporaryDirectory() as d:
+            clip = Path(d) / 'tail.mp4'
+            subprocess.run(['ffmpeg', '-v', 'error', '-y',
+                '-f', 'lavfi', '-i', 'color=c=red:s=64x64:r=24:d=1.5',
+                '-f', 'lavfi', '-i', 'color=c=blue:s=64x64:r=24:d=0.5',
+                '-filter_complex', '[0:v][1:v]concat=n=2:v=1:a=0[v]',
+                '-map', '[v]', '-c:v', 'libx264', str(clip)], check=True, capture_output=True)
+            uri = video.extract_last_frame(clip)
+            with Image.open(io.BytesIO(base64.b64decode(uri.split(',', 1)[1]))) as image:
+                red, _, blue = image.convert('RGB').getpixel((32, 32))
+            self.assertGreater(blue, red + 100, '最后半秒是蓝色，倒数一秒起点却是红色')
+
     def test_normal_entry_resubmits_changed_input_and_reuses_unchanged_input(self):
         shots = [{'name': 'LN01', 'scene': 'A', 'seconds': 12}]
         for signature, expected_calls in [('old', 1), ('current', 0)]:
