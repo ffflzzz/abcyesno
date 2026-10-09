@@ -310,6 +310,21 @@ def _build_role_graph(role: str, pack: str):
                             % (role, type(e).__name__, e, traceback.format_exc()))
             except Exception:  # noqa: BLE001
                 pass
+        # 工具交付以当前集文件为准，不能把模型的“已完成”转述给supervisor。
+        # 缺文件时保留失败事实，不在这里新增重派或自动修订循环。
+        target = _root / out_path(role, _live_ep)
+
+        def _delivered() -> bool:
+            return target.is_file() and bool(target.read_text(encoding="utf-8").strip())
+
+        if not await asyncio.to_thread(_delivered):
+            reason = last_meta.get("finish_reason") or "unknown"
+            note = ("【未交付】%s 第%d集的文件 /%s 缺失或为空；"
+                    "本轮模型结束原因=%s。聊天回复不能作为产物，"
+                    "先完成该角色文件交付再派下游。"
+                    % (role, _live_ep, out_path(role, _live_ep), reason))
+            print("[orchestrator] " + note, flush=True)
+            return {"messages": [AIMessage(content=note)]}
         return {"messages": (res.get("messages") or [])[-1:]}
 
     # 节点名 = **角色名**（唯一），不是固定的 `"role"`（2026-09-13 改）。
