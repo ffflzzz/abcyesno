@@ -161,6 +161,9 @@ def reconcile_manifest(root: Path, m: dict | None = None,
                           "本次已按裸块兜底解析（pass=%s）"
                           % (out_path("reviewer", ep), rev["passed"]))
             else:
+                # 新报告不可解析时，不能继续沿用上一份报告的通过/强制通过。
+                m["review"] = {"passed": False, "rerun": [],
+                               "reasons": ["当前评审缺少有效判定块，需重新交付评审判定"]}
                 # ★ 产物存在却解析不出判定 → 媒体门必然报「评审未通过（无 pass: true）」，
                 #   而报告里可能明明写着 `pass: true`（自相矛盾、极难排查）。
                 #   原先这里是**完全静默**的（连异常都被 `except: pass` 吞掉）—— 必须显式告警。
@@ -171,6 +174,8 @@ def reconcile_manifest(root: Path, m: dict | None = None,
                       "→ 评审门会判「未通过」，媒体链会被拦下。请检查该文件末尾的判定块格式。"
                       % out_path("reviewer", ep))
         except Exception as e:  # noqa: BLE001
+            m["review"] = {"passed": False, "rerun": [],
+                           "reasons": ["当前评审判定解析失败：" + str(e)[:120]]}
             print("[guards] ⚠️ %s 判定解析异常：%s"
                   % (out_path("reviewer", ep), str(e)[:120]))
     save_manifest(root, m)

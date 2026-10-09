@@ -779,6 +779,19 @@ class TestReviewParseWarningNamesTheEpisode(unittest.TestCase):
         self.assertIn("review_ep2.md", out, "没告警 = 判定被静默当成未通过：" + out)
         self.assertNotIn("review_ep1.md", out, "告警点名了别的集的文件 ⇒ 会把人引去查错的地方")
 
+    def test_invalid_new_report_clears_previous_pass_and_forced_pass(self):
+        from tempfile import TemporaryDirectory
+        with TemporaryDirectory() as d:
+            root = Path(d)
+            p = root / "reviewer/review_ep1.md"
+            p.parent.mkdir(parents=True)
+            p.write_text("新报告：不通过，但遗漏了机器判定块。", encoding="utf-8")
+            m = guards.reconcile_manifest(root, {"episode_index": 1,
+                "review": {"passed": True, "force_passed": True, "reasons": []}}, ep=1)
+        self.assertFalse(m["review"]["passed"])
+        self.assertFalse(m["review"].get("force_passed"))
+        self.assertTrue(m["review"]["reasons"])
+
 
 class TestExitAfterThrash(unittest.TestCase):
     """★ 反空转闸不能把出口一起掐掉（2026-10-03 `yoga-affair-1003g` 实测）。

@@ -814,6 +814,60 @@ def verify_asset_sheets(root: Path, items: list[dict], *, log=print,
 
 def verify_character_sheets(root: Path, chars: list[dict], *, log=print,
                             llm=None, ask=None) -> dict:
+    """Reuse a verdict for unchanged picture/card; retain residuals, not reroll them.
+
+    The one-redraw allowance is tied to actual inputs, rather than reset whenever
+    a media process starts. Unknown/API failures are deliberately not cached.
+    """
+    import hashlib
+    from . import sheetcheck
+    from .. import vendors
+
+    if not config.SHEET_CHECK:
+        return _verify_character_sheets(root, chars, log=log, llm=llm, ask=ask)
+    cache_path = root / ".tmp" / "character_sheet_checks.json"
+    try:
+        cache = json.loads(cache_path.read_text(encoding="utf-8"))
+        if not isinstance(cache, dict):
+            cache = {}
+    except (OSError, ValueError):
+        cache = {}
+    out = {"checked": 0, "redrawn": 0, "residual": [], "cached": 0, "unknown": 0}
+    for c in chars:
+        name = c.get("name") or ""
+        path = images_dir(root) / (name + ".png")
+
+        def fingerprint():
+            if not path.exists():
+                return ""
+            policy = json.dumps({"version": 1, "name": name, "appearance": c.get("appearance") or "",
+                "prompt": sheetcheck.ask_text(c.get("appearance") or ""),
+                "model": config.MODELS.get("chat"),
+                "provider": vendors.current("chat"),
+                "max_regen": config.SHEET_CHECK_MAX_REGEN}, ensure_ascii=False, sort_keys=True)
+            return hashlib.sha256(path.read_bytes() + policy.encode()).hexdigest()
+
+        before = fingerprint()
+        stored = cache.get(name) or {}
+        if before and stored.get("fingerprint") == before:
+            out["cached"] += 1
+            out["residual"].extend(stored.get("residual") or [])
+            log("[sheetcheck] %s 图与卡未变，保留上次判定%s，不重复重画" %
+                (name, "（仍有残留）" if stored.get("residual") else ""))
+            continue
+        rep = _verify_character_sheets(root, [c], log=log, llm=llm, ask=ask)
+        for key in ("checked", "redrawn", "unknown"):
+            out[key] += rep.get(key, 0)
+        out["residual"].extend(rep["residual"])
+        if rep["checked"] and not rep.get("unknown"):
+            cache[name] = {"fingerprint": fingerprint(), "residual": rep["residual"]}
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
+    return out
+
+
+def _verify_character_sheets(root: Path, chars: list[dict], *, log=print,
+                             llm=None, ask=None) -> dict:
     """★ 定妆照 ↔ 角色卡 对账（判据与为什么需要，见 `media/sheetcheck.py` 文件头）。
 
     **有界**：核对不过 ⇒ 把矛盾项原文前置强调、重画一次、再核对一次；仍不符就
@@ -824,7 +878,7 @@ def verify_character_sheets(root: Path, chars: list[dict], *, log=print,
     """
     from . import sheetcheck
 
-    out = {"checked": 0, "redrawn": 0, "residual": []}
+    out = {"checked": 0, "redrawn": 0, "residual": [], "unknown": 0}
     if not config.SHEET_CHECK:
         log("[sheetcheck] 已关（SHORTDRAMA_SHEET_CHECK=0）→ 定妆照不与角色卡对账")
         return out
@@ -858,10 +912,15 @@ def verify_character_sheets(root: Path, chars: list[dict], *, log=print,
         try:
             v = sheetcheck.judge(app, _ask(path, app))
         except Exception as e:                                    # noqa: BLE001
+            out["unknown"] += 1
             log("[sheetcheck] ⚠️ %s 对账**没跑成**（%s）⇒ 不判（不等于通过）"
                 % (name, str(e)[:70]))
             continue
         if not v["mismatch"]:
+            if len(v["unchecked"]) >= len(sheetcheck.items_of(app)):
+                out["unknown"] += 1
+                log("[sheetcheck] %s 外形项均未判定，不等于与卡片相符" % name)
+                continue
             log("[sheetcheck] %s 定妆照与角色卡相符（%d 项已核%s）"
                 % (name, len(sheetcheck.items_of(app)),
                    "，%d 项模型没答 ⇒ 未判" % len(v["unchecked"]) if v["unchecked"] else ""))
@@ -880,12 +939,17 @@ def verify_character_sheets(root: Path, chars: list[dict], *, log=print,
             try:
                 v = sheetcheck.judge(app, _ask(path, app))
             except Exception as e:                                # noqa: BLE001
+                out["unknown"] += 1
                 log("[sheetcheck] ⚠️ %s 重画后无法复核（%s）⇒ 保留新图、不判"
                     % (name, str(e)[:70]))
                 _register(root, c, name)
                 break
             if not v["mismatch"]:
-                log("[sheetcheck] %s 重画后与角色卡相符 ✓" % name)
+                if len(v["unchecked"]) >= len(sheetcheck.items_of(app)):
+                    out["unknown"] += 1
+                    log("[sheetcheck] %s 重画后外形项均未判定，不等于相符" % name)
+                else:
+                    log("[sheetcheck] %s 重画后已核外形项无矛盾" % name)
                 _register(root, c, name)
                 break
             for item, seen, kind in v["mismatch"]:

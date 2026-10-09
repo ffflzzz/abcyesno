@@ -1615,7 +1615,7 @@ def pack_ref_declaration(ref_roles: list[tuple[str, str]]) -> str:
     impl, previous, props = _nums("shot"), _nums("prev"), _nums("prop")
     parts = [head + "。"]
     if chars:
-        parts.append("★ 优先级：出场人物的长相、发型、服装形制与兵刃**一律以第 %s 张"
+        parts.append("★ 优先级：出场人物的形象**一律以第 %s 张"
                      "人物设定表为准**。" % "、".join(str(c) for c in chars))
     if impl:
         parts.append("第 %s 张只沿用其场景地貌、光线与人物站位——其中人物长相若与设定表"
@@ -1627,7 +1627,7 @@ def pack_ref_declaration(ref_roles: list[tuple[str, str]]) -> str:
                      % "、".join(str(c) for c in previous))
     if props:
         parts.append("第 %s 张锁定道具形状、材质、颜色、尺寸与部件，遵守上面本项目道具规格；"
-                     "不新增图和规格里没有的绳、孔、配件或发光。规格中的初始归属不代表本段重新初始化，"
+                     "完整沿用该实物的部件与结构。规格中的初始归属不代表本段重新初始化，"
                      "本段持物者、手和动作以承接状态及下面当前镜头为准。"
                      % "、".join(str(c) for c in props))
     if scenes:

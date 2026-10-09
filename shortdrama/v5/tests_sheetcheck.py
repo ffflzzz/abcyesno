@@ -165,6 +165,51 @@ class TestVerifyWiring(unittest.TestCase):
             root / "images" / "沈砚.png")
         return root
 
+    def test_same_picture_and_card_do_not_reroll_residual_on_restart(self):
+        from .media import cast
+        with tempfile.TemporaryDirectory() as td:
+            root = self._proj(td)
+            chars = [{"name": "沈砚", "appearance": CARD}]
+            ask = mock.Mock(return_value=SEEN_WRONG)
+            with mock.patch.object(cast, "_turnaround", return_value=True) as draw, \
+                    mock.patch.object(cast, "_register"):
+                first = cast.verify_character_sheets(root, chars, ask=ask, log=lambda *_: None)
+                paid = ask.call_count
+                again = cast.verify_character_sheets(root, chars, ask=ask, log=lambda *_: None)
+                self.assertEqual(ask.call_count, paid)
+                self.assertEqual(draw.call_count, 1)
+                self.assertEqual(again["residual"], first["residual"])
+                self.assertEqual(again["cached"], 1)
+                (root / "images/沈砚.png").write_bytes((root / "images/沈砚.png").read_bytes() + b"changed")
+                cast.verify_character_sheets(root, chars, ask=ask, log=lambda *_: None)
+                self.assertGreater(ask.call_count, paid)
+                before = ask.call_count
+                chars[0]["appearance"] += "；腰带为银色"
+                cast.verify_character_sheets(root, chars, ask=ask, log=lambda *_: None)
+                self.assertGreater(ask.call_count, before)
+
+    def test_unavailable_vision_is_not_cached_as_a_verdict(self):
+        from .media import cast
+        with tempfile.TemporaryDirectory() as td:
+            root = self._proj(td)
+            chars = [{"name": "沈砚", "appearance": CARD}]
+            ask = mock.Mock(side_effect=RuntimeError("unavailable"))
+            for _ in range(2):
+                rep = cast.verify_character_sheets(root, chars, ask=ask, log=lambda *_: None)
+                self.assertEqual(rep["unknown"], 1)
+            self.assertEqual(ask.call_count, 2)
+
+    def test_no_answers_are_unknown_and_retriable(self):
+        from .media import cast
+        with tempfile.TemporaryDirectory() as td:
+            root = self._proj(td)
+            chars = [{"name": "沈砚", "appearance": CARD}]
+            ask = mock.Mock(return_value="无法辨认")
+            for _ in range(2):
+                rep = cast.verify_character_sheets(root, chars, ask=ask, log=lambda *_: None)
+                self.assertEqual(rep["unknown"], 1)
+            self.assertEqual(ask.call_count, 2)
+
     def test_redraws_once_and_passes(self):
         from .media import cast
 
