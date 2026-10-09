@@ -602,6 +602,18 @@ def pack_ref_images(project_root: Path, group: list[dict],
                 locs.append((u, nm))
             else:
                 props.append((u, nm))
+    # bind 为静帧限制总图数：宽景两人+场景已经占满，关键道具会被截掉。
+    # pack 的五槽分工不同，在分组层从命中的资产补取道具，再按本入口槽位裁决。
+    reg = assets.auto_sync(project_root)
+    for s in group:
+        hits, _ = assets.hits_for_shot(reg, s, max_n=max(5, len(reg.get('assets', []))))
+        for a in hits:
+            if a.get('type') == 'character' or a.get('type') in assets.LOCATION_TYPES:
+                continue
+            for u in assets._safe_ref_urls(a, project_root):
+                if u and u not in seen:
+                    seen.add(u)
+                    props.append((u, str(a.get('name') or '')))
     urls: list[str] = []
     roles: list[tuple[str, str]] = []
 
@@ -642,6 +654,7 @@ def pack_ref_images(project_root: Path, group: list[dict],
         add(prev_url, "prev",
             "**上一片段的真实结束状态**（场景、人物站位、姿态、持物与动作进度）")
     prop_specs = assets.key_prop_specs(project_root)
+    props.sort(key=lambda item: item[1] not in prop_specs)
     for u, nm in props:
         label = "道具「%s」" % nm
         if nm in prop_specs:

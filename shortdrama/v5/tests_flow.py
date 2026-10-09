@@ -4245,6 +4245,24 @@ class TestPackMode(unittest.TestCase):
         self.assertIn('【第 0-6.5 秒',p2)
         self.assertIn('【第 6.5-12 秒',p2)
 
+    def test_pack_recovers_prop_truncated_by_still_reference_cap(self):
+        from unittest import mock
+        from v5.media import assets, video
+        s={'name':'LN05','shot_type':'全景','scene':'山门','visual':'甲与乙同行，甲右手持白玉佩'}
+        prop={'id':'白玉佩','name':'白玉佩','type':'prop','keywords':['白玉佩']}
+        def bind(_root,_group,**kw):
+            kw['names_out']['LN05']=['甲','乙','山门']
+            kw['types_out']['LN05']=['character','character','location']
+            return {'LN05':['face-a','face-b','scene']}
+        with mock.patch.object(assets,'bind',side_effect=bind), \
+                mock.patch.object(assets,'auto_sync',return_value={'assets':[prop]}), \
+                mock.patch.object(assets,'_safe_ref_urls',return_value=['jade']), \
+                mock.patch.object(assets,'key_prop_specs',return_value={'白玉佩':'实心玉片，无绳'}):
+            urls,roles=video.pack_ref_images(Path('.'),[s],prev_url='tail',ep=1)
+        self.assertEqual(urls,['face-a','face-b','scene','tail','jade'])
+        self.assertEqual([kind for kind,_ in roles],['character','character','location','prev','prop'])
+        self.assertIn('实心玉片',roles[-1][1])
+
     def test_pack_ref_declaration_locks_identity_on_costume_sheet(self):
         """A 臂图序（2026-09-28 实测）：pack 档视频请求的**身份来源必须是人物设定表**，
         静帧降级为"场景实现 + 跨组接续"两张，且声明里要写明冲突时忽略静帧的人物。
