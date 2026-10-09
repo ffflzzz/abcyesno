@@ -281,6 +281,10 @@ class TestVerifyWiring(unittest.TestCase):
         self.assertEqual(len(items), 2, items)
         self.assertTrue(any("旧疤" in i for i in items), items)
 
+    def test_temporary_pose_does_not_trigger_identity_redraw(self):
+        card = '粉色刺绣长裙、站姿带一点前倾的亲近感、左腕铜镯'
+        self.assertEqual(sc.items_of(card), ['粉色刺绣长裙', '左腕铜镯'])
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -321,3 +325,13 @@ class AssetSheetJudgement(unittest.TestCase):
         for bad in ("", "模型今天不想说话", "{不是 JSON}", json.dumps({"foo": 1})):
             self.assertEqual(sheetcheck.judge_asset(card, bad), [],
                              "答不上来一律不判 —— 判据是概率性的，别每次生成都报红")
+
+    def test_negated_collage_observations_are_not_multi_subject(self):
+        card = {'name':'白玉佩','type':'prop'}
+        for notes in ('单一场景连续空间，无分格拼图，无可读文字',
+                      '没有分格，没有可读文字，远处单一主塔轮廓清晰可见',
+                      '画面仅包含单一主体，无其他配件，无分格，无可见文字'):
+            self.assertEqual(sheetcheck.judge_asset(card,self._reply(notes=notes)), [])
+        for notes in ('无分格，但有多个主体', '没有分格却有多件不相关主体',
+                      '图上存在拼接，其他部分没有文字'):
+            self.assertIn('多主体', [k for k,_ in sheetcheck.judge_asset(card,self._reply(notes=notes))])

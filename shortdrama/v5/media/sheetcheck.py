@@ -112,7 +112,8 @@ def items_of(appearance: str) -> list[str]:
         if len(p) >= 3 and any(n in p for n in _VISUAL_NOUNS):
             out.append(p)
     # 光效条目剔掉（见 `_GLOW_WORDS`）：白底设定表上没有雷光是**对的**
-    return [p for p in out if not any(g in p for g in _GLOW_WORDS)]
+    return [p for p in out if not any(g in p for g in _GLOW_WORDS)
+            and not re.match(r"^(?:站姿|坐姿|步态|动作)", p)]
 
 
 def colors(text: str) -> set[str]:
@@ -247,6 +248,9 @@ def judge_asset(card: dict, reply: str) -> list[tuple[str, str]]:
     if "subject" in d and (not subj or subj in ("无", "空", "没有", "无主体")):
         out.append(("未画出", "模型答不出主体：%s" % (subj or "（空）")))
     notes = str(d.get("notes") or "")
-    if any(k in notes for k in ("多件", "分格", "拼图", "拼接", "多个主体")):
+    # 模型常写“无分格拼图”，否定的证据不能被子串命中翻成硬伤。
+    # 逗号或转折结束否定范围，仍保留“无分格，但有多个主体”的肯定后句。
+    positive_notes = re.sub(r"(?:没有|未见|不存在|不包含|不含|不是|并非|无)[^，。；;!?！？但却]*", "", notes)
+    if any(k in positive_notes for k in ("多件", "分格", "拼图", "拼接", "多个主体")):
         out.append(("多主体", notes[:80]))
     return out
