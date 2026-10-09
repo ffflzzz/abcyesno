@@ -12,6 +12,8 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import io
 import json
 import mimetypes
 import os
@@ -20,6 +22,151 @@ from pathlib import Path
 
 REGISTRY_NAME = "assets.json"
 IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp")
+
+
+def _identity_props(root: Path) -> dict[str, str]:
+    """Only explicitly changing ownership belongs to scene state, not identity."""
+    motion = r"交接|交给|递给|转交|易手|初始在|交到|传递|接过|handover|hand.?off|transfer"
+    boards = []
+    for path in (root / "scenedesigner").glob("*.md"):
+        try:
+            boards.append(path.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+    story = "\n".join(boards)
+    out = {}
+    for name, spec in key_prop_specs(root).items():
+        nearby = re.escape(name) + r"[^\n|]{0,60}(?:" + motion + r")|(?:" + motion + r")[^\n|]{0,60}" + re.escape(name)
+        if re.search(motion, spec, re.I) or re.search(nearby, story, re.I):
+            out[name] = spec
+    return out
+
+
+def identity_without_scene_props(root: Path, text: str) -> str:
+    """Drop only held-prop clauses from fixed identity, not scene descriptions."""
+    props = _identity_props(root)
+    if not props:
+        return text
+    parts = re.split(r"([；。，,;])", text)
+    out = []
+    for index in range(0, len(parts), 2):
+        clause = parts[index]
+        if any(name in clause for name in props) and re.search(r"手|握|托|持|拿|携|hold|carry", clause, re.I):
+            continue
+        out.append(clause)
+        if index + 1 < len(parts):
+            out.append(parts[index + 1])
+    return "".join(out).strip("；。，,; ")
+
+
+def _identity_cache(root: Path, a: dict) -> tuple[Path, Path, dict] | None:
+    if a.get("type") != "character":
+        return None
+    props = _identity_props(root)
+    ref = str(a.get("ref_image") or "")
+    source = root / "images" / ref
+    if not props or not ref or not source.is_file():
+        return None
+    from .. import config
+    manifest = {"version": 1, "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+                "props": props, "model": config.MODELS["image"]}
+    digest = hashlib.sha256(json.dumps(manifest, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    return source, root / "images" / "_identity" / (digest + ".png"), manifest
+
+
+def _clean_identity_path(root: Path, a: dict) -> Path | None:
+    """Read-only cache lookup: binding/monitoring must never invoke a model."""
+    entry = _identity_cache(root, a)
+    if entry is None:
+        return None
+    _, dest, manifest = entry
+    try:
+        saved = json.loads(dest.with_suffix(".json").read_text(encoding="utf-8"))
+        if saved == manifest and dest.is_file():
+            from PIL import Image
+            with Image.open(dest) as im:
+                im.verify()
+            return dest
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def prepare_identity_refs(root: Path, shots: list[dict], log=print, ep=None) -> dict:
+    """Cache clean identity cards once; preserve original images and prop cards.
+
+    Runs inside the existing media lock before binding, including old projects.
+    Only scene props explicitly described as changing ownership are removed.
+    Failed edits warn and retain originals; no extra QC loop or video rerender.
+    """
+    from PIL import Image
+    from . import providers
+    from .. import config
+    import httpx
+    reg = load_registry(root)
+    defaults = episode_defaults(reg, shots, root=root, ep=ep)
+    prot = protagonist(root, reg)
+    names = [str(a.get("name") or "") for a in reg.get("assets", []) if a.get("type") == "character"]
+    selected = {}
+    for shot in shots:
+        if shot.get("no_human"):
+            continue
+        hits, _ = hits_for_shot(reg, shot, defaults=defaults)
+        if not any(a.get("type") == "character" for a in hits) and prot and person_in_text(_shot_text(shot), names):
+            hits = [prot] + hits
+        for a in hits:
+            if a.get("type") == "character":
+                selected[str(a.get("name"))] = a
+    result = {"created": 0, "reused": 0, "failed": 0}
+    attempted = set()
+    for name, a in selected.items():
+        refs = list(dict.fromkeys([a.get("ref_image")] + list(a.get("ref_images") or [])))
+        for ref in refs:
+            item = {**a, "ref_image": ref}
+            entry = _identity_cache(root, item)
+            if entry is None:
+                continue
+            source, dest, manifest = entry
+            if dest in attempted:
+                continue
+            attempted.add(dest)
+            if _clean_identity_path(root, item):
+                result["reused"] += 1
+                continue
+            try:
+                with Image.open(source) as im:
+                    ratio = "3:4" if im.height > im.width * 1.15 else "16:9" if im.width > im.height * 1.4 else "1:1"
+                prop_names = "、".join(manifest["props"])
+                prompt = ("编辑这张人物身份参考图。仅移除人物手中或身上携带的剧情道具：" + prop_names
+                          + "，以及仅连接这些道具的挂绳、珠子。手恢复自然空手姿态。"
+                          "完整保留原人物脸、发型、服装、固定发饰、身体比例、渲染风格、背景和视图数量；"
+                          "多视图中每个人都要移除上述道具。不要增加人物或其他物品。")
+                _, url = providers.gen_image(prompt, refs=[_data_uri(source)], ratio=ratio,
+                                             key=config.image_key())
+                with httpx.Client(timeout=120, trust_env=False) as client:
+                    response = client.get(url)
+                    response.raise_for_status()
+                    raw = response.content
+                with Image.open(io.BytesIO(raw)) as im:
+                    im.load()
+                    buf = io.BytesIO()
+                    im.save(buf, "PNG")
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                pending = dest.with_suffix(".tmp")
+                pending.write_bytes(buf.getvalue())
+                pending.replace(dest)
+                meta = dest.with_suffix(".json")
+                pending_meta = meta.with_suffix(".tmp.json")
+                pending_meta.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+                pending_meta.replace(meta)
+                result["created"] += 1
+                log("[assets] 人物身份参考已移除剧情道具：%s（原图保留）" % name)
+            except Exception as exc:
+                result["failed"] += 1
+                log("[assets] 人物参考清理失败：%s；本次沿用原图：%s" % (name, str(exc)[:120]))
+    if attempted:
+        log("[assets] 身份参考缓存：新建 %(created)d，复用 %(reused)d，失败 %(failed)d" % result)
+    return result
 
 
 def load_registry(root: Path) -> dict:
@@ -140,6 +287,9 @@ def _resolve_one(a: dict, root: Path) -> str | None:
     而反转会让每镜请求体 +175KB（两张参考图转 data URI）。**别重复这个尝试**，
     除非真遇到"URL 不可达"的证据（如离线归档需求）。
     """
+    clean = _clean_identity_path(root, a)
+    if clean is not None:
+        return _data_uri(clean)
     for key in ("public_url", "url"):
         u = str(a.get(key) or "").strip()
         if not u:
@@ -1202,6 +1352,7 @@ def identity_lines(root: Path, shots: list[dict], max_n: int = 5,
     for s in shots:
         lines = _shot_cast_lines(s, reg, prot, fallback, max_n=max_n,
                                  defaults=defaults)
+        lines = [identity_without_scene_props(root, ln) for ln in lines]
         if skip:
             lines = [ln for ln in lines
                      if not any(ln.startswith(n + "的固定形象") for n in skip)]

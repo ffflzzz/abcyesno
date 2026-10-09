@@ -801,6 +801,12 @@ def _run_impl(project_root: Path, ep: int = 1, log=print, max_regen: int = 2,
     ref_types: dict = {}   # 2026-09-21：每张参考图的资产类型（character/prop），供点名措辞分流
     if style.still_refs_enabled(project_root):
         try:
+            identity_scope = shots if not only else [s for s in shots if s["name"] in only]
+            if only and config.VIDEO_MODE == "pack":
+                # A single selected shot rerenders its whole request group.
+                identity_scope = [s for group, _ in video_plan.group_shots(shots)
+                                  if any(s["name"] in only for s in group) for s in group]
+            assets.prepare_identity_refs(project_root, identity_scope, log=log, ep=ep)
             refs_by_shot = assets.bind(project_root, shots, names_out=ref_names,
                                        types_out=ref_types, ep=ep)
             log("[media] 参考图绑定 %d/%d 镜" % (len(refs_by_shot), len(shots)))
