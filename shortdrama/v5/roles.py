@@ -765,10 +765,13 @@ def role_input(role: str, root: Path, m: dict, reasons: list[str] | None = None)
     if role == "scriptwriter" and mode == "dialogue-led":
         target = validate.parse_target_seconds(guards.load_brief(root), ep=ep)
         if target:
+            dialogue_budget = int(target * 4 * 0.75)
             lines.append("【整集时间预算】本集目标约%d秒，中文自然对白按每秒约4字估算。"
+                         "整集净对白合计不超过约%d字（不含角色前缀与动作括注），给动作、停顿与回应留出时间。"
                          "说话、停顿与实际动作共同占用这段时间；先留出动作和回应的时间，再写对白。"
                          "不要通过重复解释或让下游无限拉长镜头来装超量台词。"
-                         "保留清楚的意图与回应，删重复信息。" % target)
+                         "保留清楚的意图与回应，删重复信息。人物台词表达人物意图，"
+                         "不要把哪只手持物、道具不能复制等制作约束说成台词。" % (target, dialogue_budget))
     # 道具形制必须**逐字复制** brief（2026-09-22，当铺「单眼镜」事故定案）。
     #
     # 证据（dangpu-yuzhuo-0922）：brief.key_props 写「单眼镜：竹制边框单眼镜、镜片微黄、
@@ -1042,15 +1045,25 @@ def role_input(role: str, root: Path, m: dict, reasons: list[str] | None = None)
                     "（实测 111 次工具调用 ⇒ 递归上限 ⇒ 零出片）。\n"
                     "改的**范围**仍然只限下面列出的这些条目，没列出的镜头内容原样保留。"
                     % (ep, len(_pl)))
-                if any("片长" in x for x in _pl):
-                    # ★ 2026-10-08 实测：只说"没列出的原样保留"，模型会在改片长时**整表重写并压缩**
-                    #   （24 镜 140 秒 ⇒ 12 镜 92 秒，离门槛更远）。片长这条**必须动全表**，
-                    #   所以给一条可数的硬话：只许加、不许减。
-                    lines.append(
-                        "★ 涉及**片长**时，上面那句「原样保留」这样理解：**只许加、不许减** ——"
-                        "可以补镜、可以把镜写长；⛔ 不许删镜、不许把几镜并成一镜、"
-                        "不许把某镜的秒数改小。**新表总时长必须 ≥ 现在这一版**"
-                        "（上一轮有角色把 24 镜 140 秒压成 12 镜 92 秒，离门槛更远）。")
+                if any("片长" in x or "实际请求合计" in x for x in _pl):
+                    # 时长不足时防止返工继续压缩；时长超标时必须允许缩短。
+                    # 不能把一次欠长事故的“只许加”指令套到所有片长问题。
+                    current_seconds = sum(float(s.get("seconds") or 0) for s in _shots)
+                    target_seconds = float(_kw.get("target_seconds") or 0)
+                    if target_seconds and current_seconds > target_seconds * 1.30:
+                        lines.append("★ 当前分镜过长：允许缩短过长镜、合并或删除重复动作，"
+                                     "使总时长回到目标区间。对白不得由分镜师擅自删改；"
+                                     "如果对白本身装不下，明确交回scriptwriter压缩重复信息，"
+                                     "不要虚报很短的镜长，也不要继续加长全片。")
+                    elif target_seconds and current_seconds < target_seconds * 0.85:
+                        lines.append(
+                            "★ 涉及**片长**时，上面那句「原样保留」这样理解：**只许加、不许减** ——"
+                            "可以补镜、可以把镜写长；⛔ 不许删镜、不许把几镜并成一镜、"
+                            "不许把某镜的秒数改小。**新表总时长必须 ≥ 现在这一版**"
+                            "（当前时长不足，应补足可见剧情而不是删短）。")
+                    else:
+                        lines.append("★ 声明时长已在目标区间：按实际pack分组时长调整，"
+                                     "避免合组压缩使成片不足，不盲目增加或缩短全片。")
                 lines.extend("- " + x for x in _pl[:24])
         except Exception as e:  # noqa: BLE001 -- 体检失败不能伪装成"合格"
             lines.append("\n【⚠️ 分镜体检未能执行（%s）—— 本轮请自行逐镜核对】"

@@ -1022,4 +1022,40 @@ class TestSoloShotItemsAndLengthConstraint(unittest.TestCase):
             encoding="utf-8")
         txt = roles.role_input("scenedesigner", root, {"episode_index": 1})
         self.assertIn("只许加、不许减", txt,
-                      "片长不合格时**必须**告诉它只能加不能减（否则它会整表重写并压缩）")
+                      "片长不足时应防止返工进一步缩短")
+
+    def test_overlong_storyboard_can_shrink(self):
+        import json
+        import tempfile
+        from v5 import roles
+        from v5.tests_storyboard_fmt import md
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "brief.json").write_text(json.dumps({
+                "topic": "线", "pack": "shortdrama", "episodes": 1,
+                "target_duration": "约 60 秒"}, ensure_ascii=False), encoding="utf-8")
+            folder = root / "scenedesigner"
+            folder.mkdir()
+            (folder / "scenedesigner_ep1.md").write_text(md("LN", 24), encoding="utf-8")
+            (folder / "shotcheck_ep1.json").write_text(json.dumps({
+                "items": ["【片长与镜数达 brief 要求】全表96秒，目标60秒"]},
+                ensure_ascii=False), encoding="utf-8")
+            text = roles.role_input("scenedesigner", root, {"episode_index": 1})
+            self.assertIn("当前分镜过长", text)
+            self.assertIn("允许缩短", text)
+            self.assertNotIn("只许加、不许减", text)
+            self.assertIn("交回scriptwriter", text)
+
+    def test_writer_gets_episode_speech_budget(self):
+        import json
+        import tempfile
+        from v5 import roles
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "brief.json").write_text(json.dumps({
+                "topic": "线", "pack": "shortdrama", "episodes": 1,
+                "target_duration": "约 60 秒", "audio_mode": "dialogue-led"},
+                ensure_ascii=False), encoding="utf-8")
+            text = roles.role_input("scriptwriter", root, {"episode_index": 1})
+            self.assertIn("净对白合计不超过约180字", text)
+            self.assertIn("不要把哪只手持物", text)
