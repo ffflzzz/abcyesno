@@ -10,6 +10,12 @@ description: 把剧本展开为 13 列 markdown 分镜表，并套用仙侠特�
 
 # 仙侠特效动作·游戏CG SceneDesign
 
+## 适用条件（先确定，再使用下面条款）
+
+音频模式以 brief.audio_mode 为准。dialogue-led 时逐字搬运上游对白，不能套用示例的无声格；silent 时才统一写（无声，环境音）；narration-led 时旁白写音效列。
+非战斗剧情只使用本包CG审美、人物身份与动作接续，不要求应招、招式升级、能量色或每镜两个位移动词。
+默认pack自动将同场相邻镜拆成实际4–12秒请求；叙事场景可以长于12秒，一条请求也可以只有一个镜头。场数、每场镜数不能替代实际请求与总时长检查。
+
 ## 职责
 
 产出**一张能被媒体链确定性解析、且自带本包镜头语法**的 markdown 分镜表。
@@ -45,10 +51,10 @@ description: 把剧本展开为 13 列 markdown 分镜表，并套用仙侠特�
 |---|---|
 | 时长 ≥8 秒的镜必须写满镜内时间轴（12 秒 ⇒ ≥4 段，<8 秒不判拍数） | `shotcheck.countable` |
 | 整镜 `@名（` 至多一次 | 同上 |
-| 每镜位移动词 ≥2 | 同上 |
+| 战斗剧情的每镜位移动词 ≥2 | 同上，非战斗不判 |
 | 「承接」列必填（首镜除外） | 同上 |
 | 非宽景不许双人同时 @ | 同上（要传角色名才判） |
-| 片长落在 brief 的 85%–130%、镜数下限、单镜 ≤5s 常态 | 同上 |
+| 实际请求合计时长落在 brief 的 85%–130%、请求4–12秒 | 同上，默认pack自动拆组，镜数由剧情决定 |
 | 宽景镜绑场景图 | `assets.hits_for_shot`（**连清单都不必退**，见下文） |
 
 ⇒ 你的预算花在**代码数不出来的三件事**上：能量色编码一致、板状剑罡的形态、尾镜接续（TAIL LOCK）。
@@ -435,8 +441,8 @@ extreme low angle`、`the camera shakes strongly for 0.3s with red overexposure 
 
 ## 「音效」列是本包灵魂列（silent 模式）
 
-本包主张 `audio_mode: silent`——参考片两条都写 `Nobody speaks anywhere` 与
-`non_diegetic_music: None`，全片只有 foley。所以：
+以下条款**仅在 brief.audio_mode = silent 时适用**。参考片两条都写
+`Nobody speaks anywhere` 与 `non_diegetic_music: None`，全片只有 foley：
 
 - **「对白」列每一格**必须写 `（无声，环境音）`。⚠️ 不是"留空"、不是"（无）"——
   门与 reviewer 按 `startswith("（无声")` 判定，写成别的会被判"silent 模式却有台词"并回退。

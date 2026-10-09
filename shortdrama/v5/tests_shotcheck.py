@@ -302,6 +302,12 @@ class TestCountable(unittest.TestCase):
 class TestWiring(unittest.TestCase):
     """分镜重跑时，输入里必须带"退回清单 / 已合格就别重写"。"""
 
+    def setUp(self):
+        # Keep the nominally compliant 4s fixture from being compressed to 96s.
+        patcher = mock.patch.object(config, "VIDEO_PACK_MAX_GROUP", 3)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def _root(self, table_rows: str):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -316,7 +322,7 @@ class TestWiring(unittest.TestCase):
 
     def test_rerun_gets_punch_list(self):
         root = self._root(_row("LN01",
-                              "0-3秒：两人隔着三身位对峙；3-6秒：谁都没有先出手"))
+                              "0-3秒：甲挥剑刺向乙；3-6秒：乙持刀格挡，两人保持原处"))
         with mock.patch.object(config, "SHOTCHECK", "count"):
             txt = roles.role_input("scenedesigner", root, {"episode_index": 1})
         self.assertIn("用一次 `write_file` 交出去", txt)
@@ -359,7 +365,7 @@ class TestWiring(unittest.TestCase):
         没有这一步，"退回清单"在真实打回路径上永远不会注入（2026-09-29 设计漏洞）。
         """
         root = self._root(_row("LN01",
-                              "0-3秒：两人隔着三身位对峙；3-6秒：谁都没有先出手"))
+                              "0-3秒：甲挥剑刺向乙；3-6秒：乙持刀格挡，两人保持原处"))
         with mock.patch.object(config, "SHOTCHECK", "count"):
             txt1 = roles.role_input("scenedesigner", root, {"episode_index": 1})
         self.assertIn("用一次 `write_file` 交出去", txt1)
@@ -651,6 +657,49 @@ class TestSceneLaws(unittest.TestCase):
         self.assertEqual(self._scene_hits(shots, 30), [], self._scene_hits(shots, 30))
 
 
+class TestProductionScope(unittest.TestCase):
+    def test_noncombat_does_not_require_dodging_or_combat_movement(self):
+        shots = [_shot("LN01", "0-4秒：她开口提出同行；4-8秒：对方面向她回答",
+                       seconds=8, dialogue="甲：我想和你一起下山，我们一起走吧。")]
+        checks = [h["check"] for h in shotcheck.countable(shots, combat=False)]
+        self.assertFalse(any("应招" in c or "位移动词" in c for c in checks))
+        battle = [h["check"] for h in shotcheck.countable(shots, combat=True)]
+        self.assertTrue(any("应招" in c for c in battle))
+
+    def test_two_story_scenes_can_have_six_single_shot_requests(self):
+        actions = ["她伸手递出玉佩，对方接住后握稳", "她松手收回衣袖，对方把玉放在右手",
+                   "她转身朝门走去，对方停在立柱旁", "她在石阶前回头，对方提出想一起走",
+                   "她伸出空着的左手，对方以右手牵住", "两人并肩迈下石阶，仍牵手走向云海"]
+        shots = [_shot("LN%02d" % (i+1), text, seconds=10, act=1 if i<3 else 2,
+                       dialogue="甲：我不是要你一个人离开，把这枚玉交给你，是想和你一起走下山去。")
+                 for i, text in enumerate(actions)]
+        with mock.patch.object(config, "VIDEO_PACK_MAX_GROUP", 6):
+            hits = shotcheck.countable(shots, 60, combat=False, auto_groups=True)
+        self.assertFalse(any("每场" in h["check"] or "场数" in h["check"] for h in hits), hits)
+        self.assertFalse(any("片长与镜数" in h["check"] or "实际请求" in h["check"] for h in hits), hits)
+
+    def test_compressed_actual_duration_is_checked(self):
+        shots = [_shot("LN%02d" % (i+1), "玉石门廊晨光中人物沿着石阶走出", seconds=4, act=1,
+                       dialogue="（无声，环境音）") for i in range(15)]
+        with mock.patch.object(config, "VIDEO_PACK_MAX_GROUP", 6):
+            hits = shotcheck.countable(shots, 60, audio_mode="silent", combat=False, auto_groups=True)
+        self.assertTrue(any("实际请求合计" in h["check"] for h in hits), hits)
+
+    def test_role_checks_derive_scope_from_actual_actions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "brief.json").write_text('{"target_duration":"约12秒","audio_mode":"dialogue-led"}', encoding="utf-8")
+            folder = root / "scenedesigner"
+            folder.mkdir()
+            path = folder / "scenedesigner_ep1.md"
+            path.write_text(SB_HEAD + _row("LN01", "她空手向前一步，开口询问对方是否同行", seconds=12), encoding="utf-8")
+            with mock.patch.object(config, "VIDEO_MODE", "pack"), mock.patch.object(config, "SHOT_COVERAGE", True):
+                self.assertFalse(roles.storyboard_check_args(root, 1)["combat"])
+                self.assertTrue(roles.storyboard_check_args(root, 1)["auto_groups"])
+                path.write_text(SB_HEAD + _row("LN01", "她挥剑刺向对方肩侧，对方格挡随即后退", seconds=12), encoding="utf-8")
+                self.assertTrue(roles.storyboard_check_args(root, 1)["combat"])
+
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -786,6 +835,10 @@ class TestDurationAdvice(unittest.TestCase):
 
 
 class TestStoryboardComplianceProbe(unittest.TestCase):
+    def setUp(self):
+        patcher = mock.patch.object(config, "VIDEO_PACK_MAX_GROUP", 3)
+        patcher.start()
+        self.addCleanup(patcher.stop)
     """`roles.storyboard_is_compliant` —— 反空转闸的"这张表已经合格了"判据。
 
     必须是**零额度**（只跑可数那层）且与退回清单**同一组参数**，

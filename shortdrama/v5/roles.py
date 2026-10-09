@@ -509,6 +509,7 @@ def _shot_coverage_directive() -> str:
         "【叙事镜头组织】一条视频请求可以包含多个镜头，不等于一镜到底。"
         "同一场连续戏按叙事需要写成多个分镜表行，每行一个镜头；"
         "相同「场次」编号和「场景」名称连续排列，交给现有pack管线合并。"
+        "叙事场可以超过12秒，管线按台词和时长自动拆组；单镜请求合法，不按场数或固定镜数推导合格。"
         "每组总长4–%d秒，最多%d行；镜数、景别、机位、镜长由剧情与台词决定，不套固定三镜模板。"
         "每行用现有列写清主体的位置和朝向、一个主要动作、对方反应、结束时的人物与道具状态。"
         "下一镜从该结束状态接入；同侧拍摄，保持人物左右关系。"
@@ -709,7 +710,7 @@ def role_input(role: str, root: Path, m: dict, reasons: list[str] | None = None)
     # 音频模式硬指令：brief 的 audio_mode 此前无人消费，导致「写 dialogue-led、
     # 交全片（无声）」反复发生。这里在**开工前**把要求写进输入，而不是事后才发现。
     mode = validate.audio_mode_of(guards.load_brief(root))
-    if role in ("dialogue", "scenedesigner"):
+    if role in ("scriptwriter", "dialogue", "scenedesigner", "reviewer"):
         if mode == "dialogue-led":
             lines.append("【硬性要求·音频模式】brief.audio_mode = dialogue-led —— "
                          "本片**必须有台词**：dialogue 角色要产出具体台词清单；"
@@ -761,6 +762,13 @@ def role_input(role: str, root: Path, m: dict, reasons: list[str] | None = None)
             "**上限 40 字**（中文口播约 4–5 字/秒，一个镜头说不完更多）——"
             "**台词长了不要自己删：分镜师会把这一镜排长来装它**"
             "（4 秒镜约 16 字、6 秒约 24 字、10 秒约 40 字）。" + _dlg_tail)
+    if role == "scriptwriter" and mode == "dialogue-led":
+        target = validate.parse_target_seconds(guards.load_brief(root), ep=ep)
+        if target:
+            lines.append("【整集时间预算】本集目标约%d秒，中文自然对白按每秒约4字估算。"
+                         "说话、停顿与实际动作共同占用这段时间；先留出动作和回应的时间，再写对白。"
+                         "不要通过重复解释或让下游无限拉长镜头来装超量台词。"
+                         "保留清楚的意图与回应，删重复信息。" % target)
     # 道具形制必须**逐字复制** brief（2026-09-22，当铺「单眼镜」事故定案）。
     #
     # 证据（dangpu-yuzhuo-0922）：brief.key_props 写「单眼镜：竹制边框单眼镜、镜片微黄、
@@ -1212,9 +1220,13 @@ def storyboard_check_args(root: Path, ep: int | None = None) -> dict:
         tgt = 0
     from . import shotcheck
     from .media import storyboard as _sbd
+    from .media import style as _style
+    parsed = _sbd.parse(md)
     _locked = validate.camera_reqs(brief)
     return {
-        "shots": _sbd.parse(md),
+        "shots": parsed,
+        "combat": any(_style.has_combat_action(s) for s in parsed),
+        "auto_groups": bool(_shot_coverage_directive()),
         "markdown": md,
         "target_seconds": tgt,
         "chars": shotcheck.character_names(root),

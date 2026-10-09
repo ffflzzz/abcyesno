@@ -203,7 +203,8 @@ def countable(shots: list[dict], target_seconds: int = 0,
               min_scenes: int = 0,
               max_locked: int = -1,
               min_dirs: int = 0,
-              markdown: str = "") -> list[dict]:
+              markdown: str = "", combat: bool = True,
+              auto_groups: bool = False) -> list[dict]:
     """能数的判据。返回 `[{name, check, detail}]`，空列表 = 全过。
 
     ★ 这一层的存在意义（2026-09-29）：**凡程序能确定的，就别写进提示词让模型自觉**。
@@ -288,7 +289,7 @@ def countable(shots: list[dict], target_seconds: int = 0,
     if _tr:
         need(False, "分镜表写断了", _tr)
     low_move = [s["name"] for s in shots
-                if len(_sb_ck.split_beats(s.get("visual") or "")) >= 2
+                if combat and len(_sb_ck.split_beats(s.get("visual") or "")) >= 2
                 and sum(1 for w in MOVE_VERBS if w in (s.get("visual") or "")) < 2]
     need(not low_move, "每镜位移动词 ≥2（**只判两拍以上的镜**）",
          "命中 %d 镜" % len(low_move), names=low_move)
@@ -364,7 +365,8 @@ def countable(shots: list[dict], target_seconds: int = 0,
     #   `contact` 仍要算，因为下面「砍环境」那条拿它当参照。
     contact = [s["name"] for s in shots if any(w in (s.get("visual") or "") for w in CONTACT)]
     dodge = [s["name"] for s in shots if any(w in (s.get("visual") or "") for w in DODGE)]
-    need(len(dodge) >= max(2, n // 10), "有应招（闪/退/被荡开）", "%d 镜" % len(dodge))
+    if combat:
+        need(len(dodge) >= max(2, n // 10), "有应招（闪/退/被荡开）", "%d 镜" % len(dodge))
     # ★ 「台词镜 ≥50%」**只在 dialogue-led 判**（2026-09-30 修）。
     #   原先它无条件生效 ⇒ `silent` 与 `narration-led` 的项目**每一镜**都不合格：
     #   silent 的对白列按契约写「（无声，环境音）」，narration-led 的旁白写在**音效**列、
@@ -433,15 +435,16 @@ def countable(shots: list[dict], target_seconds: int = 0,
                 if any(v in (s.get("visual") or "") for v in ENV_VERB)
                 and any(w in (s.get("visual") or "") for w in ENV_HIT)
                 and not any(w in (s["visual"] or "") for w in CONTACT)]
-    need(len(env_only) <= 1, "禁「砍环境」为一镜主内容",
-         "命中 %d 镜" % len(env_only), names=env_only)
+    if combat:
+        need(len(env_only) <= 1, "禁「砍环境」为一镜主内容",
+             "命中 %d 镜" % len(env_only), names=env_only)
     # ── 场级判据（2026-10-05）：场 = 一次生成 = 一条 ≤12 秒的请求 ──
     # 口径是「场锁死、镜自由」：每场总长不超过一条请求的上限，场内至少 2 镜，
     # 每镜几秒**不由程序规定**（那是分镜师的节拍决定权，2026-10-03 定的）。
     # ★ 只在表里**真有「场次」列**时才判 —— 旧项目与别的包不写这列 ⇒ 一条都不判，
     #   行为与改造前一字不变（同 `camera_light` 那条的生效方式）。
     acts = [int(s.get("act") or 0) for s in shots]
-    if any(acts):
+    if any(acts) and not auto_groups:
         units: dict[int, list[dict]] = {}
         seen_acts: set[int] = set()
         prev_a = None
@@ -479,14 +482,28 @@ def countable(shots: list[dict], target_seconds: int = 0,
             need(len(units) >= lo_acts, "场数达目标时长要求（每场 ≤12 秒 ⇒ 场数下限）",
                  "%d 场 / %d 秒（目标 %ds ⇒ 至少 %d 场；场数不够就是每场写太长）"
                  % (len(units), total, target_seconds, lo_acts))
+    if auto_groups:
+        from .media.video_plan import group_shots
+        requests = group_shots(shots)
+        request_seconds = [sum(seconds) for _, seconds in requests]
+        need(all(4 <= seconds <= 12 for seconds in request_seconds),
+             "实际视频请求时长必须为4–12秒", str(request_seconds))
+        if target_seconds:
+            planned_total = sum(request_seconds)
+            need(target_seconds * 0.85 <= planned_total <= target_seconds * 1.30,
+                 "实际请求合计时长达 brief 要求",
+                 "%d 条请求 / %.2f 秒，目标 %ds；按真实分组核算，不按场数推导" %
+                 (len(requests), planned_total, target_seconds))
     if target_seconds:
         # 镜数下限**按目标秒数推**，不写死（2026-09-29 实测：写死 25 镜把一部
         # 60 秒 / 17 镜的片子误判成不合格 —— 判据按"我以为片子多长"写，就是错的）。
         # ★ 但 brief 自己写了区间（"共 15-18 镜"）时**必须按区间判**：同日晚间一条链
         #   交出 12 镜 / 54 秒却"镜数合格"，因为派生公式的下限只有 7 —— 那是漏检。
         floor = max(6, int(target_seconds / 8))
-        ok_n = n >= floor
-        detail = "%d 镜 / %d 秒（目标 %ds，镜数下限 %d）" % (n, total, target_seconds, floor)
+        ok_n = True if auto_groups and not target_shots else n >= floor
+        detail = ("%d 镜 / %d 秒（目标 %ds，镜数由叙事决定）" % (n, total, target_seconds)
+                  if auto_groups and not target_shots else
+                  "%d 镜 / %d 秒（目标 %ds，镜数下限 %d）" % (n, total, target_seconds, floor))
         if target_shots:
             lo, hi = target_shots
             ok_n = lo <= n <= hi
@@ -571,7 +588,8 @@ def punch_list(shots: list[dict], *, target_seconds: int = 0, use_judge: bool = 
                min_scenes: int = 0,
                max_locked: int = -1,
                min_dirs: int = 0,
-               markdown: str = "") -> list[str]:
+               markdown: str = "", combat: bool = True,
+               auto_groups: bool = False) -> list[str]:
     """给角色看的**退回清单**（一镜一行，带镜号与逐字原文）。
 
     为什么要有这个形状：分镜角色拿到的如果是"你自己检查一遍"，它会逐镜重读整张表
@@ -580,14 +598,16 @@ def punch_list(shots: list[dict], *, target_seconds: int = 0, use_judge: bool = 
     hard = countable(shots, target_seconds, chars, target_shots, audio_mode,
                      camera_light=camera_light, single_at_law=single_at_law,
                      min_scenes=min_scenes, max_locked=max_locked,
-                     min_dirs=min_dirs, markdown=markdown)
+                     min_dirs=min_dirs, markdown=markdown, combat=combat,
+                     auto_groups=auto_groups)
     out = []
     for h in hard:
         out.append("【%s】%s（%s）" % (h["check"], h["name"] or "全表", h["detail"]))
-    if use_judge:
+    if use_judge and combat:
         r = check(shots, target_seconds=target_seconds, use_judge=True,
                   workers=workers, log=log, chars=chars, target_shots=target_shots,
-                  audio_mode=audio_mode, camera_light=camera_light)
+                  audio_mode=audio_mode, camera_light=camera_light,
+                  combat=combat, auto_groups=auto_groups)
         for s in r["semantic"]:
             out.append("【%s】镜 %s：「%s」—— %s"
                        % (CODE_LABELS.get(s["code"], s["code"]), s["name"],
@@ -698,7 +718,8 @@ def check(shots: list[dict], *, target_seconds: int = 0, use_judge: bool = True,
           single_at_law: bool = False,
           min_scenes: int = 0,
           max_locked: int = -1,
-          min_dirs: int = 0) -> dict:
+          min_dirs: int = 0, combat: bool = True,
+          auto_groups: bool = False) -> dict:
     """两层体检的总入口。返回 `{countable, semantic, unverifiable, errors, blocking}`。
 
     `llm` 可注入（离线单测用）—— 缺省才去建真实客户端。
@@ -708,12 +729,12 @@ def check(shots: list[dict], *, target_seconds: int = 0, use_judge: bool = True,
     hard = countable(shots, target_seconds, chars, target_shots, audio_mode,
                      camera_light=camera_light, single_at_law=single_at_law,
                      min_scenes=min_scenes, max_locked=max_locked,
-                     min_dirs=min_dirs)
+                     min_dirs=min_dirs, combat=combat, auto_groups=auto_groups)
     for h in hard:
         log("[shotcheck] ❌ %s —— %s%s"
             % (h["check"], h["detail"], ("（%s）" % h["name"]) if h["name"] else ""))
     sem, unver, errs = [], [], []
-    if use_judge:
+    if use_judge and combat:
         from concurrent.futures import ThreadPoolExecutor
 
         def _one(s):
