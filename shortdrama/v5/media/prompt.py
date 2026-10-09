@@ -1647,7 +1647,7 @@ def _pack_structure_line(n: int, total: int, bounds: list[tuple[int, int]]) -> s
     if n <= 1:
         return ("本片段总长 %d 秒，就是**一个连续镜头**，全程不切镜、"
                 "不出现第二个机位。" % total)
-    cuts = "、".join(str(r) for _l, r in bounds[:-1])
+    cuts = "、".join(storyboard.beat_label(r) for _l, r in bounds[:-1])
     return ("本片段总长 %d 秒，由 %d 个镜头依次切镜构成——镜头之间直接切换，"
             "不是同一机位的一镜到底。切点在第 %s 秒（允许 ±1 秒弹性）；"
             "每个镜头各自成画，画面内容按下列时间分配执行：" % (total, n, cuts))
@@ -1676,9 +1676,13 @@ def build_pack_prompt(group: list[dict], declared: list[int], total: int,
     left = 0
     for i, s in enumerate(group):
         right = left + declared[i]
-        maps.append("<Picture %d> 为第 %d-%d 秒镜头的画面参考" % (i + 1, left, right))
+        maps.append("<Picture %d> 为第 %s-%s 秒镜头的画面参考" % (i + 1, storyboard.beat_label(left), storyboard.beat_label(right)))
         bounds.append((left, right))
         left = right
+    internal_cuts = [c for s, d, (a, _b) in zip(group, declared, bounds)
+                     for c in storyboard.cut_offsets(_remap_beats(s.get('visual') or '', a, d))]
+    edges = sorted(set([0, total] + [b for _a, b in bounds[:-1]] + internal_cuts))
+    actual_bounds = list(zip(edges, edges[1:]))
     # ★ 跨组静帧链（2026-09-23）：上一打包组末镜的静帧追加为**最后一张**参考图，
     #   声明为"上一片段结束画面"——组与组独立生成互不知情（灯下棋实测：柳娘
     #   坐/站组间跳变、玉佩位置漂移），这张图提供状态衔接锚点。图片本身由
@@ -1707,12 +1711,14 @@ def build_pack_prompt(group: list[dict], declared: list[int], total: int,
         #   而话术一直在往"顺成一条"的方向推。官方原则 6 正是这条：一镜到底与多分镜
         #   只能选一种。⇒ 现在按镜数分流：多镜**明说切点**，单镜**明说不切**。
         #   ⚠️ 这只改了说法，没有新增任何要求（镜数与秒数都是分镜表里已有的事实）。
-        _pack_structure_line(n, total, bounds),
+        _pack_structure_line(len(actual_bounds), total, actual_bounds),
     ]
     for i, ((l, r), s) in enumerate(zip(bounds, group)):
         scene = (s.get("scene") or "").strip()
-        head = "【第 %d-%d 秒" % (l, r)
-        if n > 1:
+        head = "【第 %s-%s 秒" % (storyboard.beat_label(l), storyboard.beat_label(r))
+        if internal_cuts:
+            head += "｜分镜段 %d/%d（按镜内时间轴切镜）" % (i + 1, n)
+        elif n > 1:
             head += "｜镜头 %d/%d" % (i + 1, n)
         if scene:
             head += "｜%s" % scene
@@ -1735,8 +1741,8 @@ def build_pack_prompt(group: list[dict], declared: list[int], total: int,
                (s.get("sfx") or "").strip() or "无",
                (s.get("tail") or "").strip() or "自然收在该镜头动作结束处"))
     cont = ("这是同一条素材里的 %d 个镜头，镜头之间直接切换、不叠化；"
-            "各镜头的光线与色调随场景保持一致，人物造型跨镜头完全一致。" % n
-            if n > 1 else
+            "各镜头的光线与色调随场景保持一致，人物造型跨镜头完全一致。" % len(actual_bounds)
+            if len(actual_bounds) > 1 else
             "这是一个连续镜头，全程不切镜；光线与色调随动作自然变化，"
             "人物造型全程一致。")
     if style_block:

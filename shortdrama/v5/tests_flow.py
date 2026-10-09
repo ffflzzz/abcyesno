@@ -4231,6 +4231,20 @@ class TestPackMode(unittest.TestCase):
         self.assertIn("全程不切镜", one)
         self.assertNotIn("切点在", one, "单镜组出现切点 = 无中生有一刀")
 
+    def test_pack_structure_honors_internal_cuts(self):
+        from v5.media.prompt import build_pack_prompt
+        s = {'name':'LN04','seconds':12,'shot_type':'中景','visual':
+             '0-4秒：过肩拍@甲；4-8秒：反打@乙；8-12秒：乙点头'}
+        p = build_pack_prompt([s],[12],12)
+        self.assertIn('由 2 个镜头依次切镜构成',p)
+        self.assertIn('切点在第 4 秒',p)
+        self.assertNotIn('全程不切镜',p)
+        self.assertIn('分镜段 1/1',p)
+        p2 = build_pack_prompt([s,dict(s,name='LN05',visual='0-12秒：甲走近')],[6.5,5.5],12)
+        self.assertIn('切点在第 2.17、6.5 秒',p2)
+        self.assertIn('【第 0-6.5 秒',p2)
+        self.assertIn('【第 6.5-12 秒',p2)
+
     def test_pack_ref_declaration_locks_identity_on_costume_sheet(self):
         """A 臂图序（2026-09-28 实测）：pack 档视频请求的**身份来源必须是人物设定表**，
         静帧降级为"场景实现 + 跨组接续"两张，且声明里要写明冲突时忽略静帧的人物。

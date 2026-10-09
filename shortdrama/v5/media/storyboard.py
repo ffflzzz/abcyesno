@@ -81,7 +81,17 @@ HEADER_KEYS = ("镜头号", "景别", "角度", "运镜", "时长", "画面描�
 #   `_remap_beats` 会按这个倒挂轴做全局重映射。现在小数按浮点如实解析，
 #   整数端点仍返回 int（**未写小数的项目输出逐字不变**）。
 _BEAT_RE = re.compile(
-    r"(\d+(?:\.\d+)?|\.\d+)\s*[-–—]\s*(\d+(?:\.\d+)?|\.\d+)\s*(?:秒|s)\s*[：:]")
+    r"(\d+(?:\.\d+)?|\.\d+)\s*[-–—]\s*(\d+(?:\.\d+)?|\.\d+)\s*(?:秒|s)(?:（[^）]{0,10}）)?\s*[：:]")
+
+
+def starts_cut(body: str) -> bool:
+    """时间段开头是否明确切镜；普通动作节拍或否定措辞不算。"""
+    prefix = (body or '').split('@', 1)[0]
+    return bool(re.search(r"^\s*(?:正反打[甲乙AB一二]?[·、：:\s]*)?(?:横摇|纵摇|镜头)?(?:反打|切至|切到|切镜|换镜|硬切|\bcut\b)", prefix, re.I))
+
+
+def cut_offsets(visual: str) -> list[float]:
+    return [a for a, _b, body in split_beats(visual) if a > 0 and starts_cut(body)]
 
 #: 浮点比较容差：节拍是"人写的秒数"，0.3+0.3+0.4 这类累加噪声不该被判成不连续。
 _BEAT_EPS = 0.01

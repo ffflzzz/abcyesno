@@ -425,6 +425,7 @@ def countable(shots: list[dict], target_seconds: int = 0,
     #   ⇒ 谁写了这条律才对谁判（判据 = 该包分镜契约里有没有那句话）。
     if chars and single_at_law:
         def simultaneous_at(visual):
+            from .media.storyboard import starts_cut
             # 包契约允许复合镜正反打，每个子镜各 @ 一人。
             # 只有明确时间段开头的切镜指令才重置计数，普通动作节拍不算切镜。
             beats = list(re.finditer(r"\d+(?:\.\d+)?\s*[-–—~至]\s*\d+(?:\.\d+)?\s*秒(?:（[^）]*）)?\s*[:：]", visual))
@@ -432,7 +433,7 @@ def countable(shots: list[dict], target_seconds: int = 0,
             for i, b in enumerate(beats):
                 end = beats[i + 1].start() if i + 1 < len(beats) else len(visual)
                 prefix = visual[b.end():end].split('@', 1)[0]
-                if b.start() > 0 and re.search(r"^\s*(?:正反打[甲乙AB一二]?[·、：:\s]*)?(?:反打|切至|切到|切镜|换镜|硬切|\bcut\b)", prefix, re.I):
+                if b.start() > 0 and starts_cut(prefix):
                     cuts.append(b.start())
             cuts.append(len(visual))
             return any(len({n for n in chars if '@' + n in visual[a:b]}) >= 2
