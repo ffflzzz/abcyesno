@@ -31,13 +31,13 @@ class IdentityRefs(unittest.TestCase):
     def brief(self, prop):
         (self.root / "brief.json").write_text(json.dumps({"key_props": [prop]}), encoding="utf-8")
 
-    def prepare(self):
+    def prepare(self, presence=(True, False)):
         response = Mock(content=self.raw)
         client = Mock()
         client.__enter__ = Mock(return_value=client)
         client.__exit__ = Mock(return_value=False)
         client.get.return_value = response
-        with patch("v5.media.providers.gen_image", return_value=("", "https://new.example/edit")) as gen, patch("httpx.Client", return_value=client):
+        with patch("v5.media.assets._identity_prop_present", side_effect=presence), patch("v5.media.providers.gen_image", return_value=("", "https://new.example/edit")) as gen, patch("httpx.Client", return_value=client):
             result = assets.prepare_identity_refs(self.root, self.shots, log=lambda _: None)
         return result, gen.call_count
 
@@ -84,7 +84,7 @@ class IdentityRefs(unittest.TestCase):
         self.assertEqual((result["created"], calls), (1, 1))
 
     def test_binding_never_calls_model_and_failed_edit_keeps_original(self):
-        with patch("v5.media.providers.gen_image", side_effect=RuntimeError("unavailable")) as gen:
+        with patch("v5.media.assets._identity_prop_present", return_value=True), patch("v5.media.providers.gen_image", side_effect=RuntimeError("unavailable")) as gen:
             assets._safe_ref_urls(self.a, self.root)
             self.assertEqual(gen.call_count, 0)
             result = assets.prepare_identity_refs(self.root, self.shots, log=lambda _: None)
@@ -102,6 +102,24 @@ class IdentityRefs(unittest.TestCase):
         cache = assets._clean_identity_path(self.root, self.a)
         cache.write_bytes(b"broken")
         self.assertIsNone(assets._clean_identity_path(self.root, self.a))
+
+    def test_clean_source_is_reused_byte_exactly_without_image_generation(self):
+        original = (self.root / "images/甲.png").read_bytes()
+        result, calls = self.prepare(presence=(False,))
+        self.assertEqual((result["created"], calls), (1, 0))
+        self.assertEqual(assets._clean_identity_path(self.root, self.a).read_bytes(), original)
+
+    def test_failed_cleanup_is_never_promoted_as_clean(self):
+        result, calls = self.prepare(presence=(True, True))
+        self.assertEqual((result["failed"], calls), (1, 1))
+        self.assertIsNone(assets._clean_identity_path(self.root, self.a))
+        self.assertEqual(assets._resolve_one(self.a, self.root), self.a["public_url"])
+
+    def test_unknown_source_check_does_not_edit(self):
+        with patch("v5.media.assets._identity_prop_present", side_effect=ValueError("unknown")), patch("v5.media.providers.gen_image") as gen:
+            result = assets.prepare_identity_refs(self.root, self.shots, log=lambda _: None)
+        self.assertEqual(result["failed"], 1)
+        gen.assert_not_called()
 
 
 if __name__ == "__main__":

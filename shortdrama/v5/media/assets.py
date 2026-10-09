@@ -68,8 +68,8 @@ def _identity_cache(root: Path, a: dict) -> tuple[Path, Path, dict] | None:
     if not props or not ref or not source.is_file():
         return None
     from .. import config
-    manifest = {"version": 1, "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
-                "props": props, "model": config.MODELS["image"]}
+    manifest = {"version": 2, "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+                "props": props, "model": config.MODELS["image"], "judge": config.MODELS["chat"]}
     digest = hashlib.sha256(json.dumps(manifest, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     return source, root / "images" / "_identity" / (digest + ".png"), manifest
 
@@ -92,12 +92,35 @@ def _clean_identity_path(root: Path, a: dict) -> Path | None:
     return None
 
 
+def _identity_prop_present(path: Path, props: dict) -> bool:
+    """Inspect actual pixels; empty hands alone do not exclude worn scene props."""
+    from langchain_core.messages import HumanMessage
+    from ..llm import chat_for
+    text = ("只核对这张人物参考图中实际可见的物件，不按剧情推测。待核剧情道具："
+            + json.dumps(props, ensure_ascii=False)
+            + "。人物手中、胸前、腰间或其他身体部位是否携带该类道具，包括其吊坠形式？"
+            "按物体类别核对：形状、孔、绳或珠与规格不同，仍算该类道具残留；"
+            "例如目标是实心白玉片，胸前挂着的浅色圆玉或穿孔玉坠也必须算present=true。"
+            "衣装刺绣、固定发饰不算剧情道具。仅输出JSON："
+            '{"present": true或false, "evidence": "实际看到的物件与位置，没看到则说明"}。')
+    response = chat_for("", 400, temperature=0).invoke([HumanMessage(content=[
+        {"type": "text", "text": text},
+        {"type": "image_url", "image_url": {"url": _data_uri(path)}}])])
+    raw = str(getattr(response, "content", "") or "")
+    start, end = raw.find("{"), raw.rfind("}")
+    verdict = json.loads(raw[start:end+1])
+    if type(verdict.get("present")) is not bool:
+        raise ValueError("人物图道具核对未返回明确布尔结果")
+    return verdict["present"]
+
+
 def prepare_identity_refs(root: Path, shots: list[dict], log=print, ep=None) -> dict:
     """Cache clean identity cards once; preserve original images and prop cards.
 
     Runs inside the existing media lock before binding, including old projects.
     Only scene props explicitly described as changing ownership are removed.
-    Failed edits warn and retain originals; no extra QC loop or video rerender.
+    Clean originals are copied unchanged. One edit at most, with an output check;
+    failed checks warn and retain originals, without a regeneration loop.
     """
     from PIL import Image
     from . import providers
@@ -136,31 +159,41 @@ def prepare_identity_refs(root: Path, shots: list[dict], log=print, ep=None) -> 
             try:
                 with Image.open(source) as im:
                     ratio = "3:4" if im.height > im.width * 1.15 else "16:9" if im.width > im.height * 1.4 else "1:1"
-                prop_names = "、".join(manifest["props"])
-                prompt = ("编辑这张人物身份参考图。仅移除人物手中或身上携带的剧情道具：" + prop_names
-                          + "，以及仅连接这些道具的挂绳、珠子。手恢复自然空手姿态。"
-                          "完整保留原人物脸、发型、服装、固定发饰、身体比例、渲染风格、背景和视图数量；"
-                          "多视图中每个人都要移除上述道具。不要增加人物或其他物品。")
-                _, url = providers.gen_image(prompt, refs=[_data_uri(source)], ratio=ratio,
-                                             key=config.image_key())
-                with httpx.Client(timeout=120, trust_env=False) as client:
-                    response = client.get(url)
-                    response.raise_for_status()
-                    raw = response.content
+                needs_edit = _identity_prop_present(source, manifest["props"])
+                if needs_edit:
+                    prop_names = "、".join(manifest["props"])
+                    prompt = ("编辑这张人物身份参考图。仅移除人物手中或身上携带的剧情道具：" + prop_names
+                              + "，以及仅连接这些道具的挂绳、珠子。手恢复自然空手姿态。"
+                              "完整保留原人物脸、发型、服装、固定发饰、身体比例、渲染风格、背景和视图数量；"
+                              "多视图中每个人都要移除上述道具。不要增加人物或其他物品。")
+                    _, url = providers.gen_image(prompt, refs=[_data_uri(source)], ratio=ratio,
+                                                 key=config.image_key())
+                    with httpx.Client(timeout=120, trust_env=False) as client:
+                        response = client.get(url)
+                        response.raise_for_status()
+                        raw = response.content
+                else:
+                    raw = source.read_bytes()
                 with Image.open(io.BytesIO(raw)) as im:
                     im.load()
                     buf = io.BytesIO()
                     im.save(buf, "PNG")
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 pending = dest.with_suffix(".tmp")
-                pending.write_bytes(buf.getvalue())
+                pending.write_bytes(buf.getvalue() if needs_edit else raw)
+                if needs_edit and _identity_prop_present(pending, manifest["props"]):
+                    pending.unlink()
+                    raise ValueError("编辑结果仍有剧情道具，不缓存、不用它替换原图")
                 pending.replace(dest)
                 meta = dest.with_suffix(".json")
                 pending_meta = meta.with_suffix(".tmp.json")
                 pending_meta.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
                 pending_meta.replace(meta)
                 result["created"] += 1
-                log("[assets] 人物身份参考已移除剧情道具：%s（原图保留）" % name)
+                if needs_edit:
+                    log("[assets] 人物身份参考道具清理已核对：%s（原图保留）" % name)
+                else:
+                    log("[assets] 人物原图无剧情道具，原样复用：%s" % name)
             except Exception as exc:
                 result["failed"] += 1
                 log("[assets] 人物参考清理失败：%s；本次沿用原图：%s" % (name, str(exc)[:120]))
