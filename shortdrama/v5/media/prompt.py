@@ -1612,7 +1612,7 @@ def pack_ref_declaration(ref_roles: list[tuple[str, str]]) -> str:
     head = "、".join("第 %d 张参考图=%s" % (i + 1, lab)
                      for i, (_k, lab) in enumerate(ref_roles))
     chars, scenes = _nums("character"), _nums("location")
-    impl = _nums("shot") + _nums("prev")
+    impl, previous, props = _nums("shot"), _nums("prev"), _nums("prop")
     parts = [head + "。"]
     if chars:
         parts.append("★ 优先级：出场人物的长相、发型、服装形制与兵刃**一律以第 %s 张"
@@ -1620,6 +1620,16 @@ def pack_ref_declaration(ref_roles: list[tuple[str, str]]) -> str:
     if impl:
         parts.append("第 %s 张只沿用其场景地貌、光线与人物站位——其中人物长相若与设定表"
                      "不一致，**忽略它们的人物**。" % "、".join(str(c) for c in impl))
+    if previous:
+        parts.append("第 %s 张是上一片段真实末帧：下一段继承人物位置、身体朝向、"
+                     "持物者与所用手、道具位置及已经完成的动作，不重新交接或返回起始站位。"
+                     "长相衣装与设定表冲突时仅校正身份外观，保留动作和持物状态；允许换机位切镜。"
+                     % "、".join(str(c) for c in previous))
+    if props:
+        parts.append("第 %s 张锁定道具形状、材质、颜色、尺寸与部件，遵守上面本项目道具规格；"
+                     "不新增图和规格里没有的绳、孔、配件或发光。规格中的初始归属不代表本段重新初始化，"
+                     "本段持物者、手和动作以承接状态及下面当前镜头为准。"
+                     % "、".join(str(c) for c in props))
     if scenes:
         parts.append("第 %s 张只用于锁定场景内的建筑与地貌。"
                      % "、".join(str(c) for c in scenes))

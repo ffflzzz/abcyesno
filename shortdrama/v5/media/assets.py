@@ -1296,6 +1296,21 @@ def _chars_from_worldbuilder(root: Path) -> list[dict]:
         return []
 
 
+def key_prop_specs(root: Path) -> dict[str, str]:
+    """Original brief prop specifications, keyed by their canonical names."""
+    try:
+        data = json.loads((Path(root) / "brief.json").read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    out = {}
+    for item in data.get("key_props") or []:
+        text = str(item).strip()
+        name = re.split(r"[：:]", text, maxsplit=1)[0].strip()
+        if name:
+            out[name] = text
+    return out
+
+
 def key_prop_names(root: Path) -> set:
     """brief.json 里 `key_props` 声明的**道具名**（每项形如「走马灯：六角竹骨…」）。
 
@@ -1304,16 +1319,7 @@ def key_prop_names(root: Path) -> set:
     而 `key_props` 是 brief 契约里就定义为「跨镜一致性的锚点」的字段，
     是人**已经会填**的东西，不需要模型配合。
     """
-    try:
-        data = json.loads((Path(root) / "brief.json").read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001 -- 没有 brief 就退化成"按本集提及镜数排"
-        return set()
-    out: set = set()
-    for it in (data.get("key_props") or []):
-        nm = re.split(r"[：:]", str(it), maxsplit=1)[0].strip()
-        if nm:
-            out.add(nm)
-    return out
+    return set(key_prop_specs(root))
 
 
 def mention_counts(reg: dict, shots: list) -> dict:

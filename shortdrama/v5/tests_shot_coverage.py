@@ -60,6 +60,31 @@ class TestCoverage(unittest.TestCase):
         self.assertIn('镜头 3/3',result)
         self.assertNotIn('全程不切镜',result)
 
+class TestPropContinuity(unittest.TestCase):
+    def test_every_group_retains_prop_spec_and_previous_action_state(self):
+        from v5.media import video
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            spec='白玉佩：掌心大小完整椭圆乳白，中央无孔，没有挂绳或发光。初始冰仙持有，交接后只在春灵右手。'
+            (root/'brief.json').write_text(json.dumps({'key_props':[spec]},ensure_ascii=False),encoding='utf-8')
+            group=[{'name':'LN04','scene':'月亭','seconds':12,'visual':'春灵右手握白玉佩，冰仙在门外继续走。'}]
+            def bind(root,group,names_out,types_out,ep):
+                names_out['LN04']=['冰仙','春灵','月亭','白玉佩']
+                types_out['LN04']=['character','character','location','prop']
+                return {'LN04':['http://ref/ice','http://ref/spring','http://ref/place','http://ref/jade']}
+            for previous in [None,'http://ref/actual-tail']:
+                with patch.object(assets,'bind',side_effect=bind):
+                    urls,refs=video.pack_ref_images(root,group,prev_url=previous,ep=1)
+                self.assertIn('http://ref/jade',urls)
+                self.assertEqual(len(urls),4 if previous is None else 5)
+                compiled=prompt.build_pack_prompt(group,[12],12,ref_roles=refs)
+                self.assertIn(spec,compiled)
+                self.assertIn('初始归属不代表本段重新初始化',compiled)
+                if previous:
+                    self.assertIn('持物者与所用手',compiled)
+                    self.assertIn('允许换机位切镜',compiled)
+                self.assertEqual(assets.key_prop_names(root),{'白玉佩'})
+
 class TestReferenceDimensions(unittest.TestCase):
     def test_encoding_preserves_vendor_edge_bounds_and_original_file(self):
         import base64,io,hashlib

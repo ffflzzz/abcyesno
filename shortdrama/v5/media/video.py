@@ -640,9 +640,13 @@ def pack_ref_images(project_root: Path, group: list[dict],
     #     拿静帧接下一段本来就是 09-28 记过的那句假话）。
     if prev_url:
         add(prev_url, "prev",
-            "**上一片段的结束画面**（只取它的场景连续性与人物站位）")
+            "**上一片段的真实结束状态**（场景、人物站位、姿态、持物与动作进度）")
+    prop_specs = assets.key_prop_specs(project_root)
     for u, nm in props:
-        add(u, "prop", "道具「%s」" % nm)
+        label = "道具「%s」" % nm
+        if nm in prop_specs:
+            label += "；本项目道具规格：" + prop_specs[nm]
+        add(u, "prop", label)
     return urls, roles
 
 

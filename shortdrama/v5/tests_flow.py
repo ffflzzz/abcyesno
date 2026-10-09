@@ -4243,7 +4243,9 @@ class TestPackMode(unittest.TestCase):
                  ("prev", "**上一片段的结束画面**")]
         d = pack_ref_declaration(roles)
         self.assertIn("一律以第 1、2 张人物设定表为准", d)
-        self.assertIn("第 4、5 张只沿用其场景", d)
+        self.assertIn("第 4 张只沿用其场景", d)
+        self.assertIn("第 5 张是上一片段真实末帧", d)
+        self.assertIn("持物者与所用手", d)
         self.assertIn("忽略它们的人物", d,
                       "不写这句 = 静帧里画错的身份又被喂回视频模型（v2 的缺陷来源）")
         # 纯道具/空镜组：没有角色时不得生成"以第 张设定表为准"的空引用
