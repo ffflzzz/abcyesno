@@ -1719,6 +1719,7 @@ def build_pack_prompt(group: list[dict], declared: list[int], total: int,
         head += "｜%s·%s·%s】" % (s.get("shot_type"), s.get("angle"), s.get("camera"))
         join = (s.get("join_note") or "").strip()
         join_line = "\n转场承接：%s。" % join if join else ""
+        people_line = ("\n" + person_directive(s)) if s.get("_cast_n") is not None else ""
         style = (s.get("visual_style") or "").strip()
         style_line = "\n视觉风格：%s" % style if style else ""
         combat = (s.get("_combat_style_block") or "").strip()
@@ -1726,10 +1727,10 @@ def build_pack_prompt(group: list[dict], declared: list[int], total: int,
             style_line += "\n本镜战斗特效：%s" % combat
         # ★ 镜内节拍全局重映射（2026-09-25）：镜本地 `0-2秒：` → 组内绝对时间
         segs.append(
-            "%s\n%s%s%s\n台词：%s\n音效：%s\n落幅：%s"
+            "%s\n%s%s%s%s\n台词：%s\n音效：%s\n落幅：%s"
             % (head, _remap_beats((s.get("visual") or "").strip(),
                                  l, declared[i]),
-               join_line, style_line,
+               join_line, people_line, style_line,
                _pack_fmt_dialogue(s.get("dialogue")),
                (s.get("sfx") or "").strip() or "无",
                (s.get("tail") or "").strip() or "自然收在该镜头动作结束处"))

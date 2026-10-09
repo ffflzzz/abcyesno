@@ -204,8 +204,8 @@ def invalidate(root: Path, names: list[str], ep: int = 1, log=print) -> dict[str
                 pass
         jobs.pop(name, None)
     jobs_mod.save(out_dir, jobs)
-    log("[clipqc] 已暂存 %d 镜（clip 移入 %s，job 状态清空）待重渲"
-        % (len(names), _STASH_DIR))
+    log("[clipqc] 已暂存 %d 个视频文件（clip 移入 %s，job 状态清空）待重渲"
+        % (len(moved), _STASH_DIR))
     return moved
 
 
@@ -248,6 +248,7 @@ def restore(root: Path, stashed: dict[str, Path], ep: int = 1, log=print) -> lis
                 src.replace(dest)
             if dest.exists():
                 jobs_mod.mark(jobs, name, "completed", local=str(dest),
+                              video_id=None,
                               error="clipqc 保留：重渲未回，暂存恢复")
                 back.append(name)
         except Exception:  # noqa: BLE001
@@ -290,4 +291,3 @@ def restore_leftovers(root: Path, ep: int = 1, log=print) -> list[str]:
     if not fresh:
         return []
     return restore(root, fresh, ep=ep, log=log)
-

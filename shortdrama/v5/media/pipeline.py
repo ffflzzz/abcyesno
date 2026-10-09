@@ -561,8 +561,24 @@ def _run_guarded(project_root: Path, ep: int = 1, log=print, max_regen: int = 2,
     # 而门可能拒 —— 拒了就必须**回滚**（见 `_finish`），否则 gate 拒了、
     # clip 却已从 clips/ 消失，成片反而缺镜。
     stashed = {}
+    pack_records = {}
     if only and not stills_only:
-        stashed = clipqc.invalidate(project_root, list(only), ep=ep, log=log)
+        from . import jobs as video_jobs
+        previous_jobs = video_jobs.load(project_root / "media" / ("ep" + str(ep)))
+        selected = set(only)
+        pack_records = {n: dict(rec) for n, rec in previous_jobs.items()
+                        if n.startswith("pack") and selected.intersection(rec.get("shots") or [])}
+        # 重渲接受镜号，但 pack 的实际文件是组号；旧片必须按实际文件暂存。
+        if config.VIDEO_MODE == "pack":
+            from ..guards import resolve_path
+            board = resolve_path(project_root, "scenedesigner", ep)
+            if board.exists():
+                current = storyboard.parse(board.read_text(encoding="utf-8"))
+                for k, (g, _d) in enumerate(video_plan.group_shots(current), 1):
+                    name = "pack%02d" % k
+                    if selected.intersection(s["name"] for s in g) and name in previous_jobs:
+                        pack_records.setdefault(name, dict(previous_jobs[name]))
+        stashed = clipqc.invalidate(project_root, list(only) + list(pack_records), ep=ep, log=log)
 
     def _finish(res: dict) -> dict:
         """统一出口：把暂存区落地 —— 渲回来的丢弃，**没回来的放回原位**。
@@ -574,11 +590,29 @@ def _run_guarded(project_root: Path, ep: int = 1, log=print, max_regen: int = 2,
         if not stashed:
             return res
         got = set(res.get("clips_done") or [])
+        if pack_records:
+            current_jobs = video_jobs.load(project_root / "media" / ("ep" + str(ep)))
+            got.update(n for n, rec in current_jobs.items()
+                       if n in pack_records and rec.get("shots")
+                       and (project_root / "media" / ("ep" + str(ep)) / "clips" / (n + ".mp4")).is_file()
+                       and set(rec["shots"]).issubset(got))
         back = {n: p for n, p in stashed.items() if n not in got}
         if back:
             restored = clipqc.restore(project_root, back, ep=ep, log=log)
-            res["residual"] = sorted(set(res.get("residual") or []) | set(restored))
-            res["restored"] = sorted(restored)
+            if pack_records:
+                restored_jobs = video_jobs.load(project_root / "media" / ("ep" + str(ep)))
+                for name in restored:
+                    if name in pack_records:
+                        fields = {k: v for k, v in pack_records[name].items()
+                                  if k not in ("state", "error", "local")}
+                        video_jobs.mark(restored_jobs, name, "completed", **fields,
+                                        local=str(project_root / "media" / ("ep" + str(ep)) / "clips" / (name + ".mp4")),
+                                        error="重渲失败，已恢复原组")
+                video_jobs.save(project_root / "media" / ("ep" + str(ep)), restored_jobs)
+            restored_shots = [s for n in restored
+                              for s in (pack_records.get(n, {}).get("shots") or [n])]
+            res["residual"] = sorted(set(res.get("residual") or []) | set(restored_shots))
+            res["restored"] = sorted(restored_shots)
         clipqc.discard(project_root,
                        {n: p for n, p in stashed.items() if n in got}, log=log)
         return res

@@ -693,6 +693,8 @@ def role_input(role: str, root: Path, m: dict, reasons: list[str] | None = None)
             "每一步明确持物者和所用手；只有剧情明确要求法术、抛接或掉落时才让道具离手。"
             "行走、进出与追随用场景中的门槛、路径等可见地标写清起点和终点，"
             "严格对齐剧本与brief的结局：到门口、跨过门槛、走远是不同结果，不擅自升级。"
+            "对白与动作必须表达同一行动：送出、收回、婉拒不能与实际交接及最终归属相反。"
+            "有矛盾时由scriptwriter修正文台词，dialogue与scenedesigner不得靠改变动作偷偷圆台词。"
             "落幅必须在该镜动作中实际发生，不能仅在落幅列宣布完成。"
             "完成关键动作前保持相关手、身体与地标可辨，再拉远；"
             "人物缩成小点的远景不能同时承担手部道具细节的证明。"
@@ -1106,6 +1108,13 @@ def role_input(role: str, root: Path, m: dict, reasons: list[str] | None = None)
     # 无条目时 `render_block` 返回空串 ⇒ **一行都不加**，既有链路行为零变化。
     if role == "reviewer" and not config.LOOSE_STORYBOARD and _shot_coverage_directive():
         lines.append(_shot_coverage_directive())
+        check_args = storyboard_check_args(root, ep)
+        if check_args:
+            from . import shotcheck
+            findings = shotcheck.punch_list(**check_args)
+            lines.append("【本轮程序体检】下面是当前实际分组与可数判据结果，"
+                         "不要照抄分镜师的自报统计。已有违规应列入对应角色退回清单：\n"
+                         + ("\n".join(findings) if findings else "可数判据无违规。"))
     _ib = inbox.render_block(root, role, ep)
     if _ib:
         lines.append(_ib)

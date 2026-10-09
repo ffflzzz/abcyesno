@@ -68,6 +68,32 @@ class TestInlineUpstream(unittest.TestCase):
             text = role_input("reviewer", self.root, {"episode_index": 1})
         self.assertNotIn("assets.contract.json 已存在", text)
 
+    def test_reviewer_receives_real_packed_duration_instead_of_raw_total(self):
+        from v5.media import scaffold
+        (self.root / "brief.json").write_text(json.dumps({
+            "topic": "测试", "target_duration": "约60秒", "audio_mode": "silent"}), encoding="utf-8")
+        board = self.root / "scenedesigner" / "scenedesigner_ep1.md"
+        board.parent.mkdir()
+        text = scaffold.build("测试", [
+            {"name": "门内", "shots": [{"seconds": n} for n in (12, 8, 6, 12)]},
+            {"name": "门外", "shots": [{"seconds": n} for n in (8, 8)]}])
+        rows = []
+        for line in text.splitlines():
+            if line.startswith("| ") and line.split("|")[1].strip().isdigit():
+                cells = line.split("|")
+                index = int(cells[1])
+                cells[6] = " 门内 " if index <= 4 else " 门外 "
+                cells[10] = " 角色：" + "说" * 32 + " " if index in (1, 4) else " （无声，环境音） "
+                line = "|".join(cells)
+            rows.append(line)
+        board.write_text("\n".join(rows), encoding="utf-8")
+        with mock.patch.object(config, "VIDEO_MODE", "pack"), \
+                mock.patch.object(config, "SHOT_COVERAGE", True), \
+                mock.patch.object(config, "VIDEO_PACK_MAX_GROUP", 12):
+            text = role_input("reviewer", self.root, {"episode_index": 1})
+        self.assertIn("4 条请求 / 48.00 秒", text)
+        self.assertIn("目标 60s", text)
+
 
 class TestWorldbuilderIsDispatched(unittest.TestCase):
     """★★ 2026-09-19：**方案 D 撤销** —— worldbuilder 回到子代理清单，director 不再兼任。

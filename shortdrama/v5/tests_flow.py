@@ -3845,6 +3845,14 @@ class TestResumeMediaHonoursEp(unittest.TestCase):
 
 
 class TestPackMode(unittest.TestCase):
+    def test_pack_prompt_preserves_per_shot_cast_count(self):
+        from v5.media import prompt
+        group = [{"name": "LN01", "_cast_n": 2, "visual": "两人递接", "seconds": 6},
+                 {"name": "LN02", "_cast_n": 1, "visual": "接收者近景", "seconds": 6}]
+        text = prompt.build_pack_prompt(group, [6, 6], 12)
+        self.assertIn(prompt.MULTI_PERSON_FMT % 2, text)
+        self.assertIn(prompt.SINGLE_PERSON, text)
+
     """pack 档（2026-09-22，12s 打包法落管线）：分组 / 提交 / 展开 / 拼接识别。
 
     判据来源：旁路脚本 `scripts/pack_render.py` 三项目实测闭环（37 次提交零拒绝、
@@ -4510,6 +4518,45 @@ class TestPackMode(unittest.TestCase):
             self.assertEqual(sub.call_count, 1, "only 镜所在组整组重渲")
             self.assertFalse((clip_dir / "pack01.mp4").exists(),
                              "重渲前必须作废旧组产物")
+
+    def test_pack_rerender_stashes_actual_group_and_restores_metadata(self):
+        from unittest import mock
+        from v5.media import jobs as jm, pipeline
+        for result in ("blocked", "incomplete", "ok"):
+            with self.subTest(result=result), tempfile.TemporaryDirectory() as d:
+                root = Path(d)
+                _seed_passing_manifest(root)
+                cd = root / "media" / "ep1" / "clips"
+                cd.mkdir(parents=True)
+                (cd / "pack01.mp4").write_bytes(b"old-one")
+                (cd / "pack02.mp4").write_bytes(b"untouched")
+                original = {"pack01": {"state": "completed", "shots": ["LN01", "LN02"],
+                                       "video_id": "old-video"},
+                            "pack02": {"state": "completed", "shots": ["LN03"]}}
+                jm.save(cd.parent, original)
+                def render(*a, **kw):
+                    self.assertFalse((cd / "pack01.mp4").exists())
+                    self.assertEqual((cd / ".clipqc_bad" / "pack01.mp4").read_bytes(), b"old-one")
+                    if result == "ok":
+                        (cd / "pack01.mp4").write_bytes(b"new-one")
+                        jobs = jm.load(cd.parent)
+                        jm.mark(jobs, "pack01", "completed", shots=["LN01", "LN02"],
+                                video_id="new-video")
+                        jm.save(cd.parent, jobs)
+                    return {"status": result, "clips_done": ["LN01", "LN02"] if result == "ok" else []}
+                with mock.patch.object(pipeline.config, "VIDEO_MODE", "pack"), \
+                        mock.patch.object(pipeline.config, "REQUIRE_APPROVAL", False), \
+                        mock.patch.object(guards, "media_gate", return_value=(result != "blocked", "test")), \
+                        mock.patch.object(pipeline, "_run_impl", side_effect=render):
+                    res = pipeline._run_guarded(root, only=["LN02"], log=lambda *_: None)
+                self.assertEqual((cd / "pack02.mp4").read_bytes(), b"untouched")
+                self.assertEqual((cd / "pack01.mp4").read_bytes(), b"new-one" if result == "ok" else b"old-one")
+                record = jm.load(cd.parent)["pack01"]
+                self.assertEqual(record["shots"], ["LN01", "LN02"])
+                self.assertEqual(record["video_id"], "new-video" if result == "ok" else "old-video")
+                self.assertFalse(list((cd / ".clipqc_bad").glob("*.mp4")))
+                if result != "ok":
+                    self.assertEqual(res["restored"], ["LN01", "LN02"])
 
     def test_expand_packs_maps_shots_to_group_clip(self):
         from v5.media import video
