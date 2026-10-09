@@ -16,7 +16,9 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
+import json
 import subprocess
 import time
 from pathlib import Path
@@ -681,6 +683,31 @@ def seam_anchor(clip_dir: Path, prev_pname: str | None) -> tuple[str | None, str
     return None, "无"
 
 
+def pack_input_signature(project_root: Path, group: list[dict], declared: list,
+                         ep: int, previous: Path | None = None) -> str:
+    """Bind reuse to the compiled input and actual local reference pixels.
+
+    Legacy jobs without this field are not silently given current provenance.
+    Remote-only references are identified by their URL; no download is needed.
+    """
+    prev_url = extract_last_frame(previous) if previous else None
+    urls, roles = pack_ref_images(project_root, group, prev_url=prev_url, ep=ep)
+    compiled = prompt_mod.build_pack_prompt(
+        style_mod.prepare_shots(project_root, group), declared, sum(declared),
+        style_block=style_mod.visual_block(project_root), ref_roles=roles)
+    local = []
+    for kind, label in roles:
+        if kind == 'prev':
+            continue
+        p = assets.local_ref_path(project_root, label)
+        local.append((kind, label, hashlib.sha256(p.read_bytes()).hexdigest()
+                      if p and p.is_file() else None))
+    return hashlib.sha256(json.dumps(
+        {'prompt': compiled, 'images': urls, 'local': local,
+         'aspect': config.ASPECT_RATIO}, ensure_ascii=False,
+        sort_keys=True).encode('utf-8')).hexdigest()
+
+
 def submit_packs(project_root: Path, shots: list[dict], planned: list[dict],
                  ep: int = 1, log=print, only: list[str] | None = None,
                  max_group: int | None = None, *, invalidate: bool = True) -> dict:
@@ -729,7 +756,12 @@ def submit_packs(project_root: Path, shots: list[dict], planned: list[dict],
         rec = jobs.get(pname) or {}
         same_group = rec.get("shots") == names and rec.get("declared_seconds") == declared
         if (_only is None or not invalidate) and same_group and jobs_mod.done(jobs, pname, clip_dir):
-            continue                      # 幂等：组产物在盘且状态 completed
+            previous = clip_dir / ('pack%02d.mp4' % (k - 1)) if k > 1 else None
+            if not rec.get('input_signature') or rec['input_signature'] == pack_input_signature(
+                    project_root, g, declared, ep, previous):
+                continue                  # 未记录来源的老片不因升级而整集重烧。
+            log('[video] %s 实际生成输入已变，旧组不复用' % pname)
+            jobs_mod.mark(jobs, pname, 'pending', video_id=None, error='生成输入变化')
         if jobs_mod.done(jobs, pname, clip_dir) and not same_group:
             log("[video] %s 分组成员/时长已变，旧组不复用" % pname)
             jobs_mod.mark(jobs, pname, "pending", video_id=None, error="分组契约变化")
@@ -765,6 +797,9 @@ def submit_packs(project_root: Path, shots: list[dict], planned: list[dict],
         log("[video] %s：%s 合计 %ds，prompt=%d 字，images=%d（%s）接续锚=%s"
             % (pname, "+".join(names), total, len(prompt), len(urls),
                "、".join(k for k, _l in roles), prev_src))
+        input_signature = pack_input_signature(
+            project_root, g, declared, ep,
+            clip_dir / ('pack%02d.mp4' % (k - 1)) if k > 1 else None)
         # 提交：队列满时**换 key 重试**（2026-09-22 改造，同 submit_all 的理由：
         # 队列满是每条通道各自的状态，跨入口换通道能绕开单池拥堵）。
         r = None
@@ -822,7 +857,8 @@ def submit_packs(project_root: Path, shots: list[dict], planned: list[dict],
         jobs_mod.submitted(jobs, pname, vid,
                            first_frame_kind="reference_pack",
                            shots=names, declared_seconds=declared, total_seconds=total,
-                           key=key)
+                           key=key,
+                           input_signature=input_signature)
         jobs_mod.save(out_dir, jobs)
         log("[video] %s submitted（%d 镜打包，%ds，%s）"
             % (pname, len(names), total, pool.label(key_idx)))
@@ -882,6 +918,19 @@ def run_packs(project_root: Path, shots: list[dict], planned: list[dict],
     done = {n: p for n, p in done.items() if n in expected
             and jobs.get(n, {}).get("shots") == expected[n][0]
             and jobs.get(n, {}).get("declared_seconds") == expected[n][1]}
+    # 单镜重渲不扩面，但已知输入过期的非目标组不能混进新成片。
+    stale_previous = False
+    for k, (g, declared) in enumerate(groups, 1):
+        name = 'pack%02d' % k
+        rec = jobs.get(name, {})
+        signature = rec.get('input_signature')
+        previous = project_root / 'media' / ('ep%d' % ep) / 'clips' / ('pack%02d.mp4' % (k - 1)) if k > 1 else None
+        stale = name in done and signature and signature != pack_input_signature(
+            project_root, g, declared, ep, previous)
+        if stale or stale_previous:
+            done.pop(name, None)
+            log('[video] %s 输入或前组接续已过期，不参与本轮合成' % name)
+            stale_previous = True
     return jobs, done
 
 
