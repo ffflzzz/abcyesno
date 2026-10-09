@@ -548,6 +548,16 @@ class TestThrashStop(unittest.TestCase):
         cls.mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(cls.mod)
 
+    def test_startup_is_not_a_completed_empty_round(self):
+        f = self.mod.completed_stall_count
+        count = f([], set(), 0, 0)
+        self.assertEqual(count, 0)
+        count = f([], set(), count, 1)
+        self.assertEqual(count, 1, "导演单独写制作规格后还应允许下一轮派工")
+        count = f([], set(), count, 2)
+        self.assertEqual(count, 2, "两轮真正无角色产物仍应停止")
+        self.assertEqual(f(["worldbuilder"], set(), count, 3), 0)
+
     def test_rewrite_budget_is_the_gates_number_plus_one(self):
         """预算本身：空转已成立时，3 次放行、4 次停（`MAX_REVISIONS + 1`，不新造数字）。"""
         f = self.mod.thrash_stop

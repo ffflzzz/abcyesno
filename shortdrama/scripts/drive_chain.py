@@ -280,6 +280,14 @@ def write_bursts(prev, samples, min_gap: float = WRITE_BURST_GAP) -> tuple:
 NO_PROGRESS_SECONDS = 2700.0
 
 
+def completed_stall_count(got: list, seen: set, stalls: int,
+                          completed_rounds: int) -> int:
+    """只对已跑完的轮次计无产物；启动前的空目录不算一次失败。"""
+    if completed_rounds == 0 or set(got) - seen:
+        return 0
+    return stalls + 1
+
+
 def thrash_stop(rewrites: dict, rounds_without_new: int,
                 max_rewrites: int = 3, max_stall: int = 2,
                 since_new_seconds: float = 0.0,
@@ -679,7 +687,7 @@ async def main() -> int:
         # 轮次层面的空转判据：这一轮开始时比上一轮**有没有新角色落地**。
         # 连续 2 轮零新增 = 工头在原地重派同样的角色（1003f 实测 r3/r4/r5 就是这样
         # 各烧了 70/13/7 分钟）。
-        _stall = 0 if (set(got) - _seen_roles) else _stall + 1
+        _stall = completed_stall_count(got, _seen_roles, _stall, round_no)
         _seen_roles |= set(got)
         if _stall >= 2:
             thrashed = ("连续 %d 轮没有任何新产物（已有 %s）⇒ 工头在原地重派、"
