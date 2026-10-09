@@ -163,7 +163,9 @@ def _build_role_graph(role: str, pack: str):
     manifest（phases），media_gate / --resume-media 直接可用。
     """
     agent = create_agent(
-        model=role_chat(role, 8192),
+        # 完整分镜/跨角色评审实测触达8192后终止在聊天草稿、未写盘。
+        # 只给这两个长文角色足够交付空间；其他角色不扩大，次数预算不变。
+        model=role_chat(role, 16384 if role in {"scenedesigner", "reviewer"} else 8192),
         tools=[],
         middleware=[FilesystemMiddleware(
             backend=FilesystemBackend(root_dir=str(_root), virtual_mode=True),
