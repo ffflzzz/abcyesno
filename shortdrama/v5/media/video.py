@@ -691,7 +691,14 @@ def _pack_transports(root: Path, groups: list, planned: list[dict]) -> list:
     for group, declared in groups:
         casts = [set(assets._shot_cast_lines(s, reg, prot, fallback)) for s in group]
         same_cast = bool(previous_cast) and all(c == previous_cast for c in casts)
-        mode = video_plan.pack_transport(group, by_name.get(group[0]['name'], 'cut'), same_cast)
+        # Use the same registry matcher as reference binding, including prop aliases.
+        # Do not drop an available prop image merely because the action is continuous.
+        has_prop_reference = any(
+            a.get('type') == 'prop' and assets._safe_ref_urls(a, root)
+            for s in group
+            for a in assets.hits_for_shot(reg, s, max_n=max(5, len(reg.get('assets', []))))[0])
+        mode = video_plan.pack_transport(group, by_name.get(group[0]['name'], 'cut'), same_cast,
+                                         has_prop_reference=has_prop_reference)
         out.append(([dict(s, _pack_transport=mode) for s in group], declared))
         previous_cast = casts[-1]
     return out

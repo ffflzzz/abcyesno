@@ -44,11 +44,36 @@ class TestPackInputs(unittest.TestCase):
     def test_only_same_cast_silent_continuation_locks_start(self):
         quiet = [{'dialogue': '（无声，环境音）'}]
         self.assertEqual(video_plan.pack_transport(quiet, 'continuous', True), 'keyframe')
+        self.assertEqual(video_plan.pack_transport(quiet, 'continuous', True,
+                                                  has_prop_reference=True), 'reference')
         for group, relation, same_cast in [(quiet, 'cut', True), (quiet, 'continuous', False),
                  (quiet * 2, 'continuous', True),
                  ([{'dialogue': '', 'visual': '0-3秒：行走；3-6秒：切至脸部特写'}], 'continuous', True),
                  ([{'dialogue': '顾川：跟我走。'}], 'continuous', True)]:
             self.assertEqual(video_plan.pack_transport(group, relation, same_cast), 'reference')
+
+    def test_registered_prop_reference_survives_continuation_selection(self):
+        shots = [{'name': 'LN01'}, {'name': 'LN02', 'dialogue': '（无声，环境音）'}]
+        groups = [([s], [12]) for s in shots]
+        planned = [dict(s, frame_plan={'relation': 'continuous'}) for s in shots]
+        prop = {'name': '白玉佩', 'type': 'prop'}
+        with mock.patch.object(video.assets, '_cast_ctx', return_value=({'assets': [prop]}, None, [])), \
+                mock.patch.object(video.assets, '_shot_cast_lines', return_value=['same people']), \
+                mock.patch.object(video.assets, 'hits_for_shot', return_value=([prop], [])), \
+                mock.patch.object(video.assets, '_safe_ref_urls', return_value=['prop image']):
+            out = video._pack_transports(Path('.'), groups, planned)
+        self.assertEqual(out[1][0][0]['_pack_transport'], 'reference')
+
+    def test_unavailable_prop_image_does_not_claim_reference_protection(self):
+        shots = [{'name': 'LN01'}, {'name': 'LN02', 'dialogue': ''}]
+        prop = {'name': '白玉佩', 'type': 'prop'}
+        with mock.patch.object(video.assets, '_cast_ctx', return_value=({'assets': [prop]}, None, [])), \
+                mock.patch.object(video.assets, '_shot_cast_lines', return_value=['same people']), \
+                mock.patch.object(video.assets, 'hits_for_shot', return_value=([prop], [])), \
+                mock.patch.object(video.assets, '_safe_ref_urls', return_value=[]):
+            out = video._pack_transports(Path('.'), [([s], [12]) for s in shots],
+                                         [dict(s, frame_plan={'relation': 'continuous'}) for s in shots])
+        self.assertEqual(out[1][0][0]['_pack_transport'], 'keyframe')
 
     def test_pack_keyframe_submits_only_actual_first_frame(self):
         shots = [{'name': 'LN01', 'scene': 'A', 'seconds': 12, 'dialogue': '你好'},
