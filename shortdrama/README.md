@@ -4,7 +4,7 @@
 
 > 外部 Agent 调用规范见 **[AGENTS.md](AGENTS.md)**（写 brief.json → 调 CLI → 验收产物）。本文件说明系统本身。
 
-默认采用 pack 镜头组织：分镜师安排同场多个镜头，媒体链合为一条请求。通常使用 reference；同一批角色、无对白、声明连续承接且不含切镜的单镜组使用 keyframe，将上一组真实末帧锁为首帧。其他组的分组和镜内切镜不变。`SHORTDRAMA_SHOT_COVERAGE=0` 可回退旧创作口径，见 [v5/SHOT_COVERAGE.md](v5/SHOT_COVERAGE.md)。
+默认采用 pack 镜头组织：分镜师安排同场多个镜头，媒体链合为一条请求。通常使用 reference；同一批角色、无对白、声明连续承接、不含切镜且没有命中可用道具参考图的单镜组使用 keyframe，将上一组真实末帧锁为首帧。有道具参考时保留 reference，连续/match 组把真实末态排第一张，其余人物、场景、道具图继续保留。其他组的分组和镜内切镜不变。`SHORTDRAMA_SHOT_COVERAGE=0` 可回退旧创作口径，见 [v5/SHOT_COVERAGE.md](v5/SHOT_COVERAGE.md)。
 
 同一叙事场可由pack自动拆成多条4–12秒请求，单镜请求合法。创作检查使用真实分组时长，不按叙事场数或固定镜数推导；非战斗不要求闪避应招、战斗位移动词密度。仙侠包的无声条款只在brief声明silent时生效。
 

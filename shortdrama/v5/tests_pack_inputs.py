@@ -3,6 +3,7 @@ import tempfile
 import unittest
 import base64
 import io
+import json
 import shutil
 import subprocess
 from pathlib import Path
@@ -13,6 +14,31 @@ from v5.media import jobs
 
 
 class TestPackInputs(unittest.TestCase):
+    def test_real_display_label_resolves_registry_pixels(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / 'images').mkdir()
+            image = root / 'images/jade.png'
+            image.write_bytes(b'original actual asset bytes')
+            (root / 'assets.json').write_text(json.dumps({'assets': [
+                {'name': '白玉佩', 'type': 'prop', 'ref_image': 'jade.png'}
+            ]}, ensure_ascii=False), encoding='utf-8')
+            group = [{'_pack_transport': 'reference'}]
+            with mock.patch.object(video, '_pack_inputs', return_value=(['same-url'],
+                    [('prop', '道具「白玉佩」；本项目道具规格：实心玉片')])), \
+                    mock.patch.object(video.style_mod, 'prepare_shots', return_value=group), \
+                    mock.patch.object(video.style_mod, 'visual_block', return_value='style'), \
+                    mock.patch.object(video.prompt_mod, 'build_pack_prompt', return_value='prompt'):
+                old = video.pack_input_signature(root, group, [12], 1, legacy_labels=True)
+                legacy = {'input_signature': old}
+                self.assertTrue(video._pack_input_matches(legacy, root, group, [12], 1))
+                modern = {'input_signature': video.pack_input_signature(root, group, [12], 1),
+                          'input_signature_version': 2}
+                self.assertTrue(video._pack_input_matches(modern, root, group, [12], 1))
+                image.write_bytes(b'changed actual asset bytes at same URI')
+                self.assertFalse(video._pack_input_matches(modern, root, group, [12], 1))
+                self.assertEqual(legacy, {'input_signature': old})
+
     def test_reference_continuation_prioritizes_state_and_keeps_prop(self):
         roles = [('character', 'person'), ('location', 'place'), ('prev', 'end'), ('prop', 'jade')]
         with mock.patch.object(video, 'pack_ref_images', return_value=(['c', 'l', 'p', 'j'], roles)):
@@ -46,8 +72,8 @@ class TestPackInputs(unittest.TestCase):
     def test_reference_legacy_hash_does_not_match_keyframe_or_modern_job(self):
         with mock.patch.object(video, 'pack_input_signature',
                                side_effect=lambda *a, **k: 'old' if k.get('legacy_reference') else 'new') as signature:
-            for rec, group in [({'input_signature': 'old'}, [{'_pack_transport': 'keyframe'}]),
-                               ({'input_signature': 'old', 'generation_mode': 'reference'},
+            for rec, group in [({'input_signature': 'old', 'input_signature_version': 2}, [{'_pack_transport': 'keyframe'}]),
+                               ({'input_signature': 'old', 'input_signature_version': 2, 'generation_mode': 'reference'},
                                 [{'_pack_transport': 'reference'}])]:
                 signature.reset_mock()
                 self.assertFalse(video._pack_input_matches(rec, Path('.'), group, [12], 1))
@@ -113,6 +139,7 @@ class TestPackInputs(unittest.TestCase):
             self.assertNotIn('images', submit.call_args.kwargs)
             self.assertEqual(result['pack02']['generation_mode'], 'keyframe')
             self.assertTrue(result['pack02']['input_signature'])
+            self.assertEqual(result['pack02']['input_signature_version'], 2)
 
     @unittest.skipUnless(shutil.which('ffmpeg'), 'ffmpeg required')
     def test_seam_anchor_is_final_frame_not_first_frame_of_final_second(self):

@@ -19,6 +19,7 @@ import base64
 import hashlib
 import io
 import json
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -718,7 +719,8 @@ def _pack_inputs(root: Path, group: list[dict], previous_url: str | None, ep: in
 
 
 def pack_input_signature(project_root: Path, group: list[dict], declared: list,
-                         ep: int, previous: Path | None = None, *, legacy_reference: bool = False) -> str:
+                         ep: int, previous: Path | None = None, *, legacy_reference: bool = False,
+                         legacy_labels: bool = False) -> str:
     """Bind reuse to the compiled input and actual local reference pixels.
 
     Legacy jobs without this field are not silently given current provenance.
@@ -733,7 +735,10 @@ def pack_input_signature(project_root: Path, group: list[dict], declared: list,
     for kind, label in roles:
         if kind == 'prev':
             continue
-        p = assets.local_ref_path(project_root, label)
+        # Reference roles contain display labels, not raw registry names.
+        # Passing e.g. 道具「白玉佩」；规格... directly silently returned None.
+        named = re.search(r'「([^」]+)」', label) if not legacy_labels else None
+        p = assets.local_ref_path(project_root, named.group(1) if named else label)
         local.append((kind, label, hashlib.sha256(p.read_bytes()).hexdigest()
                       if p and p.is_file() else None))
     payload = {'prompt': compiled, 'images': urls, 'local': local, 'aspect': config.ASPECT_RATIO}
@@ -752,11 +757,19 @@ def _pack_input_matches(rec: dict, root: Path, group: list[dict], declared: list
         return True
     if signature == pack_input_signature(root, group, declared, ep, previous):
         return True
+    if rec.get('input_signature_version') == 2:
+        return False
+    # Old display-label hashes did not record local asset pixels. Grandfather
+    # their existing URI/prompt checks, but do not fabricate a pixel baseline.
+    if signature == pack_input_signature(root, group, declared, ep, previous,
+                                         legacy_labels=True):
+        return True
     # Before per-group transport was introduced every tracked job was reference.
     # This alternate hash still checks all actual inputs, including previous pixels.
     if not rec.get('generation_mode') and (not group or group[0].get('_pack_transport', 'reference') == 'reference'):
-        return signature == pack_input_signature(root, group, declared, ep, previous,
-                                                legacy_reference=True)
+        return any(signature == pack_input_signature(root, group, declared, ep, previous,
+                                                      legacy_reference=True, legacy_labels=old_labels)
+                   for old_labels in (False, True))
     return False
 
 
@@ -913,7 +926,7 @@ def submit_packs(project_root: Path, shots: list[dict], planned: list[dict],
                            first_frame_kind=("keyframe_pack" if transport == 'keyframe' else "reference_pack"),
                            shots=names, declared_seconds=declared, total_seconds=total,
                            key=key,
-                           input_signature=input_signature)
+                           input_signature=input_signature, input_signature_version=2)
         jobs[pname]['generation_mode'] = transport
         jobs_mod.save(out_dir, jobs)
         log("[video] %s submitted（%d 镜打包，%ds，%s）"
