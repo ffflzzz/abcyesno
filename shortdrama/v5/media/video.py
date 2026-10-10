@@ -697,9 +697,10 @@ def _pack_transports(root: Path, groups: list, planned: list[dict]) -> list:
             a.get('type') == 'prop' and assets._safe_ref_urls(a, root)
             for s in group
             for a in assets.hits_for_shot(reg, s, max_n=max(5, len(reg.get('assets', []))))[0])
-        mode = video_plan.pack_transport(group, by_name.get(group[0]['name'], 'cut'), same_cast,
+        relation = by_name.get(group[0]['name'], 'cut')
+        mode = video_plan.pack_transport(group, relation, same_cast,
                                          has_prop_reference=has_prop_reference)
-        out.append(([dict(s, _pack_transport=mode) for s in group], declared))
+        out.append(([dict(s, _pack_transport=mode, _pack_relation=relation) for s in group], declared))
         previous_cast = casts[-1]
     return out
 
@@ -707,7 +708,13 @@ def _pack_transports(root: Path, groups: list, planned: list[dict]) -> list:
 def _pack_inputs(root: Path, group: list[dict], previous_url: str | None, ep: int):
     if group and group[0].get('_pack_transport') == 'keyframe':
         return ([previous_url] if previous_url else []), [('prev', '连续动作首帧')]
-    return pack_ref_images(root, group, prev_url=previous_url, ep=ep)
+    urls, roles = pack_ref_images(root, group, prev_url=previous_url, ep=ep)
+    if group and group[0].get('_pack_relation') in ('continuous', 'match'):
+        # The continuation's primary image is its actual state, not a front-view
+        # character sheet. Keep identity and prop images available as references.
+        order = sorted(range(len(roles)), key=lambda i: roles[i][0] != 'prev')
+        urls, roles = [urls[i] for i in order], [roles[i] for i in order]
+    return urls, roles
 
 
 def pack_input_signature(project_root: Path, group: list[dict], declared: list,

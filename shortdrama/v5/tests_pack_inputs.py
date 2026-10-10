@@ -13,6 +13,18 @@ from v5.media import jobs
 
 
 class TestPackInputs(unittest.TestCase):
+    def test_reference_continuation_prioritizes_state_and_keeps_prop(self):
+        roles = [('character', 'person'), ('location', 'place'), ('prev', 'end'), ('prop', 'jade')]
+        with mock.patch.object(video, 'pack_ref_images', return_value=(['c', 'l', 'p', 'j'], roles)):
+            urls, labels = video._pack_inputs(Path('.'),
+                [{'_pack_transport': 'reference', '_pack_relation': 'continuous'}], 'p', 1)
+            self.assertEqual(urls, ['p', 'c', 'l', 'j'])
+            self.assertEqual([k for k, l in labels], ['prev', 'character', 'location', 'prop'])
+            for relation in ('cut', None):
+                self.assertEqual(video._pack_inputs(Path('.'),
+                    [{'_pack_transport': 'reference', '_pack_relation': relation}], 'p', 1),
+                    (['c', 'l', 'p', 'j'], roles))
+
     def test_reference_hash_migration_still_checks_actual_inputs(self):
         group = [{'name': 'LN01', '_pack_transport': 'reference'}]
         with tempfile.TemporaryDirectory() as d:
