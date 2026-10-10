@@ -1203,7 +1203,7 @@ CONTRACT_NAME = "assets.contract.json"
 `type` 取 `character` / `prop` / `location`（缺省 `prop`）；
 `keywords` 缺省用 `name` 自身。**这是"锚定契约"**：下游按名字精确匹配参考图。
 
-相连场景可在顶层 `shared_locations` 中按建筑名定义固定外观，location 的
+相连场景可在顶层 `shared_locations` 中按建筑名定义固定外观（对象，或 name/appearance 列表），location 的
 `visible_locations` 列表引用这些名称（包括远处可见建筑）。场景生图将共享结构
 放在各自机位/光照描述前；不同机位读取同一份身份，不将两份散文的省略当作新建筑。
 未使用共享建筑的旧契约行为保持；声明引用但没有定义会明确报错。
@@ -1228,8 +1228,18 @@ def _load_contract(root: Path):
         chars = [c for c in (d.get("characters") or []) if c.get("name")]
         items = [a for a in (d.get("assets") or []) if a.get("name")]
         shared_locations = d.get('shared_locations') or {}
+        if isinstance(shared_locations, list):
+            named = {}
+            for item in shared_locations:
+                if not isinstance(item, dict) or not isinstance(item.get('name'), str) or not isinstance(item.get('appearance'), str):
+                    raise ValueError('shared_locations 列表每项必须含 name 和 appearance 字符串')
+                name = item['name'].strip()
+                if name in named and named[name] != item['appearance']:
+                    raise ValueError('共享建筑 %s 存在互相冲突的定义' % name)
+                named[name] = item['appearance']
+            shared_locations = named
         if not isinstance(shared_locations, dict):
-            raise ValueError('assets.contract.json shared_locations 必须为建筑名到固定外观的对象')
+            raise ValueError('assets.contract.json shared_locations 必须为建筑名到外观的对象或 name/appearance 列表')
         from . import assets as _assets_mod   # 函数内导入：类型口径只定义在一处
         for a in items:
             a.setdefault("type", "prop")

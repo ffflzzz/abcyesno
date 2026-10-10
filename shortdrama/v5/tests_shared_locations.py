@@ -58,3 +58,18 @@ class TestSharedLocations(unittest.TestCase):
             item = dict(name='孤立山谷', type='location', prompt='青灰岩壁与溪流，暮蓝天光')
             loaded = self.load(Path(folder), {'assets': [item]})[0]
             self.assertEqual(cast._scene_prompt(loaded), cast._scene_prompt(item))
+
+    def test_named_list_and_object_compile_identically(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            spec = self.contract()
+            original = [cast._scene_prompt(x) for x in self.load(root, spec)[:2]]
+            spec['shared_locations'] = [dict(name=k, appearance=v) for k, v in spec['shared_locations'].items()]
+            self.assertEqual(original, [cast._scene_prompt(x) for x in self.load(root, spec)[:2]])
+
+    def test_conflicting_duplicate_identity_is_not_silently_overwritten(self):
+        with tempfile.TemporaryDirectory() as folder:
+            spec = self.contract()
+            spec['shared_locations'] = [dict(name='月亭', appearance='木柱'), dict(name='月亭', appearance='石柱')]
+            with self.assertRaisesRegex(ValueError, '冲突'):
+                self.load(Path(folder), spec)
