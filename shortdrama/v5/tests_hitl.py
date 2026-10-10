@@ -558,6 +558,45 @@ class TestThrashStop(unittest.TestCase):
         self.assertEqual(count, 2, "两轮真正无角色产物仍应停止")
         self.assertEqual(f(["worldbuilder"], set(), count, 3), 0)
 
+    def test_actual_revision_resets_stall_but_identical_rewrite_does_not(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            board = self.mod.resolve_path(root, 'scenedesigner', 1)
+            board.parent.mkdir(parents=True)
+            board.write_text('36秒分镜', encoding='utf-8')
+            old = self.mod.artifact_fingerprints(root, ['scenedesigner'], 1)
+            board.write_text('62秒修订分镜', encoding='utf-8')
+            current = self.mod.artifact_fingerprints(root, ['scenedesigner'], 1)
+            self.assertNotEqual(current, old)
+            changed = any(old.get(role) != digest for role, digest in current.items())
+            self.assertEqual(self.mod.completed_stall_count(['scenedesigner'], {'scenedesigner'}, 1, 2,
+                                                          artifacts_changed=changed), 0)
+            board.write_text('62秒修订分镜', encoding='utf-8')
+            same = self.mod.artifact_fingerprints(root, ['scenedesigner'], 1)
+            self.assertEqual(same, current)
+            self.assertEqual(self.mod.completed_stall_count(['scenedesigner'], {'scenedesigner'}, 1, 3,
+                                                          artifacts_changed=same != current), 2)
+
+    def test_other_episode_and_invalid_text_do_not_fake_progress(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            old_board = self.mod.resolve_path(root, 'scenedesigner', 1)
+            old_board.parent.mkdir(parents=True)
+            old_board.write_text('旧集分镜', encoding='utf-8')
+            self.assertEqual(self.mod.artifact_fingerprints(root, ['scenedesigner'], 2), {})
+            old_board.write_bytes(b'\xff')
+            self.assertEqual(self.mod.artifact_fingerprints(root, ['scenedesigner'], 1), {})
+
+    def test_restoring_an_already_seen_draft_does_not_reset_stall(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            board = self.mod.resolve_path(root, 'scenedesigner', 1)
+            board.parent.mkdir(parents=True)
+            seen = {}
+            for text, expected in [('36秒', True), ('62秒', True), ('62秒', False), ('36秒', False)]:
+                board.write_text(text, encoding='utf-8')
+                self.assertEqual(self.mod.track_artifact_progress(root, ['scenedesigner'], 1, seen), expected)
+
     def test_rewrite_budget_is_the_gates_number_plus_one(self):
         """预算本身：空转已成立时，3 次放行、4 次停（`MAX_REVISIONS + 1`，不新造数字）。"""
         f = self.mod.thrash_stop

@@ -22,6 +22,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import sys
 import time
@@ -281,11 +282,32 @@ NO_PROGRESS_SECONDS = 2700.0
 
 
 def completed_stall_count(got: list, seen: set, stalls: int,
-                          completed_rounds: int) -> int:
+                          completed_rounds: int, *, artifacts_changed: bool = False) -> int:
     """只对已跑完的轮次计无产物；启动前的空目录不算一次失败。"""
-    if completed_rounds == 0 or set(got) - seen:
+    if completed_rounds == 0 or set(got) - seen or artifacts_changed:
         return 0
     return stalls + 1
+
+
+def artifact_fingerprints(root: Path, roles: list, ep: int) -> dict:
+    """Count readable nonempty content changes, not timestamps or filenames alone."""
+    fingerprints = {}
+    for role in roles:
+        try:
+            raw = resolve_path(root, role, ep).read_bytes()
+            if raw.decode('utf-8').strip():
+                fingerprints[role] = hashlib.sha256(raw).hexdigest()
+        except (OSError, UnicodeError):
+            continue
+    return fingerprints
+
+
+def track_artifact_progress(root: Path, roles: list, ep: int, seen: dict) -> bool:
+    current = artifact_fingerprints(root, roles, ep)
+    changed = any(digest not in seen.get(role, set()) for role, digest in current.items())
+    for role, digest in current.items():
+        seen.setdefault(role, set()).add(digest)
+    return changed
 
 
 def thrash_stop(rewrites: dict, rounds_without_new: int,
@@ -645,6 +667,7 @@ async def main() -> int:
     _stamps: dict = {}
     _rewrites: dict = {}
     _seen_roles: set = set()
+    _seen_artifacts: dict = {}
     _stall = 0
     _last_moved: list = []       # 最近一次打回挪走了哪些角色（闸触发时要回捞，见下方）
     thrashed = ""                # 非空 = 反空转闸的停因（触发即整条收工，不再起新轮）
@@ -684,10 +707,9 @@ async def main() -> int:
 
     while time.time() - t0 < timeout:
         got = done_roles(t0)
-        # 轮次层面的空转判据：这一轮开始时比上一轮**有没有新角色落地**。
-        # 连续 2 轮零新增 = 工头在原地重派同样的角色（1003f 实测 r3/r4/r5 就是这样
-        # 各烧了 70/13/7 分钟）。
-        _stall = completed_stall_count(got, _seen_roles, _stall, round_no)
+        # 修订同一角色的有效内容也是进展；归档/恢复旧内容和仅改mtime不算。
+        _changed = track_artifact_progress(root, got, ep, _seen_artifacts)
+        _stall = completed_stall_count(got, _seen_roles, _stall, round_no, artifacts_changed=_changed)
         _seen_roles |= set(got)
         if _stall >= 2:
             thrashed = ("连续 %d 轮没有任何新产物（已有 %s）⇒ 工头在原地重派、"
