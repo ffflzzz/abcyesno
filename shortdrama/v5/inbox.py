@@ -97,7 +97,9 @@ class _Locked:
     ⛔ 绝不让一条辅助信道把创作链卡死。
     """
 
-    def __init__(self, root: Path, timeout: float = 3.0):
+    def __init__(self, root: Path, timeout: float = 10.0):
+        # ★ timeout 3 → 10（2026-10-10，理由见 director_chat.py 同款注释：
+        #   本机 unlink ~80-130ms，24 写者并列需 ~3.8s，3 秒兜底会丢更新）。
         self.root = Path(root)
         self.timeout = timeout
         self.handle = None
@@ -106,22 +108,32 @@ class _Locked:
         d = dir_of(self.root)
         lock = d / _LOCK
         deadline = time.time() + self.timeout
+        n_retry = 0
         while True:
             try:
                 self.handle = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
                 return self
-            except FileExistsError:
+            except (FileExistsError, PermissionError):
+                # ★ 2026-10-10：EACCES 与「已存在」同待遇 + 起步小步快试 ——
+                #   Windows 上锁文件处于删除过渡态（上一写者刚 unlink）时 O_EXCL 抛
+                #   PermissionError 而非 FileExistsError；裸 `except OSError` 会把它们
+                #   全部无锁放行（director_chat.py 的同型实测：24 线程丢 20 条）。
+                #   固定 50ms 重试在 24 写者并列时会等满 3s 兜底，故起步 10ms 递增、
+                #   4 次后 50ms 封顶。详见 director_chat.py 的同款注释。
+                n_retry += 1
                 # 陈旧锁：持有者崩了没删。超过 10 秒就抢。
                 try:
                     if time.time() - lock.stat().st_mtime > 10:
                         lock.unlink()
+                        n_retry = 0
                         continue
                 except OSError:
                     pass
                 if time.time() >= deadline:
                     return self
-                time.sleep(0.05)
+                time.sleep(min(0.01 * n_retry, 0.05))
             except OSError:
+                # 其余 OSError（目录权限等环境错误）才降级放行。
                 return self
 
     def __exit__(self, *exc):

@@ -228,7 +228,11 @@ class _Locked:
     拿不到锁时**降级为不阻塞** —— ⛔ 一条辅助信道不该把工作台卡死。
     """
 
-    def __init__(self, root: Path, timeout: float = 3.0):
+    def __init__(self, root: Path, timeout: float = 10.0):
+        # ★ timeout 3 → 10（2026-10-10）：本机实测 unlink 一个锁文件要 ~80-130ms
+        #   （沙箱内外都慢，系系统级文件删除过滤），锁的「一轮」= 持锁读写 + 慢 unlink
+        #   ≈ 160ms；24 个写者并列 = ~3.8s，恰好撑爆 3 秒兜底 ⇒ 尾部写者降级放行、丢更新。
+        #   10 秒与「陈旧锁 10 秒抢夺」对齐；真·卡死场景仍由超时降级兜底，语义不变。
         self.root = Path(root)
         self.timeout = timeout
         self.handle = None
@@ -238,21 +242,35 @@ class _Locked:
         d.mkdir(parents=True, exist_ok=True)
         lock = d / (FILE + ".lock")
         deadline = time.time() + self.timeout
+        n_retry = 0
         while True:
             try:
                 self.handle = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
                 return self
-            except FileExistsError:
+            except (FileExistsError, PermissionError):
+                # ★ 2026-10-10 实测（24 线程并发 _append）：两个坑叠在一起。
+                #   ① Windows 上锁文件处于**删除过渡态**（上一个写者刚 unlink、目录项
+                #      尚未消失）时，`O_CREAT|O_EXCL` 抛的是 PermissionError(EACCES)
+                #      而不是 FileExistsError(EEXIST)。原实现把它喂给了下面的裸
+                #      `except OSError: return self` ⇒ **20/24 个写者直接无锁放行**、
+                #      同时读改写 ⇒ 丢更新（`TestConcurrentWrites` 空载 3/3 稳定红）。
+                #      所以 EACCES 必须与「已存在」同待遇。
+                #   ② 固定 50ms 重试在 24 写者并列时太慢：每波唤醒只消化 1 个写者，
+                #      实测 ~165ms/轮 × 24 轮 > 3s 兜底 ⇒ 尾部写者等满超时降级放行。
+                #      起步小步快试（Windows sleep 粒度 ~15.6ms），4 次后 50ms 封顶。
+                n_retry += 1
                 try:                       # 陈旧锁：持有者崩了没删，超 10 秒就抢
                     if time.time() - lock.stat().st_mtime > 10:
                         lock.unlink()
+                        n_retry = 0
                         continue
                 except OSError:
                     pass
                 if time.time() >= deadline:
                     return self
-                time.sleep(0.05)
+                time.sleep(min(0.01 * n_retry, 0.05))
             except OSError:
+                # 其余 OSError（目录权限等环境错误）才降级放行。
                 return self
 
     def __exit__(self, *exc):

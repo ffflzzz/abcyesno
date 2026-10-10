@@ -327,7 +327,11 @@ def _acquire_lock(p: Path, log=print) -> bool:
     for _ in range(2):
         try:
             fd = os.open(str(p), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
+        except (FileExistsError, PermissionError):
+            # ★ 2026-10-10：PermissionError 与「已存在」同待遇 —— Windows 上锁文件
+            #   处于删除过渡态（上一持锁者刚 unlink、目录项尚未消失）时 O_EXCL 抛
+            #   EACCES；原实现让它冒泡，运气差时「媒体锁刚释放那一瞬」的启动会直接崩。
+            #   这里按「锁被占用」保守拒绝（宁可要用户重试，也不放并发进链）。
             try:
                 age = time.time() - p.stat().st_mtime
             except OSError:
