@@ -17,6 +17,8 @@ class TestPackInputs(unittest.TestCase):
         quiet = [{'dialogue': '（无声，环境音）'}]
         self.assertEqual(video_plan.pack_transport(quiet, 'continuous', True), 'keyframe')
         for group, relation, same_cast in [(quiet, 'cut', True), (quiet, 'continuous', False),
+                 (quiet * 2, 'continuous', True),
+                 ([{'dialogue': '', 'visual': '0-3秒：行走；3-6秒：切至脸部特写'}], 'continuous', True),
                  ([{'dialogue': '顾川：跟我走。'}], 'continuous', True)]:
             self.assertEqual(video_plan.pack_transport(group, relation, same_cast), 'reference')
 

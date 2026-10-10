@@ -23,11 +23,13 @@ import re
 from dataclasses import dataclass
 
 from .. import config, validate
+from . import storyboard
 
 
 def pack_transport(group: list[dict], relation: str, same_cast: bool) -> str:
     """Same-subject silent continuation can lock its actual starting state."""
-    return ('keyframe' if same_cast and relation in ('continuous', 'match')
+    return ('keyframe' if len(group) == 1 and not storyboard.cut_offsets(group[0].get('visual') or '')
+            and same_cast and relation in ('continuous', 'match')
             and not any(validate._has_line(s.get('dialogue') or '') for s in group)
             else 'reference')
 
