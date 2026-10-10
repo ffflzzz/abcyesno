@@ -22,7 +22,14 @@ import math
 import re
 from dataclasses import dataclass
 
-from .. import config
+from .. import config, validate
+
+
+def pack_transport(group: list[dict], relation: str, same_cast: bool) -> str:
+    """Same-subject silent continuation can lock its actual starting state."""
+    return ('keyframe' if same_cast and relation in ('continuous', 'match')
+            and not any(validate._has_line(s.get('dialogue') or '') for s in group)
+            else 'reference')
 
 #: 支持的四种模式（`text` 我们不使用：短剧必须有画面控制）。
 #: `mixed`（2026-09-20，osmanthus-vow 三镜对照实验后立项）：**逐镜**在

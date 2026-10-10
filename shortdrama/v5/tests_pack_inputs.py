@@ -8,11 +8,45 @@ import subprocess
 from pathlib import Path
 from unittest import mock
 
-from v5.media import video
+from v5.media import video, video_plan
 from v5.media import jobs
 
 
 class TestPackInputs(unittest.TestCase):
+    def test_only_same_cast_silent_continuation_locks_start(self):
+        quiet = [{'dialogue': '（无声，环境音）'}]
+        self.assertEqual(video_plan.pack_transport(quiet, 'continuous', True), 'keyframe')
+        for group, relation, same_cast in [(quiet, 'cut', True), (quiet, 'continuous', False),
+                 ([{'dialogue': '顾川：跟我走。'}], 'continuous', True)]:
+            self.assertEqual(video_plan.pack_transport(group, relation, same_cast), 'reference')
+
+    def test_pack_keyframe_submits_only_actual_first_frame(self):
+        shots = [{'name': 'LN01', 'scene': 'A', 'seconds': 12, 'dialogue': '你好'},
+                 {'name': 'LN02', 'scene': 'B', 'seconds': 12, 'dialogue': '（无声，环境音）'}]
+        planned = [{'name': 'LN01', 'frame_plan': {'relation': 'cut'}},
+                   {'name': 'LN02', 'frame_plan': {'relation': 'continuous'}}]
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            out = root / 'media/ep1'
+            clip = out / 'clips/pack01.mp4'
+            clip.parent.mkdir(parents=True)
+            clip.write_bytes(b'previous')
+            jobs.save(out, {'pack01': {'state': 'completed', 'attempts': 1,
+                'shots': ['LN01'], 'declared_seconds': [12], 'local': str(clip)}})
+            with mock.patch.object(video.assets, '_cast_ctx', return_value=({}, None, [])), \
+                    mock.patch.object(video.assets, '_shot_cast_lines', return_value=['same people']), \
+                    mock.patch.object(video, 'seam_anchor', return_value=('actual tail', '末帧')), \
+                    mock.patch.object(video, 'extract_last_frame', return_value='actual tail'), \
+                    mock.patch.object(video, '_wait_one', return_value=''), \
+                    mock.patch.object(video.providers, 'submit_video', return_value={'video_id': 'new'}) as submit:
+                result = video.submit_packs(root, shots, planned, log=lambda *_: None)
+            self.assertEqual(submit.call_count, 1)
+            self.assertEqual(submit.call_args.kwargs['mode'], 'keyframe')
+            self.assertEqual(submit.call_args.kwargs['first_frame'], 'actual tail')
+            self.assertNotIn('images', submit.call_args.kwargs)
+            self.assertEqual(result['pack02']['generation_mode'], 'keyframe')
+            self.assertTrue(result['pack02']['input_signature'])
+
     @unittest.skipUnless(shutil.which('ffmpeg'), 'ffmpeg required')
     def test_seam_anchor_is_final_frame_not_first_frame_of_final_second(self):
         from PIL import Image

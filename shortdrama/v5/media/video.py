@@ -683,6 +683,26 @@ def seam_anchor(clip_dir: Path, prev_pname: str | None) -> tuple[str | None, str
     return None, "无"
 
 
+def _pack_transports(root: Path, groups: list, planned: list[dict]) -> list:
+    reg, prot, fallback = assets._cast_ctx(root)
+    by_name = {s['name']: s.get('frame_plan', {}).get('relation', 'cut') for s in planned}
+    previous_cast = set()
+    out = []
+    for group, declared in groups:
+        casts = [set(assets._shot_cast_lines(s, reg, prot, fallback)) for s in group]
+        same_cast = bool(previous_cast) and all(c == previous_cast for c in casts)
+        mode = video_plan.pack_transport(group, by_name.get(group[0]['name'], 'cut'), same_cast)
+        out.append(([dict(s, _pack_transport=mode) for s in group], declared))
+        previous_cast = casts[-1]
+    return out
+
+
+def _pack_inputs(root: Path, group: list[dict], previous_url: str | None, ep: int):
+    if group and group[0].get('_pack_transport') == 'keyframe':
+        return ([previous_url] if previous_url else []), [('prev', '连续动作首帧')]
+    return pack_ref_images(root, group, prev_url=previous_url, ep=ep)
+
+
 def pack_input_signature(project_root: Path, group: list[dict], declared: list,
                          ep: int, previous: Path | None = None) -> str:
     """Bind reuse to the compiled input and actual local reference pixels.
@@ -691,7 +711,7 @@ def pack_input_signature(project_root: Path, group: list[dict], declared: list,
     Remote-only references are identified by their URL; no download is needed.
     """
     prev_url = extract_last_frame(previous) if previous else None
-    urls, roles = pack_ref_images(project_root, group, prev_url=prev_url, ep=ep)
+    urls, roles = _pack_inputs(project_root, group, prev_url, ep)
     compiled = prompt_mod.build_pack_prompt(
         style_mod.prepare_shots(project_root, group), declared, sum(declared),
         style_block=style_mod.visual_block(project_root), ref_roles=roles)
@@ -704,7 +724,7 @@ def pack_input_signature(project_root: Path, group: list[dict], declared: list,
                       if p and p.is_file() else None))
     return hashlib.sha256(json.dumps(
         {'prompt': compiled, 'images': urls, 'local': local,
-         'aspect': config.ASPECT_RATIO}, ensure_ascii=False,
+         'aspect': config.ASPECT_RATIO, 'mode': group[0].get('_pack_transport', 'reference') if group else 'reference'}, ensure_ascii=False,
         sort_keys=True).encode('utf-8')).hexdigest()
 
 
@@ -730,7 +750,7 @@ def submit_packs(project_root: Path, shots: list[dict], planned: list[dict],
     jobs = jobs_mod.load(out_dir)
     _only = set(only) if only else None
     shots = prompt_mod.resolve_styles(shots)
-    groups = video_plan.group_shots(shots, max_group)
+    groups = _pack_transports(project_root, video_plan.group_shots(shots, max_group), planned)
     if _only is not None and invalidate:
         # 一次作废所有目标组，避免前组超窗后把尚未重做的旧后组当成本轮成片。
         for k, (g, _declared) in enumerate(groups, 1):
@@ -781,7 +801,7 @@ def submit_packs(project_root: Path, shots: list[dict], planned: list[dict],
             log("[video] %s 暂缓：上一组真实末帧不可用，保留任务等待接续" % pname)
             break
         # 图序（2026-10-07 起）：设定表 → 场景空镜 → 上一段末帧 → 道具，**不含静帧**。
-        urls, roles = pack_ref_images(project_root, g, prev_url=prev_url, ep=ep)
+        urls, roles = _pack_inputs(project_root, g, prev_url, ep)
         if not urls:
             log("[video] %s：%s 一张资产图都没绑上（注册表空 / 名字没对上？）"
                 "→ 标 failed（先跑资产生成，别去画静帧）" % (pname, "+".join(names)))
@@ -800,14 +820,18 @@ def submit_packs(project_root: Path, shots: list[dict], planned: list[dict],
         input_signature = pack_input_signature(
             project_root, g, declared, ep,
             clip_dir / ('pack%02d.mp4' % (k - 1)) if k > 1 else None)
+        transport = g[0]['_pack_transport']
+        log('[video] %s 实际请求模式=%s' % (pname, transport))
         # 提交：队列满时**换 key 重试**（2026-09-22 改造，同 submit_all 的理由：
         # 队列满是每条通道各自的状态，跨入口换通道能绕开单池拥堵）。
         r = None
         for q_try in range(config.VIDEO_QUEUE_RETRIES + 1):
             key_idx, key = pool.claim()
             try:
-                r = providers.submit_video(prompt, mode="reference",
-                                           images=[u for u in urls if u],
+                media_input = ({'first_frame': prev_url} if transport == 'keyframe'
+                               else {'images': [u for u in urls if u]})
+                r = providers.submit_video(prompt, mode=transport,
+                                           **media_input,
                                            seconds=total, key=key,
                                            aspect_ratio=config.ASPECT_RATIO)
                 break
@@ -855,10 +879,11 @@ def submit_packs(project_root: Path, shots: list[dict], planned: list[dict],
             continue
         vid = r.get("video_id") or r.get("task_id")
         jobs_mod.submitted(jobs, pname, vid,
-                           first_frame_kind="reference_pack",
+                           first_frame_kind=("keyframe_pack" if transport == 'keyframe' else "reference_pack"),
                            shots=names, declared_seconds=declared, total_seconds=total,
                            key=key,
                            input_signature=input_signature)
+        jobs[pname]['generation_mode'] = transport
         jobs_mod.save(out_dir, jobs)
         log("[video] %s submitted（%d 镜打包，%ds，%s）"
             % (pname, len(names), total, pool.label(key_idx)))
@@ -893,7 +918,8 @@ def run_packs(project_root: Path, shots: list[dict], planned: list[dict],
     """
     jobs = submit_packs(project_root, shots, planned, ep=ep, log=log, only=only)
     done = poll_all(project_root, jobs, ep=ep, log=log)
-    groups = video_plan.group_shots(prompt_mod.resolve_styles(shots))
+    groups = _pack_transports(project_root,
+                             video_plan.group_shots(prompt_mod.resolve_styles(shots)), planned)
     targets = {"pack%02d" % k for k, (g, _d) in enumerate(groups, 1)
                if not only or set(only).intersection(s["name"] for s in g)}
     for _ in range(len(targets)):
