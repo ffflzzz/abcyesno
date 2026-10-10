@@ -997,8 +997,12 @@ def _scene_prompt(a: dict, *, character_names=(), legacy=False) -> str:
     """场景参考图提示词：**环境全景空镜**——与 _asset_prompt（单一物件、竖版、
     浅灰背景）完全不同。无人物、无文字；画幅不写在文字里（由 ratio 参数控制，
     与项目静帧同画幅）。"""
+    shared = a.get('shared_location_specs') or []
+    fixed = '；'.join('%s：%s' % (x['name'], x['appearance']) for x in shared)
+    source = (("固定建筑身份（本场可见部分沿用，不改变当前机位）：" + fixed + "。") if fixed else '')
+    source += a.get("prompt") or a.get("appearance") or ""
     chunks = []
-    for cl in re.split(r"[。；，、]", a.get("prompt") or a.get("appearance") or ""):
+    for cl in re.split(r"[。；，、]", source):
         cl = cl.strip()
         excludes = _ASSET_BAD_WORDS + (() if legacy else _ASSET_USAGE_WORDS + tuple(character_names))
         if not cl or any(w in cl for w in excludes):
@@ -1198,6 +1202,11 @@ CONTRACT_NAME = "assets.contract.json"
 ```
 `type` 取 `character` / `prop` / `location`（缺省 `prop`）；
 `keywords` 缺省用 `name` 自身。**这是"锚定契约"**：下游按名字精确匹配参考图。
+
+相连场景可在顶层 `shared_locations` 中按建筑名定义固定外观，location 的
+`visible_locations` 列表引用这些名称（包括远处可见建筑）。场景生图将共享结构
+放在各自机位/光照描述前；不同机位读取同一份身份，不将两份散文的省略当作新建筑。
+未使用共享建筑的旧契约行为保持；声明引用但没有定义会明确报错。
 """
 
 
@@ -1218,6 +1227,9 @@ def _load_contract(root: Path):
             return None, None
         chars = [c for c in (d.get("characters") or []) if c.get("name")]
         items = [a for a in (d.get("assets") or []) if a.get("name")]
+        shared_locations = d.get('shared_locations') or {}
+        if not isinstance(shared_locations, dict):
+            raise ValueError('assets.contract.json shared_locations 必须为建筑名到固定外观的对象')
         from . import assets as _assets_mod   # 函数内导入：类型口径只定义在一处
         for a in items:
             a.setdefault("type", "prop")
@@ -1226,6 +1238,17 @@ def _load_contract(root: Path):
             # → 白烧生图配额，且 `bind()` 的 location 排除失效。
             if str(a["type"]).strip().lower() in _assets_mod.LOCATION_TYPES:
                 a["type"] = "location"
+                visible = a.get('visible_locations') or []
+                if not isinstance(visible, list):
+                    raise ValueError('场景 %s 的 visible_locations 必须为建筑名列表' % a['name'])
+                specs = []
+                for name in visible:
+                    appearance = shared_locations.get(name) if isinstance(name, str) else None
+                    if not isinstance(appearance, str) or not appearance.strip():
+                        raise ValueError('场景 %s 引用的共享建筑 %s 未定义固定外观' % (a['name'], name))
+                    specs.append({'name': name, 'appearance': appearance.strip()})
+                if specs:
+                    a['shared_location_specs'] = specs
             if not a.get("keywords"):
                 a["keywords"] = [str(a["name"])]
         # ★ 2026-09-13 修复：**chars 也要补 keywords**，否则 `_register` 取

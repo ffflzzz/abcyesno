@@ -91,8 +91,18 @@ class TestInlineUpstream(unittest.TestCase):
                 mock.patch.object(config, "SHOT_COVERAGE", True), \
                 mock.patch.object(config, "VIDEO_PACK_MAX_GROUP", 12):
             text = role_input("reviewer", self.root, {"episode_index": 1})
-        self.assertIn("4 条请求 / 48.00 秒", text)
-        self.assertIn("目标 60s", text)
+        self.assertNotIn("4 条请求 / 48.00 秒", text)
+        self.assertNotIn("实际请求合计时长达 brief 要求", text)
+        from v5.media import storyboard, video_plan
+        groups = video_plan.group_project_shots(self.root, storyboard.parse(board.read_text(encoding='utf-8')))
+        self.assertGreaterEqual(sum(int(sum(d)) for _, d in groups), 51)
+
+    def test_asset_and_reviewer_receive_shared_building_contract(self):
+        for role in ('assetdesigner', 'reviewer'):
+            text = role_input(role, self.root, {'episode_index': 1})
+            self.assertIn('shared_locations', text)
+            self.assertIn('visible_locations', text)
+        self.assertIn('道具形制逐字复制', role_input('assetdesigner', self.root, {'episode_index': 1}))
 
 
 class TestWorldbuilderIsDispatched(unittest.TestCase):

@@ -817,7 +817,18 @@ def role_input(role: str, root: Path, m: dict, reasons: list[str] | None = None)
         lines.append(
             "【相连空间】同一建筑的外景、入口和内景共享材质、柱梁、门口结构及路径方向；"
             "这些固定特征在相关场景卡中一致写出，光色可随内外变化。"
-            "不能只写同一地点的名字，却让独立参考图各自发明不同建筑。")
+            "不能只写同一地点的名字，却让独立参考图各自发明不同建筑。"
+            "在独立 assets.contract.json 的顶层 shared_locations 对象中，将跨场景可见的同一建筑"
+            "按固定名称定义一次外观（材质、屋顶、柱梁、入口与相连路径；不混入人物、动作、光色或机位）。"
+            "每张相关 location 条目用 visible_locations 名称列表引用它，包含远处可见的建筑。"
+            "各条目的 prompt 只补本场机位、环境与光照，沿用共享建筑，不另写冲突结构。"
+            "没有共享建筑时这两个字段可以省略。")
+    if role == 'reviewer':
+        lines.append("【相连场景核对】若分镜从外景走入同一建筑，检查独立 assets.contract.json："
+                     "远处可见、入口及内景的 location 应通过 visible_locations 引用同一 shared_locations 建筑身份。"
+                     "名称相同而固定结构缺失或冲突时，指出对应资产条目并退回 assetdesigner，"
+                     "不要只要求分镜再说一次建筑名字；没有同一建筑跨场景的剧情不要求这些字段。")
+    if role == 'assetdesigner':
         lines.append(
             "【硬性要求·道具形制逐字复制】brief.json 的 `key_props` 里每件道具的形制描述"
             "（材质 / 形状 / 颜色 / **佩戴或放置方式**）必须**逐字复制**进资产卡条目——"
