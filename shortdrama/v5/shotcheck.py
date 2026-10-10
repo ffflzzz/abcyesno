@@ -497,8 +497,8 @@ def countable(shots: list[dict], target_seconds: int = 0,
                  "%d 场 / %d 秒（目标 %ds ⇒ 至少 %d 场；场数不够就是每场写太长）"
                  % (len(units), total, target_seconds, lo_acts))
     if auto_groups:
-        from .media.video_plan import group_shots
-        requests = group_shots(shots)
+        from .media.video_plan import group_shots, minimum_request_total
+        requests = group_shots(shots, min_total_seconds=minimum_request_total(shots, target_seconds))
         request_seconds = [sum(seconds) for _, seconds in requests]
         need(all(4 <= seconds <= 12 for seconds in request_seconds),
              "实际视频请求时长必须为4–12秒", str(request_seconds))

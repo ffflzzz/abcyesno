@@ -574,7 +574,7 @@ def _run_guarded(project_root: Path, ep: int = 1, log=print, max_regen: int = 2,
             board = resolve_path(project_root, "scenedesigner", ep)
             if board.exists():
                 current = storyboard.parse(board.read_text(encoding="utf-8"))
-                for k, (g, _d) in enumerate(video_plan.group_shots(current), 1):
+                for k, (g, _d) in enumerate(video_plan.group_project_shots(project_root, current, ep), 1):
                     name = "pack%02d" % k
                     if selected.intersection(s["name"] for s in g) and name in previous_jobs:
                         pack_records.setdefault(name, dict(previous_jobs[name]))
@@ -838,7 +838,7 @@ def _run_impl(project_root: Path, ep: int = 1, log=print, max_regen: int = 2,
             identity_scope = shots if not only else [s for s in shots if s["name"] in only]
             if only and config.VIDEO_MODE == "pack":
                 # A single selected shot rerenders its whole request group.
-                identity_scope = [s for group, _ in video_plan.group_shots(shots)
+                identity_scope = [s for group, _ in video_plan.group_project_shots(project_root, shots, ep)
                                   if any(s["name"] in only for s in group) for s in group]
             assets.prepare_identity_refs(project_root, identity_scope, log=log, ep=ep)
             refs_by_shot = assets.bind(project_root, shots, names_out=ref_names,

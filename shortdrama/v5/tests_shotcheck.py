@@ -693,12 +693,15 @@ class TestProductionScope(unittest.TestCase):
         self.assertFalse(any("每场" in h["check"] or "场数" in h["check"] for h in hits), hits)
         self.assertFalse(any("片长与镜数" in h["check"] or "实际请求" in h["check"] for h in hits), hits)
 
-    def test_compressed_actual_duration_is_checked(self):
+    def test_pack_planning_preserves_actual_duration_before_review(self):
         shots = [_shot("LN%02d" % (i+1), "玉石门廊晨光中人物沿着石阶走出", seconds=4, act=1,
                        dialogue="（无声，环境音）") for i in range(15)]
         with mock.patch.object(config, "VIDEO_PACK_MAX_GROUP", 6):
             hits = shotcheck.countable(shots, 60, audio_mode="silent", combat=False, auto_groups=True)
-        self.assertTrue(any("实际请求合计" in h["check"] for h in hits), hits)
+        self.assertFalse(any("实际请求合计" in h["check"] for h in hits), hits)
+        from v5.media.video_plan import group_shots, minimum_request_total
+        requests = group_shots(shots, 6, min_total_seconds=minimum_request_total(shots, 60))
+        self.assertGreaterEqual(sum(int(sum(d)) for _, d in requests), 51)
 
     def test_role_checks_derive_scope_from_actual_actions(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -795,7 +795,7 @@ def submit_packs(project_root: Path, shots: list[dict], planned: list[dict],
     jobs = jobs_mod.load(out_dir)
     _only = set(only) if only else None
     shots = prompt_mod.resolve_styles(shots)
-    groups = _pack_transports(project_root, video_plan.group_shots(shots, max_group), planned)
+    groups = _pack_transports(project_root, video_plan.group_project_shots(project_root, shots, ep, max_group), planned)
     if _only is not None and invalidate:
         # 一次作废所有目标组，避免前组超窗后把尚未重做的旧后组当成本轮成片。
         for k, (g, _declared) in enumerate(groups, 1):
@@ -808,6 +808,8 @@ def submit_packs(project_root: Path, shots: list[dict], planned: list[dict],
         jobs_mod.save(out_dir, jobs)
     log("[video] pack 档：%d 镜 → %d 组（max_group=%d）"
         % (len(shots), len(groups), max_group or config.VIDEO_PACK_MAX_GROUP))
+    log("[video] 分镜声明 %.2fs → 打包计划 %.2fs（压缩受 brief 总时长预算约束）"
+        % (sum(video_plan.pack_clamp_sec(s) for s in shots), sum(sum(d) for _, d in groups)))
 
     pool = keypool.KeyPool.of()
     log("[video] 提交配速：%d 条 key × %s" % (len(pool), pool.pacing()))
@@ -963,7 +965,7 @@ def run_packs(project_root: Path, shots: list[dict], planned: list[dict],
     jobs = submit_packs(project_root, shots, planned, ep=ep, log=log, only=only)
     done = poll_all(project_root, jobs, ep=ep, log=log)
     groups = _pack_transports(project_root,
-                             video_plan.group_shots(prompt_mod.resolve_styles(shots)), planned)
+                             video_plan.group_project_shots(project_root, prompt_mod.resolve_styles(shots), ep), planned)
     targets = {"pack%02d" % k for k, (g, _d) in enumerate(groups, 1)
                if not only or set(only).intersection(s["name"] for s in g)}
     for _ in range(len(targets)):

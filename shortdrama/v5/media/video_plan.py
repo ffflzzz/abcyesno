@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import math
 import re
+import json
+from pathlib import Path
 from dataclasses import dataclass
 
 from .. import config, validate
@@ -55,7 +57,7 @@ def pack_transport(group: list[dict], relation: str, same_cast: bool,
 MODES = config.VIDEO_MODES
 
 # ─── pack 档：压缩式分组算法（自 scripts/pack_render.py 搬入，判据逐字节一致）──
-# 旁路脚本（pack_render.py）保留为独立验证入口；两处判据若有改动必须同步。
+# 旁路脚本（pack_render.py）复用此处规划；实验图序仍独立。
 
 PACK_MAX_SECONDS = 12    # 单条请求硬上限（供应商 seconds ∈ [4, 12]）
 PACK_MIN_KEEP_RATIO = 0.6  # 压缩后每镜至少保留原声明的 60%
@@ -128,10 +130,11 @@ def _pack_fit(declared: list[float], mins: list[float]) -> list[float] | None:
     out = [round(max(m, x), 2) for x, m in zip(scaled, mins)]
     while sum(out) > PACK_MAX_SECONDS + 1e-9:
         idx = max(range(len(out)), key=lambda k: out[k] - mins[k])
-        if (out[idx] - 0.1 < mins[idx]
-                or out[idx] - 0.1 < declared[idx] * PACK_MIN_KEEP_RATIO):
+        decrement = min(0.1, round(sum(out) - PACK_MAX_SECONDS, 2))
+        if (out[idx] - decrement < mins[idx]
+                or out[idx] - decrement < declared[idx] * PACK_MIN_KEEP_RATIO):
             return None
-        out[idx] = round(out[idx] - 0.1, 2)
+        out[idx] = round(out[idx] - decrement, 2)
     if any(o < d * PACK_MIN_KEEP_RATIO - 1e-9 for o, d in zip(out, declared)):
         return None
     return out if sum(out) <= PACK_MAX_SECONDS + 1e-9 else None
@@ -153,7 +156,26 @@ def same_unit(a: dict, b: dict) -> bool:
     return bool(sc) and sc == (b.get("scene") or "").strip()
 
 
-def group_shots(shots: list[dict], max_group: int | None = None) -> list[tuple[list[dict], list[int]]]:
+def minimum_request_total(shots: list[dict], target_seconds: float) -> float:
+    """Reserve the brief's lower duration bound plus worst-case compose losses."""
+    if not target_seconds:
+        return 0.0
+    from . import compose
+    count = len(shots)
+    return target_seconds * .85 + 2 * max(0.0, compose.TRIM) * count + max(0.0, compose.XFADE) * max(0, count - 1)
+
+
+def group_project_shots(root: Path, shots: list[dict], ep: int = 1,
+                        max_group: int | None = None):
+    """Use one duration-aware plan for submission, rerender and bookkeeping."""
+    brief_path = Path(root) / 'brief.json'
+    brief = json.loads(brief_path.read_text(encoding='utf-8')) if brief_path.exists() else {}
+    target = validate.parse_target_seconds(str(brief.get('target_duration') or ''), ep=ep)
+    return group_shots(shots, max_group, min_total_seconds=minimum_request_total(shots, target or 0))
+
+
+def group_shots(shots: list[dict], max_group: int | None = None, *,
+                min_total_seconds: float = 0.0) -> list[tuple[list[dict], list[int]]]:
     """pack 档分组：**同场景**相邻镜贪心合并，返回 [(镜列表, 每镜分配秒)]。
 
     规则（v2 压缩式，与旁路脚本实测闭环版本一致）：
@@ -161,6 +183,7 @@ def group_shots(shots: list[dict], max_group: int | None = None) -> list[tuple[l
     - 声明时长之和 ≤12s 直接合并；
     - 超限时等比压缩到 12s，但每镜不得低于 `pack_speech_need`（台词时长下限），
       且压幅不得超原声明 40% —— 否则放弃合并、该镜独立成组。
+    - 项目入口传入 brief 总时长下界与合成损耗预算；压缩不得耗尽这一预算。
     - ★ 单镜成组补到 ≥4s（2026-09-25）：供应商请求级 seconds ∈ [4,12]，
       组内每拍可以 2s，但**独立成组的镜**整条请求就是它自己 → 不足 4s 会直接
       被供应商拒（组内两拍 2s+2s=4s 合法，单拍 2s 不合法）。
@@ -172,6 +195,7 @@ def group_shots(shots: list[dict], max_group: int | None = None) -> list[tuple[l
     """
     mg = int(max_group or config.VIDEO_PACK_MAX_GROUP)
     groups: list[tuple[list[dict], list[int]]] = []
+    compression_budget = max(0.0, sum(pack_clamp_sec(s) for s in shots) - min_total_seconds)
     i, n = 0, len(shots)
     while i < n:
         cur = [shots[i]]
@@ -187,9 +211,11 @@ def group_shots(shots: list[dict], max_group: int | None = None) -> list[tuple[l
                 cur.append(nxt)
                 declared = trial_d
                 continue
-            if fitted:
+            loss = sum(trial_d) - sum(fitted) if fitted else 0.0
+            if fitted and loss <= compression_budget + 1e-9:
                 cur.append(nxt)
                 declared = fitted
+                compression_budget -= loss
                 break        # 压缩组 12s 已满，不再吞镜
             break
         if len(cur) == 1 and declared[0] < 4:

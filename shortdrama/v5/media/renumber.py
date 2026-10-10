@@ -277,7 +277,7 @@ def remap_jobs(root: Path, ep: int, mapping: dict, order: list, shots_after: lis
     # ── 打包档：按内容对账，不猜组号 ──
     rep["mode"] = "pack"
     groups_after = [tuple(str(s.get("name") or "") for s in g)
-                    for g, _sec in video_plan.group_shots(shots_after)]
+                    for g, _sec in video_plan.group_project_shots(root, shots_after, ep)]
     renamed: dict = {}
     doomed: list = []
     #: 被删镜的名字集合。⚠️ **不能用 `mapping.get(m) is None` 判"这一镜被删了"** ——

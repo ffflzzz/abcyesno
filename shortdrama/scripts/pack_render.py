@@ -40,6 +40,7 @@ sys.path.insert(0, str(ROOT))
 
 from v5 import config                                   # noqa: E402
 from v5.media import providers                          # noqa: E402
+from v5.media import video_plan                         # noqa: E402
 from v5.media import style as style_mod                 # noqa: E402
 from v5.media.prompt import _remap_beats, framing_clause    # noqa: E402
 from v5.media.storyboard import parse                   # noqa: E402
@@ -82,35 +83,8 @@ def _fit(declared: list[int], mins: list[int]) -> list[int] | None:
 
 
 def group_shots(shots: list[dict], max_group: int) -> list[tuple[list[dict], list[int]]]:
-    """同场景相邻镜贪心分组，返回 (镜列表, 每镜声明秒) 。"""
-    groups: list[tuple[list[dict], list[int]]] = []
-    i, n = 0, len(shots)
-    while i < n:
-        cur = [shots[i]]
-        declared = [clamp_sec(shots[i])]
-        while len(cur) < max_group and i + len(cur) < n:
-            nxt = shots[i + len(cur)]
-            sc_cur = (cur[-1].get("scene") or "").strip()
-            sc_nxt = (nxt.get("scene") or "").strip()
-            if not sc_cur or sc_cur != sc_nxt:
-                break
-            trial_d = declared + [clamp_sec(nxt)]
-            mins = [speech_need(s) for s in cur + [nxt]]
-            fitted = _fit(trial_d, mins)
-            if sum(trial_d) <= MAX_SECONDS:
-                cur.append(nxt)
-                declared = trial_d
-                continue
-            if fitted:
-                cur.append(nxt)
-                declared = fitted
-                break        # 压缩组 12s 已满，不再吞镜
-            break
-        if len(cur) == 1 and declared[0] < 4:
-            declared[0] = 4     # 单镜成组：请求级供应商下限（与 video_plan 同步）
-        groups.append((cur, declared))
-        i += len(cur)
-    return groups
+    """Use the production grouping algorithm; image order remains a legacy experiment."""
+    return video_plan.group_shots(shots, max_group)
 
 
 def fmt_dialogue(d: str) -> str:
@@ -198,7 +172,7 @@ def main() -> int:
     if missing and not a.dry_run:
         raise SystemExit("静帧缺失：%s" % missing)
 
-    groups = group_shots(shots, a.max_group)
+    groups = video_plan.group_project_shots(root, shots, a.ep, a.max_group)
     out_dir = root / "media" / ("ep%d_pack" % a.ep)
     report = []
     print("[pack] 共 %d 镜 → %d 组" % (len(shots), len(groups)))
