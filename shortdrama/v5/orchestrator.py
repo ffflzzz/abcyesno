@@ -282,6 +282,15 @@ def _build_role_graph(role: str, pack: str):
                      "「待补：<缺失项>」以便下一轮补齐。" % "、".join(missing_up))
         if brief:
             user += "\n\n【任务简报（supervisor 下发；与 brief.json 冲突时以 brief.json 为准）】\n" + brief
+        target = _root / out_path(role, _live_ep)
+
+        def _file_stamp():
+            try:
+                return target.stat().st_mtime_ns, target.read_bytes()
+            except OSError:
+                return None
+
+        before = await asyncio.to_thread(_file_stamp)
         res = await agent.ainvoke(
             {"messages": [HumanMessage(content=user)]},
             config={"recursion_limit": ROLE_RECURSION_LIMIT})
@@ -292,6 +301,23 @@ def _build_role_graph(role: str, pack: str):
                   "按实际文件记账，不能把聊天草稿当产物"
                   % (role, (last_meta.get("token_usage") or {}).get("completion_tokens", "?")),
                   flush=True)
+        # A pre-existing rejected file does not prove this revision was delivered.
+        # Same-content rewrites are valid; the modification time records the write.
+        def _delivered() -> bool:
+            stamp = _file_stamp()
+            try:
+                return bool(stamp and stamp != before and stamp[1].decode("utf-8").strip())
+            except UnicodeError:
+                return False
+
+        if not await asyncio.to_thread(_delivered):
+            reason = last_meta.get("finish_reason") or "unknown"
+            note = ("【未交付】%s 第%d集的文件 /%s 缺失、为空、无法读取或本轮未更新；"
+                    "本轮模型结束原因=%s。旧文件和聊天草稿不能作为本轮交付，"
+                    "先用文件工具交付该角色完整文件再派下游。"
+                    % (role, _live_ep, out_path(role, _live_ep), reason))
+            print("[orchestrator] " + note, flush=True)
+            return {"messages": [AIMessage(content=note)]}
         # 记账（复用 guards 同一套）：物化对账 → phases——supervisor 架构
         # 由此产出标准 manifest，media_gate / --resume-media 直接可用。
         try:
@@ -310,24 +336,6 @@ def _build_role_graph(role: str, pack: str):
                             % (role, type(e).__name__, e, traceback.format_exc()))
             except Exception:  # noqa: BLE001
                 pass
-        # 工具交付以当前集文件为准，不能把模型的“已完成”转述给supervisor。
-        # 缺文件时保留失败事实，不在这里新增重派或自动修订循环。
-        target = _root / out_path(role, _live_ep)
-
-        def _delivered() -> bool:
-            try:
-                return target.is_file() and bool(target.read_text(encoding="utf-8").strip())
-            except (OSError, UnicodeError):
-                return False
-
-        if not await asyncio.to_thread(_delivered):
-            reason = last_meta.get("finish_reason") or "unknown"
-            note = ("【未交付】%s 第%d集的文件 /%s 缺失、为空或无法读取；"
-                    "本轮模型结束原因=%s。聊天回复不能作为产物，"
-                    "先完成该角色文件交付再派下游。"
-                    % (role, _live_ep, out_path(role, _live_ep), reason))
-            print("[orchestrator] " + note, flush=True)
-            return {"messages": [AIMessage(content=note)]}
         return {"messages": (res.get("messages") or [])[-1:]}
 
     # 节点名 = **角色名**（唯一），不是固定的 `"role"`（2026-09-13 改）。

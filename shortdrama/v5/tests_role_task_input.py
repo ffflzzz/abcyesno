@@ -1,5 +1,5 @@
 """Exercise the compiled role boundary without model/network calls."""
-import tempfile,unittest
+import tempfile,unittest,os
 from pathlib import Path
 from unittest.mock import patch
 from langchain_core.messages import HumanMessage,AIMessage
@@ -34,11 +34,17 @@ class TestRoleTaskInput(unittest.IsolatedAsyncioTestCase):
         self.assertIn('异步返工意见必须传入角色',result)
 
 class TestRoleDelivery(unittest.IsolatedAsyncioTestCase):
-    async def _run(self, artifact, ep=1):
+    async def _run(self, artifact, ep=1, write=False, finish='stop'):
         class FakeAgent:
             async def ainvoke(self,value,config):
+                if write:
+                    current=root/orchestrator.out_path('scriptwriter',2)
+                    current.parent.mkdir(parents=True,exist_ok=True)
+                    previous=current.stat().st_mtime_ns if current.exists() else 0
+                    current.write_text(artifact or 'new script',encoding='utf-8')
+                    os.utime(current,ns=(previous+1000000000,previous+1000000000))
                 return {'messages':[AIMessage(content='已经交付，可以继续',
-                    response_metadata={'finish_reason':'stop'})]}
+                    response_metadata={'finish_reason':finish})]}
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
             if artifact is not None:
@@ -48,8 +54,10 @@ class TestRoleDelivery(unittest.IsolatedAsyncioTestCase):
                     target.write_bytes(artifact)
                 else:
                     target.write_text(artifact,encoding='utf-8')
-            with patch.object(orchestrator,'_root',root),patch.object(orchestrator,'_EP',1),patch.object(orchestrator,'role_chat',return_value=object()),patch.object(orchestrator,'create_agent',return_value=FakeAgent()),patch.object(orchestrator,'load_manifest',return_value={'episode_index':2}),patch.object(orchestrator,'record_phase'):
+            with patch.object(orchestrator,'_root',root),patch.object(orchestrator,'_EP',1),patch.object(orchestrator,'role_chat',return_value=object()),patch.object(orchestrator,'create_agent',return_value=FakeAgent()),patch.object(orchestrator,'load_manifest',return_value={'episode_index':2}),patch.object(orchestrator,'record_phase') as record:
                 result=await orchestrator._build_role_graph('scriptwriter','shortdrama').ainvoke({'brief':'写本集剧本'})
+                if '【未交付】' in result['messages'][-1].content:
+                    record.assert_not_called()
                 return result['messages'][-1].content
 
     async def test_missing_file_overrides_model_success(self):
@@ -60,7 +68,18 @@ class TestRoleDelivery(unittest.IsolatedAsyncioTestCase):
         self.assertIn('【未交付】',await self._run(' \n',ep=2))
 
     async def test_current_nonempty_file_preserves_reply(self):
-        self.assertEqual('已经交付，可以继续',await self._run('当前集剧本',ep=2))
+        self.assertEqual('已经交付，可以继续',await self._run('当前集剧本',ep=2,write=True))
+
+    async def test_old_file_cannot_hide_revision_without_write(self):
+        self.assertIn('本轮未更新',await self._run('上一版尚未修订',ep=2))
+
+    async def test_truncated_revision_cannot_reuse_old_file(self):
+        result=await self._run('旧分镜',ep=2,finish='length')
+        self.assertIn('【未交付】',result)
+        self.assertIn('length',result)
+
+    async def test_first_delivery_without_existing_file(self):
+        self.assertEqual('已经交付，可以继续',await self._run(None,write=True))
 
     async def test_corrupt_text_returns_failure_instead_of_crashing(self):
         self.assertIn('【未交付】',await self._run(b'valid prefix\xff',ep=2))
