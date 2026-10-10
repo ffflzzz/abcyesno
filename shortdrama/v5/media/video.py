@@ -704,7 +704,7 @@ def _pack_inputs(root: Path, group: list[dict], previous_url: str | None, ep: in
 
 
 def pack_input_signature(project_root: Path, group: list[dict], declared: list,
-                         ep: int, previous: Path | None = None) -> str:
+                         ep: int, previous: Path | None = None, *, legacy_reference: bool = False) -> str:
     """Bind reuse to the compiled input and actual local reference pixels.
 
     Legacy jobs without this field are not silently given current provenance.
@@ -722,10 +722,28 @@ def pack_input_signature(project_root: Path, group: list[dict], declared: list,
         p = assets.local_ref_path(project_root, label)
         local.append((kind, label, hashlib.sha256(p.read_bytes()).hexdigest()
                       if p and p.is_file() else None))
+    payload = {'prompt': compiled, 'images': urls, 'local': local, 'aspect': config.ASPECT_RATIO}
+    if not legacy_reference:
+        payload['mode'] = group[0].get('_pack_transport', 'reference') if group else 'reference'
     return hashlib.sha256(json.dumps(
-        {'prompt': compiled, 'images': urls, 'local': local,
-         'aspect': config.ASPECT_RATIO, 'mode': group[0].get('_pack_transport', 'reference') if group else 'reference'}, ensure_ascii=False,
+        payload, ensure_ascii=False,
         sort_keys=True).encode('utf-8')).hexdigest()
+
+
+def _pack_input_matches(rec: dict, root: Path, group: list[dict], declared: list,
+                        ep: int, previous: Path | None = None) -> bool:
+    """Accept the original reference-only hash format without inventing provenance."""
+    signature = rec.get('input_signature')
+    if not signature:
+        return True
+    if signature == pack_input_signature(root, group, declared, ep, previous):
+        return True
+    # Before per-group transport was introduced every tracked job was reference.
+    # This alternate hash still checks all actual inputs, including previous pixels.
+    if not rec.get('generation_mode') and (not group or group[0].get('_pack_transport', 'reference') == 'reference'):
+        return signature == pack_input_signature(root, group, declared, ep, previous,
+                                                legacy_reference=True)
+    return False
 
 
 def submit_packs(project_root: Path, shots: list[dict], planned: list[dict],
@@ -777,8 +795,7 @@ def submit_packs(project_root: Path, shots: list[dict], planned: list[dict],
         same_group = rec.get("shots") == names and rec.get("declared_seconds") == declared
         if (_only is None or not invalidate) and same_group and jobs_mod.done(jobs, pname, clip_dir):
             previous = clip_dir / ('pack%02d.mp4' % (k - 1)) if k > 1 else None
-            if not rec.get('input_signature') or rec['input_signature'] == pack_input_signature(
-                    project_root, g, declared, ep, previous):
+            if _pack_input_matches(rec, project_root, g, declared, ep, previous):
                 continue                  # 未记录来源的老片不因升级而整集重烧。
             log('[video] %s 实际生成输入已变，旧组不复用' % pname)
             jobs_mod.mark(jobs, pname, 'pending', video_id=None, error='生成输入变化')
@@ -951,8 +968,8 @@ def run_packs(project_root: Path, shots: list[dict], planned: list[dict],
         rec = jobs.get(name, {})
         signature = rec.get('input_signature')
         previous = project_root / 'media' / ('ep%d' % ep) / 'clips' / ('pack%02d.mp4' % (k - 1)) if k > 1 else None
-        stale = name in done and signature and signature != pack_input_signature(
-            project_root, g, declared, ep, previous)
+        stale = name in done and signature and not _pack_input_matches(
+            rec, project_root, g, declared, ep, previous)
         if stale or stale_previous:
             done.pop(name, None)
             log('[video] %s 输入或前组接续已过期，不参与本轮合成' % name)

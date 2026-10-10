@@ -13,6 +13,34 @@ from v5.media import jobs
 
 
 class TestPackInputs(unittest.TestCase):
+    def test_reference_hash_migration_still_checks_actual_inputs(self):
+        group = [{'name': 'LN01', '_pack_transport': 'reference'}]
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            ref = root / 'prop.png'
+            ref.write_bytes(b'original pixels')
+            with mock.patch.object(video, '_pack_inputs', return_value=(['same-url'], [('prop', '玉片')])), \
+                    mock.patch.object(video.assets, 'local_ref_path', return_value=ref), \
+                    mock.patch.object(video.style_mod, 'prepare_shots', return_value=group), \
+                    mock.patch.object(video.style_mod, 'visual_block', return_value='style'), \
+                    mock.patch.object(video.prompt_mod, 'build_pack_prompt', return_value='prompt'):
+                rec = {'input_signature': video.pack_input_signature(root, group, [12], 1,
+                                                                     legacy_reference=True)}
+                self.assertTrue(video._pack_input_matches(rec, root, group, [12], 1))
+                self.assertNotIn('generation_mode', rec)
+                ref.write_bytes(b'changed pixels')
+                self.assertFalse(video._pack_input_matches(rec, root, group, [12], 1))
+
+    def test_reference_legacy_hash_does_not_match_keyframe_or_modern_job(self):
+        with mock.patch.object(video, 'pack_input_signature',
+                               side_effect=lambda *a, **k: 'old' if k.get('legacy_reference') else 'new') as signature:
+            for rec, group in [({'input_signature': 'old'}, [{'_pack_transport': 'keyframe'}]),
+                               ({'input_signature': 'old', 'generation_mode': 'reference'},
+                                [{'_pack_transport': 'reference'}])]:
+                signature.reset_mock()
+                self.assertFalse(video._pack_input_matches(rec, Path('.'), group, [12], 1))
+                self.assertEqual(signature.call_count, 1)
+
     def test_only_same_cast_silent_continuation_locks_start(self):
         quiet = [{'dialogue': '（无声，环境音）'}]
         self.assertEqual(video_plan.pack_transport(quiet, 'continuous', True), 'keyframe')
